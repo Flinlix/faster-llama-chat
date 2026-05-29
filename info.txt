@@ -1,0 +1,14 @@
+./llama.cpp/build/bin/llama-server \
+  --model models/gemma-4-E2B-it-Q4_K_M.gguf \
+  --ctx-size 4096 --threads 4 --batch-size 128 --port 8080 \
+  --jinja --reasoning off \
+  --cache-reuse 256
+
+
+Better for keeping context (small prefill)?:
+./llama.cpp/build/bin/llama-server \
+  --model models/gemma-4-E2B-it-Q4_K_M.gguf \
+  --ctx-size 4096 --threads 4 \
+  --batch-size 512 --ubatch-size 512 \
+  --port 8080 --jinja --reasoning off \
+  --cache-reuse 256 --mlock
