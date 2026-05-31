@@ -1,0 +1,351 @@
+"""ChatWrapper — the public API: ``begin``, ``inject``, ``request``.
+
+The wrapper's whole job is to prefill as little as possible. ``begin`` resets and
+prefills the system prompt plus whatever recent history fits; ``inject`` prefills
+a single message with no generation; ``request`` prefills only the new request
+text and then generates. When the cache crosses the eviction threshold the oldest
+non-system messages are removed and the survivors shifted down to close the gap,
+so their KV is reused without re-prefilling.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass
+
+from .config import Config, TemplateConfig
+from .context import Generation, KVContext
+from .messages import Message, MessageTable, fit_newest_first
+from .template import TemplateFormatter
+
+
+def detect_template_name(model_template: str | None) -> str:
+    """Infer the preset name from a model's built-in chat-template string.
+
+    Args:
+        model_template: The model's embedded chat template, or ``None``.
+
+    Returns:
+        One of ``"gemma4"``, ``"gemma"``, ``"chatml"`` — defaulting to
+        ``"chatml"`` when nothing more specific is recognised.
+    """
+    t = model_template or ""
+    if "<|turn>" in t or "<turn|>" in t:
+        return "gemma4"
+    if "<start_of_turn>" in t:
+        return "gemma"
+    return "chatml"
+
+
+@dataclass
+class Turn:
+    """What a ``request`` produced.
+
+    Attributes:
+        text: The assistant's reply (trimmed at any stop string).
+        n_prefilled: Tokens decoded for the request prompt (request text + the
+            assistant-open tag) — the work that was *not* avoidable.
+        n_generated: Tokens sampled.
+        n_evicted: Messages dropped to make room for this turn.
+        stop_reason: Why generation stopped (``"eog"``/``"stop"``/``"length"``).
+    """
+
+    text: str
+    n_prefilled: int
+    n_generated: int
+    n_evicted: int
+    stop_reason: str
+
+
+class ChatWrapper:
+    """Stateful single-conversation chat over llama.cpp with KV reuse."""
+
+    def __init__(self, config: Config, context: KVContext | None = None) -> None:
+        self._cfg = config
+        # ``context`` is injectable for testing; otherwise we load the model.
+        self._ctx = context if context is not None else KVContext(config)
+        template = self._resolve_template(config)
+        self._fmt = TemplateFormatter(template)
+        self._table = MessageTable()
+        # Serializes all cache-mutating actions: one KV sequence is shared across
+        # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
+        # it. Reentrant so request() can hold it across the stream() it drains.
+        self._lock = threading.RLock()
+
+    # ----- introspection -------------------------------------------------
+    @property
+    def total_tokens(self) -> int:
+        return self._table.total
+
+    def snapshot(self) -> list[dict]:
+        """Return the current cache layout (for inspection and tests)."""
+        return [
+            {
+                "role": m.role,
+                "n_tokens": m.n_tokens,
+                "pos_start": m.pos_start,
+                "pos_end": m.pos_end,
+            }
+            for m in self._table.messages
+        ]
+
+    # ----- action: begin -------------------------------------------------
+    def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None) -> None:
+        """Reset the conversation: prefill the system prompt and recent history.
+
+        Args:
+            system_prompt: The system prompt (always kept, never evicted).
+            messages: Optional ``(role, text)`` history, oldest first. Only the
+                most recent messages that fit under the threshold alongside the
+                system prompt are prefilled; older excess is dropped.
+        """
+        messages = messages or []
+        with self._lock:
+            self._ctx.reset()
+            self._table.reset()
+
+            sys_tokens = self._ctx.tokenize(self._fmt.fragment("system", system_prompt), add_special=True)
+            hist_tokens = [
+                self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
+                for role, text in messages
+            ]
+
+            kept = fit_newest_first(
+                [len(t) for t in hist_tokens], len(sys_tokens), self._cfg.threshold_tokens
+            )
+            keep_from = len(messages) - kept
+            kept_messages = messages[keep_from:]
+            kept_tokens = hist_tokens[keep_from:]
+
+            self._check_template_equivalence(system_prompt, kept_messages, sys_tokens, kept_tokens)
+
+            # One decode for the whole conversation == cheapest possible prefill.
+            all_tokens = list(sys_tokens)
+            for toks in kept_tokens:
+                all_tokens.extend(toks)
+            self._ctx.prefill(all_tokens, start_pos=0, want_logits=False)
+
+            self._table.append(Message("system", system_prompt, sys_tokens))
+            for (role, text), toks in zip(kept_messages, kept_tokens):
+                self._table.append(Message(role, text, toks))
+
+    # ----- action: inject ------------------------------------------------
+    def inject(self, text: str, role: str = "user") -> int:
+        """Prefill one message as context without generating.
+
+        Evicts the oldest messages until the new message fits under the
+        threshold, then prefills it.
+
+        Returns:
+            The number of messages evicted to make room.
+        """
+        with self._lock:
+            tokens = self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
+            evicted = self._evict_until(lambda: self._table.total + len(tokens) <= self._cfg.threshold_tokens)
+            tokens = self._fit_or_raise(
+                tokens, budget=self._cfg.threshold_tokens - self._table.total, what="injected message"
+            )
+
+            self._ctx.prefill(tokens, start_pos=self._table.total, want_logits=False)
+            self._table.append(Message(role, text, tokens))
+            return evicted
+
+    # ----- action: request / stream --------------------------------------
+    def stream(
+        self, text: str, *, max_tokens: int | None = None, stop: list[str] | None = None
+    ):
+        """Add a user request and stream the reply token-by-token.
+
+        Yields visible text deltas as they are generated — the low-latency path
+        for a voice pipeline (synthesize sentence *n* while sentence *n+1* is
+        still being written). The generator's ``return`` value is the :class:`Turn`
+        summary, available via ``StopIteration.value`` or by calling
+        :meth:`request`, which wraps this method.
+
+        Barge-in is safe: if the consumer stops early (``gen.close()``), the
+        ``finally`` block still terminates the assistant turn and records exactly
+        the tokens that reached the cache, so the next turn's cache stays valid.
+
+        Args:
+            text: The user request text.
+            max_tokens: Override for the per-turn generation cap.
+            stop: Extra stop strings for this request (added to the config's).
+
+        Yields:
+            Visible reply text deltas.
+
+        Returns:
+            A :class:`Turn` describing the reply and the work performed.
+        """
+        with self._lock:
+            user_tokens = self._ctx.tokenize(self._fmt.fragment("user", text), add_special=False)
+            open_tokens = self._ctx.tokenize(self._fmt.assistant_open(), add_special=False)
+            close_tokens = self._ctx.tokenize(self._fmt.assistant_close(), add_special=False)
+            n_prompt = len(user_tokens) + len(open_tokens)
+
+            # Best-effort: drop the oldest until we're back under threshold.
+            evicted = self._evict_until(
+                lambda: self._table.total + n_prompt <= self._cfg.threshold_tokens
+            )
+            # Hard wall: the prompt plus its turn closer must fit in the context.
+            user_tokens = self._fit_or_raise(
+                user_tokens,
+                budget=self._cfg.n_ctx - len(open_tokens) - len(close_tokens) - self._table.total,
+                what="request",
+            )
+            n_prompt = len(user_tokens) + len(open_tokens)
+
+            self._ctx.prefill(user_tokens, start_pos=self._table.total, want_logits=False)
+            self._table.append(Message("user", text, user_tokens))
+
+            gen_start = self._table.total + len(open_tokens)
+            self._ctx.prefill(open_tokens, start_pos=self._table.total, want_logits=True)
+
+            budget = self._cfg.n_ctx - gen_start - len(close_tokens)
+            cap = max_tokens if max_tokens is not None else self._cfg.max_tokens
+            n_predict_max = max(0, min(cap, budget))
+            stops = list(self._cfg.stop) + list(stop or [])
+
+            gen = Generation()
+            try:
+                yield from self._ctx.generate(gen_start, n_predict_max, stops, out=gen)
+            finally:
+                # Runs on normal completion *and* on early close (barge-in).
+                close_start = gen_start + len(gen.token_ids)
+                self._ctx.prefill(close_tokens, start_pos=close_start, want_logits=False)
+                assistant_tokens = list(open_tokens) + gen.token_ids + list(close_tokens)
+                self._table.append(Message("assistant", gen.text, assistant_tokens))
+
+            return Turn(
+                text=gen.text,
+                n_prefilled=n_prompt,
+                n_generated=len(gen.token_ids),
+                n_evicted=evicted,
+                stop_reason=gen.stop_reason,
+            )
+
+    def request(
+        self, text: str, *, max_tokens: int | None = None, stop: list[str] | None = None
+    ) -> Turn:
+        """Add a user request and generate a reply, reusing all existing context.
+
+        Convenience wrapper that drains :meth:`stream` and returns its summary.
+
+        Returns:
+            A :class:`Turn` describing the reply and the work performed.
+        """
+        gen = self.stream(text, max_tokens=max_tokens, stop=stop)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as done:
+            return done.value
+
+    def close(self) -> None:
+        self._ctx.close()
+
+    # ----- internals -----------------------------------------------------
+    def _resolve_template(self, config: Config) -> TemplateConfig:
+        """Pick the chat template: explicit override, else auto-detect from the model.
+
+        When ``config.template`` is set it is used as-is. Otherwise the model's
+        built-in chat template is inspected to choose a preset; if that is
+        inconclusive the ChatML default is used. The chosen template's
+        turn-terminator is then validated against the model's vocabulary so a
+        silent mismatch fails loudly instead of producing run-on generations.
+        """
+        if config.template is not None:
+            self._validate_template(config.template, source="config.template")
+            return config.template
+
+        name = detect_template_name(self._ctx.model_chat_template())
+        template = TemplateConfig.preset(name)
+        self._validate_template(template, source=f"auto-detected preset {name!r}")
+        return template
+
+    def _validate_template(self, template: TemplateConfig, source: str) -> None:
+        """Ensure the turn-terminator is a real special token of this model.
+
+        A template whose terminator splits into plain-text pieces (e.g. ChatML
+        tags on a Gemma model) never lets the model emit end-of-generation, so it
+        runs to the token cap every turn. Detecting that here turns a subtle
+        performance/quality bug into an actionable error.
+        """
+        # FakeContext (tests) has no special-token vocabulary; skip gracefully.
+        if not hasattr(self._ctx, "tokenizes_to_special"):
+            return
+        terminator = template.assistant_close.strip()
+        if terminator and not self._ctx.tokenizes_to_special(terminator):
+            raise ValueError(
+                f"chat template ({source}) is not valid for this model: its "
+                f"turn-terminator {terminator!r} does not tokenize to a special "
+                "token, so generation would never stop. Pass a matching "
+                "TemplateConfig (see TemplateConfig.preset)."
+            )
+
+    def _evict_until(self, fits) -> int:
+        """Evict the oldest non-system messages until ``fits()`` or none remain.
+
+        Two strategies, chosen by the cache's capabilities:
+
+        * **shift** (default, e.g. Gemma 4) — each eviction removes the oldest
+          message's span and shifts the survivors down in place, reusing their KV
+          for free. Applied incrementally as messages are dropped.
+        * **rebuild** (caches that can't shift, e.g. compact SWA / recurrent) —
+          drop the oldest from the bookkeeping only, then re-prefill the whole
+          surviving conversation once. Correct, but not free; this is the honest
+          fallback for models where in-place shifting is unsupported.
+        """
+        if self._ctx.can_shift:
+            evicted = 0
+            while not fits() and self._table.n_evictable > 0:
+                self._ctx.apply_eviction(self._table.evict_oldest())
+                evicted += 1
+            return evicted
+
+        # Rebuild path: decide survivors first (bookkeeping only), then re-prefill.
+        evicted = 0
+        while not fits() and self._table.n_evictable > 0:
+            self._table.evict_oldest()  # renumbers the table; cache untouched yet
+            evicted += 1
+        if evicted:
+            self._rebuild_cache()
+        return evicted
+
+    def _rebuild_cache(self) -> None:
+        """Re-prefill the cache from the surviving messages (no in-place shift)."""
+        self._ctx.reset()
+        all_tokens: list[int] = []
+        for m in self._table.messages:
+            all_tokens.extend(m.token_ids)
+        self._ctx.prefill(all_tokens, start_pos=0, want_logits=False)
+
+    def _fit_or_raise(self, tokens: list[int], budget: int, what: str) -> list[int]:
+        """Enforce the size policy when a message still doesn't fit."""
+        if len(tokens) <= budget:
+            return tokens
+        if self._cfg.oversize_policy == "truncate" and budget > 0:
+            return tokens[:budget]
+        raise ValueError(
+            f"{what} needs {len(tokens)} tokens but only {budget} fit "
+            f"(oversize_policy='{self._cfg.oversize_policy}')"
+        )
+
+    def _check_template_equivalence(self, system, kept_messages, sys_tokens, kept_tokens) -> None:
+        """Assert per-message prefill yields the same tokens as a one-shot render.
+
+        If this fails, the template tokenizes differently across message
+        boundaries and incremental ``inject``/``request`` prefill would diverge
+        from a full render — better to fail loudly at ``begin`` than corrupt the
+        cache silently later.
+        """
+        whole = self._ctx.tokenize(self._fmt.full_conversation(system, kept_messages), add_special=True)
+        piecewise = list(sys_tokens)
+        for toks in kept_tokens:
+            piecewise.extend(toks)
+        if whole != piecewise:
+            raise ValueError(
+                "chat template is not safe for per-message prefill: tokenization "
+                "differs across message boundaries. Adjust TemplateConfig so each "
+                "fragment tokenizes independently."
+            )
