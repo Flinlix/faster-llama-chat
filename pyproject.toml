@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llama_chat"
 version = "0.1.0"
-description = "A KV-cache scalpel chat wrapper around llama.cpp: prefill as little as possible, evict-and-shift the oldest messages."
+description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict-and-shift the oldest messages."
 # 3.11+: the dataclasses in config.py use PEP 604 `X | None` annotations, which
 # are evaluated at runtime by @dataclass and only valid on Python 3.10+.
 requires-python = ">=3.11"
 dependencies = [
     # Build llama-cpp-python from source per machine (see install.sh):
-    #   Pi 5 (CPU):     CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python llama-cpp-python
-    #   GPU (RTX 3090): CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+    #   CPU:        CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python
+    #   Nvidia GPU: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
     "llama-cpp-python>=0.3.0",
 ]
 

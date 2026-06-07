@@ -4,7 +4,7 @@ llama.cpp's C API has churned across releases — most importantly the KV-cache
 functions migrated ``llama_kv_cache_seq_*`` -> ``llama_kv_self_seq_*`` -> the
 newer ``llama_memory_*`` handle API. This module resolves whichever symbols the
 installed build exposes, once, so the rest of the package can speak a single
-stable vocabulary on both the CPU (Pi) and CUDA (3090) builds.
+stable vocabulary on both the CPU and CUDA builds.
 
 Only the handful of primitives the wrapper actually needs are exposed here.
 """
@@ -19,13 +19,16 @@ try:  # pragma: no cover - import guard exercised only without the dep installed
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "llama-cpp-python is required to run the model. Install it with:\n"
-        '  CPU (Pi):  pip install llama-cpp-python\n'
+        '  CPU:       pip install llama-cpp-python\n'
         '  GPU:       CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python'
     ) from exc
 
 
 def _first(*names: str) -> Callable:
-    """Return the first attribute of ``llama_cpp`` that exists among ``names``."""
+    """Return the first attribute of ``llama_cpp`` that exists among ``names``.
+
+    Handles API renames across llama_cpp versions.
+    """
     for name in names:
         fn = getattr(llama_cpp, name, None)
         if fn is not None:
@@ -33,6 +36,15 @@ def _first(*names: str) -> Callable:
     raise AttributeError(
         f"none of {names} found in llama_cpp (version {getattr(llama_cpp, '__version__', '?')})"
     )
+
+
+def _maybe(*names: str):
+    """Like ``_first``, but returns ``None`` instead of raising if nothing is found."""
+    for name in names:
+        fn = getattr(llama_cpp, name, None)
+        if fn is not None:
+            return fn
+    return None
 
 
 class Backend:
@@ -57,7 +69,6 @@ class Backend:
 
         self._is_eog = _first("llama_vocab_is_eog", "llama_token_is_eog")
         self._token_to_piece = _first("llama_token_to_piece")
-        self._chat_template = getattr(llama_cpp, "llama_model_chat_template", None)
         self._is_control = getattr(llama_cpp, "llama_vocab_is_control", None)
 
     # ----- model / context lifecycle ------------------------------------
@@ -101,6 +112,8 @@ class Backend:
             n_max = -n
             buf = (self.lc.llama_token * n_max)()
             n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, True)
+            if n < 0:
+                raise RuntimeError(f"llama_tokenize failed: required {-n} tokens")
         return list(buf[:n])
 
     def token_to_piece_bytes(self, vocab, token: int) -> bytes:
@@ -115,6 +128,8 @@ class Backend:
         if n < 0:
             buf = (ctypes.c_char * (-n))()
             n = self._token_to_piece(vocab, token, buf, len(buf), 0, True)
+            if n < 0:
+                raise RuntimeError(f"llama_token_to_piece failed for token {token}")
         return bytes(buf[:n])
 
     def token_to_piece(self, vocab, token: int) -> str:
@@ -130,14 +145,6 @@ class Backend:
             return False
         return bool(self._is_control(vocab, token))
 
-    def chat_template(self, model) -> str | None:
-        """Return the model's built-in chat template string, or ``None``."""
-        if self._chat_template is None:
-            return None
-        raw = self._chat_template(model, None)
-        if not raw:
-            return None
-        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
 
     # ----- KV / memory edits --------------------------------------------
     def _mem(self, ctx):
@@ -147,22 +154,28 @@ class Backend:
         mem = self._mem(ctx)
         if mem is not None and self._mem_clear is not None:
             self._mem_clear(mem, True)
-        else:
+        elif self._kv_clear is not None:
             self._kv_clear(ctx)
+        else:
+            raise RuntimeError("no KV-cache clear function available in this llama_cpp build")
 
     def kv_seq_rm(self, ctx, seq: int, p0: int, p1: int) -> None:
         mem = self._mem(ctx)
         if mem is not None and self._mem_rm is not None:
             self._mem_rm(mem, seq, p0, p1)
-        else:
+        elif self._kv_rm is not None:
             self._kv_rm(ctx, seq, p0, p1)
+        else:
+            raise RuntimeError("no KV-cache seq_rm function available in this llama_cpp build")
 
     def kv_seq_add(self, ctx, seq: int, p0: int, p1: int, delta: int) -> None:
         mem = self._mem(ctx)
         if mem is not None and self._mem_add is not None:
             self._mem_add(mem, seq, p0, p1, delta)
-        else:
+        elif self._kv_add is not None:
             self._kv_add(ctx, seq, p0, p1, delta)
+        else:
+            raise RuntimeError("no KV-cache seq_add function available in this llama_cpp build")
 
     def can_shift(self, ctx) -> bool:
         """True if the cache supports in-place position shifting after removal.
@@ -210,9 +223,3 @@ class Backend:
                 self.lc.llama_batch_free(batch)
 
 
-def _maybe(*names: str):
-    for name in names:
-        fn = getattr(llama_cpp, name, None)
-        if fn is not None:
-            return fn
-    return None

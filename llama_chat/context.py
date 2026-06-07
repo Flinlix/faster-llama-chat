@@ -12,14 +12,40 @@ from __future__ import annotations
 import codecs
 from dataclasses import dataclass, field
 
+from ._backend import Backend
 from .config import Config
 from .messages import Eviction
 
 SEQ = 0  # single active conversation -> single sequence id
 
 
+class _TextBuffer:
+    """Accumulated decoded text with a cursor tracking what has been emitted."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._emitted = 0
+
+    def append(self, text: str) -> None:
+        self._buf += text
+
+    def emit(self, upto: int) -> str | None:
+        if upto > self._emitted:
+            delta = self._buf[self._emitted:upto]
+            self._emitted = upto
+            return delta
+        return None
+
+    @property
+    def text(self) -> str:
+        return self._buf
+
+    def __len__(self) -> int:
+        return len(self._buf)
+
+
 @dataclass
-class Generation:
+class GenerationAccumulator:
     """Live accumulator for one generation, updated as tokens stream in.
 
     It is filled incrementally by :meth:`KVContext.generate` so that a caller
@@ -42,10 +68,6 @@ class KVContext:
     """Owns the llama.cpp model/context and performs all cache edits."""
 
     def __init__(self, config: Config) -> None:
-        # Imported lazily so the pure bookkeeping layer (and its tests) work
-        # without llama-cpp-python installed.
-        from ._backend import Backend
-
         self._cfg = config
         self._b = Backend()
         self._model = self._b.load_model(config.model_path, config.n_gpu_layers)
@@ -68,11 +90,6 @@ class KVContext:
     def detokenize(self, token_ids: list[int]) -> str:
         return "".join(self._b.token_to_piece(self._vocab, t) for t in token_ids)
 
-    # ----- template detection / validation -------------------------------
-    def model_chat_template(self) -> str | None:
-        """The model's built-in chat-template string, if it ships one."""
-        return self._b.chat_template(self._model)
-
     def tokenizes_to_special(self, text: str) -> bool:
         """True if ``text`` tokenizes to exactly one control/special token.
 
@@ -92,16 +109,16 @@ class KVContext:
 
     def apply_eviction(self, ev: Eviction) -> None:
         """Remove an evicted message's tokens, then shift survivors to close the gap."""
-        self._b.kv_seq_rm(self._ctx, SEQ, ev.removed_start, ev.removed_end)
-        if ev.removed_end < ev.old_total:
+        self._b.kv_seq_rm(self._ctx, SEQ, ev.remove_start, ev.remove_end)
+        if ev.remove_end < ev.old_total:
             self._b.kv_seq_add(
-                self._ctx, SEQ, ev.removed_end, ev.old_total, -ev.shift_delta
+                self._ctx, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
             )
 
     # ----- generation ----------------------------------------------------
     def generate(
         self, start_pos: int, n_predict_max: int, stop: list[str],
-        out: Generation | None = None,
+        out: GenerationAccumulator | None = None,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -127,58 +144,52 @@ class KVContext:
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
         """
-        gen = out if out is not None else Generation()
+        acc = out if out is not None else GenerationAccumulator()
         pos = start_pos
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         max_stop = max((len(s) for s in stop if s), default=0)
-        buf = ""       # all decoded text, including a possibly held-back tail
-        emitted = 0    # chars already yielded (kept == len(gen.text))
-
-        def emit(upto: int):
-            nonlocal emitted
-            if upto > emitted:
-                delta = buf[emitted:upto]
-                gen.text += delta
-                emitted = upto
-                return delta
-            return None
+        tbuf = _TextBuffer()
 
         for _ in range(max(0, n_predict_max)):
             tok = self._b.lc.llama_sampler_sample(self._sampler, self._ctx, -1)
             if self._b.is_eog(self._vocab, tok):
-                gen.stop_reason = "eog"
+                acc.stop_reason = "eog"
                 break
             # Commit to the cache first, then record, then surface text: this
             # ordering is what keeps token_ids == cache across an early close.
             self._b.decode(self._ctx, [tok], pos, SEQ, True, self._n_batch)
             pos += 1
-            gen.token_ids.append(tok)
-            buf += decoder.decode(self._b.token_to_piece_bytes(self._vocab, tok))
+            acc.token_ids.append(tok)
+            tbuf.append(decoder.decode(self._b.token_to_piece_bytes(self._vocab, tok)))
 
             if max_stop:
-                hit = _stop_hit(buf, stop)
+                hit = _stop_hit(tbuf.text, stop)
                 if hit is not None:
-                    delta = emit(hit)
+                    delta = tbuf.emit(hit)
                     if delta:
+                        acc.text += delta
                         yield delta
-                    gen.stop_reason = "stop"
+                    acc.stop_reason = "stop"
                     break
-                delta = emit(len(buf) - (max_stop - 1))  # hold back possible prefix
+                delta = tbuf.emit(len(tbuf) - (max_stop - 1))  # hold back possible prefix
                 if delta:
+                    acc.text += delta
                     yield delta
             else:
-                delta = emit(len(buf))
+                delta = tbuf.emit(len(tbuf))
                 if delta:
+                    acc.text += delta
                     yield delta
         else:
-            gen.stop_reason = "length"
+            acc.stop_reason = "length"
 
         # Flush the held-back tail (and any dangling bytes) unless a stop string
         # truncated the reply.
-        if gen.stop_reason != "stop":
-            buf += decoder.decode(b"", final=True)
-            delta = emit(len(buf))
+        if acc.stop_reason != "stop":
+            tbuf.append(decoder.decode(b"", final=True))
+            delta = tbuf.emit(len(tbuf))
             if delta:
+                acc.text += delta
                 yield delta
 
     # ----- lifecycle -----------------------------------------------------

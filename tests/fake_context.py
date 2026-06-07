@@ -18,7 +18,7 @@ Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 
 from __future__ import annotations
 
-from llama_chat.context import Generation
+from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
 
 BOS = -1
@@ -44,13 +44,6 @@ class FakeContext:
     def detokenize(self, token_ids: list[int]) -> str:
         return "".join(chr(t) for t in token_ids if t >= 0)
 
-    # ----- template detection / validation -------------------------------
-    # The fake has no real vocabulary, so it advertises no built-in template
-    # (wrapper falls back to the ChatML default) and skips special-token
-    # validation, exercising the wrapper's graceful-degradation path.
-    def model_chat_template(self) -> str | None:
-        return None
-
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
         self.cache = []
@@ -66,11 +59,11 @@ class FakeContext:
 
     def apply_eviction(self, ev: Eviction) -> None:
         assert len(self.cache) == ev.old_total
-        del self.cache[ev.removed_start:ev.removed_end]  # remove + implicit shift
+        del self.cache[ev.remove_start:ev.remove_end]  # remove + implicit shift
         self.evictions.append(ev)
 
     def generate(self, start_pos: int, n_predict_max: int, stop: list[str],
-                 out: Generation | None = None):
+                 out: GenerationAccumulator | None = None):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,
@@ -78,7 +71,7 @@ class FakeContext:
         cache and ``out.token_ids`` in agreement (the barge-in guarantee).
         """
         assert start_pos == len(self.cache)
-        gen = out if out is not None else Generation()
+        gen = out if out is not None else GenerationAccumulator()
         n = max(0, min(self._gen_len, n_predict_max))
         for i in range(n):
             tok = self._next_gen + i

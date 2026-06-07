@@ -8,14 +8,14 @@ action, including across evictions.
 
 import pytest
 
-from llama_chat.config import Config, TemplateConfig
-from llama_chat.wrapper import ChatWrapper, detect_template_name
+from llama_chat.config import Config
+from llama_chat.template import TemplateFormatter
+from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import BOS, FakeContext
 
 
 def _cfg(**kw):
-    # model_path is unused because we inject a FakeContext.
-    return Config(model_path="unused", **kw)
+    return Config(**kw)
 
 
 def _flatten(wrapper):
@@ -48,8 +48,8 @@ def test_begin_prefills_system_and_history_once():
 
 def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
-    # system fragment "<|im_start|>system\nsys<|im_end|>\n" + BOS is well under
-    # budget; pick a tiny threshold so only the newest message fits.
+    # system fragment "<|turn>system\nsys<turn|>\n" + BOS is well under budget;
+    # pick a tiny threshold so only the newest message fits.
     w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.07), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x")])
 
@@ -241,22 +241,22 @@ def test_oversize_truncate():
     _assert_consistent(w, fake)
 
 
-# ----- template selection ------------------------------------------------
-@pytest.mark.parametrize(
-    "model_template, expected",
-    [
-        ("...<|turn>user\n...<turn|>...", "gemma4"),
-        ("...<start_of_turn>user\n...<end_of_turn>...", "gemma"),
-        ("...<|im_start|>user\n...<|im_end|>...", "chatml"),
-        ("something unrecognised", "chatml"),
-        (None, "chatml"),
-    ],
-)
-def test_detect_template_name(model_template, expected):
-    assert detect_template_name(model_template) == expected
+# ----- template formatting -----------------------------------------------
+def test_template_defaults_to_gemma4():
+    fmt = TemplateFormatter(_cfg())
+    assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
+    assert fmt.assistant_open() == "<|turn>model\n"
+    assert fmt.assistant_close() == "<turn|>\n"
 
 
-def test_preset_lookup_and_unknown():
-    assert TemplateConfig.preset("gemma4").assistant_close == "<turn|>\n"
+def test_template_formatter_combines_fragments():
+    fmt = TemplateFormatter(
+        _cfg(user_prefix="<u>", user_suffix="</u>",
+             assistant_prefix="<a>", assistant_suffix="</a>")
+    )
+    assert fmt.fragment("user", "hi") == "<u>hi</u>"
+    assert fmt.fragment("assistant", "yo") == "<a>yo</a>"
+    assert fmt.assistant_open() == "<a>"
+    assert fmt.assistant_close() == "</a>"
     with pytest.raises(ValueError):
-        TemplateConfig.preset("does-not-exist")
+        fmt.fragment("unknown-role", "x")

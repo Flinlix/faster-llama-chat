@@ -1,13 +1,13 @@
 """Message bookkeeping — the single source of truth for the KV cache.
 
-This module is pure Python with no llama.cpp dependency so the position
-arithmetic can be unit-tested in isolation. The cache for sequence 0 holds a
-contiguous run of token positions ``[0, total)``; each message owns a slice and
-the table below mirrors that layout exactly.
+This module is pure Python with no llama.cpp dependency. The cache for
+sequence 0 holds a contiguous run of token positions ``[0, total)``;
+each message owns a slice and the table below mirrors that layout exactly.
 
 Invariants (asserted after every structural change):
     * ``messages[0]`` is the system prompt and is never evicted.
-    * ``messages[i].pos_end == messages[i + 1].pos_start`` (no gaps/overlaps).
+    * ``messages[i].pos_end == messages[i + 1].pos_start`` (no gaps/overlaps;
+      ``pos_end`` is an exclusive upper bound, so there is no overlap).
     * ``messages[-1].pos_end == total`` (the next decode position).
 """
 
@@ -44,18 +44,24 @@ class Message:
 class Eviction:
     """Describes a physical cache edit so the backend can apply it.
 
-    The backend should remove ``[removed_start, removed_end)`` then shift every
-    surviving token in ``[removed_end, old_total)`` down by ``-shift_delta`` to
+    The backend should remove ``[remove_start, remove_end)`` then shift every
+    surviving token in ``[remove_end, old_total)`` down by ``-shift_delta`` to
     close the gap.
+
+    Attributes:
+        remove_start: Inclusive start of the removed token range.
+        remove_end: Exclusive end of the removed token range.
+        old_total: Total tokens in the cache before removal; marks the right
+            boundary of the shift range.
     """
 
-    removed_start: int
-    removed_end: int
+    remove_start: int
+    remove_end: int
     old_total: int
 
     @property
     def shift_delta(self) -> int:
-        return self.removed_end - self.removed_start
+        return self.remove_end - self.remove_start
 
 
 class MessageTable:
@@ -116,13 +122,13 @@ class MessageTable:
         """
         idx = 1 if self.has_system else 0
         if idx >= len(self._messages):
-            raise IndexError("no evictable message (only the system prompt remains)")
+            raise IndexError("no evictable message")
 
         old_total = self.total
         victim = self._messages[idx]
         eviction = Eviction(
-            removed_start=victim.pos_start,
-            removed_end=victim.pos_end,
+            remove_start=victim.pos_start,
+            remove_end=victim.pos_end,
             old_total=old_total,
         )
         del self._messages[idx]

@@ -2,44 +2,46 @@
 
 Each message is wrapped in the model's role tags before it reaches the cache.
 Building the templated *string* for one message needs no model — only
-tokenizing it does — so this module keeps the two concerns separate and stays
-unit-testable on its own.
+tokenizing does. This module keeps the two concerns separate.
 """
 
 from __future__ import annotations
 
-from .config import TemplateConfig
+from .config import Config
 
 
 class TemplateFormatter:
-    """Turns ``(role, text)`` into the templated string for a single message.
+    """Combines ``(role, text)`` with the config's template fragments into one
+    message string.
 
-    The wrapper tokenizes these fragments. Because a conversation is just the
+    Each turn renders as ``prefix + text + suffix`` using the role's fragments on
+    :class:`~llama_chat.config.Config`. Because a conversation is just the
     concatenation of its per-message fragments, prefilling message-by-message
     yields the same tokens as prefilling the whole conversation at once (this is
     asserted by the template-equivalence check in ``begin``).
     """
 
-    def __init__(self, template: TemplateConfig) -> None:
-        self._t = template
+    def __init__(self, config: Config) -> None:
+        self._c = config
 
     def fragment(self, role: str, text: str) -> str:
         """Return the templated fragment for a complete message."""
+        c = self._c
         if role == "system":
-            return self._t.system.format(text=text)
+            return f"{c.system_prefix}{text}{c.system_suffix}"
         if role == "user":
-            return self._t.user.format(text=text)
+            return f"{c.user_prefix}{text}{c.user_suffix}"
         if role == "assistant":
-            return self._t.assistant.format(text=text)
+            return f"{c.assistant_prefix}{text}{c.assistant_suffix}"
         raise ValueError(f"unknown role: {role!r}")
 
     def assistant_open(self) -> str:
         """Generation prompt decoded immediately before sampling begins."""
-        return self._t.assistant_open
+        return self._c.assistant_prefix
 
     def assistant_close(self) -> str:
         """Tokens decoded after generation to terminate the assistant turn."""
-        return self._t.assistant_close
+        return self._c.assistant_suffix
 
     def full_conversation(
         self, system: str, messages: list[tuple[str, str]]

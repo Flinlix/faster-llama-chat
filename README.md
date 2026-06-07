@@ -1,18 +1,36 @@
-# llama_chat — a KV-cache scalpel for llama.cpp
+# llama_chat: a KV-cache manager for llama.cpp
 
-A thin Python wrapper around llama.cpp whose one job is to **prefill as little as
-possible**. Prefill (processing the prompt) is the expensive part of inference;
+A thin Python wrapper around llama.cpp whose goal is to **prefill as little as
+possible**. Prefill (processing the prompt) can be an expensive part of inference;
 the KV cache holding that work can be reused across turns. This wrapper keeps the
 cache alive, prefills only genuinely new tokens, and when the cache fills it
-*removes the oldest messages and shifts the survivors down to close the gap* —
-reusing their KV instead of re-prefilling. Like a scalpel.
+*removes the oldest messages and shifts the survivors down to close the gap* -
+reusing their KV instead of re-prefilling.
 
-## Three actions
+## Goals
+
+
+1. **Minimum prefill:** only ever process genuinely *new* tokens. The KV cache
+   from previous turns must survive and be reused.
+2. **Rolling eviction:** when the context fills, old messages are dropped
+   automatically so the chat runs indefinitely without erroring on a full
+   context.
+
+Naive prompt trimming defeats goal 1: removing old messages from the start of
+the sequence shifts every later token's position and **invalidates the entire
+cached prefix → full reprefill every turn.** llama-server's `cache_prompt` has
+the same problem - the moment any non-prefix message is dropped, the common
+prefix collapses to the system prompt. The correct mechanism is **in-place KV
+surgery**: remove the oldest message's token span and *shift the survivors' RoPE
+positions down* to close the gap, so kept messages are never re-processed.
+
+## Quick start
 
 ```python
 from llama_chat import ChatWrapper, Config
 
-chat = ChatWrapper(Config(model_path="model.gguf", n_ctx=4096, threshold_pct=0.8))
+# Config defaults to Gemma 4. Change it to use other models.
+chat = ChatWrapper(Config(model_path="models/gemma-4-E2B-it-Q4_K_M.gguf", n_ctx=4096, threshold_pct=0.75))
 
 # begin: reset + prefill the system prompt and as much recent history as fits
 chat.begin("You are a helpful assistant.",
@@ -26,30 +44,40 @@ turn = chat.request("What's the deadline?")
 print(turn.text)
 
 # stream: same, but yield text deltas as they are generated (low latency).
-# Ideal for a voice pipeline — synthesize sentence n while n+1 is still writing.
 for delta in chat.stream("Summarize the plan."):
     print(delta, end="", flush=True)
 ```
 
-- **`begin`** — full reset for a restart / conversation switch. Prefills the
-  system prompt plus the most recent history that fits under the threshold;
+### The four actions
+
+- **`begin(system_prompt, history)`** - full reset for a restart / conversation
+  switch. Prefills the system prompt (pinned at position 0, never evicted) plus
+  the most recent history that fits under the threshold in a single decode;
   older excess is dropped.
-- **`inject`** — adds context (e.g. retrieved documents) with no generation.
-  Evicts the oldest messages first if needed to stay under the threshold.
-- **`request`** — prefills just the request text and generates, evicting oldest
-  messages if over threshold and capping generation so the total never exceeds
-  `n_ctx`. The reply is recorded so the next turn reuses it for free.
-- **`stream`** — the generator form of `request`: yields visible text deltas as
-  tokens are sampled and returns the same `Turn` summary on completion. Bytes are
-  decoded incrementally, so a UTF-8 codepoint split across tokens is never
-  mangled. Abandoning the stream early (barge-in) still records exactly the
-  tokens that reached the cache, so the next turn stays valid. Cache-mutating
-  actions are serialized with a lock, safe to drive from a threaded server.
+- **`inject(text, role="user")`** - adds context (e.g. retrieved documents) with
+  no generation. Evicts the oldest messages first if needed to stay under the
+  threshold. Returns the number of messages evicted.
+- **`request(text)`** - prefills just the request text and generates, evicting
+  oldest messages if over threshold and capping generation so the total never
+  exceeds `n_ctx`. The reply is recorded so the next turn reuses it for free.
+  Returns a `Turn` (`text`, `n_prefilled`, `n_generated`, `n_evicted`,
+  `stop_reason`).
+- **`stream(text)`** - the generator form of `request`: yields text
+  deltas as tokens are sampled and returns the same `Turn` summary on completion
+  (via `StopIteration.value`). Bytes are decoded incrementally, so a UTF-8
+  codepoint split across tokens is never mangled. Each token is committed to the
+  cache *before* its text is surfaced, so abandoning the stream early (barge-in
+  via `gen.close()`) still records exactly the tokens that reached the cache, and the next turn stays valid.
 
-## How eviction works (the scalpel)
+Cache-mutating actions are serialized with a reentrant lock, so the wrapper is
+safe to drive from a threaded HTTP server.
 
-The cache for sequence 0 is a contiguous run `[0, total)`; each message owns a
-slice. To evict the oldest non-system message at `[a, b)`:
+## How eviction works
+
+A pure-Python `MessageTable` is the single source of truth: the cache for
+sequence 0 is a contiguous run `[0, total)`, each message owns a `[start, stop)`
+slice, and the table recomputes every position after any structural change. To
+evict the oldest non-system message at `[a, b)`:
 
 ```
 llama_memory_seq_rm(seq, a, b)               # drop those tokens
@@ -59,53 +87,90 @@ llama_memory_seq_add(seq, b, total, -(b-a))  # shift survivors down to close the
 `seq_add` also fixes the RoPE positions, so the survivors stay coherent without
 recomputation. This reuse is *lossy* (the survivors' cached K/V were computed
 while attending to the now-removed tokens), which is the standard StreamingLLM
-trade-off — fast, with slight quality drift. The system prompt is never evicted.
-(`_backend.py` resolves these symbols defensively: the modern `llama_memory_*`
-handle API when present, falling back to the older `llama_kv_self_*` /
-`llama_kv_cache_*` names across llama.cpp versions.)
+trade-off - fast, with slight quality drift. The system prompt is never evicted.
 
-Caches that can't shift in place (compact sliding-window, recurrent/Mamba) are
-detected at load via `llama_memory_can_shift()`; for those the wrapper drops the
-oldest messages and **rebuilds** the cache from the survivors in one prefill —
-correct, just not free. The fast in-place path above is used everywhere it can
-be (including Gemma 4).
+The strategy is chosen automatically at construction from
+`llama_memory_can_shift()`:
 
-## Install (same package, per-machine build)
+- **shift** (default, the fast path) - the in-place edit above, applied
+  incrementally as messages are dropped. Used everywhere it can be, including
+  Gemma 4 under the default full-size SWA cache.
+- **rebuild** (caches that can't shift - compact sliding-window, recurrent /
+  Mamba state, where dropping tokens loses the position info shifting needs) -
+  drop the oldest messages from the bookkeeping, then re-prefill the surviving
+  conversation once. Correct, just not free; a non-shiftable model degrades
+  gracefully instead of corrupting the cache.
+
+The backend (`_backend.py`) resolves the cache symbols defensively across
+llama.cpp API churn: the modern `llama_memory_*` handle API when present,
+falling back to the older `llama_kv_self_*` / `llama_kv_cache_*` names.
+
+## Install
+
+llama-cpp-python is built **from source per machine** so it uses that CPU's own
+kernels (Armv8.2 dot-product on the Pi, AVX2 on x86) or the CUDA backend - the
+prebuilt wheel targets a baseline ISA and ships no CUDA.
 
 ```bash
-# Raspberry Pi 5 (CPU) — builds llama-cpp-python from source for the ARM
-# dot-product kernels, then installs llama_chat + test deps and verifies:
+# Auto-detect: CUDA if nvidia-smi is present, else a native-CPU build.
+# Builds llama-cpp-python from source, installs llama_chat (editable), and
+# verifies the llama.cpp symbols the eviction core relies on.
 ./install.sh
 
-# Equivalent manual build:
-CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python llama-cpp-python
-pip install -e ".[test]"
+./install.sh --cpu      # force the native-CPU build
+./install.sh --cuda     # force the Nvidia GPU build
+./install.sh --dev      # add test dependencies (append to any of the above)
+```
 
-# i9 + RTX 3090 (CUDA offload)
-CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+Equivalent manual build:
+
+```bash
+# Raspberry Pi 5 / CPU
+CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"
+
+# Nvidia GPU (CUDA offload)
+CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.0"
+
 pip install -e ".[test]"
 ```
 
-Only `Config` differs between targets: `model_path`, `n_ctx`, `threshold_pct`,
-and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on the 3090). The
-wrapper code is identical — `seq_rm`/`seq_add` work on both backends.
+Only `Config` differs between targets - `model_path`, `n_ctx`, `threshold_pct`,
+and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on a GPU). The
+wrapper code is identical; `seq_rm` / `seq_add` work on both backends.
 
 ## Chat template
 
 The template must match the model, because its turn-terminator is what lets the
-model stop generating; a mismatched template tokenizes as plain text, so the
-model never emits its end-of-turn token and runs to the generation cap.
+model stop generating. A mismatched template tokenizes as plain text, so the
+model never emits its end-of-turn token and runs to the generation cap every
+turn.
 
-By default the template is **auto-detected** from the model's built-in chat
-template — Gemma 4 (`<|turn>`), Gemma 2/3 (`<start_of_turn>`) and ChatML
-(`<|im_start|>`) are recognised. The chosen terminator is validated against the
-model's vocabulary at load time, so a mismatch fails loudly instead of degrading
-silently. To override, pass a preset or a custom `TemplateConfig`:
+The template is expressed as per-role **fragments** on `Config`: the literal text
+wrapped around each message, so one turn renders as `prefix + text + suffix`.
+The defaults are **Gemma 4** (`<|turn>{role}\n … <turn|>\n`). To target another model,
+set the fragment fields:
 
 ```python
-from llama_chat import Config, TemplateConfig
-Config(model_path="model.gguf", template=TemplateConfig.preset("gemma4"))
+from llama_chat import Config
+
+# ChatML, for example:
+Config(
+    model_path="model.gguf",
+    system_prefix="<|im_start|>system\n", system_suffix="<|im_end|>\n",
+    user_prefix="<|im_start|>user\n",     user_suffix="<|im_end|>\n",
+    assistant_prefix="<|im_start|>assistant\n", assistant_suffix="<|im_end|>\n",
+)
 ```
+
+Two load-time checks make a mismatch fail loudly instead of degrading silently:
+
+- **At construction** the turn-terminator (`assistant_suffix`) is validated
+  against the model's vocabulary - if it does not tokenize to a single special
+  token, the silent-mismatch trap above, construction raises.
+- **At `begin`** the wrapper asserts that per-message prefill tokenizes
+  identically to a one-shot render of the whole conversation. If the template
+  tokenizes differently across message boundaries (which would make incremental
+  `inject` / `request` prefill diverge from a full render), it raises.
 
 ## Verify
 
@@ -114,22 +179,25 @@ Config(model_path="model.gguf", template=TemplateConfig.preset("gemma4"))
 python -m pytest -q
 
 # Against a real model (logs prefill reuse + eviction stress):
-python examples/demo.py /path/to/model.gguf            # CPU
-python examples/demo.py /path/to/model.gguf --gpu-layers -1
+python examples/demo.py /path/to/model.gguf                  # CPU
+python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 ```
 
 The test suite uses a model-free fake backend whose `prefill` asserts
-`start_pos == len(cache)` — i.e. the wrapper can only ever *append*, never
+`start_pos == len(cache)` - i.e. the wrapper can only ever *append*, never
 re-prefill a survivor. That assertion is the design guarantee, checked
-mechanically.
+mechanically. The demo proves the same claim against a real model by logging how
+many tokens each action prefills, and stresses eviction with a tiny context to
+show the oldest messages being cut while the system prompt survives and the total
+never crosses `n_ctx`.
 
 ## Layout
 
 | File | Role |
 |------|------|
-| `llama_chat/config.py` | `Config` / `TemplateConfig` — the only per-machine knobs |
-| `llama_chat/messages.py` | `MessageTable` — position bookkeeping, evict + shift (pure) |
-| `llama_chat/template.py` | per-message chat-template fragments |
+| `llama_chat/config.py` | `Config` - the hardware- and model-specific configuration |
+| `llama_chat/messages.py` | `MessageTable` - position bookkeeping, evict + shift (pure Python) |
+| `llama_chat/template.py` | `TemplateFormatter` - per-message chat-template fragments |
 | `llama_chat/_backend.py` | version-stable adapter over `llama_cpp.*` (handles API churn) |
-| `llama_chat/context.py` | `KVContext` — tokenize / prefill / streaming generate / evict |
-| `llama_chat/wrapper.py` | `ChatWrapper` — `begin` / `inject` / `request` / `stream` |
+| `llama_chat/context.py` | `KVContext` - tokenize / prefill / streaming generate / evict |
+| `llama_chat/wrapper.py` | `ChatWrapper` - `begin` / `inject` / `request` / `stream` |

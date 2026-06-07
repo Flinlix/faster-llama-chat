@@ -25,7 +25,7 @@ def test_evict_oldest_keeps_system_and_renumbers():
     t.append(_msg("assistant", 5))  # positions [7, 12)
 
     ev = t.evict_oldest()
-    assert (ev.removed_start, ev.removed_end, ev.old_total) == (3, 7, 12)
+    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 7, 12)
     assert ev.shift_delta == 4
     # System preserved, assistant shifted down to close the gap.
     roles = [(m.role, m.pos_start, m.pos_end) for m in t.messages]

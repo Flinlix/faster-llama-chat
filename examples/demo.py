@@ -1,33 +1,24 @@
-"""End-to-end demo of the KV-cache scalpel against a real GGUF model.
+"""End-to-end demo of the KV-cache manager against a real GGUF model.
 
-Run it with a small model on CPU (Pi) or a larger one on GPU (3090). Install the
-package first (see ../install.sh / README) so ``llama_chat`` is importable:
+Config defaults to Gemma 4; Change it to match your model and hardware.
 
-    # Pi / CPU
-    ./install.sh                         # builds llama-cpp-python + installs the package
-    python examples/demo.py /path/to/model.gguf
+Install the package first (see install.sh or README), then run:
 
-    # RTX 3090
-    CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
-    pip install -e .
-    python examples/demo.py /path/to/model.gguf --gpu-layers -1
+    python examples/demo.py /path/to/gemma_4_model.gguf                  # CPU
+    python examples/demo.py /path/to/gemma_4_model.gguf --gpu-layers -1  # GPU
 
 The demo proves the core claim by logging how many tokens are *prefilled* per
-action: after ``begin`` primes the conversation, each ``request`` should prefill
-only its own prompt — never the surviving history. The eviction stress run uses
-a deliberately tiny context to show the oldest messages being cut while the
+action: after ``begin`` primes the conversation, each ``request`` prefills only
+its own new prompt — never the surviving history. The eviction stress run uses
+a deliberately tiny context to show the oldest messages being dropped while the
 system prompt survives and the total never crosses ``n_ctx``.
-
-The chat template is auto-detected from the model (Gemma 4, Gemma, ChatML), so
-no template configuration is needed for those families.
 """
 
 from __future__ import annotations
 
 import argparse
 
-from llama_chat import ChatWrapper, Config
-from llama_chat.context import KVContext
+from llama_chat import ChatWrapper, Config, KVContext
 
 
 class CountingContext(KVContext):
@@ -97,7 +88,7 @@ def main() -> None:
     show(w)
     w.close()
 
-    # ---- Eviction stress: tiny context, watch the scalpel ----
+    # ---- Eviction stress: tiny context, watch the eviction ----
     banner("EVICTION STRESS: tiny context — oldest messages get cut, system kept")
     small = Config(
         model_path=args.model,

@@ -1,6 +1,6 @@
 """ChatWrapper — the public API: ``begin``, ``inject``, ``request``.
 
-The wrapper's whole job is to prefill as little as possible. ``begin`` resets and
+The wrapper's goal is to prefill as little as possible. ``begin`` resets and
 prefills the system prompt plus whatever recent history fits; ``inject`` prefills
 a single message with no generation; ``request`` prefills only the new request
 text and then generates. When the cache crosses the eviction threshold the oldest
@@ -13,28 +13,10 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from .config import Config, TemplateConfig
-from .context import Generation, KVContext
+from .config import Config
+from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, fit_newest_first
 from .template import TemplateFormatter
-
-
-def detect_template_name(model_template: str | None) -> str:
-    """Infer the preset name from a model's built-in chat-template string.
-
-    Args:
-        model_template: The model's embedded chat template, or ``None``.
-
-    Returns:
-        One of ``"gemma4"``, ``"gemma"``, ``"chatml"`` — defaulting to
-        ``"chatml"`` when nothing more specific is recognised.
-    """
-    t = model_template or ""
-    if "<|turn>" in t or "<turn|>" in t:
-        return "gemma4"
-    if "<start_of_turn>" in t:
-        return "gemma"
-    return "chatml"
 
 
 @dataclass
@@ -44,7 +26,7 @@ class Turn:
     Attributes:
         text: The assistant's reply (trimmed at any stop string).
         n_prefilled: Tokens decoded for the request prompt (request text + the
-            assistant-open tag) — the work that was *not* avoidable.
+            assistant-open tag).
         n_generated: Tokens sampled.
         n_evicted: Messages dropped to make room for this turn.
         stop_reason: Why generation stopped (``"eog"``/``"stop"``/``"length"``).
@@ -60,12 +42,12 @@ class Turn:
 class ChatWrapper:
     """Stateful single-conversation chat over llama.cpp with KV reuse."""
 
-    def __init__(self, config: Config, context: KVContext | None = None) -> None:
-        self._cfg = config
-        # ``context`` is injectable for testing; otherwise we load the model.
+    def __init__(self, config: Config = Config(), context: KVContext | None = None) -> None:
+        # ``context`` is injectable for testing only.
         self._ctx = context if context is not None else KVContext(config)
-        template = self._resolve_template(config)
-        self._fmt = TemplateFormatter(template)
+        self._cfg = config
+        self._validate_template(self._cfg)
+        self._fmt = TemplateFormatter(self._cfg)
         self._table = MessageTable()
         # Serializes all cache-mutating actions: one KV sequence is shared across
         # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
@@ -156,11 +138,9 @@ class ChatWrapper:
     ):
         """Add a user request and stream the reply token-by-token.
 
-        Yields visible text deltas as they are generated — the low-latency path
-        for a voice pipeline (synthesize sentence *n* while sentence *n+1* is
-        still being written). The generator's ``return`` value is the :class:`Turn`
-        summary, available via ``StopIteration.value`` or by calling
-        :meth:`request`, which wraps this method.
+        Yields visible text deltas as they are generated. The generator's ``return``
+        value is the :class:`Turn` summary, available via ``StopIteration.value``
+        or by calling :meth:`request`, which wraps this method.
 
         Barge-in is safe: if the consumer stops early (``gen.close()``), the
         ``finally`` block still terminates the assistant turn and records exactly
@@ -172,7 +152,7 @@ class ChatWrapper:
             stop: Extra stop strings for this request (added to the config's).
 
         Yields:
-            Visible reply text deltas.
+            Reply text deltas.
 
         Returns:
             A :class:`Turn` describing the reply and the work performed.
@@ -206,14 +186,14 @@ class ChatWrapper:
             n_predict_max = max(0, min(cap, budget))
             stops = list(self._cfg.stop) + list(stop or [])
 
-            gen = Generation()
+            gen = GenerationAccumulator()
             try:
                 yield from self._ctx.generate(gen_start, n_predict_max, stops, out=gen)
             finally:
                 # Runs on normal completion *and* on early close (barge-in).
                 close_start = gen_start + len(gen.token_ids)
                 self._ctx.prefill(close_tokens, start_pos=close_start, want_logits=False)
-                assistant_tokens = list(open_tokens) + gen.token_ids + list(close_tokens)
+                assistant_tokens = open_tokens + gen.token_ids + close_tokens
                 self._table.append(Message("assistant", gen.text, assistant_tokens))
 
             return Turn(
@@ -245,42 +225,25 @@ class ChatWrapper:
         self._ctx.close()
 
     # ----- internals -----------------------------------------------------
-    def _resolve_template(self, config: Config) -> TemplateConfig:
-        """Pick the chat template: explicit override, else auto-detect from the model.
-
-        When ``config.template`` is set it is used as-is. Otherwise the model's
-        built-in chat template is inspected to choose a preset; if that is
-        inconclusive the ChatML default is used. The chosen template's
-        turn-terminator is then validated against the model's vocabulary so a
-        silent mismatch fails loudly instead of producing run-on generations.
-        """
-        if config.template is not None:
-            self._validate_template(config.template, source="config.template")
-            return config.template
-
-        name = detect_template_name(self._ctx.model_chat_template())
-        template = TemplateConfig.preset(name)
-        self._validate_template(template, source=f"auto-detected preset {name!r}")
-        return template
-
-    def _validate_template(self, template: TemplateConfig, source: str) -> None:
+    def _validate_template(self, config: Config) -> None:
         """Ensure the turn-terminator is a real special token of this model.
 
         A template whose terminator splits into plain-text pieces (e.g. ChatML
         tags on a Gemma model) never lets the model emit end-of-generation, so it
-        runs to the token cap every turn. Detecting that here turns a subtle
-        performance/quality bug into an actionable error.
+        runs to the token cap every turn. Detecting that here lets users fix their
+        template instead of silently generating bad outputs.
         """
         # FakeContext (tests) has no special-token vocabulary; skip gracefully.
         if not hasattr(self._ctx, "tokenizes_to_special"):
             return
-        terminator = template.assistant_close.strip()
+        terminator = config.assistant_suffix.strip()
         if terminator and not self._ctx.tokenizes_to_special(terminator):
             raise ValueError(
-                f"chat template ({source}) is not valid for this model: its "
-                f"turn-terminator {terminator!r} does not tokenize to a special "
-                "token, so generation would never stop. Pass a matching "
-                "TemplateConfig (see TemplateConfig.preset)."
+                "chat template is not valid for this model: its turn-terminator "
+                f"{terminator!r} does not tokenize to a special token, so "
+                "generation would never stop. Set the assistant_prefix/"
+                "assistant_suffix (and other *_prefix/*_suffix) fields on Config "
+                "to match the model's trained template."
             )
 
     def _evict_until(self, fits) -> int:
@@ -288,12 +251,12 @@ class ChatWrapper:
 
         Two strategies, chosen by the cache's capabilities:
 
-        * **shift** (default, e.g. Gemma 4) — each eviction removes the oldest
-          message's span and shifts the survivors down in place, reusing their KV
-          for free. Applied incrementally as messages are dropped.
+        * **shift** (default) — each eviction removes the oldest message's span
+          and shifts the survivors down in place, reusing their KV for free.
+          Applied incrementally as messages are dropped.
         * **rebuild** (caches that can't shift, e.g. compact SWA / recurrent) —
           drop the oldest from the bookkeeping only, then re-prefill the whole
-          surviving conversation once. Correct, but not free; this is the honest
+          surviving conversation once. Correct, but not free; this is the expensive
           fallback for models where in-place shifting is unsupported.
         """
         if self._ctx.can_shift:
@@ -346,6 +309,6 @@ class ChatWrapper:
         if whole != piecewise:
             raise ValueError(
                 "chat template is not safe for per-message prefill: tokenization "
-                "differs across message boundaries. Adjust TemplateConfig so each "
-                "fragment tokenizes independently."
+                "differs across message boundaries. Adjust the template fragments "
+                "on Config so each fragment tokenizes independently."
             )
