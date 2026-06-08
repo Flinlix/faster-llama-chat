@@ -13,7 +13,7 @@ import codecs
 from dataclasses import dataclass, field
 
 from ._backend import Backend
-from .config import Config
+from .config import KV_CACHE_GGML_TYPES, Config
 from .messages import Eviction
 
 SEQ = 0  # single active conversation -> single sequence id
@@ -71,12 +71,15 @@ class KVContext:
         self._cfg = config
         self._b = Backend()
         self._model = self._b.load_model(config.model_path, config.n_gpu_layers)
+        kv_type = KV_CACHE_GGML_TYPES.get(config.kv_cache_type)
         self._ctx = self._b.new_context(
-            self._model, config.n_ctx, config.n_threads, config.n_batch)
+            self._model, config.n_ctx, config.n_threads, config.n_batch,
+            flash_attn=config.flash_attn, type_k=kv_type, type_v=kv_type)
         self._vocab = self._b.vocab(self._model)
         self._n_batch = config.n_batch
         self._can_shift = self._b.can_shift(self._ctx)
         self._sampler = self._build_sampler(config)
+        self._model_formatter = self._build_model_formatter()
 
     @property
     def can_shift(self) -> bool:
@@ -99,6 +102,34 @@ class KVContext:
         """
         toks = self.tokenize(text, add_special=False)
         return len(toks) == 1 and self._b.is_special(self._vocab, toks[0])
+
+    def render_with_model_template(self, messages: list[dict]) -> str | None:
+        """Render ``messages`` with the model's own GGUF chat template.
+
+        Returns ``None`` when the model ships no ``tokenizer.chat_template`` or
+        the template rejects this message shape (e.g. Gemma refusing a system
+        role) — callers treat that as "nothing to validate against". BOS is
+        suppressed and no generation prompt is added so the render aligns with a
+        fragment prefill (``add_special=False``).
+        """
+        if self._model_formatter is None:
+            return None
+        try:
+            return self._model_formatter(messages=messages).prompt
+        except Exception:
+            return None
+
+    def _build_model_formatter(self):
+        template = self._b.metadata_value(self._model, "tokenizer.chat_template")
+        if not template:
+            return None
+        from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+        return Jinja2ChatFormatter(
+            template=template,
+            eos_token=self._b.eos_text(self._vocab),
+            bos_token="",
+            add_generation_prompt=False,
+        )
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:

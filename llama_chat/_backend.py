@@ -68,8 +68,10 @@ class Backend:
         self._kv_add = _maybe("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
 
         self._is_eog = _first("llama_vocab_is_eog", "llama_token_is_eog")
+        self._token_eos = _first("llama_vocab_eos", "llama_token_eos")
         self._token_to_piece = _first("llama_token_to_piece")
         self._is_control = getattr(llama_cpp, "llama_vocab_is_control", None)
+        self._meta_val_str = getattr(llama_cpp, "llama_model_meta_val_str", None)
 
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int):
@@ -80,7 +82,9 @@ class Backend:
             raise RuntimeError(f"failed to load model: {path}")
         return model
 
-    def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int):
+    def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
+                    flash_attn: bool = False, type_k: int | None = None,
+                    type_v: int | None = None):
         cparams = self.lc.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
@@ -88,13 +92,50 @@ class Backend:
         if n_threads:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
+        if flash_attn:
+            self._enable_flash_attn(cparams)
+        if type_k is not None:
+            cparams.type_k = type_k
+        if type_v is not None:
+            cparams.type_v = type_v
         ctx = self._new_ctx(model, cparams)
         if not ctx:
             raise RuntimeError("failed to create llama context")
         return ctx
 
+    def _enable_flash_attn(self, cparams) -> None:
+        """Turn on flash attention across the param-struct churn.
+
+        Older builds expose a bool ``flash_attn``; newer ones replaced it with a
+        ``flash_attn_type`` enum (``..._ENABLED`` == 1).
+        """
+        if hasattr(cparams, "flash_attn"):
+            cparams.flash_attn = True
+        elif hasattr(cparams, "flash_attn_type"):
+            cparams.flash_attn_type = getattr(
+                self.lc, "LLAMA_FLASH_ATTN_TYPE_ENABLED", 1)
+        else:
+            raise RuntimeError(
+                "this llama_cpp build exposes no flash-attention context param")
+
     def vocab(self, model):
         return self._get_vocab(model) if self._get_vocab else model
+
+    def metadata_value(self, model, key: str) -> str | None:
+        """Return the GGUF metadata string for ``key``, or ``None`` if absent."""
+        if self._meta_val_str is None:
+            return None
+        size = 8192
+        buf = ctypes.create_string_buffer(size)
+        n = self._meta_val_str(model, key.encode("utf-8"), buf, size)
+        if n < 0:
+            return None
+        if n >= size:  # truncated; n is the length the value needs
+            buf = ctypes.create_string_buffer(n + 1)
+            n = self._meta_val_str(model, key.encode("utf-8"), buf, n + 1)
+            if n < 0:
+                return None
+        return buf.value.decode("utf-8", errors="replace")
 
     def free_model(self, model) -> None:
         self._free_model(model)
@@ -138,6 +179,10 @@ class Backend:
 
     def is_eog(self, vocab_or_model, token: int) -> bool:
         return bool(self._is_eog(vocab_or_model, token))
+
+    def eos_text(self, vocab) -> str:
+        """Rendered text of the end-of-sequence token (e.g. ``<eos>``)."""
+        return self.token_to_piece(vocab, self._token_eos(vocab))
 
     def is_special(self, vocab, token: int) -> bool:
         """True if ``token`` is a control/special token (rendered, not literal text)."""

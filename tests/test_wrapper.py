@@ -10,7 +10,7 @@ import pytest
 
 from llama_chat.config import Config
 from llama_chat.template import TemplateFormatter
-from llama_chat.wrapper import ChatWrapper
+from llama_chat.wrapper import ChatWrapper, ContextOverflowError
 from tests.fake_context import BOS, FakeContext
 
 
@@ -48,9 +48,9 @@ def test_begin_prefills_system_and_history_once():
 
 def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
-    # system fragment "<|turn>system\nsys<turn|>\n" + BOS is well under budget;
+    # system fragment "<start_of_turn>user\nsys<end_of_turn>\n" + BOS is well under budget;
     # pick a tiny threshold so only the newest message fits.
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.07), context=fake)
+    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.08), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x")])
 
     roles = [s["role"] for s in w.snapshot()]
@@ -85,7 +85,7 @@ def test_inject_appends_without_generating():
 
 def test_inject_evicts_oldest_to_fit():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.085), context=fake)
+    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.1), context=fake)
     w.begin("s")
     w.inject("first injected chunk", role="user")
     n_evicted = w.inject("second injected chunk", role="user")
@@ -242,11 +242,11 @@ def test_oversize_truncate():
 
 
 # ----- template formatting -----------------------------------------------
-def test_template_defaults_to_gemma4():
+def test_template_defaults_to_gemma():
     fmt = TemplateFormatter(_cfg())
-    assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
-    assert fmt.assistant_open() == "<|turn>model\n"
-    assert fmt.assistant_close() == "<turn|>\n"
+    assert fmt.fragment("user", "hi") == "<start_of_turn>user\nhi<end_of_turn>\n"
+    assert fmt.assistant_open() == "<start_of_turn>model\n"
+    assert fmt.assistant_close() == "<end_of_turn>\n"
 
 
 def test_template_formatter_combines_fragments():
@@ -260,3 +260,99 @@ def test_template_formatter_combines_fragments():
     assert fmt.assistant_close() == "</a>"
     with pytest.raises(ValueError):
         fmt.fragment("unknown-role", "x")
+
+
+def test_trim_content_strips_by_default():
+    fmt = TemplateFormatter(_cfg())
+    assert fmt.fragment("user", "  hi\n") == "<start_of_turn>user\nhi<end_of_turn>\n"
+
+
+def test_trim_content_disabled_keeps_whitespace():
+    fmt = TemplateFormatter(_cfg(trim_content=False))
+    assert fmt.fragment("user", "  hi\n") == "<start_of_turn>user\n  hi\n<end_of_turn>\n"
+
+
+# ----- min-answer headroom guard -----------------------------------------
+def test_request_refuses_when_too_little_room_to_answer():
+    fake = FakeContext(gen_len=2)
+    # Prompt fits n_ctx, but leaves fewer than min_answer_tokens for the reply.
+    w = ChatWrapper(
+        _cfg(n_ctx=120, threshold_pct=1.0, min_answer_tokens=60), context=fake
+    )
+    w.begin("s")
+    with pytest.raises(ContextOverflowError):
+        w.request("hello")
+    # The refused request never touched the cache.
+    assert w.snapshot()[-1]["role"] == "system"
+    _assert_consistent(w, fake)
+
+
+def test_request_proceeds_when_headroom_sufficient():
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(
+        _cfg(n_ctx=120, threshold_pct=1.0, min_answer_tokens=10), context=fake
+    )
+    w.begin("s")
+    turn = w.request("hello")
+    assert turn.n_generated == 2
+    _assert_consistent(w, fake)
+
+
+# ----- model-template fragment validation --------------------------------
+class _TemplatingFake(FakeContext):
+    """FakeContext that also renders a model chat template for the fragment check."""
+
+    def __init__(self, render):
+        super().__init__()
+        self._render = render
+
+    def render_with_model_template(self, messages):
+        return self._render(messages)
+
+
+def test_fragment_check_passes_when_fragments_match_model():
+    fmt = TemplateFormatter(_cfg())
+    render = lambda msgs: "".join(fmt.fragment(m["role"], m["content"]) for m in msgs)
+    # Constructs without error: model render == fragment render.
+    ChatWrapper(_cfg(), context=_TemplatingFake(render))
+
+
+def test_fragment_check_rejects_mismatched_fragments():
+    render = lambda msgs: "".join(
+        f"<start_of_turn>{m['role']}\n{m['content']}<end_of_turn>\n" for m in msgs
+    )
+    with pytest.raises(ValueError, match="do not match the model"):
+        ChatWrapper(_cfg(), context=_TemplatingFake(render))
+
+
+def test_fragment_check_skipped_when_disabled():
+    render = lambda msgs: "totally different tags"
+    # Mismatch is ignored when validation is turned off.
+    ChatWrapper(
+        _cfg(validate_against_model_template=False), context=_TemplatingFake(render)
+    )
+
+
+def test_fragment_check_catches_trim_mismatch():
+    # Model trims content; the wrapper is told not to -> the whitespace probe
+    # diverges and construction must fail.
+    trimming = TemplateFormatter(_cfg())
+    render = lambda msgs: "".join(trimming.fragment(m["role"], m["content"]) for m in msgs)
+    with pytest.raises(ValueError, match="do not match the model"):
+        ChatWrapper(_cfg(trim_content=False), context=_TemplatingFake(render))
+
+
+# ----- KV-cache / flash-attn config --------------------------------------
+def test_kv_cache_type_requires_flash_attn():
+    with pytest.raises(ValueError, match="flash_attn"):
+        Config(kv_cache_type="q8_0")
+
+
+def test_kv_cache_type_rejects_unknown_name():
+    with pytest.raises(ValueError, match="kv_cache_type"):
+        Config(kv_cache_type="bogus", flash_attn=True)
+
+
+def test_kv_cache_type_accepts_known_type_with_flash_attn():
+    cfg = Config(kv_cache_type="q8_0", flash_attn=True)
+    assert cfg.kv_cache_type == "q8_0"

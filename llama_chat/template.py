@@ -27,6 +27,8 @@ class TemplateFormatter:
     def fragment(self, role: str, text: str) -> str:
         """Return the templated fragment for a complete message."""
         c = self._c
+        if c.trim_content:
+            text = text.strip()  # match templates that apply Jinja `| trim`
         if role == "system":
             return f"{c.system_prefix}{text}{c.system_suffix}"
         if role == "user":

@@ -14,11 +14,12 @@ from .config import Config
 from .context import KVContext
 from .messages import Eviction, Message, MessageTable, fit_newest_first
 from .template import TemplateFormatter
-from .wrapper import ChatWrapper, Turn
+from .wrapper import ChatWrapper, ContextOverflowError, Turn
 
 __all__ = [
     "Config",
     "ChatWrapper",
+    "ContextOverflowError",
     "KVContext",
     "Turn",
     "Message",

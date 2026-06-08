@@ -19,6 +19,10 @@ from .messages import Message, MessageTable, fit_newest_first
 from .template import TemplateFormatter
 
 
+class ContextOverflowError(RuntimeError):
+    """A request would leave fewer than ``min_answer_tokens`` free for the reply."""
+
+
 @dataclass
 class Turn:
     """What a ``request`` produced.
@@ -48,6 +52,8 @@ class ChatWrapper:
         self._cfg = config
         self._validate_template(self._cfg)
         self._fmt = TemplateFormatter(self._cfg)
+        if self._cfg.validate_against_model_template:
+            self._check_fragments_match_model()
         self._table = MessageTable()
         # Serializes all cache-mutating actions: one KV sequence is shared across
         # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
@@ -175,6 +181,15 @@ class ChatWrapper:
             )
             n_prompt = len(user_tokens) + len(open_tokens)
 
+            # Refuse before mutating the cache if too little room remains to reply.
+            free = self._cfg.n_ctx - self._table.total - n_prompt - len(close_tokens)
+            if free < self._cfg.min_answer_tokens:
+                raise ContextOverflowError(
+                    f"only {free} tokens free for the reply "
+                    f"(min_answer_tokens={self._cfg.min_answer_tokens}); shorten "
+                    f"the request or lower threshold_pct"
+                )
+
             self._ctx.prefill(user_tokens, start_pos=self._table.total, want_logits=False)
             self._table.append(Message("user", text, user_tokens))
 
@@ -244,6 +259,45 @@ class ChatWrapper:
                 "generation would never stop. Set the assistant_prefix/"
                 "assistant_suffix (and other *_prefix/*_suffix) fields on Config "
                 "to match the model's trained template."
+            )
+
+    def _check_fragments_match_model(self) -> None:
+        """Assert the user/assistant fragments match the model's trained template.
+
+        The hand-configured ``*_prefix``/``*_suffix`` tags must reproduce the tags
+        the model saw in training, or incremental prefill writes tokens it never
+        learned. We render a fixed user/assistant probe through the model's own
+        chat template (from the GGUF) and compare its tokenization to the fragment
+        render. The system fragment is *not* probed: chat templates handle a
+        system role inconsistently (Gemma rejects it, others fold it into the
+        first user turn), so there is no portable ground truth for it.
+        """
+        # FakeContext (tests) and GGUFs without a template have nothing to check.
+        if not hasattr(self._ctx, "render_with_model_template"):
+            return
+        # Surrounding whitespace makes the probe also catch a wrong `trim_content`
+        # setting: a template that applies `| trim` collapses it, a verbatim one
+        # keeps it, and the two renders diverge unless the flag matches.
+        probe = [
+            {"role": "user", "content": " ping "},
+            {"role": "assistant", "content": " pong "},
+        ]
+        rendered = self._ctx.render_with_model_template(probe)
+        if rendered is None:
+            return
+        model_tokens = self._ctx.tokenize(rendered, add_special=False)
+        fragment_text = "".join(self._fmt.fragment(m["role"], m["content"]) for m in probe)
+        fragment_tokens = self._ctx.tokenize(fragment_text, add_special=False)
+        if model_tokens != fragment_tokens:
+            raise ValueError(
+                "chat template fragments do not match the model's trained "
+                "template:\n"
+                f"  model renders:    {rendered!r}\n"
+                f"  fragments render: {fragment_text!r}\n"
+                "Set the user_prefix/user_suffix/assistant_prefix/assistant_suffix "
+                "(and the matching system_* fields) on Config to the tags shown in "
+                "the model's render above, or pass "
+                "validate_against_model_template=False to skip this check."
             )
 
     def _evict_until(self, fits) -> int:

@@ -9,6 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Friendly KV-cache quantization names -> ggml type ids (see ggml.h `enum ggml_type`).
+KV_CACHE_GGML_TYPES = {
+    "f16": 1,
+    "q8_0": 8,
+    "q5_1": 7,
+    "q5_0": 6,
+    "q4_1": 3,
+    "q4_0": 2,
+}
+
 
 @dataclass
 class Config:
@@ -30,6 +40,11 @@ class Config:
         n_threads: CPU threads for decode (``None`` lets llama.cpp decide).
         n_batch: Maximum tokens submitted to a single ``llama_decode`` call;
             longer prefills are chunked to this size.
+        flash_attn: Enable flash attention. Required for a quantized KV cache.
+        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_GGML_TYPES``
+            (e.g. ``"q8_0"`` to roughly halve cache memory at near-zero quality
+            cost) or ``None`` for llama.cpp's f16 default. Quantized types
+            require ``flash_attn=True``.
         seed: RNG seed for sampling.
         max_tokens: Upper bound on generated tokens per ``request`` (further
             capped so total never exceeds ``n_ctx``).
@@ -42,9 +57,21 @@ class Config:
         oversize_policy: What to do when a single message cannot fit under the
             threshold even after evicting everything but the system prompt:
             ``"reject"`` raises, ``"truncate"`` clips the message to fit.
+        min_answer_tokens: Refuse a ``request``/``stream`` (raising
+            :class:`~llama_chat.wrapper.ContextOverflowError`) if fewer than this
+            many tokens of ``n_ctx`` would remain for the reply after prefilling
+            the prompt. ``0`` disables the guard.
+        validate_against_model_template: At construction, render a user/assistant
+            probe through the model's own chat template (read from the GGUF) and
+            assert the configured fragments tokenize identically. Catches
+            mis-typed ``*_prefix``/``*_suffix`` tags before they corrupt the cache.
         system_prefix, system_suffix: Wrap a system turn.
         user_prefix, user_suffix: Wrap a user turn.
         assistant_prefix, assistant_suffix: Wrap an assistant turn.
+        trim_content: Strip leading/trailing whitespace from each message's
+            content before wrapping it in role tags, matching templates that
+            apply Jinja ``| trim`` (e.g. Gemma, Llama-3). Set ``False`` for
+            templates that emit content verbatim.
         verbose: Pass through of llama.cpp's logging.
     """
 
@@ -58,6 +85,8 @@ class Config:
     n_gpu_layers: int = 0
     n_threads: int | None = None
     n_batch: int = 512
+    flash_attn: bool = False
+    kv_cache_type: str | None = None
     seed: int = 0
 
     # Generation defaults (overridable per request)
@@ -71,14 +100,21 @@ class Config:
 
     # Policy
     oversize_policy: str = "reject"
+    min_answer_tokens: int = 32
+    validate_against_model_template: bool = True
 
-    # Chat template
-    system_prefix: str = "<|turn>system\n"
-    system_suffix: str = "<turn|>\n"
-    user_prefix: str = "<|turn>user\n"
-    user_suffix: str = "<turn|>\n"
-    assistant_prefix: str = "<|turn>model\n"
-    assistant_suffix: str = "<turn|>\n"
+    # Chat template (Gemma). The trained template is
+    # ``<start_of_turn>{role}\n{content}<end_of_turn>\n`` with ``assistant`` ->
+    # ``model`` and ``<bos>`` prepended once (added by ``add_special`` on the
+    # system fragment). Gemma has no system role, so the system message rides in
+    # a ``user`` turn — the same convention llama.cpp uses.
+    system_prefix: str = "<start_of_turn>user\n"
+    system_suffix: str = "<end_of_turn>\n"
+    user_prefix: str = "<start_of_turn>user\n"
+    user_suffix: str = "<end_of_turn>\n"
+    assistant_prefix: str = "<start_of_turn>model\n"
+    assistant_suffix: str = "<end_of_turn>\n"
+    trim_content: bool = True
 
     verbose: bool = False
 
@@ -89,6 +125,13 @@ class Config:
             raise ValueError("n_ctx must be positive")
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
+        if self.kv_cache_type is not None:
+            if self.kv_cache_type not in KV_CACHE_GGML_TYPES:
+                raise ValueError(
+                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_GGML_TYPES)}"
+                )
+            if not self.flash_attn:
+                raise ValueError("a quantized kv_cache_type requires flash_attn=True")
 
     @property
     def threshold_tokens(self) -> int:

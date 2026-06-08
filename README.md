@@ -29,7 +29,7 @@ positions down* to close the gap, so kept messages are never re-processed.
 ```python
 from llama_chat import ChatWrapper, Config
 
-# Config defaults to Gemma 4. Change it to use other models.
+# Config defaults to Gemma. Change it to use other models.
 chat = ChatWrapper(Config(model_path="models/gemma-4-E2B-it-Q4_K_M.gguf", n_ctx=4096, threshold_pct=0.75))
 
 # begin: reset + prefill the system prompt and as much recent history as fits
@@ -61,13 +61,17 @@ for delta in chat.stream("Summarize the plan."):
   oldest messages if over threshold and capping generation so the total never
   exceeds `n_ctx`. The reply is recorded so the next turn reuses it for free.
   Returns a `Turn` (`text`, `n_prefilled`, `n_generated`, `n_evicted`,
-  `stop_reason`).
+  `stop_reason`). If `min_answer_tokens` is set and the prompt would leave less
+  than that for the reply, it raises `ContextOverflowError` before touching the
+  cache.
 - **`stream(text)`** - the generator form of `request`: yields text
   deltas as tokens are sampled and returns the same `Turn` summary on completion
-  (via `StopIteration.value`). Bytes are decoded incrementally, so a UTF-8
-  codepoint split across tokens is never mangled. Each token is committed to the
-  cache *before* its text is surfaced, so abandoning the stream early (barge-in
-  via `gen.close()`) still records exactly the tokens that reached the cache, and the next turn stays valid.
+  (via `StopIteration.value`). Raises `ContextOverflowError` on the same
+  `min_answer_tokens` headroom check as `request`. Bytes are decoded
+  incrementally, so a UTF-8 codepoint split across tokens is never mangled. Each
+  token is committed to the cache *before* its text is surfaced, so abandoning
+  the stream early (barge-in via `gen.close()`) still records exactly the tokens
+  that reached the cache, and the next turn stays valid.
 
 Cache-mutating actions are serialized with a reentrant lock, so the wrapper is
 safe to drive from a threaded HTTP server.
@@ -94,7 +98,7 @@ The strategy is chosen automatically at construction from
 
 - **shift** (default, the fast path) - the in-place edit above, applied
   incrementally as messages are dropped. Used everywhere it can be, including
-  Gemma 4 under the default full-size SWA cache.
+  Gemma under the default full-size SWA cache.
 - **rebuild** (caches that can't shift - compact sliding-window, recurrent /
   Mamba state, where dropping tokens loses the position info shifting needs) -
   drop the oldest messages from the bookkeeping, then re-prefill the surviving
@@ -136,7 +140,9 @@ pip install -e ".[test]"
 
 Only `Config` differs between targets - `model_path`, `n_ctx`, `threshold_pct`,
 and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on a GPU). The
-wrapper code is identical; `seq_rm` / `seq_add` work on both backends.
+wrapper code is identical; `seq_rm` / `seq_add` work on both backends. On a GPU,
+`flash_attn=True` with `kv_cache_type="q8_0"` roughly halves KV-cache memory at
+near-zero quality cost (a quantized `kv_cache_type` requires flash attention).
 
 ## Chat template
 
@@ -147,8 +153,11 @@ turn.
 
 The template is expressed as per-role **fragments** on `Config`: the literal text
 wrapped around each message, so one turn renders as `prefix + text + suffix`.
-The defaults are **Gemma 4** (`<|turn>{role}\n … <turn|>\n`). To target another model,
-set the fragment fields:
+Content is stripped first when `trim_content` is set (the default), matching
+templates that apply Jinja `| trim` such as Gemma; set it `False` for templates
+that emit content verbatim. The defaults are **Gemma**
+(`<start_of_turn>{role}\n … <end_of_turn>\n`). To target another model, set the
+fragment fields:
 
 ```python
 from llama_chat import Config
@@ -162,11 +171,19 @@ Config(
 )
 ```
 
-Two load-time checks make a mismatch fail loudly instead of degrading silently:
+Three load-time checks make a mismatch fail loudly instead of degrading silently:
 
 - **At construction** the turn-terminator (`assistant_suffix`) is validated
   against the model's vocabulary - if it does not tokenize to a single special
-  token, the silent-mismatch trap above, construction raises.
+  token (the silent-mismatch trap above), construction raises.
+- **At construction** the `user`/`assistant` fragments are checked against the
+  model's own chat template read from the GGUF: a fixed probe (with surrounding
+  whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
+  must tokenize identically, so mis-typed tags are caught before they corrupt the
+  cache. Disable with `validate_against_model_template=False`; it is
+  skipped automatically for models that ship no chat template. The `system`
+  fragment is not probed - chat templates handle a system role inconsistently
+  (Gemma rejects it; others fold it into the first user turn).
 - **At `begin`** the wrapper asserts that per-message prefill tokenizes
   identically to a one-shot render of the whole conversation. If the template
   tokenizes differently across message boundaries (which would make incremental
