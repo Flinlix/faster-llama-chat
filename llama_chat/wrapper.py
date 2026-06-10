@@ -32,7 +32,9 @@ class Turn:
         n_prefilled: Tokens decoded for the request prompt (request text + the
             assistant-open tag).
         n_generated: Tokens sampled.
-        n_evicted: Messages dropped to make room for this turn.
+        n_evicted: Messages evicted after this turn to restore the cache to
+            ``threshold_tokens`` (the reply is appended first, then older turns
+            are trimmed).
         stop_reason: Why generation stopped (``"eog"``/``"stop"``/``"length"``).
     """
 
@@ -169,10 +171,6 @@ class ChatWrapper:
             close_tokens = self._ctx.tokenize(self._fmt.assistant_close(), add_special=False)
             n_prompt = len(user_tokens) + len(open_tokens)
 
-            # Best-effort: drop the oldest until we're back under threshold.
-            evicted = self._evict_until(
-                lambda: self._table.total + n_prompt <= self._cfg.threshold_tokens
-            )
             # Hard wall: the prompt plus its turn closer must fit in the context.
             user_tokens = self._fit_or_raise(
                 user_tokens,
@@ -202,6 +200,7 @@ class ChatWrapper:
             stops = list(self._cfg.stop) + list(stop or [])
 
             gen = GenerationAccumulator()
+            n_evicted = 0
             try:
                 yield from self._ctx.generate(gen_start, n_predict_max, stops, out=gen)
             finally:
@@ -210,12 +209,17 @@ class ChatWrapper:
                 self._ctx.prefill(close_tokens, start_pos=close_start, want_logits=False)
                 assistant_tokens = open_tokens + gen.token_ids + close_tokens
                 self._table.append(Message("assistant", gen.text, assistant_tokens))
+                # Trim back under threshold after the reply, so the cache rests
+                # below threshold for the next turn (and on barge-in too).
+                n_evicted = self._evict_until(
+                    lambda: self._table.total <= self._cfg.threshold_tokens
+                )
 
             return Turn(
                 text=gen.text,
                 n_prefilled=n_prompt,
                 n_generated=len(gen.token_ids),
-                n_evicted=evicted,
+                n_evicted=n_evicted,
                 stop_reason=gen.stop_reason,
             )
 
@@ -305,26 +309,22 @@ class ChatWrapper:
 
         Two strategies, chosen by the cache's capabilities:
 
-        * **shift** (default) — each eviction removes the oldest message's span
-          and shifts the survivors down in place, reusing their KV for free.
-          Applied incrementally as messages are dropped.
+        * **shift** (default) — remove the dropped span and shift the survivors
+          down in place, reusing their KV for free. The contiguous block of
+          victims collapses into a single remove-and-shift.
         * **rebuild** (caches that can't shift, e.g. compact SWA / recurrent) —
           drop the oldest from the bookkeeping only, then re-prefill the whole
           surviving conversation once. Correct, but not free; this is the expensive
           fallback for models where in-place shifting is unsupported.
         """
         if self._ctx.can_shift:
-            evicted = 0
-            while not fits() and self._table.n_evictable > 0:
-                self._ctx.apply_eviction(self._table.evict_oldest())
-                evicted += 1
+            eviction, evicted = self._table.evict_oldest_until(fits)
+            if eviction is not None:
+                self._ctx.apply_eviction(eviction)  # one seq_rm + one seq_add
             return evicted
 
         # Rebuild path: decide survivors first (bookkeeping only), then re-prefill.
-        evicted = 0
-        while not fits() and self._table.n_evictable > 0:
-            self._table.evict_oldest()  # renumbers the table; cache untouched yet
-            evicted += 1
+        _, evicted = self._table.evict_oldest_until(fits)
         if evicted:
             self._rebuild_cache()
         return evicted

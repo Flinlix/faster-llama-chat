@@ -33,6 +33,34 @@ def test_evict_oldest_keeps_system_and_renumbers():
     assert t.total == 8
 
 
+def test_evict_oldest_until_coalesces():
+    t = MessageTable()
+    t.append(_msg("system", 3))
+    t.append(_msg("user", 4))       # positions [3, 7)
+    t.append(_msg("assistant", 5))  # positions [7, 12)
+    t.append(_msg("user", 6))       # positions [12, 18)
+
+    # Force dropping the two oldest evictable messages (4 + 5 tokens).
+    ev, count = t.evict_oldest_until(lambda: t.total <= 9)
+    assert count == 2
+    # One combined edit spanning exactly the dropped block [3, 12).
+    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 12, 18)
+    assert ev.shift_delta == 9
+    # System preserved, survivor shifted down to close the gap.
+    roles = [(m.role, m.pos_start, m.pos_end) for m in t.messages]
+    assert roles == [("system", 0, 3), ("user", 3, 9)]
+    assert t.total == 9
+
+
+def test_evict_oldest_until_noop_when_already_fits():
+    t = MessageTable()
+    t.append(_msg("system", 3))
+    t.append(_msg("user", 4))
+    ev, count = t.evict_oldest_until(lambda: True)
+    assert ev is None and count == 0
+    assert t.total == 7
+
+
 def test_evict_raises_when_only_system_remains():
     t = MessageTable()
     t.append(_msg("system", 3))

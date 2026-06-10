@@ -136,6 +136,34 @@ class MessageTable:
         self._assert_invariants()
         return eviction
 
+    def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
+        """Drop oldest non-system messages until ``fits()`` (or none remain).
+
+        The victims are always the contiguous block after the system prompt, so
+        the whole batch collapses to one removed range plus one survivor shift.
+
+        Returns:
+            The combined :class:`Eviction` (``None`` if nothing was dropped) and
+            the number of messages dropped.
+        """
+        if fits() or self.n_evictable == 0:
+            return None, 0
+        idx = 1 if self.has_system else 0
+        old_total = self.total
+        remove_start = self._messages[idx].pos_start
+        count = 0
+        while not fits() and self.n_evictable > 0:
+            del self._messages[idx]
+            self._renumber()  # cheap bookkeeping; keeps total/fits() correct each iter
+            count += 1
+        self._assert_invariants()
+        eviction = Eviction(
+            remove_start=remove_start,
+            remove_end=remove_start + (old_total - self.total),
+            old_total=old_total,
+        )
+        return eviction, count
+
     # ----- internals -----------------------------------------------------
     def _renumber(self) -> None:
         cursor = 0

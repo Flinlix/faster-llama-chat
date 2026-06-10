@@ -195,6 +195,20 @@ def test_request_evicts_then_stays_within_context():
         _assert_consistent(w, fake)
 
 
+def test_request_rests_under_threshold_after_turn():
+    # The reply is appended first, then older turns are trimmed, so the cache
+    # rests at or below threshold once the turn returns.
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.2), context=fake)
+    w.begin("s")
+    for i in range(8):
+        w.request(f"message number {i} with some length")
+        assert w.total_tokens <= w._cfg.threshold_tokens  # rests under threshold
+        assert w.snapshot()[0]["role"] == "system"        # system survives
+        assert w.snapshot()[-1]["role"] == "assistant"    # newest turn kept
+        _assert_consistent(w, fake)
+
+
 def test_eviction_shift_mode_does_not_rebuild():
     # Default cache supports shifting: eviction uses apply_eviction, never rebuild.
     fake = FakeContext(gen_len=2)  # can_shift=True
@@ -244,9 +258,9 @@ def test_oversize_truncate():
 # ----- template formatting -----------------------------------------------
 def test_template_defaults_to_gemma():
     fmt = TemplateFormatter(_cfg())
-    assert fmt.fragment("user", "hi") == "<start_of_turn>user\nhi<end_of_turn>\n"
-    assert fmt.assistant_open() == "<start_of_turn>model\n"
-    assert fmt.assistant_close() == "<end_of_turn>\n"
+    assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
+    assert fmt.assistant_open() == "<|turn>model\n"
+    assert fmt.assistant_close() == "<turn|>\n"
 
 
 def test_template_formatter_combines_fragments():
@@ -264,12 +278,12 @@ def test_template_formatter_combines_fragments():
 
 def test_trim_content_strips_by_default():
     fmt = TemplateFormatter(_cfg())
-    assert fmt.fragment("user", "  hi\n") == "<start_of_turn>user\nhi<end_of_turn>\n"
+    assert fmt.fragment("user", "  hi\n") == "<|turn>user\nhi<turn|>\n"
 
 
 def test_trim_content_disabled_keeps_whitespace():
     fmt = TemplateFormatter(_cfg(trim_content=False))
-    assert fmt.fragment("user", "  hi\n") == "<start_of_turn>user\n  hi\n<end_of_turn>\n"
+    assert fmt.fragment("user", "  hi\n") == "<|turn>user\n  hi\n<turn|>\n"
 
 
 # ----- min-answer headroom guard -----------------------------------------
