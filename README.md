@@ -29,7 +29,7 @@ positions down* to close the gap, so kept messages are never re-processed.
 ```python
 from llama_chat import ChatWrapper, Config
 
-# Config defaults to Gemma. Change it to use other models.
+# Config defaults to Gemma 4. Change it to use other models.
 chat = ChatWrapper(Config(model_path="models/gemma-4-E2B-it-Q4_K_M.gguf", n_ctx=4096, threshold_pct=0.75))
 
 # begin: reset + prefill the system prompt and as much recent history as fits
@@ -98,7 +98,7 @@ The strategy is chosen automatically at construction from
 
 - **shift** (default, the fast path) - the in-place edit above, applied
   incrementally as messages are dropped. Used everywhere it can be, including
-  Gemma under the default full-size SWA cache.
+  Gemma 4 under the default full-size SWA cache.
 - **rebuild** (caches that can't shift - compact sliding-window, recurrent /
   Mamba state, where dropping tokens loses the position info shifting needs) -
   drop the oldest messages from the bookkeeping, then re-prefill the surviving
@@ -154,9 +154,9 @@ turn.
 The template is expressed as per-role **fragments** on `Config`: the literal text
 wrapped around each message, so one turn renders as `prefix + text + suffix`.
 Content is stripped first when `trim_content` is set (the default), matching
-templates that apply Jinja `| trim` such as Gemma; set it `False` for templates
-that emit content verbatim. The defaults are **Gemma**
-(`<start_of_turn>{role}\n … <end_of_turn>\n`). To target another model, set the
+templates that apply Jinja `| trim` such as Gemma 4; set it `False` for templates
+that emit content verbatim. The defaults are **Gemma 4**
+(`<|turn>{role}\n … <turn|>\n`). To target another model, set the
 fragment fields:
 
 ```python
@@ -183,7 +183,7 @@ Three load-time checks make a mismatch fail loudly instead of degrading silently
   cache. Disable with `validate_against_model_template=False`; it is
   skipped automatically for models that ship no chat template. The `system`
   fragment is not probed - chat templates handle a system role inconsistently
-  (Gemma rejects it; others fold it into the first user turn).
+  (Gemma 4 rejects it; others fold it into the first user turn).
 - **At `begin`** the wrapper asserts that per-message prefill tokenizes
   identically to a one-shot render of the whole conversation. If the template
   tokenizes differently across message boundaries (which would make incremental

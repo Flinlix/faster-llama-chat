@@ -103,17 +103,17 @@ class Config:
     min_answer_tokens: int = 32
     validate_against_model_template: bool = True
 
-    # Chat template (Gemma). The trained template is
-    # ``<start_of_turn>{role}\n{content}<end_of_turn>\n`` with ``assistant`` ->
-    # ``model`` and ``<bos>`` prepended once (added by ``add_special`` on the
-    # system fragment). Gemma has no system role, so the system message rides in
-    # a ``user`` turn — the same convention llama.cpp uses.
-    system_prefix: str = "<start_of_turn>user\n"
-    system_suffix: str = "<end_of_turn>\n"
-    user_prefix: str = "<start_of_turn>user\n"
-    user_suffix: str = "<end_of_turn>\n"
-    assistant_prefix: str = "<start_of_turn>model\n"
-    assistant_suffix: str = "<end_of_turn>\n"
+    # Chat template (Gemma 4). The trained template is
+    # ``<|turn>{role}\n{content}<turn|>\n`` with ``assistant`` -> ``model`` and
+    # ``<bos>`` prepended once (added by ``add_special`` on the system fragment).
+    # Gemma has no system role, so the system message rides in a ``user`` turn —
+    # the same convention llama.cpp uses.
+    system_prefix: str = "<|turn>user\n"
+    system_suffix: str = "<turn|>\n"
+    user_prefix: str = "<|turn>user\n"
+    user_suffix: str = "<turn|>\n"
+    assistant_prefix: str = "<|turn>model\n"
+    assistant_suffix: str = "<turn|>\n"
     trim_content: bool = True
 
     verbose: bool = False
