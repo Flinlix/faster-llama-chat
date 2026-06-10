@@ -90,7 +90,7 @@ class Config:
     seed: int = 0
 
     # Generation defaults (overridable per request)
-    max_tokens: int = 512
+    max_tokens: int = 1024
     temperature: float = 1.0
     top_k: int = 64
     top_p: float = 0.95
