@@ -30,7 +30,7 @@ positions down* to close the gap, so kept messages are never re-processed.
 from llama_chat import ChatWrapper, Config
 
 # Config defaults to Gemma 4. Change it to use other models.
-chat = ChatWrapper(Config(model_path="models/gemma-4-E2B-it-Q4_K_M.gguf", n_ctx=4096, threshold_pct=0.75))
+chat = ChatWrapper(Config(model_path="llama/models/gemma-4-E2B-it-Q4_K_M.gguf"))
 
 # begin: reset + prefill the system prompt and as much recent history as fits
 chat.begin("You are a helpful assistant.",

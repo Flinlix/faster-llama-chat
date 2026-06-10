@@ -77,7 +77,7 @@ class Config:
 
     # Gemma 4
 
-    model_path: str = "models/gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path: str = "llama/models/gemma-4-E2B-it-Q4_K_M.gguf"
     n_ctx: int = 4096
     threshold_pct: float = 0.75
 
