@@ -48,8 +48,10 @@ class Turn:
 class ChatWrapper:
     """Stateful single-conversation chat over llama.cpp with KV reuse."""
 
-    def __init__(self, config: Config = Config(), context: KVContext | None = None) -> None:
+    def __init__(self, config: Config | None = None, context: KVContext | None = None, **kwargs) -> None:
         # ``context`` is injectable for testing only.
+        if config is None:
+            config = Config(**kwargs)
         self._ctx = context if context is not None else KVContext(config)
         self._cfg = config
         self._validate_template(self._cfg)

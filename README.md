@@ -63,10 +63,19 @@ positions down* to close the gap, so kept messages are never re-processed.
 ## Quick start
 
 ```python
-from llama_chat import ChatWrapper, Config
+from llama_chat import ChatWrapper
 
-# Config defaults to Gemma 4. Change it to use other models.
-chat = ChatWrapper(Config(model_path="llama/models/gemma-4-E2B-it-Q4_K_M.gguf"))
+# Default config (Gemma 4, CPU, 4096-token context):
+chat = ChatWrapper()
+
+# Or override specific fields - kwargs map directly to Config fields:
+chat = ChatWrapper(
+    model_path="llama/models/gemma-4-E2B-it-Q4_K_M.gguf",
+    n_ctx=8192,           # context window in tokens
+    n_gpu_layers=-1,      # -1 = offload all layers to GPU; 0 = CPU only
+    flash_attn=True,      # required for quantized KV cache
+    kv_cache_type="q8_0", # halves KV memory; requires flash_attn=True
+)
 
 # begin: reset + prefill the system prompt and as much recent history as fits
 chat.begin("You are a helpful assistant.",
