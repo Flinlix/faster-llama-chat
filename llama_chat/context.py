@@ -149,6 +149,21 @@ class KVContext:
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         self._b.decode(self._ctx, token_ids, start_pos, SEQ, want_logits, self._n_batch)
 
+    def warmup(self) -> None:
+        """Warm the single-token generation graph (batch-1 decode + logits).
+
+        ``begin``'s prefill only warms the batched-prefill graph; the batch-1
+        decode used during generation is first built on the first request, paying
+        a one-time graph-capture/allocation cost. Decode one throwaway token with
+        logits on the empty cache, then clear it so the real prefill that follows
+        starts clean. Mirrors llama.cpp's own model warmup.
+        """
+        tok = self._b.token_eos(self._vocab)
+        if tok < 0:  # some models expose no EOS; any valid id warms the graph
+            tok = 0
+        self._b.decode(self._ctx, [tok], 0, SEQ, True, self._n_batch)
+        self.reset()  # kv_clear -> cache empty again for the real prefill
+
     def apply_eviction(self, ev: Eviction) -> None:
         """Remove an evicted message's tokens, then shift survivors to close the gap."""
         self._b.kv_seq_rm(self._ctx, SEQ, ev.remove_start, ev.remove_end)

@@ -1,7 +1,9 @@
 """ChatWrapper - the public API: ``begin``, ``inject``, ``request``.
 
 The wrapper's goal is to prefill as little as possible. ``begin`` resets and
-prefills the system prompt plus whatever recent history fits; ``inject`` prefills
+prefills the system prompt plus whatever recent history fits (and on the first
+call warms the generation graph so the first reply has no cold-start latency);
+``inject`` prefills
 a single message with no generation; ``request`` prefills only the new request
 text and then generates. When the cache crosses the eviction threshold the oldest
 non-system messages are removed and the survivors shifted down to close the gap,
@@ -68,6 +70,8 @@ class ChatWrapper:
         self._fmt = TemplateFormatter(self._frags)
         self._check_fragments_match_model()
         self._table = MessageTable()
+        # The first ``begin`` warms the generation graph once (see ``warmup``).
+        self._warmed = False
         # Serializes all cache-mutating actions: one KV sequence is shared across
         # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
         # it. Reentrant so request() can hold it across the stream() it drains.
@@ -94,6 +98,10 @@ class ChatWrapper:
     def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
+        The first call also warms the model's single-token generation graph (a
+        throwaway decode that is immediately cleared), so the first ``request``
+        streams without paying the one-time graph-capture/allocation cost.
+
         Args:
             system_prompt: The system prompt (always kept, never evicted).
             messages: Optional ``(role, text)`` history, oldest first. Only the
@@ -104,6 +112,11 @@ class ChatWrapper:
         with self._lock:
             self._ctx.reset()
             self._table.reset()
+            # First conversation: warm the batch-1 generation graph so the first
+            # reply has no cold-start latency. warmup self-clears the cache.
+            if not self._warmed:
+                self._ctx.warmup()
+                self._warmed = True
 
             sys_tokens = self._ctx.tokenize(self._fmt.fragment("system", system_prompt), add_special=True)
             hist_tokens = [

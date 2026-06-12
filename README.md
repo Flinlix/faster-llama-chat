@@ -150,7 +150,8 @@ for delta in chat.stream("Summarize the plan."):
 - **`begin(system_prompt, history)`** - full reset for a restart / conversation
   switch. Prefills the system prompt (pinned at position 0, never evicted) plus
   the most recent history that fits under the threshold in a single decode;
-  older excess is dropped.
+  older excess is dropped. The first call also warms the generation graph (a
+  throwaway decode, immediately cleared) so the first reply has no cold start.
 - **`inject(text, role="user")`** - adds context (e.g. retrieved documents) with
   no generation. Evicts the oldest messages first if needed to stay under the
   threshold. Returns the number of messages evicted.

@@ -184,6 +184,10 @@ class Backend:
         """Rendered text of the end-of-sequence token (e.g. ``<eos>``)."""
         return self.token_to_piece(vocab, self._token_eos(vocab))
 
+    def token_eos(self, vocab) -> int:
+        """The end-of-sequence token id (may be negative if the model has none)."""
+        return self._token_eos(vocab)
+
     def is_special(self, vocab, token: int) -> bool:
         """True if ``token`` is a control/special token (rendered, not literal text)."""
         if self._is_control is None:

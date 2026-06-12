@@ -42,6 +42,7 @@ class FakeContext:
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
         self.rebuilds = 0  # how many times the cache was rebuilt (no-shift path)
+        self.warmups = 0  # how many times warmup() was called
         self._gen_len = gen_len
         self._gen_text = gen_text
         self._next_gen = 1000
@@ -61,6 +62,11 @@ class FakeContext:
     def reset(self) -> None:
         self.cache = []
         self.rebuilds += 1  # begin() and every no-shift rebuild call this
+
+    def warmup(self) -> None:
+        # Real warmup nets to an empty cache; begin calls it post-reset, so just
+        # record the call.
+        self.warmups += 1
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         assert start_pos == len(self.cache), (
