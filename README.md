@@ -121,6 +121,35 @@ for delta in chat.stream("Summarize the plan."):
 Cache-mutating actions are serialized with a reentrant lock, so the wrapper is
 safe to drive from a threaded HTTP server.
 
+## Persistence
+
+The KV cache only holds the recent window that fits `n_ctx`; eviction drops older
+turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
+every message (user, assistant, and injected context - everything but the system
+prompt) into a durable store, then replays the prior turns at `begin`:
+
+```python
+from llama_chat import PersistentChat, InMemoryStore
+
+chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config possible here as well
+chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
+chat.request("What did we decide last time?")                  # auto-persisted
+```
+
+A store is any object satisfying the `ConversationStore` protocol - two methods
+keyed by conversation id:
+
+```python
+class ConversationStore(Protocol):
+    def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
+    def append(self, conversation_id: str, role: str, text: str) -> None: ...
+```
+
+`InMemoryStore` is a reference implementation (not durable); back it with SQLite,
+Redis, or files by implementing those two methods. Capture is driven by an optional
+`on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
+own sink without `PersistentChat` if you prefer.
+
 ## How eviction works
 
 A pure-Python `MessageTable` is the single source of truth: the cache for

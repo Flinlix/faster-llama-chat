@@ -1,4 +1,4 @@
-"""ChatWrapper — the public API: ``begin``, ``inject``, ``request``.
+"""ChatWrapper - the public API: ``begin``, ``inject``, ``request``.
 
 The wrapper's goal is to prefill as little as possible. ``begin`` resets and
 prefills the system prompt plus whatever recent history fits; ``inject`` prefills
@@ -48,10 +48,16 @@ class Turn:
 class ChatWrapper:
     """Stateful single-conversation chat over llama.cpp with KV reuse."""
 
-    def __init__(self, config: Config | None = None, context: KVContext | None = None, **kwargs) -> None:
+    def __init__(self, config: Config | None = None, context: KVContext | None = None,
+                 *, on_message=None, **kwargs) -> None:
         # ``context`` is injectable for testing only.
         if config is None:
             config = Config(**kwargs)
+        # Optional ``Callable[[str, str], None]`` invoked with (role, text) for
+        # every message except the system prompt and begin-replay - i.e. each
+        # genuine new turn (user, assistant) and each inject. Runs under the lock,
+        # so it must be cheap and must not call back into the wrapper.
+        self._on_message = on_message
         self._ctx = context if context is not None else KVContext(config)
         self._cfg = config
         self._validate_template(self._cfg)
@@ -140,6 +146,8 @@ class ChatWrapper:
 
             self._ctx.prefill(tokens, start_pos=self._table.total, want_logits=False)
             self._table.append(Message(role, text, tokens))
+            if self._on_message:
+                self._on_message(role, text)
             return evicted
 
     # ----- action: request / stream --------------------------------------
@@ -192,6 +200,8 @@ class ChatWrapper:
 
             self._ctx.prefill(user_tokens, start_pos=self._table.total, want_logits=False)
             self._table.append(Message("user", text, user_tokens))
+            if self._on_message:
+                self._on_message("user", text)
 
             gen_start = self._table.total + len(open_tokens)
             self._ctx.prefill(open_tokens, start_pos=self._table.total, want_logits=True)
@@ -211,6 +221,8 @@ class ChatWrapper:
                 self._ctx.prefill(close_tokens, start_pos=close_start, want_logits=False)
                 assistant_tokens = open_tokens + gen.token_ids + close_tokens
                 self._table.append(Message("assistant", gen.text, assistant_tokens))
+                if self._on_message:
+                    self._on_message("assistant", gen.text)
                 # Trim back under threshold after the reply, so the cache rests
                 # below threshold for the next turn (and on barge-in too).
                 n_evicted = self._evict_until(
@@ -311,10 +323,10 @@ class ChatWrapper:
 
         Two strategies, chosen by the cache's capabilities:
 
-        * **shift** (default) — remove the dropped span and shift the survivors
+        * **shift** (default) - remove the dropped span and shift the survivors
           down in place, reusing their KV for free. The contiguous block of
           victims collapses into a single remove-and-shift.
-        * **rebuild** (caches that can't shift, e.g. compact SWA / recurrent) —
+        * **rebuild** (caches that can't shift, e.g. compact SWA / recurrent) -
           drop the oldest from the bookkeeping only, then re-prefill the whole
           surviving conversation once. Correct, but not free; this is the expensive
           fallback for models where in-place shifting is unsupported.
@@ -355,7 +367,7 @@ class ChatWrapper:
 
         If this fails, the template tokenizes differently across message
         boundaries and incremental ``inject``/``request`` prefill would diverge
-        from a full render — better to fail loudly at ``begin`` than corrupt the
+        from a full render - better to fail loudly at ``begin`` than corrupt the
         cache silently later.
         """
         whole = self._ctx.tokenize(self._fmt.full_conversation(system, kept_messages), add_special=True)

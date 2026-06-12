@@ -13,6 +13,7 @@ and the survivors shifted down to reuse their KV without re-prefilling.
 from .config import Config
 from .context import KVContext
 from .messages import Eviction, Message, MessageTable, fit_newest_first
+from .persistence import ConversationStore, InMemoryStore, PersistentChat
 from .template import TemplateFormatter
 from .wrapper import ChatWrapper, ContextOverflowError, Turn
 
@@ -27,4 +28,7 @@ __all__ = [
     "Eviction",
     "TemplateFormatter",
     "fit_newest_first",
+    "PersistentChat",
+    "ConversationStore",
+    "InMemoryStore",
 ]
