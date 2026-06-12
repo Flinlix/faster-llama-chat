@@ -8,14 +8,21 @@ action, including across evictions.
 
 import pytest
 
+import dataclasses
+
 from llama_chat.config import Config
 from llama_chat.template import TemplateFormatter
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
-from tests.fake_context import BOS, FakeContext
+from tests.fake_context import BOS, GEMMA_FRAGMENTS, FakeContext
 
 
 def _cfg(**kw):
     return Config(**kw)
+
+
+def _frags(**kw):
+    """Gemma-default fragments with the given fields overridden."""
+    return dataclasses.replace(GEMMA_FRAGMENTS, **kw)
 
 
 def _flatten(wrapper):
@@ -256,8 +263,8 @@ def test_oversize_truncate():
 
 
 # ----- template formatting -----------------------------------------------
-def test_template_defaults_to_gemma():
-    fmt = TemplateFormatter(_cfg())
+def test_template_formatter_renders_gemma_tags():
+    fmt = TemplateFormatter(_frags())
     assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
     assert fmt.assistant_open() == "<|turn>model\n"
     assert fmt.assistant_close() == "<turn|>\n"
@@ -265,8 +272,8 @@ def test_template_defaults_to_gemma():
 
 def test_template_formatter_combines_fragments():
     fmt = TemplateFormatter(
-        _cfg(user_prefix="<u>", user_suffix="</u>",
-             assistant_prefix="<a>", assistant_suffix="</a>")
+        _frags(user_prefix="<u>", user_suffix="</u>",
+               assistant_prefix="<a>", assistant_suffix="</a>")
     )
     assert fmt.fragment("user", "hi") == "<u>hi</u>"
     assert fmt.fragment("assistant", "yo") == "<a>yo</a>"
@@ -277,12 +284,12 @@ def test_template_formatter_combines_fragments():
 
 
 def test_trim_content_strips_by_default():
-    fmt = TemplateFormatter(_cfg())
+    fmt = TemplateFormatter(_frags())
     assert fmt.fragment("user", "  hi\n") == "<|turn>user\nhi<turn|>\n"
 
 
 def test_trim_content_disabled_keeps_whitespace():
-    fmt = TemplateFormatter(_cfg(trim_content=False))
+    fmt = TemplateFormatter(_frags(trim_content=False))
     assert fmt.fragment("user", "  hi\n") == "<|turn>user\n  hi\n<turn|>\n"
 
 
@@ -316,8 +323,8 @@ def test_request_proceeds_when_headroom_sufficient():
 class _TemplatingFake(FakeContext):
     """FakeContext that also renders a model chat template for the fragment check."""
 
-    def __init__(self, render):
-        super().__init__()
+    def __init__(self, render, fragments=GEMMA_FRAGMENTS):
+        super().__init__(fragments=fragments)
         self._render = render
 
     def render_with_model_template(self, messages):
@@ -325,7 +332,7 @@ class _TemplatingFake(FakeContext):
 
 
 def test_fragment_check_passes_when_fragments_match_model():
-    fmt = TemplateFormatter(_cfg())
+    fmt = TemplateFormatter(_frags())
     render = lambda msgs: "".join(fmt.fragment(m["role"], m["content"]) for m in msgs)
     # Constructs without error: model render == fragment render.
     ChatWrapper(_cfg(), context=_TemplatingFake(render))
@@ -339,21 +346,13 @@ def test_fragment_check_rejects_mismatched_fragments():
         ChatWrapper(_cfg(), context=_TemplatingFake(render))
 
 
-def test_fragment_check_skipped_when_disabled():
-    render = lambda msgs: "totally different tags"
-    # Mismatch is ignored when validation is turned off.
-    ChatWrapper(
-        _cfg(validate_against_model_template=False), context=_TemplatingFake(render)
-    )
-
-
 def test_fragment_check_catches_trim_mismatch():
-    # Model trims content; the wrapper is told not to -> the whitespace probe
-    # diverges and construction must fail.
-    trimming = TemplateFormatter(_cfg())
+    # Model trims content; the wrapper's fragments say not to -> the whitespace
+    # probe diverges and construction must fail.
+    trimming = TemplateFormatter(_frags())
     render = lambda msgs: "".join(trimming.fragment(m["role"], m["content"]) for m in msgs)
     with pytest.raises(ValueError, match="do not match the model"):
-        ChatWrapper(_cfg(trim_content=False), context=_TemplatingFake(render))
+        ChatWrapper(context=_TemplatingFake(render, fragments=_frags(trim_content=False)))
 
 
 # ----- KV-cache / flash-attn config --------------------------------------

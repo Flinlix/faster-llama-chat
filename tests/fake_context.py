@@ -20,14 +20,24 @@ from __future__ import annotations
 
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
+from llama_chat.template import Fragments
 
 BOS = -1
+
+# Gemma-style tags, the fragments the wrapper used to default to via Config.
+GEMMA_FRAGMENTS = Fragments(
+    system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
+    user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
+    assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
+    trim_content=True,
+)
 
 
 class FakeContext:
     def __init__(self, gen_len: int = 5, gen_text: str = "reply",
-                 can_shift: bool = True) -> None:
+                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS) -> None:
         self.cache: list[int] = []
+        self._fragments = fragments
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
@@ -43,6 +53,9 @@ class FakeContext:
 
     def detokenize(self, token_ids: list[int]) -> str:
         return "".join(chr(t) for t in token_ids if t >= 0)
+
+    def extract_fragments(self) -> Fragments:
+        return self._fragments
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:

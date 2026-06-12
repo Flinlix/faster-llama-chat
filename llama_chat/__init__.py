@@ -14,7 +14,7 @@ from .config import Config
 from .context import KVContext
 from .messages import Eviction, Message, MessageTable, fit_newest_first
 from .persistence import ConversationStore, InMemoryStore, PersistentChat
-from .template import TemplateFormatter
+from .template import Fragments, TemplateFormatter
 from .wrapper import ChatWrapper, ContextOverflowError, Turn
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "Message",
     "MessageTable",
     "Eviction",
+    "Fragments",
     "TemplateFormatter",
     "fit_newest_first",
     "PersistentChat",

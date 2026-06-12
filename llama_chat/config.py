@@ -24,10 +24,7 @@ KV_CACHE_GGML_TYPES = {
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`.
 
-    The chat template is expressed as per-role *fragments*: the literal text
-    wrapped around each message's content, so one turn renders as
-    ``prefix + text + suffix`` (the combination is done by
-    :class:`~llama_chat.template.TemplateFormatter`).
+    You can supply a chat template explicitly via ``ChatWrapper(fragments=...)``.
 
     Attributes:
         model_path: Path to the GGUF model file.
@@ -61,17 +58,6 @@ class Config:
             :class:`~llama_chat.wrapper.ContextOverflowError`) if fewer than this
             many tokens of ``n_ctx`` would remain for the reply after prefilling
             the prompt. ``0`` disables the guard.
-        validate_against_model_template: At construction, render a user/assistant
-            probe through the model's own chat template (read from the GGUF) and
-            assert the configured fragments tokenize identically. Catches
-            mis-typed ``*_prefix``/``*_suffix`` tags before they corrupt the cache.
-        system_prefix, system_suffix: Wrap a system turn.
-        user_prefix, user_suffix: Wrap a user turn.
-        assistant_prefix, assistant_suffix: Wrap an assistant turn.
-        trim_content: Strip leading/trailing whitespace from each message's
-            content before wrapping it in role tags, matching templates that
-            apply Jinja ``| trim`` (e.g. Gemma, Llama-3). Set ``False`` for
-            templates that emit content verbatim.
         verbose: Pass through of llama.cpp's logging.
     """
 
@@ -101,20 +87,6 @@ class Config:
     # Policy
     oversize_policy: str = "reject"
     min_answer_tokens: int = 32
-    validate_against_model_template: bool = True
-
-    # Chat template (Gemma 4). The trained template is
-    # ``<|turn>{role}\n{content}<turn|>\n`` with ``assistant`` -> ``model`` and
-    # ``<bos>`` prepended once (added by ``add_special`` on the system fragment).
-    # Gemma has no system role, so the system message rides in a ``user`` turn -
-    # the same convention llama.cpp uses.
-    system_prefix: str = "<|turn>user\n"
-    system_suffix: str = "<turn|>\n"
-    user_prefix: str = "<|turn>user\n"
-    user_suffix: str = "<turn|>\n"
-    assistant_prefix: str = "<|turn>model\n"
-    assistant_suffix: str = "<turn|>\n"
-    trim_content: bool = True
 
     verbose: bool = False
 

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from ._backend import Backend
 from .config import KV_CACHE_GGML_TYPES, Config
 from .messages import Eviction
+from .template import Fragments
 
 SEQ = 0  # single active conversation -> single sequence id
 
@@ -118,6 +119,16 @@ class KVContext:
             return self._model_formatter(messages=messages).prompt
         except Exception:
             return None
+
+    def extract_fragments(self) -> Fragments | None:
+        """Recover the per-role template fragments from the model's own template.
+
+        Returns a :class:`~llama_chat.template.Fragments` derived from the GGUF
+        ``tokenizer.chat_template``, or ``None`` when the model ships no template
+        (callers must then supply ``ChatWrapper(fragments=...)``).
+        """
+        from .template_extract import extract_fragments
+        return extract_fragments(self.render_with_model_template)
 
     def _build_model_formatter(self):
         template = self._b.metadata_value(self._model, "tokenizer.chat_template")

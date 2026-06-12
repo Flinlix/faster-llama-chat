@@ -7,6 +7,40 @@ cache alive, prefills only genuinely new tokens, and when the cache fills it
 *removes the oldest messages and shifts the survivors down to close the gap* -
 reusing their KV instead of re-prefilling.
 
+## Overview
+
+- [**Goals**](#goals) - what the wrapper optimizes for, and why naive prompt
+  trimming fails to achieve it.
+- [**Comparison with llama.cpp**](#comparison-with-llamacpps-built-in-context-shift) -
+  how the policy differs from llama.cpp's built-in context shift.
+- [**Install**](#install) - building llama-cpp-python from source for CPU or CUDA.
+- [**Quick start**](#quick-start) - the API in a few lines, plus the four actions
+  (`begin` / `inject` / `request` / `stream`).
+- [**How eviction works**](#how-eviction-works) - the in-place KV surgery and the
+  shift / rebuild strategies.
+- [**Persistence**](#persistence) - keeping the full history beyond the cache window.
+- [**Chat template**](#chat-template) - per-role fragments and the load-time
+  validation that catches a mismatched template.
+- [**Verify**](#verify) - running the tests and the real-model demo.
+- [**Layout**](#layout) - a file-by-file map of the package.
+
+## Goals
+
+
+1. **Minimum prefill:** only ever process genuinely *new* tokens. The KV cache
+   from previous turns must survive and be reused.
+2. **Rolling eviction:** when the context fills, old messages are dropped
+   automatically so the chat runs indefinitely without erroring on a full
+   context.
+
+Naive prompt trimming defeats goal 1: removing old messages from the start of
+the sequence shifts every later token's position and **invalidates the entire
+cached prefix → full reprefill every turn.** llama-server's `cache_prompt` has
+the same problem - the moment any non-prefix message is dropped, the common
+prefix collapses to the system prompt. The correct mechanism is **in-place KV
+surgery**: remove the oldest message's token span and *shift the survivors' RoPE
+positions down* to close the gap, so kept messages are never re-processed.
+
 ## Comparison with llama.cpp's built-in context shift
 
 llama.cpp's server has its own context-shift mechanism. Both use the same
@@ -43,22 +77,40 @@ llama.cpp's server has its own context-shift mechanism. Both use the same
 - *llama_chat*: `MessageTable` mirrors the cache exactly, invariants asserted
   after every change, `snapshot()` exposes the live layout.
 
-## Goals
+## Install
 
+llama-cpp-python is built **from source per machine** so it uses that CPU's own
+kernels (Armv8.2 dot-product on the Pi, AVX2 on x86) or the CUDA backend - the
+prebuilt wheel targets a baseline ISA and ships no CUDA.
 
-1. **Minimum prefill:** only ever process genuinely *new* tokens. The KV cache
-   from previous turns must survive and be reused.
-2. **Rolling eviction:** when the context fills, old messages are dropped
-   automatically so the chat runs indefinitely without erroring on a full
-   context.
+```bash
+# Auto-detect: CUDA if nvidia-smi is present, else a native-CPU build.
+# Builds llama-cpp-python from source, installs llama_chat (editable), and
+# verifies the llama.cpp symbols the eviction core relies on.
+./install.sh
 
-Naive prompt trimming defeats goal 1: removing old messages from the start of
-the sequence shifts every later token's position and **invalidates the entire
-cached prefix → full reprefill every turn.** llama-server's `cache_prompt` has
-the same problem - the moment any non-prefix message is dropped, the common
-prefix collapses to the system prompt. The correct mechanism is **in-place KV
-surgery**: remove the oldest message's token span and *shift the survivors' RoPE
-positions down* to close the gap, so kept messages are never re-processed.
+./install.sh --cpu      # force the native-CPU build
+./install.sh --cuda     # force the Nvidia GPU build
+./install.sh --dev      # add test dependencies (append to any of the above)
+```
+
+Equivalent manual build:
+
+```bash
+# Raspberry Pi 5 / CPU
+CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"
+
+# Nvidia GPU (CUDA offload)
+CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.0"
+
+pip install -e ".[test]"
+```
+
+Only `Config` differs between targets - `model_path`, `n_ctx`, `threshold_pct`,
+and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on a GPU). The
+wrapper code is identical; `seq_rm` / `seq_add` work on both backends. On a GPU,
+`flash_attn=True` with `kv_cache_type="q8_0"` roughly halves KV-cache memory at
+near-zero quality cost (a quantized `kv_cache_type` requires flash attention).
 
 ## Quick start
 
@@ -121,35 +173,6 @@ for delta in chat.stream("Summarize the plan."):
 Cache-mutating actions are serialized with a reentrant lock, so the wrapper is
 safe to drive from a threaded HTTP server.
 
-## Persistence
-
-The KV cache only holds the recent window that fits `n_ctx`; eviction drops older
-turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
-every message (user, assistant, and injected context - everything but the system
-prompt) into a durable store, then replays the prior turns at `begin`:
-
-```python
-from llama_chat import PersistentChat, InMemoryStore
-
-chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config possible here as well
-chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
-chat.request("What did we decide last time?")                  # auto-persisted
-```
-
-A store is any object satisfying the `ConversationStore` protocol - two methods
-keyed by conversation id:
-
-```python
-class ConversationStore(Protocol):
-    def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
-    def append(self, conversation_id: str, role: str, text: str) -> None: ...
-```
-
-`InMemoryStore` is a reference implementation (not durable); back it with SQLite,
-Redis, or files by implementing those two methods. Capture is driven by an optional
-`on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
-own sink without `PersistentChat` if you prefer.
-
 ## How eviction works
 
 A pure-Python `MessageTable` is the single source of truth: the cache for
@@ -183,40 +206,34 @@ The backend (`_backend.py`) resolves the cache symbols defensively across
 llama.cpp API churn: the modern `llama_memory_*` handle API when present,
 falling back to the older `llama_kv_self_*` / `llama_kv_cache_*` names.
 
-## Install
+## Persistence
 
-llama-cpp-python is built **from source per machine** so it uses that CPU's own
-kernels (Armv8.2 dot-product on the Pi, AVX2 on x86) or the CUDA backend - the
-prebuilt wheel targets a baseline ISA and ships no CUDA.
+The KV cache only holds the recent window that fits `n_ctx`; eviction drops older
+turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
+every message (user, assistant, and injected context - everything but the system
+prompt) into a durable store, then replays the prior turns at `begin`:
 
-```bash
-# Auto-detect: CUDA if nvidia-smi is present, else a native-CPU build.
-# Builds llama-cpp-python from source, installs llama_chat (editable), and
-# verifies the llama.cpp symbols the eviction core relies on.
-./install.sh
+```python
+from llama_chat import PersistentChat, InMemoryStore
 
-./install.sh --cpu      # force the native-CPU build
-./install.sh --cuda     # force the Nvidia GPU build
-./install.sh --dev      # add test dependencies (append to any of the above)
+chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config possible here as well
+chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
+chat.request("What did we decide last time?")                  # auto-persisted
 ```
 
-Equivalent manual build:
+A store is any object satisfying the `ConversationStore` protocol - two methods
+keyed by conversation id:
 
-```bash
-# Raspberry Pi 5 / CPU
-CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"
-
-# Nvidia GPU (CUDA offload)
-CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.0"
-
-pip install -e ".[test]"
+```python
+class ConversationStore(Protocol):
+    def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
+    def append(self, conversation_id: str, role: str, text: str) -> None: ...
 ```
 
-Only `Config` differs between targets - `model_path`, `n_ctx`, `threshold_pct`,
-and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on a GPU). The
-wrapper code is identical; `seq_rm` / `seq_add` work on both backends. On a GPU,
-`flash_attn=True` with `kv_cache_type="q8_0"` roughly halves KV-cache memory at
-near-zero quality cost (a quantized `kv_cache_type` requires flash attention).
+`InMemoryStore` is a reference implementation (not durable); back it with SQLite,
+Redis, or files by implementing those two methods. Capture is driven by an optional
+`on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
+own sink without `PersistentChat` if you prefer.
 
 ## Chat template
 
@@ -225,23 +242,36 @@ model stop generating. A mismatched template tokenizes as plain text, so the
 model never emits its end-of-turn token and runs to the generation cap every
 turn.
 
-The template is expressed as per-role **fragments** on `Config`: the literal text
-wrapped around each message, so one turn renders as `prefix + text + suffix`.
-Content is stripped first when `trim_content` is set (the default), matching
-templates that apply Jinja `| trim` such as Gemma 4; set it `False` for templates
-that emit content verbatim. The defaults are **Gemma 4**
-(`<|turn>{role}\n … <turn|>\n`). To target another model, set the
-fragment fields:
+The template is expressed as per-role **fragments**: the literal text wrapped
+around each message, so one turn renders as `prefix + text + suffix`. Content is
+stripped first when `trim_content` is set, matching templates that apply Jinja
+`| trim` such as Gemma 4; it is `False` for templates that emit content verbatim.
+
+**The fragments are derived from the model automatically.** At construction the
+wrapper reads the model's own chat template from the GGUF
+(`tokenizer.chat_template`) and recovers the per-role fragments from it. It works by rendering
+short probes through the model's template with sentinel content and splitting the
+render on the sentinels to recover each role's `prefix`/`suffix` (the inverse of
+the validation probe below), plus a whitespace-padded probe to detect
+`trim_content`. The `system` role has no portable ground truth - some models have
+no distinct system role (Gemma 4 rejects it; others fold it into the first user
+turn) - so when the system probe does not survive, the system fragment falls back
+to the user tags, the same convention llama.cpp uses.
+
+For a model that ships **no** embedded chat template, pass the tags explicitly via
+`ChatWrapper(fragments=...)`:
 
 ```python
-from llama_chat import Config
+from llama_chat import ChatWrapper, Config, Fragments
 
 # ChatML, for example:
-Config(
-    model_path="model.gguf",
-    system_prefix="<|im_start|>system\n", system_suffix="<|im_end|>\n",
-    user_prefix="<|im_start|>user\n",     user_suffix="<|im_end|>\n",
-    assistant_prefix="<|im_start|>assistant\n", assistant_suffix="<|im_end|>\n",
+w = ChatWrapper(
+    Config(model_path="model.gguf"),
+    fragments=Fragments(
+        system_prefix="<|im_start|>system\n", system_suffix="<|im_end|>\n",
+        user_prefix="<|im_start|>user\n",     user_suffix="<|im_end|>\n",
+        assistant_prefix="<|im_start|>assistant\n", assistant_suffix="<|im_end|>\n",
+    ),
 )
 ```
 
@@ -253,11 +283,12 @@ Three load-time checks make a mismatch fail loudly instead of degrading silently
 - **At construction** the `user`/`assistant` fragments are checked against the
   model's own chat template read from the GGUF: a fixed probe (with surrounding
   whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
-  must tokenize identically, so mis-typed tags are caught before they corrupt the
-  cache. Disable with `validate_against_model_template=False`; it is
-  skipped automatically for models that ship no chat template. The `system`
-  fragment is not probed - chat templates handle a system role inconsistently
-  (Gemma 4 rejects it; others fold it into the first user turn).
+  must tokenize identically - a self-consistency check that the recovered (or
+  explicitly supplied) fragments round-trip through the model's template before
+  they corrupt the cache. It is skipped automatically for models that ship no chat
+  template. The `system` fragment is not probed - chat templates handle a system
+  role inconsistently (Gemma 4 rejects it; others fold it into the first user
+  turn).
 - **At `begin`** the wrapper asserts that per-message prefill tokenizes
   identically to a one-shot render of the whole conversation. If the template
   tokenizes differently across message boundaries (which would make incremental
@@ -288,7 +319,8 @@ never crosses `n_ctx`.
 |------|------|
 | `llama_chat/config.py` | `Config` - the hardware- and model-specific configuration |
 | `llama_chat/messages.py` | `MessageTable` - position bookkeeping, evict + shift (pure Python) |
-| `llama_chat/template.py` | `TemplateFormatter` - per-message chat-template fragments |
+| `llama_chat/template.py` | `Fragments` + `TemplateFormatter` - per-message chat-template fragments |
+| `llama_chat/template_extract.py` | `extract_fragments` - recover the fragments from the model's GGUF template |
 | `llama_chat/_backend.py` | version-stable adapter over `llama_cpp.*` (handles API churn) |
 | `llama_chat/context.py` | `KVContext` - tokenize / prefill / streaming generate / evict |
 | `llama_chat/wrapper.py` | `ChatWrapper` - `begin` / `inject` / `request` / `stream` |

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from .config import Config
 from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, fit_newest_first
-from .template import TemplateFormatter
+from .template import Fragments, TemplateFormatter
 
 
 class ContextOverflowError(RuntimeError):
@@ -49,7 +49,7 @@ class ChatWrapper:
     """Stateful single-conversation chat over llama.cpp with KV reuse."""
 
     def __init__(self, config: Config | None = None, context: KVContext | None = None,
-                 *, on_message=None, **kwargs) -> None:
+                 *, fragments: Fragments | None = None, on_message=None, **kwargs) -> None:
         # ``context`` is injectable for testing only.
         if config is None:
             config = Config(**kwargs)
@@ -61,10 +61,12 @@ class ChatWrapper:
         # Optional, for testing purposes only
         self._ctx = context if context is not None else KVContext(config)
         self._cfg = config
-        self._validate_template(self._cfg)
-        self._fmt = TemplateFormatter(self._cfg)
-        if self._cfg.validate_against_model_template:
-            self._check_fragments_match_model()
+        # The template comes from the model itself; pass ``fragments`` explicitly
+        # only for a model that ships no embedded chat template.
+        self._frags = fragments if fragments is not None else self._resolve_fragments()
+        self._validate_template(self._frags)
+        self._fmt = TemplateFormatter(self._frags)
+        self._check_fragments_match_model()
         self._table = MessageTable()
         # Serializes all cache-mutating actions: one KV sequence is shared across
         # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
@@ -259,37 +261,50 @@ class ChatWrapper:
         self._ctx.close()
 
     # ----- internals -----------------------------------------------------
-    def _validate_template(self, config: Config) -> None:
+    def _resolve_fragments(self) -> Fragments:
+        """Recover the template fragments from the model's own chat template."""
+        # (FakeContext (tests) supplies its own fragments via extract_fragments.)
+        if not hasattr(self._ctx, "extract_fragments"):
+            raise ValueError("context cannot supply template fragments")
+        frags = self._ctx.extract_fragments()
+        if frags is None:
+            raise ValueError(
+                "the model ships no chat template, so the fragments cannot be "
+                "derived; pass them explicitly with ChatWrapper(fragments=...)"
+            )
+        return frags
+
+    def _validate_template(self, frags: Fragments) -> None:
         """Ensure the turn-terminator is a real special token of this model.
 
         A template whose terminator splits into plain-text pieces (e.g. ChatML
         tags on a Gemma model) never lets the model emit end-of-generation, so it
-        runs to the token cap every turn. Detecting that here lets users fix their
+        runs to the token cap every turn. Detecting that here surfaces a bad
         template instead of silently generating bad outputs.
         """
         # FakeContext (tests) has no special-token vocabulary; skip gracefully.
         if not hasattr(self._ctx, "tokenizes_to_special"):
             return
-        terminator = config.assistant_suffix.strip()
+        terminator = frags.assistant_suffix.strip()
         if terminator and not self._ctx.tokenizes_to_special(terminator):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
                 f"{terminator!r} does not tokenize to a special token, so "
-                "generation would never stop. Set the assistant_prefix/"
-                "assistant_suffix (and other *_prefix/*_suffix) fields on Config "
-                "to match the model's trained template."
+                "generation would never stop. The model's embedded chat template "
+                "is malformed; supply correct tags with ChatWrapper(fragments=...)."
             )
 
     def _check_fragments_match_model(self) -> None:
         """Assert the user/assistant fragments match the model's trained template.
 
-        The hand-configured ``*_prefix``/``*_suffix`` tags must reproduce the tags
-        the model saw in training, or incremental prefill writes tokens it never
-        learned. We render a fixed user/assistant probe through the model's own
-        chat template (from the GGUF) and compare its tokenization to the fragment
-        render. The system fragment is *not* probed: chat templates handle a
-        system role inconsistently (Gemma rejects it, others fold it into the
-        first user turn), so there is no portable ground truth for it.
+        The fragments in use must reproduce the tags the model saw in training, or
+        incremental prefill writes tokens it never learned. We render a fixed
+        user/assistant probe through the model's own chat template (from the GGUF)
+        and compare its tokenization to the fragment render - a self-consistency
+        check on the recovered (or supplied) fragments. The system fragment is
+        *not* probed: chat templates handle a system role inconsistently (Gemma
+        rejects it, others fold it into the first user turn), so there is no
+        portable ground truth for it.
         """
         # FakeContext (tests) and GGUFs without a template have nothing to check.
         if not hasattr(self._ctx, "render_with_model_template"):
@@ -313,10 +328,8 @@ class ChatWrapper:
                 "template:\n"
                 f"  model renders:    {rendered!r}\n"
                 f"  fragments render: {fragment_text!r}\n"
-                "Set the user_prefix/user_suffix/assistant_prefix/assistant_suffix "
-                "(and the matching system_* fields) on Config to the tags shown in "
-                "the model's render above, or pass "
-                "validate_against_model_template=False to skip this check."
+                "The recovered fragments do not round-trip through the model's "
+                "template; supply correct tags with ChatWrapper(fragments=...)."
             )
 
     def _evict_until(self, fits) -> int:
