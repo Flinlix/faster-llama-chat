@@ -7,6 +7,42 @@ cache alive, prefills only genuinely new tokens, and when the cache fills it
 *removes the oldest messages and shifts the survivors down to close the gap* -
 reusing their KV instead of re-prefilling.
 
+## Comparison with llama.cpp's built-in context shift
+
+llama.cpp's server has its own context-shift mechanism. Both use the same
+`seq_rm` + `seq_add` cache operations; the differences are in policy.
+
+**What gets removed**
+- *llama.cpp*: a fixed token count starting at `n_keep`. Cuts mid-message,
+  mid-template-tag - leaves malformed turn fragments in the cache.
+- *llama_chat*: whole messages only. The surviving cache is always a clean
+  sequence of intact turns.
+
+**System-prompt protection**
+- *llama.cpp*: `--keep N` where `N` is a hand-counted token offset. Default
+  is ~0 (only BOS survives). Wrong or stale `N` silently corrupts the prompt.
+- *llama_chat*: the system message is structurally non-evictable - no number
+  to maintain.
+
+**When eviction fires**
+- *llama.cpp*: when the context is physically full (decode would overflow).
+- *llama_chat*: against a soft threshold (`threshold_pct × n_ctx`, default
+  0.75). After each turn the cache rests ≤ threshold; `min_answer_tokens`
+  guarantees reply headroom or raises `ContextOverflowError` up front.
+
+**SWA / Gemma compatibility**
+- *llama.cpp*: context shift is disabled or unreliable on iSWA models in
+  default memory-saving mode. `--swa-full` restores it but forfeits the memory
+  benefit.
+- *llama_chat*: probes `llama_memory_can_shift()` at startup and falls back
+  to the rebuild path (drop + re-prefill) on non-shiftable caches - correct
+  on the exact models where the built-in fails.
+
+**Bookkeeping**
+- *llama.cpp*: no message-level record; client and cache can diverge silently.
+- *llama_chat*: `MessageTable` mirrors the cache exactly, invariants asserted
+  after every change, `snapshot()` exposes the live layout.
+
 ## Goals
 
 
