@@ -1,6 +1,6 @@
 """Thin adapter over llama-cpp-python's low-level (``llama_cpp.*``) API.
 
-llama.cpp's C API has churned across releases — most importantly the KV-cache
+llama.cpp's C API has churned across releases - most importantly the KV-cache
 functions migrated ``llama_kv_cache_seq_*`` -> ``llama_kv_self_seq_*`` -> the
 newer ``llama_memory_*`` handle API. This module resolves whichever symbols the
 installed build exposes, once, so the rest of the package can speak a single
@@ -227,7 +227,7 @@ class Backend:
 
         False for caches that lose position information when tokens are dropped
         (e.g. compact sliding-window or recurrent state). When unknown, assume
-        True — the modern handle API only exposes this for caches that need it.
+        True - the modern handle API only exposes this for caches that need it.
         """
         mem = self._mem(ctx)
         if mem is None or self._mem_can_shift is None:
@@ -241,7 +241,7 @@ class Backend:
 
         Long inputs are split into ``n_batch``-sized decode calls so a single
         prefill never exceeds the context's batch limit. Logits are requested
-        only on the very last token, and only when generation will follow —
+        only on the very last token, and only when generation will follow -
         injection and history prefill skip them.
         """
         n = len(token_ids)

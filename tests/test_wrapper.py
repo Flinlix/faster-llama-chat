@@ -105,7 +105,7 @@ def test_request_prefills_only_new_tokens_and_reuses_context():
     turn = w.request("what's up?")
 
     # The only new prefill is the request prompt (user fragment + assistant-open)
-    # plus the turn-closing tag — never any survivor.
+    # plus the turn-closing tag - never any survivor.
     close_len = len(fake.tokenize(w._fmt.assistant_close()))
     new_prefill = fake.total_prefilled() - prefilled_after_begin
     assert new_prefill == turn.n_prefilled + close_len
@@ -162,7 +162,7 @@ def test_bargein_keeps_cache_consistent():
     assert first == "a"
     gen.close()  # barge-in: stop early
 
-    # The assistant turn was still recorded, and the cache equals the table —
+    # The assistant turn was still recorded, and the cache equals the table -
     # i.e. exactly the tokens that reached the cache were recorded, no more.
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)

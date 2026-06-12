@@ -31,7 +31,7 @@ class Config:
 
     Attributes:
         model_path: Path to the GGUF model file.
-        n_ctx: General context size in tokens (the hard wall — generation must
+        n_ctx: General context size in tokens (the hard wall - generation must
             never cross it).
         threshold_pct: Fraction of ``n_ctx`` above which prefilled content
             triggers eviction of the oldest messages. Must be in ``(0, 1]``.
@@ -106,7 +106,7 @@ class Config:
     # Chat template (Gemma 4). The trained template is
     # ``<|turn>{role}\n{content}<turn|>\n`` with ``assistant`` -> ``model`` and
     # ``<bos>`` prepended once (added by ``add_special`` on the system fragment).
-    # Gemma has no system role, so the system message rides in a ``user`` turn —
+    # Gemma has no system role, so the system message rides in a ``user`` turn -
     # the same convention llama.cpp uses.
     system_prefix: str = "<|turn>user\n"
     system_suffix: str = "<turn|>\n"

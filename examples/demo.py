@@ -9,7 +9,7 @@ Install the package first (see install.sh or README), then run:
 
 The demo proves the core claim by logging how many tokens are *prefilled* per
 action: after ``begin`` primes the conversation, each ``request`` prefills only
-its own new prompt — never the surviving history. The eviction stress run uses
+its own new prompt - never the surviving history. The eviction stress run uses
 a deliberately tiny context to show the oldest messages being dropped while the
 system prompt survives and the total never crosses ``n_ctx``.
 """
@@ -89,7 +89,7 @@ def main() -> None:
     w.close()
 
     # ---- Eviction stress: tiny context, watch the eviction ----
-    banner("EVICTION STRESS: tiny context — oldest messages get cut, system kept")
+    banner("EVICTION STRESS: tiny context - oldest messages get cut, system kept")
     small = Config(
         model_path=args.model,
         n_ctx=512,

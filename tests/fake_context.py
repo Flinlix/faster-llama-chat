@@ -6,11 +6,11 @@ cache stays in lockstep with the message table.
 
 Two correctness guarantees fall out of this fake:
 
-* ``prefill`` asserts ``start_pos == len(cache)`` — i.e. the wrapper only ever
+* ``prefill`` asserts ``start_pos == len(cache)`` - i.e. the wrapper only ever
   *appends*. It never re-prefills survivors. That is the whole point of the
   design, enforced mechanically.
 * After eviction the physical cache equals the concatenation of the surviving
-  messages' tokens — proving remove-and-shift closes the gap correctly.
+  messages' tokens - proving remove-and-shift closes the gap correctly.
 
 Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 ``add_special`` is set. Deterministic and easy to reason about.

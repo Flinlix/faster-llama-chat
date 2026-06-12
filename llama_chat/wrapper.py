@@ -58,6 +58,7 @@ class ChatWrapper:
         # genuine new turn (user, assistant) and each inject. Runs under the lock,
         # so it must be cheap and must not call back into the wrapper.
         self._on_message = on_message
+        # Optional, for testing purposes only
         self._ctx = context if context is not None else KVContext(config)
         self._cfg = config
         self._validate_template(self._cfg)

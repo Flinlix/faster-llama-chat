@@ -1,7 +1,7 @@
 """Per-message chat-template formatting.
 
 Each message is wrapped in the model's role tags before it reaches the cache.
-Building the templated *string* for one message needs no model — only
+Building the templated *string* for one message needs no model - only
 tokenizing does. This module keeps the two concerns separate.
 """
 

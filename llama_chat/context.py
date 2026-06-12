@@ -3,7 +3,7 @@
 This is the only module that drives llama.cpp directly. It owns the model,
 context and sampler, and translates the wrapper's intent into the low-level
 calls resolved by :class:`~llama_chat._backend.Backend`. It deliberately knows
-nothing about *which* messages to keep — that policy lives in the wrapper and
+nothing about *which* messages to keep - that policy lives in the wrapper and
 :mod:`~llama_chat.messages`.
 """
 
@@ -108,7 +108,7 @@ class KVContext:
 
         Returns ``None`` when the model ships no ``tokenizer.chat_template`` or
         the template rejects this message shape (e.g. Gemma refusing a system
-        role) — callers treat that as "nothing to validate against". BOS is
+        role) - callers treat that as "nothing to validate against". BOS is
         suppressed and no generation prompt is added so the render aligns with a
         fragment prefill (``add_special=False``).
         """

@@ -1,4 +1,4 @@
-"""Message bookkeeping — the single source of truth for the KV cache.
+"""Message bookkeeping - the single source of truth for the KV cache.
 
 This module is pure Python with no llama.cpp dependency. The cache for
 sequence 0 holds a contiguous run of token positions ``[0, total)``;
