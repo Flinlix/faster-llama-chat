@@ -17,14 +17,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Pick the build backend: explicit flag wins, otherwise auto-detect.
+# Parse flags in any order: backend (--cpu/--cuda, else auto-detect) and --dev.
 BACKEND=""
-case "${1:-}" in
-    --cpu) BACKEND="cpu" ;;
-    --cuda) BACKEND="cuda" ;;
-    "") BACKEND="$(command -v nvidia-smi >/dev/null && echo cuda || echo cpu)" ;;
-    *) echo "usage: $0 [--cpu|--cuda]" >&2; exit 2 ;;
-esac
+DEV=0
+for arg in "$@"; do
+    case "$arg" in
+        --cpu) BACKEND="cpu" ;;
+        --cuda) BACKEND="cuda" ;;
+        --dev) DEV=1 ;;
+        *) echo "usage: $0 [--cpu|--cuda] [--dev]" >&2; exit 2 ;;
+    esac
+done
+[ -n "$BACKEND" ] || BACKEND="$(command -v nvidia-smi >/dev/null && echo cuda || echo cpu)"
 
 # Build prerequisites (cmake, a C++ compiler, Python headers).
 if ! command -v cmake >/dev/null || ! command -v g++ >/dev/null; then
@@ -53,7 +57,7 @@ CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
 # Install llama_chat itself (editable) so `import llama_chat` and the demo work
 # without setting PYTHONPATH. Pass --dev to also install test dependencies.
 echo "Installing llama_chat (editable)..."
-if [ "${1:-}" = "--dev" ] || [ "${2:-}" = "--dev" ]; then
+if [ "$DEV" = 1 ]; then
     "$PIP" install -e ".[test]"
 else
     "$PIP" install -e "."

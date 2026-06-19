@@ -24,7 +24,7 @@ from llama_chat.template import Fragments
 
 BOS = -1
 
-# Gemma-style tags, the fragments the wrapper used to default to via Config.
+# Gemma-style tags; the default fragments for tests.
 GEMMA_FRAGMENTS = Fragments(
     system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
     user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
@@ -35,9 +35,11 @@ GEMMA_FRAGMENTS = Fragments(
 
 class FakeContext:
     def __init__(self, gen_len: int = 5, gen_text: str = "reply",
-                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS) -> None:
+                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS,
+                 special_tokens: tuple[str, ...] = ()) -> None:
         self.cache: list[int] = []
         self._fragments = fragments
+        self._special_tokens = special_tokens
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
@@ -52,11 +54,11 @@ class FakeContext:
         toks = [ord(c) for c in text]
         return [BOS] + toks if add_special else toks
 
-    def detokenize(self, token_ids: list[int]) -> str:
-        return "".join(chr(t) for t in token_ids if t >= 0)
-
     def extract_fragments(self) -> Fragments:
         return self._fragments
+
+    def special_token_texts(self) -> list[str]:
+        return list(self._special_tokens)
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:

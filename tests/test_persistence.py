@@ -1,5 +1,7 @@
 """Persistence layer tests using the model-free FakeContext."""
 
+import pytest
+
 from llama_chat import ChatWrapper, Config, InMemoryStore, PersistentChat
 from tests.fake_context import FakeContext
 
@@ -117,6 +119,24 @@ def test_persistent_chat_isolates_conversations():
 
     assert store.load("conv-a") == [("user", "a-question"), ("assistant", "rr")]
     assert store.load("conv-b") == [("user", "b-question"), ("assistant", "rr")]
+
+
+def test_persistent_chat_requires_begin():
+    fake = FakeContext(gen_len=2)
+    chat = PersistentChat(InMemoryStore(), _cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    with pytest.raises(RuntimeError, match="begin"):
+        chat.request("hi")
+
+
+def test_persistent_chat_failed_begin_selects_no_conversation():
+    # begin fails (system prompt over threshold) -> no conversation selected,
+    # so a later request cannot persist into a never-loaded conversation.
+    fake = FakeContext(gen_len=2)
+    chat = PersistentChat(InMemoryStore(), _cfg(n_ctx=1000, threshold_pct=0.05), context=fake)
+    with pytest.raises(ValueError):
+        chat.begin("conv-1", "x" * 100)
+    with pytest.raises(RuntimeError, match="begin"):
+        chat.request("hi")
 
 
 def test_in_memory_store_roundtrip():

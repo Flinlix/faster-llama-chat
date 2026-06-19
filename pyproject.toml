@@ -4,10 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llama_chat"
-version = "0.1.0"
+version = "1.0.0"
 description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict-and-shift the oldest messages."
-# 3.11+: the dataclasses in config.py use PEP 604 `X | None` annotations, which
-# are evaluated at runtime by @dataclass and only valid on Python 3.10+.
+readme = "README.md"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Development Status :: Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# The dataclasses use PEP 604 `X | None` annotations evaluated at runtime by
+# @dataclass (needs 3.10+); 3.11 is the oldest version the package is tested on.
 requires-python = ">=3.11"
 dependencies = [
     # Build llama-cpp-python from source per machine (see install.sh):

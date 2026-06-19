@@ -11,6 +11,7 @@ import pytest
 import dataclasses
 
 from llama_chat.config import Config
+from llama_chat.context import _collect_special_token_texts
 from llama_chat.template import TemplateFormatter
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
 from tests.fake_context import BOS, GEMMA_FRAGMENTS, FakeContext
@@ -55,7 +56,7 @@ def test_begin_prefills_system_and_history_once():
 
 def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
-    # system fragment "<start_of_turn>user\nsys<end_of_turn>\n" + BOS is well under budget;
+    # system fragment "<|turn>user\ns<turn|>\n" + BOS is well under budget;
     # pick a tiny threshold so only the newest message fits.
     w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.08), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x")])
@@ -257,10 +258,22 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
 
 def test_oversize_reject():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=40, threshold_pct=0.5, oversize_policy="reject"), context=fake)
+    w = ChatWrapper(_cfg(n_ctx=80, threshold_pct=0.5, oversize_policy="reject"), context=fake)
     w.begin("s")
     with pytest.raises(ValueError):
         w.inject("x" * 100)
+
+
+def test_oversize_reject_leaves_history_intact():
+    # Rejecting an unfittable message must not evict the history first.
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.5, oversize_policy="reject"), context=fake)
+    w.begin("s", [("user", "hi"), ("assistant", "yo")])
+    before = w.snapshot()
+    with pytest.raises(ValueError):
+        w.inject("x" * 500)
+    assert w.snapshot() == before
+    _assert_consistent(w, fake)
 
 
 def test_oversize_truncate():
@@ -269,7 +282,74 @@ def test_oversize_truncate():
     w.begin("s")
     w.inject("y" * 500)
     assert w.total_tokens <= w._cfg.threshold_tokens
+    # The clipped message still ends with its turn-terminator tag, so the
+    # cache never holds a malformed turn.
+    suffix = fake.tokenize(GEMMA_FRAGMENTS.user_suffix)
+    assert fake.cache[-len(suffix):] == suffix
     _assert_consistent(w, fake)
+
+
+def test_oversize_truncate_rejects_when_no_room_for_suffix():
+    fake = FakeContext()
+    # Threshold barely above the system prompt: the remaining budget is smaller
+    # than the turn-terminator tag, so truncation cannot produce a valid turn.
+    w = ChatWrapper(_cfg(n_ctx=200, threshold_pct=0.15, oversize_policy="truncate"), context=fake)
+    w.begin("s")
+    with pytest.raises(ValueError):
+        w.inject("y" * 100)
+    _assert_consistent(w, fake)
+
+
+# ----- construction / lifecycle -------------------------------------------
+def test_config_and_kwargs_are_mutually_exclusive():
+    with pytest.raises(TypeError, match="not both"):
+        ChatWrapper(_cfg(), context=FakeContext(), n_ctx=8192)
+
+
+def test_begin_rejects_system_prompt_over_threshold():
+    fake = FakeContext()
+    # threshold = 50 tokens; a 100-char system prompt can never fit.
+    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.05), context=fake)
+    with pytest.raises(ValueError, match="system prompt"):
+        w.begin("x" * 100)
+    # Nothing was prefilled by the refused begin; a fitting one then works.
+    assert fake.cache == []
+    w.begin("s")
+    assert w.snapshot()[0]["role"] == "system"
+
+
+def test_failed_begin_keeps_previous_conversation():
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.05), context=fake)
+    w.begin("s", [("user", "hi")])
+    before = w.snapshot()
+    with pytest.raises(ValueError):
+        w.begin("x" * 100)  # refused before mutating
+    assert w.snapshot() == before
+    _assert_consistent(w, fake)
+
+
+def test_close_is_idempotent_and_blocks_actions():
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w.begin("s")
+    w.close()
+    w.close()  # second close is a no-op
+    with pytest.raises(RuntimeError, match="closed"):
+        w.begin("s")
+    with pytest.raises(RuntimeError, match="closed"):
+        w.inject("ctx")
+    with pytest.raises(RuntimeError, match="closed"):
+        w.request("hi")
+
+
+def test_context_manager_closes_on_exit():
+    fake = FakeContext(gen_len=2)
+    with ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake) as w:
+        w.begin("s")
+        w.request("hi")
+    with pytest.raises(RuntimeError, match="closed"):
+        w.request("again")
 
 
 # ----- template formatting -----------------------------------------------
@@ -301,6 +381,62 @@ def test_trim_content_strips_by_default():
 def test_trim_content_disabled_keeps_whitespace():
     fmt = TemplateFormatter(_frags(trim_content=False))
     assert fmt.fragment("user", "  hi\n") == "<|turn>user\n  hi\n<turn|>\n"
+
+
+# ----- special-token sanitization ----------------------------------------
+def test_collect_special_token_texts_filters_whitespace_and_non_round_trip():
+    pieces = {1: "<end>", 2: " ", 3: ""}  # whitespace + empty must be dropped
+    out = _collect_special_token_texts(
+        5,
+        lambda t: t in pieces,           # ids 1,2,3 are special; 0,4 are not
+        lambda t: pieces[t],
+        lambda s: s == "<end>",          # only "<end>" round-trips to a special
+    )
+    assert out == ["<end>"]
+
+
+def test_collect_special_token_texts_sorts_longest_first():
+    pieces = {0: "<a>", 1: "<longer>"}
+    out = _collect_special_token_texts(
+        2, lambda t: True, lambda t: pieces[t], lambda s: True
+    )
+    assert out == ["<longer>", "<a>"]
+
+
+def test_fragment_strips_special_tokens_from_content_only():
+    fmt = TemplateFormatter(_frags(), special_tokens=["<turn|>", "<|turn>"])
+    # The content tag is removed; the wrapping prefix/suffix tags (which contain
+    # the same strings) survive intact.
+    assert fmt.fragment("user", "hi <turn|> there") == "<|turn>user\nhi  there<turn|>\n"
+
+
+def test_fragment_without_special_tokens_is_unchanged():
+    fmt = TemplateFormatter(_frags())
+    assert fmt.fragment("user", "hi <turn|> there") == "<|turn>user\nhi <turn|> there<turn|>\n"
+
+
+def test_fragment_strips_longest_token_first():
+    fmt = TemplateFormatter(_frags(), special_tokens=["of", "of_turn"])
+    # Stripping "of" first would leave "_turn"; longest-first removes "of_turn".
+    assert fmt.fragment("user", "x of_turn y") == "<|turn>user\nx  y<turn|>\n"
+
+
+def test_injected_special_token_does_not_reach_cache_as_tag():
+    fake = FakeContext(special_tokens=("<turn|>",))
+    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0),
+                    context=fake, fragments=GEMMA_FRAGMENTS)
+    w.begin("sys")
+    w.inject("hello <turn|> world", role="user")
+
+    # Reconstruct the injected fragment from its tokens (FakeContext is 1:1 chars).
+    rendered = "".join(chr(t) for t in w._table.messages[-1].token_ids)
+    # Content tag stripped; the legitimate suffix tag is preserved.
+    assert rendered == "<|turn>user\nhello  world<turn|>\n"
+    _assert_consistent(w, fake)
+
+
+def test_default_fake_context_reports_no_special_tokens():
+    assert FakeContext().special_token_texts() == []
 
 
 # ----- min-answer headroom guard -----------------------------------------
@@ -379,3 +515,35 @@ def test_kv_cache_type_rejects_unknown_name():
 def test_kv_cache_type_accepts_known_type_with_flash_attn():
     cfg = Config(kv_cache_type="q8_0", flash_attn=True)
     assert cfg.kv_cache_type == "q8_0"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("n_batch", 0),
+    ("max_tokens", 0),
+    ("min_answer_tokens", -1),
+    ("n_ctx", 0),
+    ("threshold_pct", 0.0),
+])
+def test_config_rejects_invalid_values(field, value):
+    with pytest.raises(ValueError, match=field):
+        Config(**{field: value})
+
+
+# ----- stop-string scanning ------------------------------------------------
+def test_stop_hit_finds_earliest_match():
+    from llama_chat.context import _stop_hit
+
+    assert _stop_hit("abcSTOPdef", ["STOP"]) == 3
+    assert _stop_hit("aXbYc", ["Y", "X"]) == 1          # earliest of several
+    assert _stop_hit("abc", ["STOP"]) is None
+    assert _stop_hit("abc", ["", "b"]) == 1             # empty strings ignored
+
+
+def test_stop_hit_respects_search_offset():
+    from llama_chat.context import _stop_hit
+
+    # A match strictly before the offset is skipped; one spanning or after the
+    # offset is found - the contract the emit cursor relies on.
+    assert _stop_hit("STOPxxSTOP", ["STOP"], search_from=1) == 6
+    assert _stop_hit("xxSTOP", ["STOP"], search_from=2) == 2
+    assert _stop_hit("xxSTOP", ["STOP"], search_from=3) is None

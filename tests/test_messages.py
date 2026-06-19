@@ -1,7 +1,5 @@
 """Pure bookkeeping tests for the message table (no model required)."""
 
-import pytest
-
 from llama_chat.messages import Message, MessageTable, fit_newest_first
 
 
@@ -18,13 +16,14 @@ def test_append_assigns_contiguous_positions():
     assert t.total == 12
 
 
-def test_evict_oldest_keeps_system_and_renumbers():
+def test_evict_oldest_until_single_message_renumbers():
     t = MessageTable()
     t.append(_msg("system", 3))
     t.append(_msg("user", 4))      # positions [3, 7)
     t.append(_msg("assistant", 5))  # positions [7, 12)
 
-    ev = t.evict_oldest()
+    ev, count = t.evict_oldest_until(lambda: t.total <= 8)
+    assert count == 1
     assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 7, 12)
     assert ev.shift_delta == 4
     # System preserved, assistant shifted down to close the gap.
@@ -61,11 +60,12 @@ def test_evict_oldest_until_noop_when_already_fits():
     assert t.total == 7
 
 
-def test_evict_raises_when_only_system_remains():
+def test_evict_oldest_until_stops_when_only_system_remains():
     t = MessageTable()
     t.append(_msg("system", 3))
-    with pytest.raises(IndexError):
-        t.evict_oldest()
+    ev, count = t.evict_oldest_until(lambda: False)  # can never fit
+    assert ev is None and count == 0
+    assert [m.role for m in t.messages] == ["system"]
 
 
 def test_n_evictable():

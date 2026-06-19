@@ -1,6 +1,6 @@
 """End-to-end demo of the KV-cache manager against a real GGUF model.
 
-Config defaults to Gemma 4; Change it to match your model and hardware.
+Config defaults to Gemma 4; change it to match your model and hardware.
 
 Install the package first (see install.sh or README), then run:
 

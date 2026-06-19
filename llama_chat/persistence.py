@@ -10,10 +10,11 @@ to capture each message, reloading prior history at ``begin``.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Generator
 from typing import Protocol, runtime_checkable
 
 from .config import Config
-from .wrapper import ChatWrapper
+from .wrapper import ChatWrapper, Turn
 
 
 @runtime_checkable
@@ -58,17 +59,24 @@ class PersistentChat:
         self._chat = ChatWrapper(config, on_message=self._persist, **kwargs)
 
     def _persist(self, role: str, text: str) -> None:
-        assert self._cid is not None, "call begin() before persisting turns"
+        if self._cid is None:
+            raise RuntimeError("call begin() before sending turns")
         self._store.append(self._cid, role, text)
 
     def begin(self, conversation_id: str, system_prompt: str) -> None:
-        self._cid = conversation_id
-        self._chat.begin(system_prompt, self._store.load(conversation_id))
+        """Select the conversation and prefill its recent history.
 
-    def request(self, text: str, **kwargs):
+        ``_cid`` is set only once the wrapped ``begin`` succeeds, so a failed
+        begin cannot leave later turns persisting into a conversation whose
+        history was never loaded.
+        """
+        self._chat.begin(system_prompt, self._store.load(conversation_id))
+        self._cid = conversation_id
+
+    def request(self, text: str, **kwargs) -> Turn:
         return self._chat.request(text, **kwargs)
 
-    def stream(self, text: str, **kwargs):
+    def stream(self, text: str, **kwargs) -> Generator[str, None, Turn]:
         return self._chat.stream(text, **kwargs)
 
     def inject(self, text: str, role: str = "user") -> int:
@@ -79,3 +87,9 @@ class PersistentChat:
 
     def close(self) -> None:
         self._chat.close()
+
+    def __enter__(self) -> PersistentChat:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()

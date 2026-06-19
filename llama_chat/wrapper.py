@@ -1,18 +1,19 @@
-"""ChatWrapper - the public API: ``begin``, ``inject``, ``request``.
+"""ChatWrapper - the public API: ``begin``, ``inject``, ``request``, ``stream``.
 
 The wrapper's goal is to prefill as little as possible. ``begin`` resets and
 prefills the system prompt plus whatever recent history fits (and on the first
 call warms the generation graph so the first reply has no cold-start latency);
-``inject`` prefills
-a single message with no generation; ``request`` prefills only the new request
-text and then generates. When the cache crosses the eviction threshold the oldest
-non-system messages are removed and the survivors shifted down to close the gap,
-so their KV is reused without re-prefilling.
+``inject`` prefills a single message with no generation; ``request`` and
+``stream`` prefill only the new request text and then generate. When the cache
+crosses the eviction threshold the oldest non-system messages are removed and
+the survivors shifted down to close the gap, so their KV is reused without
+re-prefilling.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 
 from .config import Config
@@ -50,32 +51,69 @@ class Turn:
 class ChatWrapper:
     """Stateful single-conversation chat over llama.cpp with KV reuse."""
 
-    def __init__(self, config: Config | None = None, context: KVContext | None = None,
-                 *, fragments: Fragments | None = None, on_message=None, **kwargs) -> None:
-        # ``context`` is injectable for testing only.
+    def __init__(
+        self,
+        config: Config | None = None,
+        context: KVContext | None = None,
+        *,
+        fragments: Fragments | None = None,
+        on_message: Callable[[str, str], None] | None = None,
+        **kwargs,
+    ) -> None:
+        """Load the model, resolve the chat template, and validate it.
+
+        Args:
+            config: Full configuration. Mutually exclusive with ``**kwargs``.
+            context: Pre-built cache context; injectable for testing only.
+            fragments: Explicit chat-template fragments, for a model that ships
+                no embedded template (otherwise they are recovered from the
+                model's own GGUF chat template).
+            on_message: Invoked with ``(role, text)`` for every message except
+                the system prompt and begin-replay - i.e. each genuine new turn
+                (user, assistant) and each inject. Runs under the lock, so it
+                must be cheap and must not call back into the wrapper.
+            **kwargs: :class:`~llama_chat.config.Config` field overrides, used
+                to build the config when ``config`` is not given.
+
+        Raises:
+            TypeError: If both ``config`` and config ``**kwargs`` are passed.
+            ValueError: If the chat template cannot be recovered or fails
+                validation against the model.
+        """
         if config is None:
             config = Config(**kwargs)
-        # Optional ``Callable[[str, str], None]`` invoked with (role, text) for
-        # every message except the system prompt and begin-replay - i.e. each
-        # genuine new turn (user, assistant) and each inject. Runs under the lock,
-        # so it must be cheap and must not call back into the wrapper.
+        elif kwargs:
+            raise TypeError(
+                "pass either a Config or Config field overrides, not both "
+                f"(got config and {sorted(kwargs)})"
+            )
         self._on_message = on_message
-        # Optional, for testing purposes only
-        self._ctx = context if context is not None else KVContext(config)
+        owns_ctx = context is None
+        self._ctx = KVContext(config) if owns_ctx else context
         self._cfg = config
-        # The template comes from the model itself; pass ``fragments`` explicitly
-        # only for a model that ships no embedded chat template.
-        self._frags = fragments if fragments is not None else self._resolve_fragments()
-        self._validate_template(self._frags)
-        self._fmt = TemplateFormatter(self._frags)
-        self._check_fragments_match_model()
+        try:
+            # The template comes from the model itself; pass ``fragments`` explicitly
+            # only for a model that ships no embedded chat template.
+            self._frags = fragments if fragments is not None else self._resolve_fragments()
+            self._validate_template(self._frags)
+            special = self._ctx.special_token_texts() if hasattr(self._ctx, "special_token_texts") else []
+            self._fmt = TemplateFormatter(self._frags, special_tokens=special)
+            self._check_fragments_match_model()
+        except BaseException:
+            # Template validation is a designed failure path; don't leak the
+            # model/context created above.
+            if owns_ctx:
+                self._ctx.close()
+            raise
         self._table = MessageTable()
         # The first ``begin`` warms the generation graph once (see ``warmup``).
         self._warmed = False
+        self._closed = False
         # Serializes all cache-mutating actions: one KV sequence is shared across
         # turns, so concurrent decodes (e.g. a threaded HTTP server) would corrupt
-        # it. Reentrant so request() can hold it across the stream() it drains.
-        self._lock = threading.RLock()
+        # it. ``stream`` acquires it once inside the generator body and holds it
+        # until the turn completes (or the stream is closed).
+        self._lock = threading.Lock()
 
     # ----- introspection -------------------------------------------------
     @property
@@ -83,16 +121,12 @@ class ChatWrapper:
         return self._table.total
 
     def snapshot(self) -> list[dict]:
-        """Return the current cache layout (for inspection and tests)."""
-        return [
-            {
-                "role": m.role,
-                "n_tokens": m.n_tokens,
-                "pos_start": m.pos_start,
-                "pos_end": m.pos_end,
-            }
-            for m in self._table.messages
-        ]
+        """Return the current cache layout (for inspection and tests).
+
+        Safe to call from any thread, including while another thread is
+        mid-turn: the table guards its own reads, so the layout is never torn.
+        """
+        return self._table.snapshot_rows()
 
     # ----- action: begin -------------------------------------------------
     def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None) -> None:
@@ -107,18 +141,25 @@ class ChatWrapper:
             messages: Optional ``(role, text)`` history, oldest first. Only the
                 most recent messages that fit under the threshold alongside the
                 system prompt are prefilled; older excess is dropped.
+
+        Raises:
+            ValueError: If the system prompt alone exceeds ``threshold_tokens``
+                (nothing could ever be evicted to make room for a turn), or if
+                the template fails the per-message equivalence check. The
+                previous conversation is left intact in either case.
         """
         messages = messages or []
         with self._lock:
-            self._ctx.reset()
-            self._table.reset()
-            # First conversation: warm the batch-1 generation graph so the first
-            # reply has no cold-start latency. warmup self-clears the cache.
-            if not self._warmed:
-                self._ctx.warmup()
-                self._warmed = True
-
+            self._ensure_open()
+            # Tokenize and validate first: a failed begin must not destroy the
+            # conversation it was about to replace.
             sys_tokens = self._ctx.tokenize(self._fmt.fragment("system", system_prompt), add_special=True)
+            if len(sys_tokens) > self._cfg.threshold_tokens:
+                raise ValueError(
+                    f"system prompt needs {len(sys_tokens)} tokens but the "
+                    f"eviction threshold is {self._cfg.threshold_tokens}; "
+                    "shorten the prompt or raise n_ctx/threshold_pct"
+                )
             hist_tokens = [
                 self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
                 for role, text in messages
@@ -132,6 +173,14 @@ class ChatWrapper:
             kept_tokens = hist_tokens[keep_from:]
 
             self._check_template_equivalence(system_prompt, kept_messages, sys_tokens, kept_tokens)
+
+            self._ctx.reset()
+            self._table.reset()
+            # First conversation: warm the batch-1 generation graph so the first
+            # reply has no cold-start latency. warmup self-clears the cache.
+            if not self._warmed:
+                self._ctx.warmup()
+                self._warmed = True
 
             # One decode for the whole conversation == cheapest possible prefill.
             all_tokens = list(sys_tokens)
@@ -152,13 +201,26 @@ class ChatWrapper:
 
         Returns:
             The number of messages evicted to make room.
+
+        Raises:
+            ValueError: If the message cannot fit even after evicting every
+                non-system message (and truncation is disabled or impossible).
+                Raised *before* anything is evicted, so a rejected message
+                leaves the conversation untouched.
         """
         with self._lock:
+            self._ensure_open()
             tokens = self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
-            evicted = self._evict_until(lambda: self._table.total + len(tokens) <= self._cfg.threshold_tokens)
+            # Enforce the size policy against the best case (everything but the
+            # system prompt evicted) before evicting anything: a rejected
+            # message must not destroy the history it could never fit beside.
+            # After this, eviction below is guaranteed to make the message fit.
+            floor = self._table.messages[0].n_tokens if self._table.has_system else 0
             tokens = self._fit_or_raise(
-                tokens, budget=self._cfg.threshold_tokens - self._table.total, what="injected message"
+                tokens, budget=self._cfg.threshold_tokens - floor,
+                what="injected message", role=role,
             )
+            evicted = self._evict_until(lambda: self._table.total + len(tokens) <= self._cfg.threshold_tokens)
 
             self._ctx.prefill(tokens, start_pos=self._table.total, want_logits=False)
             self._table.append(Message(role, text, tokens))
@@ -169,16 +231,25 @@ class ChatWrapper:
     # ----- action: request / stream --------------------------------------
     def stream(
         self, text: str, *, max_tokens: int | None = None, stop: list[str] | None = None
-    ):
+    ) -> Generator[str, None, Turn]:
         """Add a user request and stream the reply token-by-token.
 
         Yields visible text deltas as they are generated. The generator's ``return``
         value is the :class:`Turn` summary, available via ``StopIteration.value``
         or by calling :meth:`request`, which wraps this method.
 
+        The generator is lazy: nothing happens (including the
+        :class:`ContextOverflowError` headroom check) until the first iteration.
+
         Barge-in is safe: if the consumer stops early (``gen.close()``), the
         ``finally`` block still terminates the assistant turn and records exactly
         the tokens that reached the cache, so the next turn's cache stays valid.
+
+        Note:
+            ``text`` is sanitized before tokenization: any of the model's
+            special-token pieces (e.g. ``<end_of_turn>``) are stripped from the
+            content, so untrusted input cannot forge turn boundaries (see the
+            README's chat-template section).
 
         Args:
             text: The user request text.
@@ -192,16 +263,16 @@ class ChatWrapper:
             A :class:`Turn` describing the reply and the work performed.
         """
         with self._lock:
+            self._ensure_open()
             user_tokens = self._ctx.tokenize(self._fmt.fragment("user", text), add_special=False)
             open_tokens = self._ctx.tokenize(self._fmt.assistant_open(), add_special=False)
             close_tokens = self._ctx.tokenize(self._fmt.assistant_close(), add_special=False)
-            n_prompt = len(user_tokens) + len(open_tokens)
 
             # Hard wall: the prompt plus its turn closer must fit in the context.
             user_tokens = self._fit_or_raise(
                 user_tokens,
                 budget=self._cfg.n_ctx - len(open_tokens) - len(close_tokens) - self._table.total,
-                what="request",
+                what="request", role="user",
             )
             n_prompt = len(user_tokens) + len(open_tokens)
 
@@ -271,9 +342,29 @@ class ChatWrapper:
             return done.value
 
     def close(self) -> None:
-        self._ctx.close()
+        """Free the underlying context and model. Idempotent and thread-safe.
+
+        Waits for any in-flight turn (the lock serializes against it), then
+        closes the context - including one injected at construction. Every
+        action after close raises ``RuntimeError``.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._ctx.close()
+
+    def __enter__(self) -> ChatWrapper:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
 
     # ----- internals -----------------------------------------------------
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("ChatWrapper is closed")
+
     def _resolve_fragments(self) -> Fragments:
         """Recover the template fragments from the model's own chat template."""
         # (FakeContext (tests) supplies its own fragments via extract_fragments.)
@@ -378,18 +469,31 @@ class ChatWrapper:
             all_tokens.extend(m.token_ids)
         self._ctx.prefill(all_tokens, start_pos=0, want_logits=False)
 
-    def _fit_or_raise(self, tokens: list[int], budget: int, what: str) -> list[int]:
-        """Enforce the size policy when a message still doesn't fit."""
+    def _fit_or_raise(self, tokens: list[int], budget: int, what: str, role: str) -> list[int]:
+        """Enforce the size policy when a message still doesn't fit.
+
+        Truncation drops content tokens from the end but re-appends the role's
+        turn-terminator tag, so a clipped message still closes its turn and the
+        cache never holds a malformed fragment.
+        """
         if len(tokens) <= budget:
             return tokens
-        if self._cfg.oversize_policy == "truncate" and budget > 0:
-            return tokens[:budget]
+        if self._cfg.oversize_policy == "truncate":
+            suffix = self._ctx.tokenize(self._fmt.suffix(role), add_special=False)
+            if budget > len(suffix):
+                return tokens[: budget - len(suffix)] + suffix
         raise ValueError(
             f"{what} needs {len(tokens)} tokens but only {budget} fit "
             f"(oversize_policy='{self._cfg.oversize_policy}')"
         )
 
-    def _check_template_equivalence(self, system, kept_messages, sys_tokens, kept_tokens) -> None:
+    def _check_template_equivalence(
+        self,
+        system: str,
+        kept_messages: list[tuple[str, str]],
+        sys_tokens: list[int],
+        kept_tokens: list[list[int]],
+    ) -> None:
         """Assert per-message prefill yields the same tokens as a one-shot render.
 
         If this fails, the template tokenizes differently across message

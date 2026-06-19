@@ -13,7 +13,8 @@ Invariants (asserted after every structural change):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass
 
 
 @dataclass
@@ -74,67 +75,71 @@ class MessageTable:
 
     def __init__(self) -> None:
         self._messages: list[Message] = []
+        # Guards reads against structural changes so a snapshot taken from
+        # another thread is never torn mid-renumber. Reentrant lock: eviction's
+        # ``fits()`` callback re-enters through ``total``.
+        self._lock = threading.RLock()
 
     # ----- introspection -------------------------------------------------
     @property
     def messages(self) -> list[Message]:
-        return list(self._messages)
+        with self._lock:
+            return list(self._messages)
 
     @property
     def total(self) -> int:
         """Total tokens in the cache == next decode position."""
-        return self._messages[-1].pos_end if self._messages else 0
+        with self._lock:
+            return self._messages[-1].pos_end if self._messages else 0
+
+    def snapshot_rows(self) -> list[dict]:
+        """Return the layout as plain dict rows, read atomically.
+
+        Returns:
+            One ``{"role", "n_tokens", "pos_start", "pos_end"}`` dict per
+            message, copied under the lock so positions are mutually consistent
+            even while another thread is restructuring the table.
+        """
+        with self._lock:
+            return [
+                {
+                    "role": m.role,
+                    "n_tokens": m.n_tokens,
+                    "pos_start": m.pos_start,
+                    "pos_end": m.pos_end,
+                }
+                for m in self._messages
+            ]
 
     @property
     def has_system(self) -> bool:
-        return bool(self._messages) and self._messages[0].role == "system"
+        with self._lock:
+            return bool(self._messages) and self._messages[0].role == "system"
 
     @property
     def n_evictable(self) -> int:
         """Number of messages that may be evicted (everything but the system prompt)."""
-        return max(0, len(self._messages) - (1 if self.has_system else 0))
+        with self._lock:
+            return max(0, len(self._messages) - (1 if self.has_system else 0))
 
     def __len__(self) -> int:
-        return len(self._messages)
+        with self._lock:
+            return len(self._messages)
 
     # ----- mutation ------------------------------------------------------
     def reset(self) -> None:
-        self._messages.clear()
+        with self._lock:
+            self._messages.clear()
 
     def append(self, message: Message) -> Message:
         """Append a message at the end of the cache, assigning its positions."""
-        start = self.total
-        message.pos_start = start
-        message.pos_end = start + message.n_tokens
-        self._messages.append(message)
-        self._assert_invariants()
-        return message
-
-    def evict_oldest(self) -> Eviction:
-        """Drop the oldest non-system message and renumber survivors.
-
-        Returns:
-            An :class:`Eviction` describing the physical edit to apply to the
-            cache (``seq_rm`` then ``seq_add`` shift).
-
-        Raises:
-            IndexError: If there is no evictable message.
-        """
-        idx = 1 if self.has_system else 0
-        if idx >= len(self._messages):
-            raise IndexError("no evictable message")
-
-        old_total = self.total
-        victim = self._messages[idx]
-        eviction = Eviction(
-            remove_start=victim.pos_start,
-            remove_end=victim.pos_end,
-            old_total=old_total,
-        )
-        del self._messages[idx]
-        self._renumber()
-        self._assert_invariants()
-        return eviction
+        with self._lock:
+            start = self.total
+            message.pos_start = start
+            message.pos_end = start + message.n_tokens
+            self._messages.append(message)
+            self._assert_invariants()
+            return message
 
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
         """Drop oldest non-system messages until ``fits()`` (or none remain).
@@ -146,23 +151,24 @@ class MessageTable:
             The combined :class:`Eviction` (``None`` if nothing was dropped) and
             the number of messages dropped.
         """
-        if fits() or self.n_evictable == 0:
-            return None, 0
-        idx = 1 if self.has_system else 0
-        old_total = self.total
-        remove_start = self._messages[idx].pos_start
-        count = 0
-        while not fits() and self.n_evictable > 0:
-            del self._messages[idx]
-            self._renumber()  # cheap bookkeeping; keeps total/fits() correct each iter
-            count += 1
-        self._assert_invariants()
-        eviction = Eviction(
-            remove_start=remove_start,
-            remove_end=remove_start + (old_total - self.total),
-            old_total=old_total,
-        )
-        return eviction, count
+        with self._lock:
+            if fits() or self.n_evictable == 0:
+                return None, 0
+            idx = 1 if self.has_system else 0
+            old_total = self.total
+            remove_start = self._messages[idx].pos_start
+            count = 0
+            while not fits() and self.n_evictable > 0:
+                del self._messages[idx]
+                self._renumber()  # cheap bookkeeping; keeps total/fits() correct each iteration
+                count += 1
+            self._assert_invariants()
+            eviction = Eviction(
+                remove_start=remove_start,
+                remove_end=remove_start + (old_total - self.total),
+                old_total=old_total,
+            )
+            return eviction, count
 
     # ----- internals -----------------------------------------------------
     def _renumber(self) -> None:

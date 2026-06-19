@@ -42,7 +42,6 @@ class Config:
             (e.g. ``"q8_0"`` to roughly halve cache memory at near-zero quality
             cost) or ``None`` for llama.cpp's f16 default. Quantized types
             require ``flash_attn=True``.
-        seed: RNG seed for sampling.
         max_tokens: Upper bound on generated tokens per ``request`` (further
             capped so total never exceeds ``n_ctx``).
         temperature: Sampling temperature; ``<= 0`` selects greedy decoding.
@@ -53,12 +52,13 @@ class Config:
         stop: Additional stop strings that end generation.
         oversize_policy: What to do when a single message cannot fit under the
             threshold even after evicting everything but the system prompt:
-            ``"reject"`` raises, ``"truncate"`` clips the message to fit.
+            ``"reject"`` raises, ``"truncate"`` clips the message's content to
+            fit (the turn-terminator tag is kept, so the clipped turn still
+            closes cleanly).
         min_answer_tokens: Refuse a ``request``/``stream`` (raising
             :class:`~llama_chat.wrapper.ContextOverflowError`) if fewer than this
             many tokens of ``n_ctx`` would remain for the reply after prefilling
             the prompt. ``0`` disables the guard.
-        verbose: Pass through of llama.cpp's logging.
     """
 
     # Gemma 4
@@ -73,14 +73,13 @@ class Config:
     n_batch: int = 512
     flash_attn: bool = False
     kv_cache_type: str | None = None
-    seed: int = 0
 
     # Generation defaults (overridable per request)
     max_tokens: int = 1024
     temperature: float = 1.0
     top_k: int = 64
     top_p: float = 0.95
-    repeat_penalty: float = 1.0 # 1.0 means no penalty
+    repeat_penalty: float = 1.0  # 1.0 means no penalty
     repeat_last_n: int = 64
     stop: list[str] = field(default_factory=list)
 
@@ -88,13 +87,17 @@ class Config:
     oversize_policy: str = "reject"
     min_answer_tokens: int = 32
 
-    verbose: bool = False
-
     def __post_init__(self) -> None:
         if not 0.0 < self.threshold_pct <= 1.0:
             raise ValueError("threshold_pct must be in (0, 1]")
         if self.n_ctx <= 0:
             raise ValueError("n_ctx must be positive")
+        if self.n_batch <= 0:
+            raise ValueError("n_batch must be positive")
+        if self.max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        if self.min_answer_tokens < 0:
+            raise ValueError("min_answer_tokens must be >= 0")
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
         if self.kv_cache_type is not None:

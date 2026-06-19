@@ -24,27 +24,27 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 
-def _first(*names: str) -> Callable:
+def _maybe(*names: str) -> Callable | None:
     """Return the first attribute of ``llama_cpp`` that exists among ``names``.
 
-    Handles API renames across llama_cpp versions.
+    Handles API renames across llama_cpp versions; returns ``None`` when no
+    name is present (the caller treats the capability as unavailable).
     """
     for name in names:
         fn = getattr(llama_cpp, name, None)
         if fn is not None:
             return fn
-    raise AttributeError(
-        f"none of {names} found in llama_cpp (version {getattr(llama_cpp, '__version__', '?')})"
-    )
-
-
-def _maybe(*names: str):
-    """Like ``_first``, but returns ``None`` instead of raising if nothing is found."""
-    for name in names:
-        fn = getattr(llama_cpp, name, None)
-        if fn is not None:
-            return fn
     return None
+
+
+def _first(*names: str) -> Callable:
+    """Like ``_maybe``, but raises when the symbol is mandatory and absent."""
+    fn = _maybe(*names)
+    if fn is None:
+        raise AttributeError(
+            f"none of {names} found in llama_cpp (version {getattr(llama_cpp, '__version__', '?')})"
+        )
+    return fn
 
 
 class Backend:
@@ -55,14 +55,14 @@ class Backend:
         self._load_model = _first("llama_model_load_from_file", "llama_load_model_from_file")
         self._free_model = _first("llama_model_free", "llama_free_model")
         self._new_ctx = _first("llama_init_from_model", "llama_new_context_with_model")
-        self._get_vocab = getattr(llama_cpp, "llama_model_get_vocab", None)
+        self._get_vocab = _maybe("llama_model_get_vocab")
 
         # Memory / KV-cache handle ops, newest-API-first.
-        self._get_memory = getattr(llama_cpp, "llama_get_memory", None)
-        self._mem_clear = getattr(llama_cpp, "llama_memory_clear", None)
-        self._mem_rm = getattr(llama_cpp, "llama_memory_seq_rm", None)
-        self._mem_add = getattr(llama_cpp, "llama_memory_seq_add", None)
-        self._mem_can_shift = getattr(llama_cpp, "llama_memory_can_shift", None)
+        self._get_memory = _maybe("llama_get_memory")
+        self._mem_clear = _maybe("llama_memory_clear")
+        self._mem_rm = _maybe("llama_memory_seq_rm")
+        self._mem_add = _maybe("llama_memory_seq_add")
+        self._mem_can_shift = _maybe("llama_memory_can_shift")
         self._kv_clear = _maybe("llama_kv_self_clear", "llama_kv_cache_clear")
         self._kv_rm = _maybe("llama_kv_self_seq_rm", "llama_kv_cache_seq_rm")
         self._kv_add = _maybe("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
@@ -70,8 +70,10 @@ class Backend:
         self._is_eog = _first("llama_vocab_is_eog", "llama_token_is_eog")
         self._token_eos = _first("llama_vocab_eos", "llama_token_eos")
         self._token_to_piece = _first("llama_token_to_piece")
-        self._is_control = getattr(llama_cpp, "llama_vocab_is_control", None)
-        self._meta_val_str = getattr(llama_cpp, "llama_model_meta_val_str", None)
+        self._is_control = _maybe("llama_vocab_is_control")
+        self._vocab_n_tokens = _first("llama_vocab_n_tokens", "llama_n_vocab")
+        self._meta_val_str = _maybe("llama_model_meta_val_str")
+        self._sampler_reset = _maybe("llama_sampler_reset")
 
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int):
@@ -145,6 +147,14 @@ class Backend:
 
     # ----- tokenize / detokenize ----------------------------------------
     def tokenize(self, vocab, text: str, add_special: bool) -> list[int]:
+        """Convert ``text`` to a list of token IDs, optionally prepending a BOS token.
+
+        Special-token parsing is always enabled so template tags tokenize to
+        their control tokens. Message content is kept safe upstream:
+        :class:`~llama_chat.template.TemplateFormatter` strips the model's
+        special-token pieces from content before it reaches this method, so a
+        literal tag in user text cannot forge a turn boundary here.
+        """
         raw = text.encode("utf-8")
         n_max = len(raw) + 16
         buf = (self.lc.llama_token * n_max)()
@@ -194,6 +204,25 @@ class Backend:
             return False
         return bool(self._is_control(vocab, token))
 
+    def supports_special(self) -> bool:
+        """Whether this build can classify control/special tokens."""
+        return self._is_control is not None
+
+    def vocab_size(self, vocab_or_model) -> int:
+        """Number of tokens in the vocabulary.
+
+        Takes the same vocab-or-model object that :meth:`vocab` returns: the
+        newer ``llama_vocab_n_tokens`` takes a vocab, the older ``llama_n_vocab``
+        a model, and the object generation tracks the resolved symbol - so this
+        is correct on both builds (same coupling as ``is_eog``/``token_eos``).
+        """
+        return int(self._vocab_n_tokens(vocab_or_model))
+
+    # ----- sampler -------------------------------------------------------
+    def sampler_reset(self, sampler) -> None:
+        """Reset sampler-chain state (e.g. the repeat-penalty window), if supported."""
+        if self._sampler_reset is not None:
+            self._sampler_reset(sampler)
 
     # ----- KV / memory edits --------------------------------------------
     def _mem(self, ctx):
@@ -251,12 +280,13 @@ class Backend:
         n = len(token_ids)
         if n == 0:
             return
-        for off in range(0, n, n_batch):
-            chunk = token_ids[off:off + n_batch]
-            m = len(chunk)
-            is_last_chunk = off + m >= n
-            batch = self.lc.llama_batch_init(m, 0, 1)
-            try:
+        # One batch allocation sized for the largest chunk, reused across chunks.
+        batch = self.lc.llama_batch_init(min(n, n_batch), 0, 1)
+        try:
+            for off in range(0, n, n_batch):
+                chunk = token_ids[off:off + n_batch]
+                m = len(chunk)
+                is_last_chunk = off + m >= n
                 for i, tok in enumerate(chunk):
                     batch.token[i] = tok
                     batch.pos[i] = start_pos + off + i
@@ -268,7 +298,5 @@ class Backend:
                 rc = self.lc.llama_decode(ctx, batch)
                 if rc != 0:
                     raise RuntimeError(f"llama_decode failed (rc={rc})")
-            finally:
-                self.lc.llama_batch_free(batch)
-
-
+        finally:
+            self.lc.llama_batch_free(batch)

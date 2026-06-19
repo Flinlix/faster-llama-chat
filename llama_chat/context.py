@@ -10,6 +10,8 @@ nothing about *which* messages to keep - that policy lives in the wrapper and
 from __future__ import annotations
 
 import codecs
+import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ._backend import Backend
@@ -18,6 +20,46 @@ from .messages import Eviction
 from .template import Fragments
 
 SEQ = 0  # single active conversation -> single sequence id
+
+
+def _collect_special_token_texts(
+    vocab_size: int,
+    is_special_id: Callable[[int], bool],
+    to_piece: Callable[[int], str],
+    round_trips: Callable[[str], bool],
+) -> list[str]:
+    """Collect the rendered text of every special token in the vocabulary.
+
+    Returned strings are exactly the substrings that, if left in message content,
+    would tokenize to a control token (and so forge turn boundaries). A piece is
+    kept only when it is non-empty/non-whitespace *and* round-trips to a single
+    special token - this excludes whitespace/empty pieces and any piece that does
+    not actually re-parse as special, avoiding over-stripping ordinary content.
+
+    Sorted longest-first so a caller can strip overlapping tags greedily. Takes
+    plain callables so it is testable without a model.
+
+    Args:
+        vocab_size: Number of tokens in the vocabulary; ids ``0..vocab_size-1``
+            are scanned.
+        is_special_id: Maps a token id to ``True`` if it is a control/special
+            token.
+        to_piece: Maps a token id to its rendered text.
+        round_trips: Maps a piece back to ``True`` if it tokenizes to exactly one
+            special token (the over-stripping guard).
+
+    Returns:
+        The special-token pieces, longest-first.
+    """
+    texts = []
+    for tid in range(vocab_size):
+        if not is_special_id(tid):
+            continue
+        piece = to_piece(tid)
+        if piece.strip() and round_trips(piece):
+            texts.append(piece)
+    texts.sort(key=len, reverse=True)
+    return texts
 
 
 class _TextBuffer:
@@ -36,6 +78,10 @@ class _TextBuffer:
             self._emitted = upto
             return delta
         return None
+
+    @property
+    def emitted(self) -> int:
+        return self._emitted
 
     @property
     def text(self) -> str:
@@ -72,15 +118,47 @@ class KVContext:
         self._cfg = config
         self._b = Backend()
         self._model = self._b.load_model(config.model_path, config.n_gpu_layers)
-        kv_type = KV_CACHE_GGML_TYPES.get(config.kv_cache_type)
-        self._ctx = self._b.new_context(
-            self._model, config.n_ctx, config.n_threads, config.n_batch,
-            flash_attn=config.flash_attn, type_k=kv_type, type_v=kv_type)
-        self._vocab = self._b.vocab(self._model)
-        self._n_batch = config.n_batch
-        self._can_shift = self._b.can_shift(self._ctx)
-        self._sampler = self._build_sampler(config)
-        self._model_formatter = self._build_model_formatter()
+        self._ctx = None
+        self._sampler = None
+        try:
+            kv_type = KV_CACHE_GGML_TYPES.get(config.kv_cache_type)
+            self._ctx = self._b.new_context(
+                self._model, config.n_ctx, config.n_threads, config.n_batch,
+                flash_attn=config.flash_attn, type_k=kv_type, type_v=kv_type)
+            self._vocab = self._b.vocab(self._model)
+            self._n_batch = config.n_batch
+            self._can_shift = self._b.can_shift(self._ctx)
+            self._sampler = self._build_sampler(config)
+            self._model_formatter = self._build_model_formatter()
+            # One-time vocab scan: the special-token pieces the formatter strips
+            # from untrusted content. Builds that cannot classify special tokens
+            # leave content unsanitized - degrade rather than crash, but say so.
+            if self._b.supports_special():
+                self._special_texts = _collect_special_token_texts(
+                    self._b.vocab_size(self._vocab),
+                    lambda t: self._b.is_special(self._vocab, t),
+                    lambda t: self._b.token_to_piece(self._vocab, t),
+                    self.tokenizes_to_special,
+                )
+            else:
+                self._special_texts = []
+                warnings.warn(
+                    "this llama_cpp build lacks llama_vocab_is_control, so "
+                    "special tokens cannot be classified; message content is "
+                    "NOT sanitized and literal template tags in untrusted input "
+                    "can forge turn boundaries",
+                    RuntimeWarning,
+                )
+        except BaseException:
+            # Construction can legitimately fail (bad config, OOM); free the
+            # native resources created so far instead of leaking them.
+            if self._sampler is not None:
+                self._b.lc.llama_sampler_free(self._sampler)
+            if self._ctx is not None:
+                self._b.free_context(self._ctx)
+            self._b.free_model(self._model)
+            raise
+        self._closed = False
 
     @property
     def can_shift(self) -> bool:
@@ -91,9 +169,6 @@ class KVContext:
     def tokenize(self, text: str, add_special: bool = False) -> list[int]:
         return self._b.tokenize(self._vocab, text, add_special)
 
-    def detokenize(self, token_ids: list[int]) -> str:
-        return "".join(self._b.token_to_piece(self._vocab, t) for t in token_ids)
-
     def tokenizes_to_special(self, text: str) -> bool:
         """True if ``text`` tokenizes to exactly one control/special token.
 
@@ -103,6 +178,10 @@ class KVContext:
         """
         toks = self.tokenize(text, add_special=False)
         return len(toks) == 1 and self._b.is_special(self._vocab, toks[0])
+
+    def special_token_texts(self) -> list[str]:
+        """The model's special-token pieces, for stripping from untrusted content."""
+        return self._special_texts
 
     def render_with_model_template(self, messages: list[dict]) -> str | None:
         """Render ``messages`` with the model's own GGUF chat template.
@@ -145,6 +224,9 @@ class KVContext:
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
         self._b.kv_clear(self._ctx)
+        # Forget sampler state (e.g. the repeat-penalty window) along with the
+        # cache, so a fresh conversation is not penalized for the previous one.
+        self._b.sampler_reset(self._sampler)
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         self._b.decode(self._ctx, token_ids, start_pos, SEQ, want_logits, self._n_batch)
@@ -220,23 +302,21 @@ class KVContext:
             tbuf.append(decoder.decode(self._b.token_to_piece_bytes(self._vocab, tok)))
 
             if max_stop:
-                hit = _stop_hit(tbuf.text, stop)
+                # Emitted text is already known to start no stop string (that is
+                # what the hold-back guarantees), so only the unemitted tail
+                # needs scanning - the total scan stays linear in the reply.
+                hit = _stop_hit(tbuf.text, stop, search_from=tbuf.emitted)
                 if hit is not None:
-                    delta = tbuf.emit(hit)
-                    if delta:
-                        acc.text += delta
-                        yield delta
                     acc.stop_reason = "stop"
-                    break
-                delta = tbuf.emit(len(tbuf) - (max_stop - 1))  # hold back possible prefix
-                if delta:
-                    acc.text += delta
-                    yield delta
+                upto = hit if hit is not None else len(tbuf) - (max_stop - 1)
             else:
-                delta = tbuf.emit(len(tbuf))
-                if delta:
-                    acc.text += delta
-                    yield delta
+                upto = len(tbuf)
+            delta = tbuf.emit(upto)
+            if delta:
+                acc.text += delta
+                yield delta
+            if acc.stop_reason == "stop":
+                break
         else:
             acc.stop_reason = "length"
 
@@ -251,6 +331,10 @@ class KVContext:
 
     # ----- lifecycle -----------------------------------------------------
     def close(self) -> None:
+        """Free the sampler, context and model. Safe to call more than once."""
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._b.lc.llama_sampler_free(self._sampler)
         finally:
@@ -268,7 +352,14 @@ class KVContext:
                 add(chain, lc.llama_sampler_init_penalties(
                     cfg.repeat_last_n, cfg.repeat_penalty, 0.0, 0.0))
             except TypeError:
-                pass  # older signature; skip penalties rather than crash
+                # Older builds use a different signature; degrade without the
+                # penalty rather than crash - but say so.
+                warnings.warn(
+                    "this llama_cpp build has an incompatible "
+                    "llama_sampler_init_penalties signature; "
+                    f"repeat_penalty={cfg.repeat_penalty} is ignored",
+                    RuntimeWarning,
+                )
         if cfg.temperature <= 0.0:
             add(chain, lc.llama_sampler_init_greedy())
             return chain
@@ -276,17 +367,23 @@ class KVContext:
             add(chain, lc.llama_sampler_init_top_k(cfg.top_k))
         add(chain, lc.llama_sampler_init_top_p(cfg.top_p, 1))
         add(chain, lc.llama_sampler_init_temp(cfg.temperature))
-        add(chain, lc.llama_sampler_init_dist(cfg.seed))
+        # LLAMA_DEFAULT_SEED asks llama.cpp for a fresh random seed per run.
+        seed = getattr(lc, "LLAMA_DEFAULT_SEED", 0xFFFFFFFF)
+        add(chain, lc.llama_sampler_init_dist(seed))
         return chain
 
 
-def _stop_hit(text: str, stop: list[str]) -> int | None:
-    """Return the index where the earliest stop string begins, or ``None``."""
+def _stop_hit(text: str, stop: list[str], search_from: int = 0) -> int | None:
+    """Return the index where the earliest stop string begins, or ``None``.
+
+    ``search_from`` skips text already known to contain no stop start (e.g.
+    previously emitted output), keeping repeated scans linear overall.
+    """
     earliest: int | None = None
     for s in stop:
         if not s:
             continue
-        i = text.find(s)
+        i = text.find(s, search_from)
         if i != -1 and (earliest is None or i < earliest):
             earliest = i
     return earliest

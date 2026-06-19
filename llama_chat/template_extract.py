@@ -60,12 +60,15 @@ def _extract_assistant(render: Render, user_prefix: str, user_suffix: str) -> di
         {"role": "user", "content": _USER},
         {"role": "assistant", "content": _ASST},
     ])
-    if both is None or _ASST not in both:
-        # Fall back to the user tags so generation still has an open/close pair.
-        return {"assistant_prefix": user_prefix, "assistant_suffix": user_suffix}
+    fallback = {"assistant_prefix": user_prefix, "assistant_suffix": user_suffix}
+    if both is None or _ASST not in both or _USER + user_suffix not in both:
+        # The two-message render does not contain the expected user turn (or no
+        # assistant sentinel at all); fall back to the user tags so generation
+        # still has an open/close pair.
+        return fallback
     # Strip the leading user fragment, then the assistant fragment is what wraps
     # the assistant sentinel.
-    tail = both.split(_USER, 1)[1].split(user_suffix, 1)[1]
+    tail = both.split(_USER + user_suffix, 1)[1]
     asst_prefix, _, asst_suffix = tail.partition(_ASST)
     return {"assistant_prefix": asst_prefix, "assistant_suffix": asst_suffix}
 
@@ -84,8 +87,13 @@ def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
     ])
     if rendered is None or _SYS not in rendered or _USER not in rendered:
         return {"system_prefix": user_prefix, "system_suffix": user_suffix}
-    # The system fragment is everything before the user turn begins.
+    # The system fragment is everything before the user turn begins. Templates
+    # that fold the system message *into* the first user turn have no standalone
+    # user turn to split on; ``head`` then still contains the user sentinel, so
+    # no clean system fragment exists - fall back to the user tags.
     head = rendered.split(user_prefix + _USER, 1)[0]
+    if _USER in head:
+        return {"system_prefix": user_prefix, "system_suffix": user_suffix}
     sys_prefix, _, sys_suffix = head.partition(_SYS)
     return {"system_prefix": sys_prefix, "system_suffix": sys_suffix}
 

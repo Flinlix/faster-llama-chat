@@ -152,9 +152,13 @@ for delta in chat.stream("Summarize the plan."):
   the most recent history that fits under the threshold in a single decode;
   older excess is dropped. The first call also warms the generation graph (a
   throwaway decode, immediately cleared) so the first reply has no cold start.
+  A system prompt that alone exceeds the threshold raises `ValueError` before
+  the previous conversation is touched.
 - **`inject(text, role="user")`** - adds context (e.g. retrieved documents) with
   no generation. Evicts the oldest messages first if needed to stay under the
-  threshold. Returns the number of messages evicted.
+  threshold. Returns the number of messages evicted. A message that could never
+  fit is rejected (or truncated, per `oversize_policy`) *before* anything is
+  evicted, so a rejected inject leaves the conversation untouched.
 - **`request(text)`** - prefills just the request text and generates, evicting
   oldest messages if over threshold and capping generation so the total never
   exceeds `n_ctx`. The reply is recorded so the next turn reuses it for free.
@@ -171,8 +175,10 @@ for delta in chat.stream("Summarize the plan."):
   the stream early (barge-in via `gen.close()`) still records exactly the tokens
   that reached the cache, and the next turn stays valid.
 
-Cache-mutating actions are serialized with a reentrant lock, so the wrapper is
-safe to drive from a threaded HTTP server.
+Cache-mutating actions are serialized with a lock, so the wrapper is safe to
+drive from a threaded environment. `close()` (also available via `with
+ChatWrapper(...) as chat:`) waits for any in-flight turn, frees the model, and
+makes later actions raise; it is idempotent and thread-safe.
 
 ## How eviction works
 
@@ -217,7 +223,7 @@ prompt) into a durable store, then replays the prior turns at `begin`:
 ```python
 from llama_chat import PersistentChat, InMemoryStore
 
-chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config possible here as well
+chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config here as well
 chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
 chat.request("What did we decide last time?")                  # auto-persisted
 ```
@@ -294,6 +300,23 @@ Three load-time checks make a mismatch fail loudly instead of degrading silently
   identically to a one-shot render of the whole conversation. If the template
   tokenizes differently across message boundaries (which would make incremental
   `inject` / `request` prefill diverge from a full render), it raises.
+
+**Special tokens in message content.** Text is tokenized with special-token
+parsing enabled, which is what makes the template tags tokenize to their control
+tokens. Left unchecked, *message content* containing literal template tags (e.g.
+a user typing `<end_of_turn>`) would also become control tokens, letting
+untrusted input forge turn boundaries (prompt injection at the token level). To
+prevent this, the wrapper enumerates the model's special tokens once at startup
+- keeping only the pieces that round-trip to a single control token (excluding
+empty/whitespace) - and strips them from message content inside fragment
+rendering, before tokenization. The template tags themselves stay special
+because they live in the fragment prefix/suffix, not the content. This preserves
+the fragment-concatenation equivalence the design relies on: the equivalence
+check renders through the same `fragment()`, so both sides sanitize identically.
+On llama.cpp builds that lack the `llama_vocab_is_control` symbol, token
+classification is unavailable and the sanitization step is skipped — content is
+left unsanitized rather than crashing, and a `RuntimeWarning` is emitted so the
+weakened guarantee is not silent.
 
 ## Verify
 

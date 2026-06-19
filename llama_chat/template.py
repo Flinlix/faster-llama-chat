@@ -7,6 +7,7 @@ tokenizing does. This module keeps the two concerns separate.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -49,21 +50,42 @@ class TemplateFormatter:
     template-equivalence check in ``begin``).
     """
 
-    def __init__(self, fragments: Fragments) -> None:
+    def __init__(self, fragments: Fragments, special_tokens: Sequence[str] = ()) -> None:
         self._f = fragments
+        # The model's special-token pieces, stripped from message content so a
+        # user typing a literal tag (e.g. ``<end_of_turn>``) cannot forge a turn
+        # boundary. Sorted longest-first so greedy stripping handles overlaps.
+        self._special = tuple(sorted(special_tokens, key=len, reverse=True))
+
+    def _parts(self, role: str) -> tuple[str, str]:
+        """Return the ``(prefix, suffix)`` tags for ``role``."""
+        f = self._f
+        if role == "system":
+            return f.system_prefix, f.system_suffix
+        if role == "user":
+            return f.user_prefix, f.user_suffix
+        if role == "assistant":
+            return f.assistant_prefix, f.assistant_suffix
+        raise ValueError(f"unknown role: {role!r}")
 
     def fragment(self, role: str, text: str) -> str:
-        """Return the templated fragment for a complete message."""
-        f = self._f
-        if f.trim_content:
+        """Return the templated fragment for a complete message.
+
+        Any of the model's special-token pieces appearing in ``text`` are
+        stripped first, so untrusted content cannot smuggle control tokens past
+        the template tags. The wrapping ``prefix``/``suffix`` tags are left
+        intact - only the content between them is sanitized.
+        """
+        prefix, suffix = self._parts(role)
+        for tok in self._special:
+            text = text.replace(tok, "")
+        if self._f.trim_content:
             text = text.strip()  # match templates that apply Jinja `| trim`
-        if role == "system":
-            return f"{f.system_prefix}{text}{f.system_suffix}"
-        if role == "user":
-            return f"{f.user_prefix}{text}{f.user_suffix}"
-        if role == "assistant":
-            return f"{f.assistant_prefix}{text}{f.assistant_suffix}"
-        raise ValueError(f"unknown role: {role!r}")
+        return f"{prefix}{text}{suffix}"
+
+    def suffix(self, role: str) -> str:
+        """Return the turn-terminator tag for ``role`` (kept when truncating)."""
+        return self._parts(role)[1]
 
     def assistant_open(self) -> str:
         """Generation prompt decoded immediately before sampling begins."""
