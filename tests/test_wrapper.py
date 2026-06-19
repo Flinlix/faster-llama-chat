@@ -11,7 +11,7 @@ import pytest
 import dataclasses
 
 from llama_chat.config import Config
-from llama_chat.context import _collect_special_token_texts
+from llama_chat.context import _collect_special_token_texts, _enforce_unsafe_content_policy
 from llama_chat.template import TemplateFormatter
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
 from tests.fake_context import BOS, GEMMA_FRAGMENTS, FakeContext
@@ -439,6 +439,24 @@ def test_default_fake_context_reports_no_special_tokens():
     assert FakeContext().special_token_texts() == []
 
 
+def test_unsafe_content_policy_error_raises():
+    with pytest.raises(RuntimeError, match="llama_vocab_is_control"):
+        _enforce_unsafe_content_policy("error")
+
+
+def test_unsafe_content_policy_warn_emits_warning():
+    with pytest.warns(RuntimeWarning, match="llama_vocab_is_control"):
+        _enforce_unsafe_content_policy("warn")
+
+
+def test_unsafe_content_policy_ignore_is_silent():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning would raise
+        _enforce_unsafe_content_policy("ignore")  # neither raises nor warns
+
+
 # ----- min-answer headroom guard -----------------------------------------
 def test_request_refuses_when_too_little_room_to_answer():
     fake = FakeContext(gen_len=2)
@@ -523,6 +541,7 @@ def test_kv_cache_type_accepts_known_type_with_flash_attn():
     ("min_answer_tokens", -1),
     ("n_ctx", 0),
     ("threshold_pct", 0.0),
+    ("unsafe_content_policy", "bogus"),
 ])
 def test_config_rejects_invalid_values(field, value):
     with pytest.raises(ValueError, match=field):

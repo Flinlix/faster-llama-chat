@@ -59,6 +59,12 @@ class Config:
             :class:`~llama_chat.wrapper.ContextOverflowError`) if fewer than this
             many tokens of ``n_ctx`` would remain for the reply after prefilling
             the prompt. ``0`` disables the guard.
+        unsafe_content_policy: What to do on a llama.cpp build lacking
+            ``llama_vocab_is_control``, where special tokens cannot be classified
+            and message content is therefore left unsanitized (untrusted input
+            can forge turn boundaries): ``"error"`` raises at construction,
+            ``"warn"`` emits a ``RuntimeWarning``, ``"ignore"`` proceeds
+            silently. Has no effect on builds that can classify tokens.
     """
 
     # Gemma 4
@@ -86,6 +92,7 @@ class Config:
     # Policy
     oversize_policy: str = "reject"
     min_answer_tokens: int = 32
+    unsafe_content_policy: str = "error"
 
     def __post_init__(self) -> None:
         if not 0.0 < self.threshold_pct <= 1.0:
@@ -100,6 +107,8 @@ class Config:
             raise ValueError("min_answer_tokens must be >= 0")
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
+        if self.unsafe_content_policy not in ("error", "warn", "ignore"):
+            raise ValueError("unsafe_content_policy must be 'error', 'warn' or 'ignore'")
         if self.kv_cache_type is not None:
             if self.kv_cache_type not in KV_CACHE_GGML_TYPES:
                 raise ValueError(

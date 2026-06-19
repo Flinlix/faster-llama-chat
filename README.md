@@ -314,9 +314,9 @@ because they live in the fragment prefix/suffix, not the content. This preserves
 the fragment-concatenation equivalence the design relies on: the equivalence
 check renders through the same `fragment()`, so both sides sanitize identically.
 On llama.cpp builds that lack the `llama_vocab_is_control` symbol, token
-classification is unavailable and the sanitization step is skipped — content is
-left unsanitized rather than crashing, and a `RuntimeWarning` is emitted so the
-weakened guarantee is not silent.
+classification is unavailable and content cannot be sanitized. The
+`unsafe_content_policy` config decides what happens then: `"error"` raises at construction so the weakened guarantee is never silent,
+`"warn"` proceeds with a `RuntimeWarning`, and `"ignore"` proceeds silently.
 
 ## Verify
 

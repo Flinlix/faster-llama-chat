@@ -62,6 +62,25 @@ def _collect_special_token_texts(
     return texts
 
 
+_UNSANITIZED_CONTENT_MSG = (
+    "this llama_cpp build lacks llama_vocab_is_control, so special tokens "
+    "cannot be classified; message content is NOT sanitized and literal "
+    "template tags in untrusted input can forge turn boundaries"
+)
+
+
+def _enforce_unsafe_content_policy(policy: str) -> None:
+    """Apply ``unsafe_content_policy`` when content sanitization is unavailable.
+
+    Raises ``RuntimeError`` for ``"error"``, emits a ``RuntimeWarning`` for
+    ``"warn"``, and is silent for ``"ignore"``.
+    """
+    if policy == "error":
+        raise RuntimeError(_UNSANITIZED_CONTENT_MSG)
+    if policy == "warn":
+        warnings.warn(_UNSANITIZED_CONTENT_MSG, RuntimeWarning)
+
+
 class _TextBuffer:
     """Accumulated decoded text with a cursor tracking what has been emitted."""
 
@@ -141,14 +160,8 @@ class KVContext:
                     self.tokenizes_to_special,
                 )
             else:
+                _enforce_unsafe_content_policy(config.unsafe_content_policy)
                 self._special_texts = []
-                warnings.warn(
-                    "this llama_cpp build lacks llama_vocab_is_control, so "
-                    "special tokens cannot be classified; message content is "
-                    "NOT sanitized and literal template tags in untrusted input "
-                    "can forge turn boundaries",
-                    RuntimeWarning,
-                )
         except BaseException:
             # Construction can legitimately fail (bad config, OOM); free the
             # native resources created so far instead of leaking them.
