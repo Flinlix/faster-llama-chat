@@ -75,7 +75,9 @@ class Config:
             ``LOG_LEVELS`` (``"debug"``, ``"info"``, ``"warn"``, ``"error"``,
             ``"none"``). Messages below the chosen level are suppressed;
             ``"none"`` silences llama.cpp entirely, including its load-time
-            banners. Applied process-wide before the model loads.
+            banners. Applied process-wide before the model loads. Note that
+            llama.cpp tags its routine model-loader banners at
+            WARN, so ``"warn"`` still leaks the whole load-time wall.
     """
 
     # Model
@@ -113,7 +115,7 @@ class Config:
 
     # Logging
 
-    log_level: str = "warn"
+    log_level: str = "error"
 
     def __post_init__(self) -> None:
         if not 0.0 < self.eviction_threshold <= 1.0:
