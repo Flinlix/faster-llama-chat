@@ -283,7 +283,7 @@ w = ChatWrapper(
 )
 ```
 
-Three load-time checks make a mismatch fail loudly instead of degrading silently:
+Two load-time checks make a mismatch fail loudly instead of degrading silently:
 
 - **At construction** the turn-terminator (`assistant_suffix`) is validated
   against the model's vocabulary - if it does not tokenize to a single special
@@ -293,31 +293,21 @@ Three load-time checks make a mismatch fail loudly instead of degrading silently
   whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
   must tokenize identically - a self-consistency check that the recovered (or
   explicitly supplied) fragments round-trip through the model's template before
-  they corrupt the cache. It is skipped automatically for models that ship no chat
-  template. The `system` fragment is not probed - chat templates handle a system
-  role inconsistently (Gemma 4 rejects it; others fold it into the first user
-  turn).
-- **At `begin`** the wrapper asserts that per-message prefill tokenizes
-  identically to a one-shot render of the whole conversation. If the template
-  tokenizes differently across message boundaries (which would make incremental
-  `inject` / `request` prefill diverge from a full render), it raises.
+  they corrupt the cache. The fragment side is tokenized exactly as real prefill
+  is (tags special-on, content special-off), so this also confirms the two agree
+  across the tag/content boundaries. It is skipped automatically for models that
+  ship no chat template. The `system` fragment is not probed - chat templates
+  handle a system role inconsistently (Gemma 4 rejects it; others fold it into
+  the first user turn).
 
-**Special tokens in message content.** Text is tokenized with special-token
-parsing enabled, which is what makes the template tags tokenize to their control
-tokens. Left unchecked, *message content* containing literal template tags (e.g.
-a user typing `<end_of_turn>`) would also become control tokens, letting
-untrusted input forge turn boundaries (prompt injection at the token level). To
-prevent this, the wrapper enumerates the model's special tokens once at startup
-- keeping only the pieces that round-trip to a single control token (excluding
-empty/whitespace) - and strips them from message content inside fragment
-rendering, before tokenization. The template tags themselves stay special
-because they live in the fragment prefix/suffix, not the content. This preserves
-the fragment-concatenation equivalence the design relies on: the equivalence
-check renders through the same `fragment()`, so both sides sanitize identically.
-On llama.cpp builds that lack the `llama_vocab_is_control` symbol, token
-classification is unavailable and content cannot be sanitized. The
-`unsafe_content_policy` config decides what happens then: `"error"` raises at construction so the weakened guarantee is never silent,
-`"warn"` proceeds with a `RuntimeWarning`, and `"ignore"` proceeds silently.
+**Special tokens in message content.** *Message content* is tokenized with
+special-token parsing **off**, while the structural template tags (the fragment
+prefix/suffix) are tokenized with it **on**. So a user typing a literal template
+tag (e.g. `<end_of_turn>`) yields ordinary text tokens that can never become a
+control token, while the wrapping tags still tokenize to their real control
+tokens. This closes token-level prompt injection (forging turn boundaries) at
+the source: it is robust even on models that mis-type a control-looking token
+in the GGUF or on llama.cpp builds lacking the `llama_vocab_is_control` symbol.
 
 ## Verify
 

@@ -65,12 +65,6 @@ class Config:
             (e.g. ``"q8_0"`` to roughly halve cache memory at near-zero quality
             cost) or ``None`` for llama.cpp's f16 default. Quantized types
             require ``flash_attention=True``.
-        unsafe_content_policy: What to do on a llama.cpp build lacking
-            ``llama_vocab_is_control``, where special tokens cannot be classified
-            and message content is therefore left unsanitized (untrusted input
-            can forge turn boundaries): ``"error"`` raises at construction,
-            ``"warn"`` emits a ``RuntimeWarning``, ``"ignore"`` proceeds
-            silently. Has no effect on builds that can classify tokens.
         log_level: Verbosity of llama.cpp/ggml's own log output, one of
             ``LOG_LEVELS`` (``"debug"``, ``"info"``, ``"warn"``, ``"error"``,
             ``"none"``). Messages below the chosen level are suppressed;
@@ -109,10 +103,6 @@ class Config:
     flash_attention: bool = False
     kv_cache_type: str | None = None
 
-    # Security
-
-    unsafe_content_policy: str = "error"
-
     # Logging
 
     log_level: str = "error"
@@ -130,8 +120,6 @@ class Config:
             raise ValueError("min_reply_tokens must be >= 0")
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
-        if self.unsafe_content_policy not in ("error", "warn", "ignore"):
-            raise ValueError("unsafe_content_policy must be 'error', 'warn' or 'ignore'")
         if self.log_level not in LOG_LEVELS:
             raise ValueError(f"log_level must be one of {list(LOG_LEVELS)}")
         if self.kv_cache_type is not None:

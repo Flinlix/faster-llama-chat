@@ -96,8 +96,7 @@ class ChatWrapper:
             # only for a model that ships no embedded chat template.
             self._frags = fragments if fragments is not None else self._resolve_fragments()
             self._validate_template(self._frags)
-            special = self._ctx.special_token_texts() if hasattr(self._ctx, "special_token_texts") else []
-            self._fmt = TemplateFormatter(self._frags, special_tokens=special)
+            self._fmt = TemplateFormatter(self._frags)
             self._check_fragments_match_model()
         except BaseException:
             # Template validation is a designed failure path; don't leak the
@@ -144,16 +143,15 @@ class ChatWrapper:
 
         Raises:
             ValueError: If the system prompt alone exceeds ``threshold_tokens``
-                (nothing could ever be evicted to make room for a turn), or if
-                the template fails the per-message equivalence check. The
-                previous conversation is left intact in either case.
+                (nothing could ever be evicted to make room for a turn). The
+                previous conversation is left intact.
         """
         messages = messages or []
         with self._lock:
             self._ensure_open()
             # Tokenize and validate first: a failed begin must not destroy the
             # conversation it was about to replace.
-            sys_tokens = self._ctx.tokenize(self._fmt.fragment("system", system_prompt), add_special=True)
+            sys_tokens = self._fragment_tokens("system", system_prompt, add_special=True)
             if len(sys_tokens) > self._cfg.threshold_tokens:
                 raise ValueError(
                     f"system prompt needs {len(sys_tokens)} tokens but the "
@@ -161,7 +159,7 @@ class ChatWrapper:
                     "shorten the prompt or raise context_size/eviction_threshold"
                 )
             hist_tokens = [
-                self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
+                self._fragment_tokens(role, text)
                 for role, text in messages
             ]
 
@@ -171,8 +169,6 @@ class ChatWrapper:
             keep_from = len(messages) - kept
             kept_messages = messages[keep_from:]
             kept_tokens = hist_tokens[keep_from:]
-
-            self._check_template_equivalence(system_prompt, kept_messages, sys_tokens, kept_tokens)
 
             self._ctx.reset()
             self._table.reset()
@@ -210,7 +206,7 @@ class ChatWrapper:
         """
         with self._lock:
             self._ensure_open()
-            tokens = self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
+            tokens = self._fragment_tokens(role, text)
             # Enforce the size policy against the best case (everything but the
             # system prompt evicted) before evicting anything: a rejected
             # message must not destroy the history it could never fit beside.
@@ -246,10 +242,10 @@ class ChatWrapper:
         the tokens that reached the cache, so the next turn's cache stays valid.
 
         Note:
-            ``text`` is sanitized before tokenization: any of the model's
-            special-token pieces (e.g. ``<end_of_turn>``) are stripped from the
-            content, so untrusted input cannot forge turn boundaries (see the
-            README's chat-template section).
+            ``text`` is tokenized with special-token parsing off, so a literal
+            template tag (e.g. ``<end_of_turn>``) in the content becomes ordinary
+            text tokens and cannot forge a turn boundary (see the README's
+            chat-template section).
 
         Args:
             text: The user request text.
@@ -264,7 +260,7 @@ class ChatWrapper:
         """
         with self._lock:
             self._ensure_open()
-            user_tokens = self._ctx.tokenize(self._fmt.fragment("user", text), add_special=False)
+            user_tokens = self._fragment_tokens("user", text)
             open_tokens = self._ctx.tokenize(self._fmt.assistant_open(), add_special=False)
             close_tokens = self._ctx.tokenize(self._fmt.assistant_close(), add_special=False)
 
@@ -424,9 +420,14 @@ class ChatWrapper:
         if rendered is None:
             return
         model_tokens = self._ctx.tokenize(rendered, add_special=False)
-        fragment_text = "".join(self._fmt.fragment(m["role"], m["content"]) for m in probe)
-        fragment_tokens = self._ctx.tokenize(fragment_text, add_special=False)
+        # Build the fragment side exactly as real prefill does: tags special-on,
+        # content special-off. The probe content is benign, so it tokenizes
+        # identically either way - any mismatch is a tag/trim divergence.
+        fragment_tokens: list[int] = []
+        for m in probe:
+            fragment_tokens.extend(self._fragment_tokens(m["role"], m["content"]))
         if model_tokens != fragment_tokens:
+            fragment_text = "".join(self._fmt.fragment(m["role"], m["content"]) for m in probe)
             raise ValueError(
                 "chat template fragments do not match the model's trained "
                 "template:\n"
@@ -487,27 +488,12 @@ class ChatWrapper:
             f"(oversize_policy='{self._cfg.oversize_policy}')"
         )
 
-    def _check_template_equivalence(
-        self,
-        system: str,
-        kept_messages: list[tuple[str, str]],
-        sys_tokens: list[int],
-        kept_tokens: list[list[int]],
-    ) -> None:
-        """Assert per-message prefill yields the same tokens as a one-shot render.
+    def _fragment_tokens(self, role: str, text: str, add_special: bool = False) -> list[int]:
+        """Tokenize one message: tags special-on, content special-off.
 
-        If this fails, the template tokenizes differently across message
-        boundaries and incremental ``inject``/``request`` prefill would diverge
-        from a full render - better to fail loudly at ``begin`` than corrupt the
-        cache silently later.
+        A literal template tag inside ``text`` tokenizes as ordinary text and so
+        cannot forge a turn boundary. ``add_special`` (BOS) attaches only to the
+        leading tag.
         """
-        whole = self._ctx.tokenize(self._fmt.full_conversation(system, kept_messages), add_special=True)
-        piecewise = list(sys_tokens)
-        for toks in kept_tokens:
-            piecewise.extend(toks)
-        if whole != piecewise:
-            raise ValueError(
-                "chat template is not safe for per-message prefill: tokenization "
-                "differs across message boundaries. Adjust the template fragments "
-                "on Config so each fragment tokenizes independently."
-            )
+        prefix, content, suffix = self._fmt.parts(role, text)
+        return self._ctx.tokenize_fragment(prefix, content, suffix, add_special=add_special)

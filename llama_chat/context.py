@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import codecs
 import warnings
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ._backend import Backend, set_log_level
@@ -20,65 +19,6 @@ from .messages import Eviction
 from .template import Fragments
 
 SEQ = 0  # single active conversation -> single sequence id
-
-
-def _collect_special_token_texts(
-    vocab_size: int,
-    is_special_id: Callable[[int], bool],
-    to_piece: Callable[[int], str],
-    round_trips: Callable[[str], bool],
-) -> list[str]:
-    """Collect the rendered text of every special token in the vocabulary.
-
-    Returned strings are exactly the substrings that, if left in message content,
-    would tokenize to a control token (and so forge turn boundaries). A piece is
-    kept only when it is non-empty/non-whitespace *and* round-trips to a single
-    special token - this excludes whitespace/empty pieces and any piece that does
-    not actually re-parse as special, avoiding over-stripping ordinary content.
-
-    Sorted longest-first so a caller can strip overlapping tags greedily. Takes
-    plain callables so it is testable without a model.
-
-    Args:
-        vocab_size: Number of tokens in the vocabulary; ids ``0..vocab_size-1``
-            are scanned.
-        is_special_id: Maps a token id to ``True`` if it is a control/special
-            token.
-        to_piece: Maps a token id to its rendered text.
-        round_trips: Maps a piece back to ``True`` if it tokenizes to exactly one
-            special token (the over-stripping guard).
-
-    Returns:
-        The special-token pieces, longest-first.
-    """
-    texts = []
-    for tid in range(vocab_size):
-        if not is_special_id(tid):
-            continue
-        piece = to_piece(tid)
-        if piece.strip() and round_trips(piece):
-            texts.append(piece)
-    texts.sort(key=len, reverse=True)
-    return texts
-
-
-_UNSANITIZED_CONTENT_MSG = (
-    "this llama_cpp build lacks llama_vocab_is_control, so special tokens "
-    "cannot be classified; message content is NOT sanitized and literal "
-    "template tags in untrusted input can forge turn boundaries"
-)
-
-
-def _enforce_unsafe_content_policy(policy: str) -> None:
-    """Apply ``unsafe_content_policy`` when content sanitization is unavailable.
-
-    Raises ``RuntimeError`` for ``"error"``, emits a ``RuntimeWarning`` for
-    ``"warn"``, and is silent for ``"ignore"``.
-    """
-    if policy == "error":
-        raise RuntimeError(_UNSANITIZED_CONTENT_MSG)
-    if policy == "warn":
-        warnings.warn(_UNSANITIZED_CONTENT_MSG, RuntimeWarning)
 
 
 class _TextBuffer:
@@ -150,19 +90,6 @@ class KVContext:
             self._can_shift = self._b.can_shift(self._ctx)
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
-            # One-time vocab scan: the special-token pieces the formatter strips
-            # from untrusted content. Builds that cannot classify special tokens
-            # leave content unsanitized - degrade rather than crash, but say so.
-            if self._b.supports_special():
-                self._special_texts = _collect_special_token_texts(
-                    self._b.vocab_size(self._vocab),
-                    lambda t: self._b.is_special(self._vocab, t),
-                    lambda t: self._b.token_to_piece(self._vocab, t),
-                    self.tokenizes_to_special,
-                )
-            else:
-                _enforce_unsafe_content_policy(config.unsafe_content_policy)
-                self._special_texts = []
         except BaseException:
             # Construction can legitimately fail (bad config, OOM); free the
             # native resources created so far instead of leaking them.
@@ -180,8 +107,24 @@ class KVContext:
         return self._can_shift
 
     # ----- tokenization --------------------------------------------------
-    def tokenize(self, text: str, add_special: bool = False) -> list[int]:
-        return self._b.tokenize(self._vocab, text, add_special)
+    def tokenize(self, text: str, add_special: bool = False,
+                 parse_special: bool = True) -> list[int]:
+        return self._b.tokenize(self._vocab, text, add_special, parse_special)
+
+    def tokenize_fragment(self, prefix: str, content: str, suffix: str,
+                          add_special: bool = False) -> list[int]:
+        """Tokenize one templated message: tags special-on, content special-off.
+
+        The structural ``prefix``/``suffix`` tags are parsed with special-token
+        parsing on so they become their control tokens, while ``content`` is
+        parsed with it off so a literal tag in untrusted text becomes ordinary
+        text tokens and cannot forge a turn boundary. ``add_special`` (BOS)
+        attaches only to the leading ``prefix``.
+        """
+        toks = self.tokenize(prefix, add_special=add_special, parse_special=True)
+        toks += self.tokenize(content, add_special=False, parse_special=False)
+        toks += self.tokenize(suffix, add_special=False, parse_special=True)
+        return toks
 
     def tokenizes_to_special(self, text: str) -> bool:
         """True if ``text`` tokenizes to exactly one control/special token.
@@ -192,10 +135,6 @@ class KVContext:
         """
         toks = self.tokenize(text, add_special=False)
         return len(toks) == 1 and self._b.is_special(self._vocab, toks[0])
-
-    def special_token_texts(self) -> list[str]:
-        """The model's special-token pieces, for stripping from untrusted content."""
-        return self._special_texts
 
     def render_with_model_template(self, messages: list[dict]) -> str | None:
         """Render ``messages`` with the model's own GGUF chat template.

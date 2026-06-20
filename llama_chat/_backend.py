@@ -94,7 +94,6 @@ class Backend:
         self._token_eos = _first("llama_vocab_eos", "llama_token_eos")
         self._token_to_piece = _first("llama_token_to_piece")
         self._is_control = _maybe("llama_vocab_is_control")
-        self._vocab_n_tokens = _first("llama_vocab_n_tokens", "llama_n_vocab")
         self._meta_val_str = _maybe("llama_model_meta_val_str")
         self._sampler_reset = _maybe("llama_sampler_reset")
 
@@ -171,23 +170,24 @@ class Backend:
         self.lc.llama_free(ctx)
 
     # ----- tokenize / detokenize ----------------------------------------
-    def tokenize(self, vocab, text: str, add_special: bool) -> list[int]:
+    def tokenize(self, vocab, text: str, add_special: bool,
+                 parse_special: bool = True) -> list[int]:
         """Convert ``text`` to a list of token IDs, optionally prepending a BOS token.
 
-        Special-token parsing is always enabled so template tags tokenize to
-        their control tokens. Message content is kept safe upstream:
-        :class:`~llama_chat.template.TemplateFormatter` strips the model's
-        special-token pieces from content before it reaches this method, so a
-        literal tag in user text cannot forge a turn boundary here.
+        ``parse_special`` controls whether special-token text is parsed into its
+        control token: template tags are tokenized with it on so their tags
+        become the right control tokens, while untrusted message content is
+        tokenized with it off so a literal tag in user text becomes ordinary
+        text tokens and cannot forge a turn boundary.
         """
         raw = text.encode("utf-8")
         n_max = len(raw) + 16
         buf = (self.lc.llama_token * n_max)()
-        n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, True)
+        n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
         if n < 0:  # buffer too small; n is the negative required size
             n_max = -n
             buf = (self.lc.llama_token * n_max)()
-            n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, True)
+            n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
             if n < 0:
                 raise RuntimeError(f"llama_tokenize failed: required {-n} tokens")
         return list(buf[:n])
@@ -228,20 +228,6 @@ class Backend:
         if self._is_control is None:
             return False
         return bool(self._is_control(vocab, token))
-
-    def supports_special(self) -> bool:
-        """Whether this build can classify control/special tokens."""
-        return self._is_control is not None
-
-    def vocab_size(self, vocab_or_model) -> int:
-        """Number of tokens in the vocabulary.
-
-        Takes the same vocab-or-model object that :meth:`vocab` returns: the
-        newer ``llama_vocab_n_tokens`` takes a vocab, the older ``llama_n_vocab``
-        a model, and the object generation tracks the resolved symbol - so this
-        is correct on both builds (same coupling as ``is_eog``/``token_eos``).
-        """
-        return int(self._vocab_n_tokens(vocab_or_model))
 
     # ----- sampler -------------------------------------------------------
     def sampler_reset(self, sampler) -> None:

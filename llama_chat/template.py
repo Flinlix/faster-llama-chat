@@ -7,7 +7,6 @@ tokenizing does. This module keeps the two concerns separate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -50,12 +49,8 @@ class TemplateFormatter:
     template-equivalence check in ``begin``).
     """
 
-    def __init__(self, fragments: Fragments, special_tokens: Sequence[str] = ()) -> None:
+    def __init__(self, fragments: Fragments) -> None:
         self._f = fragments
-        # The model's special-token pieces, stripped from message content so a
-        # user typing a literal tag (e.g. ``<end_of_turn>``) cannot forge a turn
-        # boundary. Sorted longest-first so greedy stripping handles overlaps.
-        self._special = tuple(sorted(special_tokens, key=len, reverse=True))
 
     def _parts(self, role: str) -> tuple[str, str]:
         """Return the ``(prefix, suffix)`` tags for ``role``."""
@@ -68,20 +63,23 @@ class TemplateFormatter:
             return f.assistant_prefix, f.assistant_suffix
         raise ValueError(f"unknown role: {role!r}")
 
-    def fragment(self, role: str, text: str) -> str:
-        """Return the templated fragment for a complete message.
+    def parts(self, role: str, text: str) -> tuple[str, str, str]:
+        """Return ``(prefix, content, suffix)`` for a complete message.
 
-        Any of the model's special-token pieces appearing in ``text`` are
-        stripped first, so untrusted content cannot smuggle control tokens past
-        the template tags. The wrapping ``prefix``/``suffix`` tags are left
-        intact - only the content between them is sanitized.
+        ``content`` is the message text with ``trim_content`` applied; callers
+        tokenize it with special-token parsing off so a literal tag in untrusted
+        text cannot forge a turn boundary, while the ``prefix``/``suffix`` tags
+        are tokenized special-on.
         """
         prefix, suffix = self._parts(role)
-        for tok in self._special:
-            text = text.replace(tok, "")
         if self._f.trim_content:
             text = text.strip()  # match templates that apply Jinja `| trim`
-        return f"{prefix}{text}{suffix}"
+        return prefix, text, suffix
+
+    def fragment(self, role: str, text: str) -> str:
+        """Return the templated fragment string for a complete message."""
+        prefix, content, suffix = self.parts(role, text)
+        return f"{prefix}{content}{suffix}"
 
     def suffix(self, role: str) -> str:
         """Return the turn-terminator tag for ``role`` (kept when truncating)."""
@@ -94,11 +92,3 @@ class TemplateFormatter:
     def assistant_close(self) -> str:
         """Tokens decoded after generation to terminate the assistant turn."""
         return self._f.assistant_suffix
-
-    def full_conversation(
-        self, system: str, messages: list[tuple[str, str]]
-    ) -> str:
-        """Render an entire conversation in one string (for the equivalence check)."""
-        parts = [self.fragment("system", system)]
-        parts.extend(self.fragment(role, text) for role, text in messages)
-        return "".join(parts)

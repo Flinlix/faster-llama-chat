@@ -35,11 +35,10 @@ GEMMA_FRAGMENTS = Fragments(
 
 class FakeContext:
     def __init__(self, gen_len: int = 5, gen_text: str = "reply",
-                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS,
-                 special_tokens: tuple[str, ...] = ()) -> None:
+                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS) -> None:
         self.cache: list[int] = []
         self._fragments = fragments
-        self._special_tokens = special_tokens
+        self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
@@ -50,15 +49,23 @@ class FakeContext:
         self._next_gen = 1000
 
     # ----- tokenization --------------------------------------------------
-    def tokenize(self, text: str, add_special: bool = False) -> list[int]:
+    def tokenize(self, text: str, add_special: bool = False,
+                 parse_special: bool = True) -> list[int]:
+        # 1:1 char tokenizer: tokens never merge, so parse_special is a no-op
+        # here (a literal tag is the same char tokens either way). Recorded so
+        # tests can assert content is tokenized with parse_special off.
+        self.tokenize_calls.append((text, parse_special))
         toks = [ord(c) for c in text]
         return [BOS] + toks if add_special else toks
 
+    def tokenize_fragment(self, prefix: str, content: str, suffix: str,
+                          add_special: bool = False) -> list[int]:
+        return (self.tokenize(prefix, add_special=add_special, parse_special=True)
+                + self.tokenize(content, parse_special=False)
+                + self.tokenize(suffix, parse_special=True))
+
     def extract_fragments(self) -> Fragments:
         return self._fragments
-
-    def special_token_texts(self) -> list[str]:
-        return list(self._special_tokens)
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
