@@ -535,6 +535,57 @@ def test_kv_cache_type_accepts_known_type_with_flash_attn():
     assert cfg.kv_cache_type == "q8_0"
 
 
+def _set_flash_attn(cparams, enable, lc=None):
+    """Drive Backend._set_flash_attn with fakes, bypassing llama_cpp import."""
+    from types import SimpleNamespace
+    from llama_chat._backend import Backend
+
+    Backend._set_flash_attn(SimpleNamespace(lc=lc), cparams, enable)
+
+
+@pytest.mark.parametrize("enable", [True, False])
+def test_set_flash_attn_bool_build(enable):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn=None)
+    _set_flash_attn(cparams, enable)
+    assert cparams.flash_attn is enable
+
+
+@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
+def test_set_flash_attn_enum_build(enable, expected):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn_type=None)  # no bool field
+    lc = SimpleNamespace(LLAMA_FLASH_ATTN_TYPE_ENABLED=1,
+                         LLAMA_FLASH_ATTN_TYPE_DISABLED=0)
+    _set_flash_attn(cparams, enable, lc=lc)
+    assert cparams.flash_attn_type == expected
+
+
+@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
+def test_set_flash_attn_enum_build_without_constants(enable, expected):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn_type=None)
+    _set_flash_attn(cparams, enable, lc=SimpleNamespace())  # constants absent
+    assert cparams.flash_attn_type == expected
+
+
+def test_set_flash_attn_disable_on_unsupported_build_is_noop():
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace()  # neither field present
+    _set_flash_attn(cparams, False)  # must not raise
+
+
+def test_set_flash_attn_enable_on_unsupported_build_raises():
+    from types import SimpleNamespace
+
+    with pytest.raises(RuntimeError, match="flash-attention"):
+        _set_flash_attn(SimpleNamespace(), True)
+
+
 @pytest.mark.parametrize("field,value", [
     ("batch_size", 0),
     ("max_tokens", 0),

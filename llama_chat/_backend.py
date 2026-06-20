@@ -117,8 +117,7 @@ class Backend:
         if n_threads:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
-        if flash_attn:
-            self._enable_flash_attn(cparams)
+        self._set_flash_attn(cparams, flash_attn)
         if type_k is not None:
             cparams.type_k = type_k
         if type_v is not None:
@@ -128,18 +127,21 @@ class Backend:
             raise RuntimeError("failed to create llama context")
         return ctx
 
-    def _enable_flash_attn(self, cparams) -> None:
-        """Turn on flash attention across the param-struct churn.
+    def _set_flash_attn(self, cparams, enable: bool) -> None:
+        """Set flash attention across the param-struct churn.
 
-        Older builds expose a bool ``flash_attn``; newer ones replaced it with a
-        ``flash_attn_type`` enum (``..._ENABLED`` == 1).
+        Older builds expose a bool ``flash_attn``; newer ones use a
+        ``flash_attn_type`` enum (DISABLED=0, ENABLED=1, AUTO=-1).
+        Always set explicitly so the build's default (AUTO on newer builds)
+        never silently overrides the caller's intent.
         """
         if hasattr(cparams, "flash_attn"):
-            cparams.flash_attn = True
+            cparams.flash_attn = enable
         elif hasattr(cparams, "flash_attn_type"):
-            cparams.flash_attn_type = getattr(
-                self.lc, "LLAMA_FLASH_ATTN_TYPE_ENABLED", 1)
-        else:
+            name = ("LLAMA_FLASH_ATTN_TYPE_ENABLED" if enable
+                    else "LLAMA_FLASH_ATTN_TYPE_DISABLED")
+            cparams.flash_attn_type = getattr(self.lc, name, 1 if enable else 0)
+        elif enable:
             raise RuntimeError(
                 "this llama_cpp build exposes no flash-attention context param")
 
