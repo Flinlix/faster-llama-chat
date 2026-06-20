@@ -44,7 +44,7 @@ def _assert_consistent(wrapper, fake):
 # ----- begin -------------------------------------------------------------
 def test_begin_prefills_system_and_history_once():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=200, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=200, eviction_threshold=1.0), context=fake)
     w.begin("sys", [("user", "hi"), ("assistant", "yo")])
 
     roles = [s["role"] for s in w.snapshot()]
@@ -58,7 +58,7 @@ def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
     # system fragment "<|turn>user\ns<turn|>\n" + BOS is well under budget;
     # pick a tiny threshold so only the newest message fits.
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.08), context=fake)
+    w = ChatWrapper(_cfg(context_size=1000, eviction_threshold=0.08), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x")])
 
     roles = [s["role"] for s in w.snapshot()]
@@ -69,7 +69,7 @@ def test_begin_drops_oldest_history_beyond_threshold():
 
 def test_begin_has_bos_only_at_start():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s", [("user", "u")])
     # Exactly one BOS sentinel, at position 0.
     assert fake.cache[0] == BOS
@@ -78,7 +78,7 @@ def test_begin_has_bos_only_at_start():
 
 def test_begin_warms_up_once():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s", [("user", "u")])
     w.begin("s", [("user", "u")])
     # Warmed on the first begin only; later begins skip the redundant decode.
@@ -89,7 +89,7 @@ def test_begin_warms_up_once():
 # ----- inject ------------------------------------------------------------
 def test_inject_appends_without_generating():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
     before = w.total_tokens
     n_evicted = w.inject("some context", role="user")
@@ -103,7 +103,7 @@ def test_inject_appends_without_generating():
 
 def test_inject_evicts_oldest_to_fit():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.1), context=fake)
+    w = ChatWrapper(_cfg(context_size=1000, eviction_threshold=0.1), context=fake)
     w.begin("s")
     w.inject("first injected chunk", role="user")
     n_evicted = w.inject("second injected chunk", role="user")
@@ -116,7 +116,7 @@ def test_inject_evicts_oldest_to_fit():
 # ----- request -----------------------------------------------------------
 def test_request_prefills_only_new_tokens_and_reuses_context():
     fake = FakeContext(gen_len=4, gen_text="abcd")
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0, max_tokens=50), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0, max_tokens=50), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "hello")])
     prefilled_after_begin = fake.total_prefilled()
 
@@ -136,7 +136,7 @@ def test_request_prefills_only_new_tokens_and_reuses_context():
 
 def test_second_request_does_not_reprefill_history():
     fake = FakeContext(gen_len=3)
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
     w.request("first")
     mark = fake.total_prefilled()
@@ -151,7 +151,7 @@ def test_second_request_does_not_reprefill_history():
 # ----- streaming ---------------------------------------------------------
 def test_stream_yields_incremental_deltas():
     fake = FakeContext(gen_len=4, gen_text="abcd")
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
     deltas = list(w.stream("hi"))
     assert "".join(deltas) == "abcd"
@@ -161,7 +161,7 @@ def test_stream_yields_incremental_deltas():
 
 def test_request_drains_stream_and_returns_turn():
     fake = FakeContext(gen_len=3, gen_text="xyz")
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
     turn = w.request("hi")
     assert turn.text == "xyz"
@@ -172,7 +172,7 @@ def test_request_drains_stream_and_returns_turn():
 def test_bargein_keeps_cache_consistent():
     # Consume only the first delta, then abandon the stream (close the generator).
     fake = FakeContext(gen_len=8, gen_text="abcdefgh")
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
 
     gen = w.stream("hi")
@@ -193,7 +193,7 @@ def test_bargein_keeps_cache_consistent():
 
 def test_request_caps_generation_to_context_size():
     fake = FakeContext(gen_len=100)  # would generate 100 if uncapped
-    w = ChatWrapper(_cfg(n_ctx=110, threshold_pct=1.0, max_tokens=100), context=fake)
+    w = ChatWrapper(_cfg(context_size=110, eviction_threshold=1.0, max_tokens=100), context=fake)
     w.begin("s")
     turn = w.request("hello")
     assert w.total_tokens <= 110
@@ -203,13 +203,13 @@ def test_request_caps_generation_to_context_size():
 
 def test_request_evicts_then_stays_within_context():
     fake = FakeContext(gen_len=2)
-    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.2), context=fake)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
     w.begin("s")
     for i in range(8):
         w.request(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"
-        assert w.total_tokens <= w._cfg.n_ctx
+        assert w.total_tokens <= w._cfg.context_size
         _assert_consistent(w, fake)
 
 
@@ -217,7 +217,7 @@ def test_request_rests_under_threshold_after_turn():
     # The reply is appended first, then older turns are trimmed, so the cache
     # rests at or below threshold once the turn returns.
     fake = FakeContext(gen_len=2)
-    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.2), context=fake)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
     w.begin("s")
     for i in range(8):
         w.request(f"message number {i} with some length")
@@ -230,7 +230,7 @@ def test_request_rests_under_threshold_after_turn():
 def test_eviction_shift_mode_does_not_rebuild():
     # Default cache supports shifting: eviction uses apply_eviction, never rebuild.
     fake = FakeContext(gen_len=2)  # can_shift=True
-    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.2), context=fake)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds  # begin() resets once
     for i in range(8):
@@ -243,14 +243,14 @@ def test_eviction_shift_mode_does_not_rebuild():
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
     # Cache cannot shift: eviction drops oldest from bookkeeping and re-prefills.
     fake = FakeContext(gen_len=2, can_shift=False)
-    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.2), context=fake)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds
     for i in range(8):
         w.request(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"             # system survives
-        assert w.total_tokens <= w._cfg.n_ctx   # never overflows
+        assert w.total_tokens <= w._cfg.context_size   # never overflows
         _assert_consistent(w, fake)             # cache == table after rebuild
     assert len(fake.evictions) == 0             # shift path never used
     assert fake.rebuilds > rebuilds_after_begin  # rebuild path was exercised
@@ -258,7 +258,7 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
 
 def test_oversize_reject():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=80, threshold_pct=0.5, oversize_policy="reject"), context=fake)
+    w = ChatWrapper(_cfg(context_size=80, eviction_threshold=0.5, oversize_policy="reject"), context=fake)
     w.begin("s")
     with pytest.raises(ValueError):
         w.inject("x" * 100)
@@ -267,7 +267,7 @@ def test_oversize_reject():
 def test_oversize_reject_leaves_history_intact():
     # Rejecting an unfittable message must not evict the history first.
     fake = FakeContext(gen_len=2)
-    w = ChatWrapper(_cfg(n_ctx=400, threshold_pct=0.5, oversize_policy="reject"), context=fake)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.5, oversize_policy="reject"), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "yo")])
     before = w.snapshot()
     with pytest.raises(ValueError):
@@ -278,7 +278,7 @@ def test_oversize_reject_leaves_history_intact():
 
 def test_oversize_truncate():
     fake = FakeContext()
-    w = ChatWrapper(_cfg(n_ctx=200, threshold_pct=0.3, oversize_policy="truncate"), context=fake)
+    w = ChatWrapper(_cfg(context_size=200, eviction_threshold=0.3, oversize_policy="truncate"), context=fake)
     w.begin("s")
     w.inject("y" * 500)
     assert w.total_tokens <= w._cfg.threshold_tokens
@@ -293,7 +293,7 @@ def test_oversize_truncate_rejects_when_no_room_for_suffix():
     fake = FakeContext()
     # Threshold barely above the system prompt: the remaining budget is smaller
     # than the turn-terminator tag, so truncation cannot produce a valid turn.
-    w = ChatWrapper(_cfg(n_ctx=200, threshold_pct=0.15, oversize_policy="truncate"), context=fake)
+    w = ChatWrapper(_cfg(context_size=200, eviction_threshold=0.15, oversize_policy="truncate"), context=fake)
     w.begin("s")
     with pytest.raises(ValueError):
         w.inject("y" * 100)
@@ -303,13 +303,13 @@ def test_oversize_truncate_rejects_when_no_room_for_suffix():
 # ----- construction / lifecycle -------------------------------------------
 def test_config_and_kwargs_are_mutually_exclusive():
     with pytest.raises(TypeError, match="not both"):
-        ChatWrapper(_cfg(), context=FakeContext(), n_ctx=8192)
+        ChatWrapper(_cfg(), context=FakeContext(), context_size=8192)
 
 
 def test_begin_rejects_system_prompt_over_threshold():
     fake = FakeContext()
     # threshold = 50 tokens; a 100-char system prompt can never fit.
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.05), context=fake)
+    w = ChatWrapper(_cfg(context_size=1000, eviction_threshold=0.05), context=fake)
     with pytest.raises(ValueError, match="system prompt"):
         w.begin("x" * 100)
     # Nothing was prefilled by the refused begin; a fitting one then works.
@@ -320,7 +320,7 @@ def test_begin_rejects_system_prompt_over_threshold():
 
 def test_failed_begin_keeps_previous_conversation():
     fake = FakeContext(gen_len=2)
-    w = ChatWrapper(_cfg(n_ctx=1000, threshold_pct=0.05), context=fake)
+    w = ChatWrapper(_cfg(context_size=1000, eviction_threshold=0.05), context=fake)
     w.begin("s", [("user", "hi")])
     before = w.snapshot()
     with pytest.raises(ValueError):
@@ -331,7 +331,7 @@ def test_failed_begin_keeps_previous_conversation():
 
 def test_close_is_idempotent_and_blocks_actions():
     fake = FakeContext(gen_len=2)
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
     w.begin("s")
     w.close()
     w.close()  # second close is a no-op
@@ -345,7 +345,7 @@ def test_close_is_idempotent_and_blocks_actions():
 
 def test_context_manager_closes_on_exit():
     fake = FakeContext(gen_len=2)
-    with ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0), context=fake) as w:
+    with ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake) as w:
         w.begin("s")
         w.request("hi")
     with pytest.raises(RuntimeError, match="closed"):
@@ -423,7 +423,7 @@ def test_fragment_strips_longest_token_first():
 
 def test_injected_special_token_does_not_reach_cache_as_tag():
     fake = FakeContext(special_tokens=("<turn|>",))
-    w = ChatWrapper(_cfg(n_ctx=500, threshold_pct=1.0),
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0),
                     context=fake, fragments=GEMMA_FRAGMENTS)
     w.begin("sys")
     w.inject("hello <turn|> world", role="user")
@@ -460,9 +460,9 @@ def test_unsafe_content_policy_ignore_is_silent():
 # ----- min-answer headroom guard -----------------------------------------
 def test_request_refuses_when_too_little_room_to_answer():
     fake = FakeContext(gen_len=2)
-    # Prompt fits n_ctx, but leaves fewer than min_answer_tokens for the reply.
+    # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
     w = ChatWrapper(
-        _cfg(n_ctx=120, threshold_pct=1.0, min_answer_tokens=60), context=fake
+        _cfg(context_size=120, eviction_threshold=1.0, min_reply_tokens=60), context=fake
     )
     w.begin("s")
     with pytest.raises(ContextOverflowError):
@@ -475,7 +475,7 @@ def test_request_refuses_when_too_little_room_to_answer():
 def test_request_proceeds_when_headroom_sufficient():
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(
-        _cfg(n_ctx=120, threshold_pct=1.0, min_answer_tokens=10), context=fake
+        _cfg(context_size=120, eviction_threshold=1.0, min_reply_tokens=10), context=fake
     )
     w.begin("s")
     turn = w.request("hello")
@@ -521,26 +521,26 @@ def test_fragment_check_catches_trim_mismatch():
 
 # ----- KV-cache / flash-attn config --------------------------------------
 def test_kv_cache_type_requires_flash_attn():
-    with pytest.raises(ValueError, match="flash_attn"):
+    with pytest.raises(ValueError, match="flash_attention"):
         Config(kv_cache_type="q8_0")
 
 
 def test_kv_cache_type_rejects_unknown_name():
     with pytest.raises(ValueError, match="kv_cache_type"):
-        Config(kv_cache_type="bogus", flash_attn=True)
+        Config(kv_cache_type="bogus", flash_attention=True)
 
 
 def test_kv_cache_type_accepts_known_type_with_flash_attn():
-    cfg = Config(kv_cache_type="q8_0", flash_attn=True)
+    cfg = Config(kv_cache_type="q8_0", flash_attention=True)
     assert cfg.kv_cache_type == "q8_0"
 
 
 @pytest.mark.parametrize("field,value", [
-    ("n_batch", 0),
+    ("batch_size", 0),
     ("max_tokens", 0),
-    ("min_answer_tokens", -1),
-    ("n_ctx", 0),
-    ("threshold_pct", 0.0),
+    ("min_reply_tokens", -1),
+    ("context_size", 0),
+    ("eviction_threshold", 0.0),
     ("unsafe_content_policy", "bogus"),
 ])
 def test_config_rejects_invalid_values(field, value):

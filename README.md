@@ -60,8 +60,8 @@ llama.cpp's server has its own context-shift mechanism. Both use the same
 
 **When eviction fires**
 - *llama.cpp*: when the context is physically full (decode would overflow).
-- *llama_chat*: against a soft threshold (`threshold_pct × n_ctx`, default
-  0.75). After each turn the cache rests ≤ threshold; `min_answer_tokens`
+- *llama_chat*: against a soft threshold (`eviction_threshold × context_size`,
+  default 0.75). After each turn the cache rests ≤ threshold; `min_reply_tokens`
   guarantees reply headroom or raises `ContextOverflowError` up front.
 
 **SWA / Gemma compatibility**
@@ -106,10 +106,11 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.0"
 pip install -e ".[test]"
 ```
 
-Only `Config` differs between targets - `model_path`, `n_ctx`, `threshold_pct`,
-and `n_gpu_layers` (`0` on the Pi, `-1` to offload everything on a GPU). The
-wrapper code is identical; `seq_rm` / `seq_add` work on both backends. On a GPU,
-`flash_attn=True` with `kv_cache_type="q8_0"` roughly halves KV-cache memory at
+Only `Config` differs between targets - `model_path`, `context_size`,
+`eviction_threshold`, and `gpu_layers` (`0` on the Pi, `-1` to offload everything
+on a GPU). The wrapper code is identical; `seq_rm` / `seq_add` work on both
+backends. On a GPU, `flash_attention=True` with `kv_cache_type="q8_0"` roughly
+halves KV-cache memory at
 near-zero quality cost (a quantized `kv_cache_type` requires flash attention).
 
 ## Quick start
@@ -123,10 +124,10 @@ chat = ChatWrapper()
 # Or override specific fields - kwargs map directly to Config fields:
 chat = ChatWrapper(
     model_path="llama/models/gemma-4-E2B-it-Q4_K_M.gguf",
-    n_ctx=8192,           # context window in tokens
-    n_gpu_layers=-1,      # -1 = offload all layers to GPU; 0 = CPU only
-    flash_attn=True,      # required for quantized KV cache
-    kv_cache_type="q8_0", # halves KV memory; requires flash_attn=True
+    context_size=8192,    # context window in tokens
+    gpu_layers=-1,        # -1 = offload all layers to GPU; 0 = CPU only
+    flash_attention=True, # required for quantized KV cache
+    kv_cache_type="q8_0", # halves KV memory; requires flash_attention=True
 )
 
 # begin: reset + prefill the system prompt and as much recent history as fits
@@ -161,15 +162,15 @@ for delta in chat.stream("Summarize the plan."):
   evicted, so a rejected inject leaves the conversation untouched.
 - **`request(text)`** - prefills just the request text and generates, evicting
   oldest messages if over threshold and capping generation so the total never
-  exceeds `n_ctx`. The reply is recorded so the next turn reuses it for free.
-  Returns a `Turn` (`text`, `n_prefilled`, `n_generated`, `n_evicted`,
-  `stop_reason`). If `min_answer_tokens` is set and the prompt would leave less
+  exceeds `context_size`. The reply is recorded so the next turn reuses it for
+  free. Returns a `Turn` (`text`, `n_prefilled`, `n_generated`, `n_evicted`,
+  `stop_reason`). If `min_reply_tokens` is set and the prompt would leave less
   than that for the reply, it raises `ContextOverflowError` before touching the
   cache.
 - **`stream(text)`** - the generator form of `request`: yields text
   deltas as tokens are sampled and returns the same `Turn` summary on completion
   (via `StopIteration.value`). Raises `ContextOverflowError` on the same
-  `min_answer_tokens` headroom check as `request`. Bytes are decoded
+  `min_reply_tokens` headroom check as `request`. Bytes are decoded
   incrementally, so a UTF-8 codepoint split across tokens is never mangled. Each
   token is committed to the cache *before* its text is surfaced, so abandoning
   the stream early (barge-in via `gen.close()`) still records exactly the tokens
@@ -215,7 +216,7 @@ falling back to the older `llama_kv_self_*` / `llama_kv_cache_*` names.
 
 ## Persistence
 
-The KV cache only holds the recent window that fits `n_ctx`; eviction drops older
+The KV cache only holds the recent window that fits `context_size`; eviction drops older
 turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
 every message (user, assistant, and injected context - everything but the system
 prompt) into a durable store, then replays the prior turns at `begin`:
@@ -223,7 +224,7 @@ prompt) into a durable store, then replays the prior turns at `begin`:
 ```python
 from llama_chat import PersistentChat, InMemoryStore
 
-chat = PersistentChat(InMemoryStore(), n_ctx=8192)  # kwargs forward to Config here as well
+chat = PersistentChat(InMemoryStore(), context_size=8192)  # kwargs forward to Config here as well
 chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
 chat.request("What did we decide last time?")                  # auto-persisted
 ```
@@ -335,7 +336,7 @@ re-prefill a survivor. That assertion is the design guarantee, checked
 mechanically. The demo proves the same claim against a real model by logging how
 many tokens each action prefills, and stresses eviction with a tiny context to
 show the oldest messages being cut while the system prompt survives and the total
-never crosses `n_ctx`.
+never crosses `context_size`.
 
 ## Layout
 

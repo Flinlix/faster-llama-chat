@@ -136,16 +136,16 @@ class KVContext:
     def __init__(self, config: Config) -> None:
         self._cfg = config
         self._b = Backend()
-        self._model = self._b.load_model(config.model_path, config.n_gpu_layers)
+        self._model = self._b.load_model(config.model_path, config.gpu_layers)
         self._ctx = None
         self._sampler = None
         try:
             kv_type = KV_CACHE_GGML_TYPES.get(config.kv_cache_type)
             self._ctx = self._b.new_context(
-                self._model, config.n_ctx, config.n_threads, config.n_batch,
-                flash_attn=config.flash_attn, type_k=kv_type, type_v=kv_type)
+                self._model, config.context_size, config.threads, config.batch_size,
+                flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type)
             self._vocab = self._b.vocab(self._model)
-            self._n_batch = config.n_batch
+            self._batch_size = config.batch_size
             self._can_shift = self._b.can_shift(self._ctx)
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
@@ -242,7 +242,7 @@ class KVContext:
         self._b.sampler_reset(self._sampler)
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
-        self._b.decode(self._ctx, token_ids, start_pos, SEQ, want_logits, self._n_batch)
+        self._b.decode(self._ctx, token_ids, start_pos, SEQ, want_logits, self._batch_size)
 
     def warmup(self) -> None:
         """Warm the single-token generation graph (batch-1 decode + logits).
@@ -256,7 +256,7 @@ class KVContext:
         tok = self._b.token_eos(self._vocab)
         if tok < 0:  # some models expose no EOS; any valid id warms the graph
             tok = 0
-        self._b.decode(self._ctx, [tok], 0, SEQ, True, self._n_batch)
+        self._b.decode(self._ctx, [tok], 0, SEQ, True, self._batch_size)
         self.reset()  # kv_clear -> cache empty again for the real prefill
 
     def apply_eviction(self, ev: Eviction) -> None:
@@ -309,7 +309,7 @@ class KVContext:
                 break
             # Commit to the cache first, then record, then surface text: this
             # ordering is what keeps token_ids == cache across an early close.
-            self._b.decode(self._ctx, [tok], pos, SEQ, True, self._n_batch)
+            self._b.decode(self._ctx, [tok], pos, SEQ, True, self._batch_size)
             pos += 1
             acc.token_ids.append(tok)
             tbuf.append(decoder.decode(self._b.token_to_piece_bytes(self._vocab, tok)))
@@ -360,17 +360,17 @@ class KVContext:
         params = lc.llama_sampler_chain_default_params()
         chain = lc.llama_sampler_chain_init(params)
         add = lc.llama_sampler_chain_add
-        if cfg.repeat_penalty and cfg.repeat_penalty != 1.0:
+        if cfg.repetition_penalty and cfg.repetition_penalty != 1.0:
             try:
                 add(chain, lc.llama_sampler_init_penalties(
-                    cfg.repeat_last_n, cfg.repeat_penalty, 0.0, 0.0))
+                    cfg.repetition_window, cfg.repetition_penalty, 0.0, 0.0))
             except TypeError:
                 # Older builds use a different signature; degrade without the
                 # penalty rather than crash - but say so.
                 warnings.warn(
                     "this llama_cpp build has an incompatible "
                     "llama_sampler_init_penalties signature; "
-                    f"repeat_penalty={cfg.repeat_penalty} is ignored",
+                    f"repetition_penalty={cfg.repetition_penalty} is ignored",
                     RuntimeWarning,
                 )
         if cfg.temperature <= 0.0:

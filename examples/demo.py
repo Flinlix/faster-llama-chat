@@ -11,7 +11,7 @@ The demo proves the core claim by logging how many tokens are *prefilled* per
 action: after ``begin`` primes the conversation, each ``request`` prefills only
 its own new prompt - never the surviving history. The eviction stress run uses
 a deliberately tiny context to show the oldest messages being dropped while the
-system prompt survives and the total never crosses ``n_ctx``.
+system prompt survives and the total never crosses ``context_size``.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ def main() -> None:
     banner("CONVERSATION (reuse): only new tokens are prefilled per turn")
     cfg = Config(
         model_path=args.model,
-        n_ctx=args.n_ctx,
-        threshold_pct=args.threshold,
-        n_gpu_layers=args.gpu_layers,
+        context_size=args.n_ctx,
+        eviction_threshold=args.threshold,
+        gpu_layers=args.gpu_layers,
         max_tokens=64,
     )
     ctx = CountingContext(cfg)
@@ -92,9 +92,9 @@ def main() -> None:
     banner("EVICTION STRESS: tiny context - oldest messages get cut, system kept")
     small = Config(
         model_path=args.model,
-        n_ctx=512,
-        threshold_pct=0.5,
-        n_gpu_layers=args.gpu_layers,
+        context_size=512,
+        eviction_threshold=0.5,
+        gpu_layers=args.gpu_layers,
         max_tokens=32,
     )
     sw = ChatWrapper(small, context=KVContext(small))
@@ -103,9 +103,9 @@ def main() -> None:
         turn = sw.request(f"Give me fact number {i} about the planet Mars, briefly.")
         roles = [r["role"] for r in sw.snapshot()]
         assert roles[0] == "system", "system prompt was evicted!"
-        assert sw.total_tokens <= small.n_ctx, "context overflow!"
+        assert sw.total_tokens <= small.context_size, "context overflow!"
         print(
-            f"turn {i:>2}: total={sw.total_tokens:>4}/{small.n_ctx} "
+            f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
             f"messages={len(roles):>2} evicted={turn.n_evicted}"
         )
     show(sw)

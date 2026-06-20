@@ -2,7 +2,7 @@
 
 The store is a *superset* that outlives KV eviction: it keeps every message except
 the system prompt forever (user, assistant, and injected context), while the
-wrapper's ``MessageTable`` holds only the recent window that fits ``n_ctx``.
+wrapper's ``MessageTable`` holds only the recent window that fits ``context_size``.
 :class:`PersistentChat` composes a ``ChatWrapper`` and uses its ``on_message`` hook
 to capture each message, reloading prior history at ``begin``.
 """

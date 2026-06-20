@@ -23,7 +23,7 @@ from .template import Fragments, TemplateFormatter
 
 
 class ContextOverflowError(RuntimeError):
-    """A request would leave fewer than ``min_answer_tokens`` free for the reply."""
+    """A request would leave fewer than ``min_reply_tokens`` free for the reply."""
 
 
 @dataclass
@@ -158,7 +158,7 @@ class ChatWrapper:
                 raise ValueError(
                     f"system prompt needs {len(sys_tokens)} tokens but the "
                     f"eviction threshold is {self._cfg.threshold_tokens}; "
-                    "shorten the prompt or raise n_ctx/threshold_pct"
+                    "shorten the prompt or raise context_size/eviction_threshold"
                 )
             hist_tokens = [
                 self._ctx.tokenize(self._fmt.fragment(role, text), add_special=False)
@@ -271,18 +271,18 @@ class ChatWrapper:
             # Hard wall: the prompt plus its turn closer must fit in the context.
             user_tokens = self._fit_or_raise(
                 user_tokens,
-                budget=self._cfg.n_ctx - len(open_tokens) - len(close_tokens) - self._table.total,
+                budget=self._cfg.context_size - len(open_tokens) - len(close_tokens) - self._table.total,
                 what="request", role="user",
             )
             n_prompt = len(user_tokens) + len(open_tokens)
 
             # Refuse before mutating the cache if too little room remains to reply.
-            free = self._cfg.n_ctx - self._table.total - n_prompt - len(close_tokens)
-            if free < self._cfg.min_answer_tokens:
+            free = self._cfg.context_size - self._table.total - n_prompt - len(close_tokens)
+            if free < self._cfg.min_reply_tokens:
                 raise ContextOverflowError(
                     f"only {free} tokens free for the reply "
-                    f"(min_answer_tokens={self._cfg.min_answer_tokens}); shorten "
-                    f"the request or lower threshold_pct"
+                    f"(min_reply_tokens={self._cfg.min_reply_tokens}); shorten "
+                    f"the request or lower eviction_threshold"
                 )
 
             self._ctx.prefill(user_tokens, start_pos=self._table.total, want_logits=False)
@@ -293,10 +293,10 @@ class ChatWrapper:
             gen_start = self._table.total + len(open_tokens)
             self._ctx.prefill(open_tokens, start_pos=self._table.total, want_logits=True)
 
-            budget = self._cfg.n_ctx - gen_start - len(close_tokens)
+            budget = self._cfg.context_size - gen_start - len(close_tokens)
             cap = max_tokens if max_tokens is not None else self._cfg.max_tokens
             n_predict_max = max(0, min(cap, budget))
-            stops = list(self._cfg.stop) + list(stop or [])
+            stops = list(self._cfg.stop_strings) + list(stop or [])
 
             gen = GenerationAccumulator()
             n_evicted = 0
