@@ -19,6 +19,9 @@ KV_CACHE_GGML_TYPES = {
     "q4_0": 2,
 }
 
+# Accepted llama.cpp/ggml log verbosities, least to most restrictive.
+LOG_LEVELS = ("debug", "info", "warn", "error", "none")
+
 
 @dataclass
 class Config:
@@ -68,6 +71,11 @@ class Config:
             can forge turn boundaries): ``"error"`` raises at construction,
             ``"warn"`` emits a ``RuntimeWarning``, ``"ignore"`` proceeds
             silently. Has no effect on builds that can classify tokens.
+        log_level: Verbosity of llama.cpp/ggml's own log output, one of
+            ``LOG_LEVELS`` (``"debug"``, ``"info"``, ``"warn"``, ``"error"``,
+            ``"none"``). Messages below the chosen level are suppressed;
+            ``"none"`` silences llama.cpp entirely, including its load-time
+            banners. Applied process-wide before the model loads.
     """
 
     # Model
@@ -103,6 +111,10 @@ class Config:
 
     unsafe_content_policy: str = "error"
 
+    # Logging
+
+    log_level: str = "warn"
+
     def __post_init__(self) -> None:
         if not 0.0 < self.eviction_threshold <= 1.0:
             raise ValueError("eviction_threshold must be in (0, 1]")
@@ -118,6 +130,8 @@ class Config:
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
         if self.unsafe_content_policy not in ("error", "warn", "ignore"):
             raise ValueError("unsafe_content_policy must be 'error', 'warn' or 'ignore'")
+        if self.log_level not in LOG_LEVELS:
+            raise ValueError(f"log_level must be one of {list(LOG_LEVELS)}")
         if self.kv_cache_type is not None:
             if self.kv_cache_type not in KV_CACHE_GGML_TYPES:
                 raise ValueError(

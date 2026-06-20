@@ -12,6 +12,7 @@ Only the handful of primitives the wrapper actually needs are exposed here.
 from __future__ import annotations
 
 import ctypes
+import logging
 from typing import Callable
 
 try:  # pragma: no cover - import guard exercised only without the dep installed
@@ -22,6 +23,28 @@ except ImportError as exc:  # pragma: no cover
         '  CPU:       pip install llama-cpp-python\n'
         '  GPU:       CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python'
     ) from exc
+
+# Config log levels -> Python logging levels. llama-cpp-python installs a ggml
+# log callback at import that prints a message only when its "llama-cpp-python"
+# logger level is at or below the message's mapped level, so setting that
+# logger's level is all it takes to filter llama.cpp's output. "none" sits above
+# CRITICAL to also drop llama.cpp's unconditional (level-0) banners.
+_LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+    "none": logging.CRITICAL + 1,
+}
+
+
+def set_log_level(level: str) -> None:
+    """Filter llama.cpp/ggml log output to ``level`` and above, process-wide.
+
+    Args:
+        level: One of :data:`~llama_chat.config.LOG_LEVELS`.
+    """
+    logging.getLogger("llama-cpp-python").setLevel(_LOG_LEVELS[level])
 
 
 def _maybe(*names: str) -> Callable | None:

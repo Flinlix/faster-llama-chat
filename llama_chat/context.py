@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ._backend import Backend
+from ._backend import Backend, set_log_level
 from .config import KV_CACHE_GGML_TYPES, Config
 from .messages import Eviction
 from .template import Fragments
@@ -135,6 +135,7 @@ class KVContext:
 
     def __init__(self, config: Config) -> None:
         self._cfg = config
+        set_log_level(config.log_level)  # filter llama.cpp's load-time logs too
         self._b = Backend()
         self._model = self._b.load_model(config.model_path, config.gpu_layers)
         self._ctx = None
