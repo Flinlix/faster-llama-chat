@@ -9,7 +9,7 @@ description = "A KV-cache managing chat wrapper around llama.cpp: prefill as lit
 readme = "README.md"
 license = { text = "Apache-2.0" }
 classifiers = [
-    "Development Status :: Production/Stable",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
