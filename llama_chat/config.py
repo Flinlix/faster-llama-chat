@@ -76,7 +76,7 @@ class Config:
 
     # Model
 
-    model_path: str = "llama/models/gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path: str = "faster-llama-chat/models/gemma-4-E2B-it-Q4_K_M.gguf"
     temperature: float = 1.0
     top_k: int = 64
     top_p: float = 0.95
