@@ -91,25 +91,35 @@ class FakeContext:
         self.evictions.append(ev)
 
     def generate(self, start_pos: int, n_predict_max: int, stop: list[str],
-                 out: GenerationAccumulator | None = None):
+                 out: GenerationAccumulator | None = None, cancel=None):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,
         and ``out`` is filled incrementally, so an early ``close()`` leaves the
         cache and ``out.token_ids`` in agreement (the barge-in guarantee).
+        Both abort routes record ``stop_reason == "interrupted"``: the ``cancel``
+        event (checked once per token) and a ``close()`` of the generator.
         """
         assert start_pos == len(self.cache)
         gen = out if out is not None else GenerationAccumulator()
         n = max(0, min(self._gen_len, n_predict_max))
         for i in range(n):
+            if cancel is not None and cancel.is_set():
+                gen.stop_reason = "interrupted"
+                break
             tok = self._next_gen + i
             self.cache.append(tok)  # decoded into the cache before surfacing text
             gen.token_ids.append(tok)
             ch = self._gen_text[i] if i < len(self._gen_text) else "x"
             gen.text += ch
-            yield ch
+            try:
+                yield ch
+            except GeneratorExit:
+                gen.stop_reason = "interrupted"
+                raise
+        else:
+            gen.stop_reason = "eog" if n == self._gen_len else "length"
         self._next_gen += n
-        gen.stop_reason = "eog" if n == self._gen_len else "length"
         return gen
 
     def close(self) -> None:

@@ -174,7 +174,11 @@ for delta in chat.stream("Summarize the plan."):
   incrementally, so a UTF-8 codepoint split across tokens is never mangled. Each
   token is committed to the cache *before* its text is surfaced, so abandoning
   the stream early (barge-in via `gen.close()`) still records exactly the tokens
-  that reached the cache, and the next turn stays valid.
+  that reached the cache, and the next turn stays valid. To interrupt from
+  *another* thread (a generator must only be driven from its consuming thread),
+  pass `stream(text, cancel=event)`: setting the `threading.Event` stops
+  generation within one token and the stream ends normally with
+  `stop_reason == "interrupted"`.
 
 Cache-mutating actions are serialized with a lock, so the wrapper is safe to
 drive from a threaded environment. `close()` (also available via `with

@@ -10,6 +10,7 @@ nothing about *which* messages to keep - that policy lives in the wrapper and
 from __future__ import annotations
 
 import codecs
+import threading
 import warnings
 from dataclasses import dataclass, field
 
@@ -62,7 +63,7 @@ class GenerationAccumulator:
     Attributes:
         token_ids: Every token decoded into the cache (the cache truth).
         text: Visible reply text so far, trimmed at the stop string if one hit.
-        stop_reason: ``"eog"``, ``"stop"`` or ``"length"``.
+        stop_reason: ``"eog"``, ``"stop"``, ``"length"`` or ``"interrupted"``.
     """
 
     token_ids: list[int] = field(default_factory=list)
@@ -211,6 +212,7 @@ class KVContext:
     def generate(
         self, start_pos: int, n_predict_max: int, stop: list[str],
         out: GenerationAccumulator | None = None,
+        cancel: threading.Event | None = None,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -232,6 +234,11 @@ class KVContext:
             stop: Stop strings; generation ends just before the earliest match.
             out: Accumulator to fill (token_ids/text/stop_reason). Pass one in to
                 observe progress after barge-in; a fresh one is used otherwise.
+            cancel: Optional event checked once per token: when set, generation
+                stops before sampling the next token and the turn ends with
+                ``stop_reason == "interrupted"``. This is the thread-safe way to
+                interrupt a stream from another thread (a generator itself must
+                only be driven from the consuming thread).
 
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
@@ -243,6 +250,9 @@ class KVContext:
         tbuf = _TextBuffer()
 
         for _ in range(max(0, n_predict_max)):
+            if cancel is not None and cancel.is_set():
+                acc.stop_reason = "interrupted"
+                break
             tok = self._b.lc.llama_sampler_sample(self._sampler, self._ctx, -1)
             if self._b.is_eog(self._vocab, tok):
                 acc.stop_reason = "eog"
@@ -267,7 +277,15 @@ class KVContext:
             delta = tbuf.emit(upto)
             if delta:
                 acc.text += delta
-                yield delta
+                try:
+                    yield delta
+                except GeneratorExit:
+                    # Consumer closed the stream mid-turn (barge-in). A reply
+                    # that already ended at a stop string keeps that reason:
+                    # the close only declined the final, already-doomed resume.
+                    if acc.stop_reason != "stop":
+                        acc.stop_reason = "interrupted"
+                    raise
             if acc.stop_reason == "stop":
                 break
         else:

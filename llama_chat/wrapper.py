@@ -38,7 +38,8 @@ class Turn:
         n_evicted: Messages evicted after this turn to restore the cache to
             ``threshold_tokens`` (the reply is appended first, then older turns
             are trimmed).
-        stop_reason: Why generation stopped (``"eog"``/``"stop"``/``"length"``).
+        stop_reason: Why generation stopped
+            (``"eog"``/``"stop"``/``"length"``/``"interrupted"``).
     """
 
     text: str
@@ -226,7 +227,9 @@ class ChatWrapper:
 
     # ----- action: request / stream --------------------------------------
     def stream(
-        self, text: str, *, max_tokens: int | None = None, stop: list[str] | None = None
+        self, text: str, *, max_tokens: int | None = None,
+        stop: list[str] | None = None,
+        cancel: threading.Event | None = None,
     ) -> Generator[str, None, Turn]:
         """Add a user request and stream the reply token-by-token.
 
@@ -241,6 +244,15 @@ class ChatWrapper:
         ``finally`` block still terminates the assistant turn and records exactly
         the tokens that reached the cache, so the next turn's cache stays valid.
 
+        Thread safety: the generator must be driven (``next``/``close``) from one
+        thread at a time - calling ``gen.close()`` from another thread while a
+        ``next()`` is executing raises ``ValueError`` and does not interrupt
+        generation. To interrupt from another thread, pass ``cancel`` and set it:
+        generation stops within one token and the stream ends normally with
+        ``stop_reason == "interrupted"``. An abandoned, never-closed generator
+        holds the wrapper's lock until it is garbage-collected, blocking every
+        other action - always exhaust or ``close()`` it.
+
         Note:
             ``text`` is tokenized with special-token parsing off, so a literal
             template tag (e.g. ``<end_of_turn>``) in the content becomes ordinary
@@ -251,6 +263,9 @@ class ChatWrapper:
             text: The user request text.
             max_tokens: Override for the per-turn generation cap.
             stop: Extra stop strings for this request (added to the config's).
+            cancel: Optional ``threading.Event``; setting it (from any thread)
+                stops generation within one token and closes the turn with
+                ``stop_reason == "interrupted"``. Scoped to this call only.
 
         Yields:
             Reply text deltas.
@@ -297,7 +312,9 @@ class ChatWrapper:
             gen = GenerationAccumulator()
             n_evicted = 0
             try:
-                yield from self._ctx.generate(gen_start, n_predict_max, stops, out=gen)
+                yield from self._ctx.generate(
+                    gen_start, n_predict_max, stops, out=gen, cancel=cancel
+                )
             finally:
                 # Runs on normal completion *and* on early close (barge-in).
                 close_start = gen_start + len(gen.token_ids)
@@ -321,7 +338,9 @@ class ChatWrapper:
             )
 
     def request(
-        self, text: str, *, max_tokens: int | None = None, stop: list[str] | None = None
+        self, text: str, *, max_tokens: int | None = None,
+        stop: list[str] | None = None,
+        cancel: threading.Event | None = None,
     ) -> Turn:
         """Add a user request and generate a reply, reusing all existing context.
 
@@ -330,7 +349,7 @@ class ChatWrapper:
         Returns:
             A :class:`Turn` describing the reply and the work performed.
         """
-        gen = self.stream(text, max_tokens=max_tokens, stop=stop)
+        gen = self.stream(text, max_tokens=max_tokens, stop=stop, cancel=cancel)
         try:
             while True:
                 next(gen)

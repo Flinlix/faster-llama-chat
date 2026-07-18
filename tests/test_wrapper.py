@@ -9,6 +9,7 @@ action, including across evictions.
 import pytest
 
 import dataclasses
+import threading
 
 from llama_chat.config import Config
 from llama_chat.template import TemplateFormatter
@@ -188,6 +189,86 @@ def test_bargein_keeps_cache_consistent():
     turn = w.request("again")
     assert turn.stop_reason == "eog"
     _assert_consistent(w, fake)
+
+
+def test_cancel_event_interrupts_midstream():
+    fake = FakeContext(gen_len=8, gen_text="abcdefgh")
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
+    w.begin("s")
+
+    cancel = threading.Event()
+    gen = w.stream("hi", cancel=cancel)
+    assert next(gen) == "a"
+    cancel.set()  # e.g. from another thread (barge-in)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as done:
+        turn = done.value
+
+    # The stream ends normally, so the Turn is delivered - unlike gen.close().
+    assert turn.stop_reason == "interrupted"
+    assert turn.n_generated == 1
+    assert w.snapshot()[-1]["role"] == "assistant"
+    _assert_consistent(w, fake)
+    # The spent event is scoped to that call; the next turn runs normally.
+    assert w.request("again").stop_reason == "eog"
+    _assert_consistent(w, fake)
+
+
+def test_cancel_set_before_start_yields_empty_interrupted_turn():
+    fake = FakeContext(gen_len=5)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
+    w.begin("s")
+    cancel = threading.Event()
+    cancel.set()
+    turn = w.request("hi", cancel=cancel)
+    assert turn.stop_reason == "interrupted"
+    assert turn.n_generated == 0
+    # The empty assistant turn is still closed cleanly and recorded.
+    assert w.snapshot()[-1]["role"] == "assistant"
+    _assert_consistent(w, fake)
+
+
+def test_close_after_stop_hit_keeps_stop_reason():
+    # A stop string sets stop_reason="stop" before the final delta is yielded;
+    # a consumer that then closes the generator must not reclassify the
+    # completed reply as "interrupted". Drives the real KVContext.generate
+    # with a stubbed backend (no model needed).
+    from types import SimpleNamespace
+    from llama_chat.context import GenerationAccumulator, KVContext
+
+    pieces = {0: b"hello ", 1: b"STOP"}
+    toks = iter([0, 1])
+    ctx = object.__new__(KVContext)
+    ctx._b = SimpleNamespace(
+        lc=SimpleNamespace(llama_sampler_sample=lambda s, c, i: next(toks)),
+        is_eog=lambda vocab, tok: False,
+        decode=lambda ctx_, ids, pos, seq, logits, batch: None,
+        token_to_piece_bytes=lambda vocab, tok: pieces[tok],
+    )
+    ctx._sampler = ctx._vocab = ctx._ctx = None
+    ctx._batch_size = 8
+
+    acc = GenerationAccumulator()
+    g = ctx.generate(0, 10, ["STOP"], out=acc)
+    assert next(g) == "hel"   # held back by the stop-string window
+    assert next(g) == "lo "   # final visible delta; "stop" already recorded
+    g.close()                 # consumer closes after seeing the reply end
+    assert acc.stop_reason == "stop"  # not misreported as "interrupted"
+
+
+def test_generator_close_marks_interrupted():
+    # gen.close() records the same stop reason on the accumulator (the Turn
+    # itself is unreachable after close() - Python offers no return channel).
+    from llama_chat.context import GenerationAccumulator
+
+    fake = FakeContext(gen_len=5, gen_text="abcde")
+    acc = GenerationAccumulator()
+    g = fake.generate(0, 5, [], out=acc)
+    next(g)
+    g.close()
+    assert acc.stop_reason == "interrupted"
 
 
 def test_request_caps_generation_to_context_size():
