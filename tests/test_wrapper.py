@@ -556,6 +556,9 @@ def test_set_flash_attn_enable_on_unsupported_build_raises():
     ("min_reply_tokens", -1),
     ("context_size", 0),
     ("eviction_threshold", 0.0),
+    ("repetition_penalty", 0.0),
+    ("seed", -1),
+    ("seed", 0xFFFFFFFF),
 ])
 def test_config_rejects_invalid_values(field, value):
     with pytest.raises(ValueError, match=field):

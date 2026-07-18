@@ -300,17 +300,19 @@ class KVContext:
         params = lc.llama_sampler_chain_default_params()
         chain = lc.llama_sampler_chain_init(params)
         add = lc.llama_sampler_chain_add
-        if cfg.repetition_penalty and cfg.repetition_penalty != 1.0:
+        if cfg.repetition_penalty != 1.0 \
+                or cfg.presence_penalty or cfg.frequency_penalty:
             try:
                 add(chain, lc.llama_sampler_init_penalties(
-                    cfg.repetition_window, cfg.repetition_penalty, 0.0, 0.0))
+                    cfg.penalty_window, cfg.repetition_penalty,
+                    cfg.frequency_penalty, cfg.presence_penalty))
             except TypeError:
                 # Older builds use a different signature; degrade without the
-                # penalty rather than crash - but say so.
+                # penalties rather than crash - but say so.
                 warnings.warn(
                     "this llama_cpp build has an incompatible "
                     "llama_sampler_init_penalties signature; "
-                    f"repetition_penalty={cfg.repetition_penalty} is ignored",
+                    "repetition/presence/frequency penalties are ignored",
                     RuntimeWarning,
                 )
         if cfg.temperature <= 0.0:
@@ -319,9 +321,14 @@ class KVContext:
         if cfg.top_k > 0:
             add(chain, lc.llama_sampler_init_top_k(cfg.top_k))
         add(chain, lc.llama_sampler_init_top_p(cfg.top_p, 1))
+        if cfg.min_p > 0.0:
+            add(chain, lc.llama_sampler_init_min_p(cfg.min_p, 1))
         add(chain, lc.llama_sampler_init_temp(cfg.temperature))
-        # LLAMA_DEFAULT_SEED asks llama.cpp for a fresh random seed per run.
-        seed = getattr(lc, "LLAMA_DEFAULT_SEED", 0xFFFFFFFF)
+        if cfg.seed is not None:
+            seed = cfg.seed
+        else:
+            # LLAMA_DEFAULT_SEED asks llama.cpp for a fresh random seed per run.
+            seed = getattr(lc, "LLAMA_DEFAULT_SEED", 0xFFFFFFFF)
         add(chain, lc.llama_sampler_init_dist(seed))
         return chain
 

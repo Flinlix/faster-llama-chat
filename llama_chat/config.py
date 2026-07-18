@@ -34,9 +34,17 @@ class Config:
         temperature: Sampling temperature; ``<= 0`` selects greedy decoding.
         top_k: Top-k sampling cutoff (``<= 0`` disables).
         top_p: Nucleus sampling cutoff.
-        repetition_penalty: Repetition penalty applied over ``repetition_window``
-            tokens.
-        repetition_window: Window for the repetition penalty.
+        min_p: Min-p sampling cutoff: drop tokens whose probability is below
+            ``min_p`` times the top token's probability. ``0`` disables.
+        repetition_penalty: Repetition penalty applied over ``penalty_window``
+            tokens (``1.0`` disables).
+        presence_penalty: Flat penalty on any token already present in the last
+            ``penalty_window`` tokens (``0`` disables).
+        frequency_penalty: Penalty scaled by how often a token occurs in the
+            last ``penalty_window`` tokens (``0`` disables).
+        penalty_window: Window for the repetition/presence/frequency penalties.
+        seed: Sampling RNG seed, for reproducible generation; must be in
+            ``[0, 2**32 - 2]``. ``None`` draws a fresh random seed per run.
         context_size: General context size in tokens (the hard wall - generation
             must never cross it).
         eviction_threshold: Fraction of ``context_size`` above which prefilled
@@ -80,8 +88,12 @@ class Config:
     temperature: float = 1.0
     top_k: int = 64
     top_p: float = 0.95
+    min_p: float = 0.0  # 0.0 means disabled
     repetition_penalty: float = 1.0  # 1.0 means no penalty
-    repetition_window: int = 64
+    presence_penalty: float = 0.0  # 0.0 means no penalty
+    frequency_penalty: float = 0.0  # 0.0 means no penalty
+    penalty_window: int = 64
+    seed: int | None = None  # None means a fresh random seed per run
 
     # Context management
 
@@ -118,6 +130,13 @@ class Config:
             raise ValueError("max_tokens must be positive")
         if self.min_reply_tokens < 0:
             raise ValueError("min_reply_tokens must be >= 0")
+        if self.repetition_penalty <= 0:
+            raise ValueError("repetition_penalty must be > 0 (1.0 disables)")
+        if self.seed is not None and not 0 <= self.seed <= 0xFFFFFFFE:
+            raise ValueError(
+                "seed must be None or an int in [0, 2**32 - 2] "
+                "(use None for a random seed)"
+            )
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
         if self.log_level not in LOG_LEVELS:
