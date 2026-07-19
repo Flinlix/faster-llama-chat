@@ -64,6 +64,10 @@ class Config:
         stop_strings: Additional stop strings that end generation.
         gpu_layers: Layers to offload to GPU. ``0`` for a CPU-only build;
             ``-1`` to offload everything on the GPU.
+        offload_kqv_to_gpu: Whether to offload the KV cache (and the KQV ops) to
+            the GPU. ``True`` (llama.cpp's own default) puts the cache in VRAM;
+            ``False`` keeps it in host RAM, freeing a large amount of VRAM on long
+            contexts at the cost of generation speed. Ignored on a CPU-only build.
         threads: CPU threads for decode (``None`` lets llama.cpp decide).
         batch_size: Maximum tokens submitted to a single ``llama_decode`` call;
             longer prefills are chunked to this size.
@@ -110,6 +114,7 @@ class Config:
     # Backend / hardware
 
     gpu_layers: int = 0
+    offload_kqv_to_gpu: bool = False
     threads: int | None = None
     batch_size: int = 512
     flash_attention: bool = False

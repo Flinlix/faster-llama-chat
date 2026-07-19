@@ -631,6 +631,42 @@ def test_set_flash_attn_enable_on_unsupported_build_raises():
         _set_flash_attn(SimpleNamespace(), True)
 
 
+def _set_offload(cparams, enable):
+    """Drive Backend._set_offload_kqv_to_gpu with fakes, bypassing llama_cpp import."""
+    from types import SimpleNamespace
+    from llama_chat._backend import Backend
+
+    Backend._set_offload_kqv_to_gpu(SimpleNamespace(lc=None), cparams, enable)
+
+
+def test_offload_kqv_to_gpu_defaults_off():
+    # KV cache stays in host RAM unless explicitly offloaded to the GPU.
+    assert Config().offload_kqv_to_gpu is False
+
+
+@pytest.mark.parametrize("enable", [True, False])
+def test_set_offload_kqv_bool_build(enable):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(offload_kqv=None)
+    _set_offload(cparams, enable)
+    assert cparams.offload_kqv is enable
+
+
+def test_set_offload_kqv_enable_on_unsupported_build_is_noop():
+    from types import SimpleNamespace
+
+    # GPU placement is llama.cpp's own default, so a missing knob is harmless.
+    _set_offload(SimpleNamespace(), True)  # must not raise
+
+
+def test_set_offload_kqv_disable_on_unsupported_build_raises():
+    from types import SimpleNamespace
+
+    with pytest.raises(RuntimeError, match="KV-offload"):
+        _set_offload(SimpleNamespace(), False)
+
+
 @pytest.mark.parametrize("field,value", [
     ("batch_size", 0),
     ("max_tokens", 0),

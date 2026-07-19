@@ -112,6 +112,9 @@ on a GPU). The wrapper code is identical; `seq_rm` / `seq_add` work on both
 backends. On a GPU, `flash_attention=True` with `kv_cache_type="q8_0"` roughly
 halves KV-cache memory at
 near-zero quality cost (a quantized `kv_cache_type` requires flash attention).
+`offload_kqv_to_gpu` picks where the KV cache lives: `True` places it in VRAM
+for fastest generation, `False` keeps it in host RAM - trading speed for VRAM
+headroom.
 
 ## Quick start
 
@@ -126,6 +129,7 @@ chat = ChatWrapper(
     model_path="llama/models/gemma-4-E2B-it-Q4_K_M.gguf",
     context_size=8192,    # context window in tokens
     gpu_layers=-1,        # -1 = offload all layers to GPU; 0 = CPU only
+    offload_kqv_to_gpu=True,  # KV cache in VRAM; False keeps it in host RAM
     flash_attention=True, # required for quantized KV cache
     kv_cache_type="q8_0", # halves KV memory; requires flash_attention=True
 )

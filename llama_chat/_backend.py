@@ -122,7 +122,7 @@ class Backend:
 
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool = False, type_k: int | None = None,
-                    type_v: int | None = None):
+                    type_v: int | None = None, offload_kqv_to_gpu: bool = True):
         cparams = self.lc.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
@@ -131,6 +131,7 @@ class Backend:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
         self._set_flash_attn(cparams, flash_attn)
+        self._set_offload_kqv_to_gpu(cparams, offload_kqv_to_gpu)
         if type_k is not None:
             cparams.type_k = type_k
         if type_v is not None:
@@ -139,6 +140,24 @@ class Backend:
         if not ctx:
             raise RuntimeError("failed to create llama context")
         return ctx
+
+    def _set_offload_kqv_to_gpu(self, cparams, enable: bool) -> None:
+        """Place the KV cache (and the KQV ops) on GPU (``True``) or in host RAM
+        (``False``) via the bool ``offload_kqv`` param (llama.cpp's default:
+        True → VRAM).
+
+        Keeping the cache in RAM trades generation speed for a large VRAM
+        saving on long contexts.
+        """
+        if hasattr(cparams, "offload_kqv"):
+            cparams.offload_kqv = enable
+        elif not enable:
+            # No knob leaves llama.cpp at its own default (KV on GPU) which is
+            # exactly what enable=True asks for; only the RAM request (False,
+            # the non-default) is unachievable and must fail loudly.
+            raise RuntimeError(
+                "this llama_cpp build exposes no KV-offload context param, so the "
+                "KV cache cannot be kept in RAM (offload_kqv_to_gpu=False)")
 
     def _set_flash_attn(self, cparams, enable: bool) -> None:
         """Set flash attention across the param-struct churn.
@@ -155,6 +174,8 @@ class Backend:
                     else "LLAMA_FLASH_ATTN_TYPE_DISABLED")
             cparams.flash_attn_type = getattr(self.lc, name, 1 if enable else 0)
         elif enable:
+            # No param means the build predates flash attention, so "off" (the
+            # default, enable=False) already holds; only enabling is unachievable.
             raise RuntimeError(
                 "this llama_cpp build exposes no flash-attention context param")
 
