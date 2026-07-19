@@ -59,6 +59,7 @@ class ChatWrapper:
         *,
         fragments: Fragments | None = None,
         on_message: Callable[[str, str], None] | None = None,
+        on_load_progress: Callable[[float], None] | None = None,
         **kwargs,
     ) -> None:
         """Load the model, resolve the chat template, and validate it.
@@ -73,6 +74,10 @@ class ChatWrapper:
                 the system prompt and begin-replay - i.e. each genuine new turn
                 (user, assistant) and each inject. Runs under the lock, so it
                 must be cheap and must not call back into the wrapper.
+            on_load_progress: Invoked during model loading with a fraction in
+                ``[0.0, 1.0]`` (for startup progress feedback); must not raise,
+                as an exception there aborts the load. Ignored when ``context``
+                is supplied (that context's model is already loaded).
             **kwargs: :class:`~llama_chat.config.Config` field overrides, used
                 to build the config when ``config`` is not given.
 
@@ -90,7 +95,10 @@ class ChatWrapper:
             )
         self._on_message = on_message
         owns_ctx = context is None
-        self._ctx = KVContext(config) if owns_ctx else context
+        self._ctx = (
+            KVContext(config, on_load_progress=on_load_progress)
+            if owns_ctx else context
+        )
         self._cfg = config
         try:
             # The template comes from the model itself; pass ``fragments`` explicitly

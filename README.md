@@ -130,6 +130,13 @@ chat = ChatWrapper(
     kv_cache_type="q8_0", # halves KV memory; requires flash_attention=True
 )
 
+# on_load_progress: an optional callback for startup progress feedback, invoked
+# with a fraction 0.0..1.0 while the model weights load. It is keyword-only
+# (not a Config field) and must not raise.
+chat = ChatWrapper(
+    on_load_progress=lambda f: print(f"\rloading model {f * 100:3.0f}%", end="", flush=True)
+)
+
 # begin: reset + prefill the system prompt and as much recent history as fits
 chat.begin("You are a helpful assistant.",
            [("user", "Hi"), ("assistant", "Hello!")])

@@ -98,9 +98,23 @@ class Backend:
         self._sampler_reset = _maybe("llama_sampler_reset")
 
     # ----- model / context lifecycle ------------------------------------
-    def load_model(self, path: str, n_gpu_layers: int):
+    def load_model(self, path: str, n_gpu_layers: int,
+                   progress: Callable[[float], None] | None = None):
         mparams = self.lc.llama_model_default_params()
         mparams.n_gpu_layers = n_gpu_layers
+        if progress is not None:
+            @self.lc.llama_progress_callback
+            def _cb(frac, _user_data):
+                progress(float(frac))
+                # Return True to continue; False aborts the load. A raised
+                # exception is converted by ctypes into a False return, so a
+                # buggy `progress` would abort the load - callers must not raise.
+                return True
+            # llama.cpp holds the callback only as a raw C pointer, so keep a
+            # Python reference alive for the duration of the load or it is GC'd
+            # and the native call jumps into freed memory.
+            self._progress_cb = _cb
+            mparams.progress_callback = _cb
         model = self._load_model(path.encode("utf-8"), mparams)
         if not model:
             raise RuntimeError(f"failed to load model: {path}")

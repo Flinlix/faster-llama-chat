@@ -12,6 +12,7 @@ from __future__ import annotations
 import codecs
 import threading
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ._backend import Backend, set_log_level
@@ -72,13 +73,25 @@ class GenerationAccumulator:
 
 
 class KVContext:
-    """Owns the llama.cpp model/context and performs all cache edits."""
+    """Owns the llama.cpp model/context and performs all cache edits.
 
-    def __init__(self, config: Config) -> None:
+    Args:
+        config: Runtime configuration.
+        on_load_progress: Optional callback invoked during model weight loading
+            with a fraction in ``[0.0, 1.0]``. Called from llama.cpp's loader,
+            so it must be cheap, must not re-enter the context, and must not
+            raise - an exception there is reported to stderr and aborts the load.
+    """
+
+    def __init__(
+        self, config: Config,
+        on_load_progress: Callable[[float], None] | None = None,
+    ) -> None:
         self._cfg = config
         set_log_level(config.log_level)  # filter llama.cpp's load-time logs too
         self._b = Backend()
-        self._model = self._b.load_model(config.model_path, config.gpu_layers)
+        self._model = self._b.load_model(
+            config.model_path, config.gpu_layers, progress=on_load_progress)
         self._ctx = None
         self._sampler = None
         try:

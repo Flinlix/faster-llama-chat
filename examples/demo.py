@@ -17,6 +17,7 @@ system prompt survives and the total never crosses ``context_size``.
 from __future__ import annotations
 
 import argparse
+import sys
 
 from llama_chat import ChatWrapper, Config, KVContext
 
@@ -24,8 +25,8 @@ from llama_chat import ChatWrapper, Config, KVContext
 class CountingContext(KVContext):
     """KVContext that records prefill volume so the demo can report reuse."""
 
-    def __init__(self, config: Config) -> None:
-        super().__init__(config)
+    def __init__(self, config: Config, on_load_progress=None) -> None:
+        super().__init__(config, on_load_progress=on_load_progress)
         self.prefilled = 0
 
     def prefill(self, token_ids, start_pos, want_logits):
@@ -35,6 +36,13 @@ class CountingContext(KVContext):
 
 def banner(title: str) -> None:
     print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
+
+
+def load_bar(frac: float, width: int = 40) -> None:
+    """Render a single-line model-load progress bar to stderr (no trailing newline)."""
+    filled = int(frac * width)
+    bar = "#" * filled + "-" * (width - filled)
+    print(f"\rloading model [{bar}] {frac * 100:5.1f}%", end="", file=sys.stderr, flush=True)
 
 
 def show(w: ChatWrapper) -> None:
@@ -61,7 +69,9 @@ def main() -> None:
         gpu_layers=args.gpu_layers,
         max_tokens=64,
     )
-    ctx = CountingContext(cfg)
+    ctx = CountingContext(cfg, on_load_progress=load_bar)
+    load_bar(1.0)           # snap to 100% (the loader may report just short) ...
+    print(file=sys.stderr)  # ... then terminate the bar's line
     w = ChatWrapper(cfg, context=ctx)
 
     w.begin(
