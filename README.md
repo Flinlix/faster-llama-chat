@@ -209,7 +209,15 @@ llama_memory_seq_add(seq, b, total, -(b-a))  # shift survivors down to close the
 ```
 
 `seq_add` also fixes the RoPE positions, so the survivors stay coherent without
-recomputation. This reuse is *lossy* (the survivors' cached K/V were computed
+re-prefilling them. It does not do that work where you call it: `seq_add` only
+marks the cells as shifted, and the RoPE K-shift over the whole cache is built
+into the graph of the **next** `llama_decode` (The shift is expensive only for
+a quantized cache). That bill therefore lands on whatever decodes next - which
+is why `stream` decodes the assistant turn's closing tag *after* the post-reply
+eviction rather than before it, so a decode the turn owes anyway absorbs the
+shift instead of the next turn's prefill.
+
+This reuse is *lossy* (the survivors' cached K/V were computed
 while attending to the now-removed tokens), which is the standard StreamingLLM
 trade-off - fast, with slight quality drift. The system prompt is never evicted.
 

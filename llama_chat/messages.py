@@ -141,6 +141,21 @@ class MessageTable:
             self._assert_invariants()
             return message
 
+    def extend_last(self, token_ids: list[int]) -> None:
+        """Widen the newest message by tokens decoded after it was appended.
+
+        The assistant turn's closing tag is decoded after the post-reply
+        eviction (so that decode absorbs the eviction's pending shift), which
+        means the message is recorded a moment before its last tokens exist.
+        Recording them here keeps the table equal to the cache at every point
+        the two are compared.
+        """
+        with self._lock:
+            msg = self._messages[-1]
+            msg.token_ids.extend(token_ids)
+            msg.pos_end = msg.pos_start + msg.n_tokens
+            self._assert_invariants()
+
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
         """Drop oldest non-system messages until ``fits()`` (or none remain).
 

@@ -8,6 +8,15 @@ call warms the generation graph so the first reply has no cold-start latency);
 crosses the eviction threshold the oldest non-system messages are removed and
 the survivors shifted down to close the gap, so their KV is reused without
 re-prefilling.
+
+The turn-closing tag is decoded *after* the post-reply eviction, not before it.
+``llama_memory_seq_add`` moves nothing - it marks the surviving cells as shifted
+and leaves the RoPE K-shift to the next decode's graph, which would otherwise be
+the next turn's prefill. Closing the turn last ends a decode the conversation
+already owes on that shift instead.
+
+Every action leaves the physical cache equal to the concatenation of the message
+table, and every prefill appends at the cache's end. The tests enforce both.
 """
 
 from __future__ import annotations
@@ -304,13 +313,16 @@ class ChatWrapper:
                     f"the request or lower eviction_threshold"
                 )
 
-            self._ctx.prefill(user_tokens, start_pos=self._table.total, want_logits=False)
+            # One decode for the request text *and* the assistant-open tag:
+            # The backend already flags logits on the final token only, so a
+            # single call over the concatenation is equivalent.
+            self._ctx.prefill(user_tokens + open_tokens,
+                              start_pos=self._table.total, want_logits=True)
             self._table.append(Message("user", text, user_tokens))
             if self._on_message:
                 self._on_message("user", text)
 
             gen_start = self._table.total + len(open_tokens)
-            self._ctx.prefill(open_tokens, start_pos=self._table.total, want_logits=True)
 
             budget = self._cfg.context_size - gen_start - len(close_tokens)
             cap = max_tokens if max_tokens is not None else self._cfg.max_tokens
@@ -325,17 +337,21 @@ class ChatWrapper:
                 )
             finally:
                 # Runs on normal completion *and* on early close (barge-in).
-                close_start = gen_start + len(gen.token_ids)
-                self._ctx.prefill(close_tokens, start_pos=close_start, want_logits=False)
-                assistant_tokens = open_tokens + gen.token_ids + close_tokens
-                self._table.append(Message("assistant", gen.text, assistant_tokens))
+                # The closing tag is not part of the message yet: it is decoded
+                # after the eviction below (see _close_turn), so the table keeps
+                # describing exactly what the cache holds.
+                msg = self._table.append(
+                    Message("assistant", gen.text, open_tokens + gen.token_ids))
                 if self._on_message:
                     self._on_message("assistant", gen.text)
                 # Trim back under threshold after the reply, so the cache rests
-                # below threshold for the next turn (and on barge-in too).
+                # below threshold for the next turn (and on barge-in too). The
+                # closer counts against the threshold even though it is decoded
+                # after the trim.
                 n_evicted = self._evict_until(
-                    lambda: self._table.total <= self._cfg.threshold_tokens
+                    lambda: self._table.total + len(close_tokens) <= self._cfg.threshold_tokens
                 )
+                self._close_turn(msg, close_tokens)
 
             return Turn(
                 text=gen.text,
@@ -488,6 +504,18 @@ class ChatWrapper:
         if evicted:
             self._rebuild_cache()
         return evicted
+
+    def _close_turn(self, msg: Message, close_tokens: list[int]) -> None:
+        """Decode the assistant turn's closing tag.
+
+        Skipped when the eviction dropped this very message: its cache span went
+        with it, and there is no turn left to close.
+        """
+        messages = self._table.messages
+        if not messages or messages[-1] is not msg:
+            return
+        self._ctx.prefill(close_tokens, start_pos=self._table.total, want_logits=False)
+        self._table.extend_last(close_tokens)
 
     def _rebuild_cache(self) -> None:
         """Re-prefill the cache from the surviving messages (no in-place shift)."""

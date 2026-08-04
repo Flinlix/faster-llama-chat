@@ -134,6 +134,30 @@ def test_request_prefills_only_new_tokens_and_reuses_context():
     _assert_consistent(w, fake)
 
 
+def test_request_prompt_is_one_decode():
+    """The prompt reaches llama.cpp in a single call, closer aside.
+
+    The request text and the assistant-open tag used to be two prefills, each
+    paying llama.cpp's per-decode fixed overhead on the one prefill a user is
+    actually waiting through. Splitting them again would be invisible to every
+    other assertion here, so it gets its own.
+    """
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
+    w.begin("s")
+    close_len = len(fake.tokenize(w._fmt.assistant_close()))
+    mark = len(fake.prefill_calls)
+
+    turn = w.request("hi")
+
+    prompt_call, close_call = fake.prefill_calls[mark:]
+    assert prompt_call[1] == turn.n_prefilled     # user fragment + assistant-open
+    assert prompt_call[2] is True                 # logits: generation follows
+    assert close_call[1] == close_len             # the closer, decoded last
+    assert close_call[2] is False
+    _assert_consistent(w, fake)
+
+
 def test_second_request_does_not_reprefill_history():
     fake = FakeContext(gen_len=3)
     w = ChatWrapper(_cfg(context_size=500, eviction_threshold=1.0), context=fake)
@@ -305,6 +329,44 @@ def test_request_rests_under_threshold_after_turn():
         assert w.snapshot()[0]["role"] == "system"        # system survives
         assert w.snapshot()[-1]["role"] == "assistant"    # newest turn kept
         _assert_consistent(w, fake)
+
+
+def test_turn_closes_after_the_eviction_not_before():
+    # llama.cpp applies an eviction's K-shift on the next decode, so the closer
+    # is decoded last: that decode absorbs the shift instead of leaving it for
+    # the next turn's prefill. Ordering is the whole point, hence the assertion.
+    fake = FakeContext(gen_len=2)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
+    w.begin("s")
+
+    evicting = 0
+    for i in range(8):
+        n_evictions = len(fake.evictions)
+        turn = w.request(f"message number {i} with some length")
+        if turn.n_evicted:
+            evicting += 1
+            # The eviction landed, and the closer is the turn's last prefill.
+            assert len(fake.evictions) > n_evictions
+            last = fake.prefill_calls[-1]
+            assert last[0] + last[1] == w.total_tokens   # closer at the tail
+            assert last[2] is False                      # no logits wanted
+        _assert_consistent(w, fake)
+    assert evicting
+
+
+def test_rebuild_mode_does_not_decode_the_closer_twice():
+    # can_shift=False re-prefills the whole table, closer included, so closing
+    # the turn afterwards must be a no-op rather than a duplicate decode.
+    fake = FakeContext(gen_len=2, can_shift=False)
+    w = ChatWrapper(_cfg(context_size=400, eviction_threshold=0.2), context=fake)
+    w.begin("s")
+    rebuilt = 0
+    for i in range(8):
+        before = fake.rebuilds
+        w.request(f"message number {i} with some length")
+        rebuilt += fake.rebuilds > before
+        _assert_consistent(w, fake)          # would double-count the closer
+    assert rebuilt
 
 
 def test_eviction_shift_mode_does_not_rebuild():
