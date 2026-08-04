@@ -803,3 +803,21 @@ def test_wait_idle_blocks_until_a_turn_releases_the_lock():
     t.join(5)
     assert w.wait_idle(timeout=1.0) is True
     assert w.busy is False
+
+
+# ----- template customisation -------------------------------------------
+def test_a_formatter_factory_customises_how_generation_opens():
+    class NoThink(TemplateFormatter):
+        def assistant_open(self) -> str:
+            return super().assistant_open() + "<empty/>"
+
+    fake = FakeContext()
+    w = ChatWrapper(_cfg(context_size=200), context=fake, formatter=NoThink)
+    w.begin("sys")
+    w.request("hi")
+    # The suffix is really tokenized into the generation prompt ...
+    assert any("<empty/>" in text for text, _special in fake.tokenize_calls)
+    # ... and only there: the history-wrapping fragments are untouched, so the
+    # cache layout and the template validation see exactly what they did before.
+    plain = ChatWrapper(_cfg(context_size=200), context=FakeContext())
+    assert "<empty/>" not in plain._fmt.fragment("assistant", "yo")

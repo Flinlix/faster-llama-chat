@@ -67,6 +67,7 @@ class ChatWrapper:
         context: KVContext | None = None,
         *,
         fragments: Fragments | None = None,
+        formatter: Callable[[Fragments], TemplateFormatter] | None = None,
         on_message: Callable[[str, str], None] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
         **kwargs,
@@ -79,6 +80,11 @@ class ChatWrapper:
             fragments: Explicit chat-template fragments, for a model that ships
                 no embedded template (otherwise they are recovered from the
                 model's own GGUF chat template).
+            formatter: Factory building the :class:`TemplateFormatter` from the
+                resolved fragments. Use it to alter how turns are opened or
+                closed (e.g. injecting a reasoning model's empty thought channel
+                into the generation prompt) without touching the fragments
+                themselves. Defaults to :class:`TemplateFormatter`.
             on_message: Invoked with ``(role, text)`` for every message except
                 the system prompt and begin-replay - i.e. each genuine new turn
                 (user, assistant) and each inject. Runs under the lock, so it
@@ -114,7 +120,7 @@ class ChatWrapper:
             # only for a model that ships no embedded chat template.
             self._frags = fragments if fragments is not None else self._resolve_fragments()
             self._validate_template(self._frags)
-            self._fmt = TemplateFormatter(self._frags)
+            self._fmt = (formatter or TemplateFormatter)(self._frags)
             self._check_fragments_match_model()
         except BaseException:
             # Template validation is a designed failure path; don't leak the
