@@ -137,6 +137,46 @@ class ChatWrapper:
     def total_tokens(self) -> int:
         return self._table.total
 
+    @property
+    def can_shift(self) -> bool:
+        """Whether eviction can shift surviving KV in place.
+
+        ``False`` for caches that do not support in-place shifting (compact SWA,
+        recurrent), where :meth:`_evict_until` falls back to re-prefilling the
+        whole surviving conversation - correct, but a latency cliff the first
+        time history crosses the threshold.
+        """
+        return self._ctx.can_shift
+
+    @property
+    def busy(self) -> bool:
+        """Whether a turn currently holds the wrapper.
+
+        Advisory: the answer can be stale the moment it is returned. Correctness
+        rests on the wrapper's own lock, which every action takes regardless.
+        """
+        if not self._lock.acquire(blocking=False):
+            return True
+        self._lock.release()
+        return False
+
+    def wait_idle(self, timeout: float | None = None) -> bool:
+        """Block until no turn holds the wrapper.
+
+        Advisory: another thread may take the lock the instant this returns. It
+        changes what a caller can *observe*, never what is safe.
+
+        Args:
+            timeout: Seconds to wait; ``None`` waits indefinitely.
+
+        Returns:
+            ``True`` if the wrapper was idle, ``False`` on timeout.
+        """
+        if not self._lock.acquire(timeout=-1 if timeout is None else timeout):
+            return False
+        self._lock.release()
+        return True
+
     def snapshot(self) -> list[dict]:
         """Return the current cache layout (for inspection and tests).
 

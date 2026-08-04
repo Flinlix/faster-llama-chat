@@ -762,3 +762,44 @@ def test_stop_hit_respects_search_offset():
     assert _stop_hit("STOPxxSTOP", ["STOP"], search_from=1) == 6
     assert _stop_hit("xxSTOP", ["STOP"], search_from=2) == 2
     assert _stop_hit("xxSTOP", ["STOP"], search_from=3) is None
+
+
+# ----- public surface for callers that schedule around the lock ----------
+# The assistant that drives this wrapper needs three things the lock already
+# knows, and used to reach into privates for all three.
+def test_can_shift_reports_the_contexts_capability():
+    assert ChatWrapper(_cfg(), context=FakeContext(can_shift=True)).can_shift is True
+    assert ChatWrapper(_cfg(), context=FakeContext(can_shift=False)).can_shift is False
+
+
+def test_wait_idle_is_true_when_nothing_holds_the_wrapper():
+    w = ChatWrapper(_cfg(context_size=200), context=FakeContext())
+    assert w.busy is False
+    assert w.wait_idle(timeout=0.1) is True
+
+
+def test_wait_idle_blocks_until_a_turn_releases_the_lock():
+    fake = FakeContext(gen_len=3, gen_text="abc")
+    w = ChatWrapper(_cfg(context_size=200), context=fake)
+    w.begin("sys")
+
+    entered, release = threading.Event(), threading.Event()
+
+    def turn():
+        gen = w.stream("hi")
+        next(gen)                 # takes the lock inside the generator body
+        entered.set()
+        release.wait(5)
+        for _ in gen:
+            pass
+
+    t = threading.Thread(target=turn, daemon=True)
+    t.start()
+    entered.wait(5)
+
+    assert w.busy is True
+    assert w.wait_idle(timeout=0.05) is False   # the turn still holds it
+    release.set()
+    t.join(5)
+    assert w.wait_idle(timeout=1.0) is True
+    assert w.busy is False
