@@ -69,6 +69,12 @@ class Config:
             ``False`` keeps it in host RAM, freeing a large amount of VRAM on long
             contexts at the cost of generation speed. Ignored on a CPU-only build.
         threads: CPU threads for decode (``None`` lets llama.cpp decide).
+        batch_threads: CPU threads for prefill. ``None`` means same amount as
+            ``threads``. Prefill is one brief compute-bound burst and wants
+            every core; decode is often faster with fewer, since filling the
+            pool oversubscribes its spin-waiting workers (measured on a 16-core
+            host: 87 tok/s at 12 threads vs 77 at 16). Hence the split -
+            e.g. ``threads=12, batch_threads=16``.
         batch_size: Maximum tokens submitted to a single ``llama_decode`` call;
             longer prefills are chunked to this size.
         flash_attention: Enable flash attention. Required for a quantized KV
@@ -116,6 +122,7 @@ class Config:
     gpu_layers: int = 0
     offload_kqv_to_gpu: bool = False
     threads: int | None = None
+    batch_threads: int | None = None
     batch_size: int = 512
     flash_attention: bool = False
     kv_cache_type: str | None = None

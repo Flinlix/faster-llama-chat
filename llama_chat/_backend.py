@@ -122,7 +122,8 @@ class Backend:
 
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool = False, type_k: int | None = None,
-                    type_v: int | None = None, offload_kqv_to_gpu: bool = True):
+                    type_v: int | None = None, offload_kqv_to_gpu: bool = True,
+                    n_threads_batch: int | None = None):
         cparams = self.lc.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
@@ -130,6 +131,11 @@ class Backend:
         if n_threads:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
+        if n_threads_batch:
+            # Prefill (batch) threads independently of decode threads: prefill
+            # is compute-bound and brief, so it can use every core even when
+            # decode deliberately leaves some free.
+            cparams.n_threads_batch = n_threads_batch
         self._set_flash_attn(cparams, flash_attn)
         self._set_offload_kqv_to_gpu(cparams, offload_kqv_to_gpu)
         if type_k is not None:

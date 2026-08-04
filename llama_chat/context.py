@@ -99,7 +99,8 @@ class KVContext:
             self._ctx = self._b.new_context(
                 self._model, config.context_size, config.threads, config.batch_size,
                 flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type,
-                offload_kqv_to_gpu=config.offload_kqv_to_gpu)
+                offload_kqv_to_gpu=config.offload_kqv_to_gpu,
+                n_threads_batch=config.batch_threads)
             self._vocab = self._b.vocab(self._model)
             self._batch_size = config.batch_size
             self._can_shift = self._b.can_shift(self._ctx)
