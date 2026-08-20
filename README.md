@@ -75,7 +75,7 @@ llama.cpp's server has its own context-shift mechanism. Both use the same
 **Bookkeeping**
 - *llama.cpp*: no message-level record; client and cache can diverge silently.
 - *llama_chat*: `MessageTable` mirrors the cache exactly, invariants asserted
-  after every change, `snapshot()` exposes the live layout.
+  after every change, `snapshot()` exposes a copy of the conversation and its layout.
 
 ## Install
 

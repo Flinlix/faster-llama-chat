@@ -184,10 +184,10 @@ class ChatWrapper:
         return True
 
     def snapshot(self) -> list[dict]:
-        """Return the current cache layout (for inspection and tests).
+        """Return the conversation and its cache layout, as plain dict rows.
 
         Safe to call from any thread, including while another thread is
-        mid-turn: the table guards its own reads, so the layout is never torn.
+        mid-turn: the table guards its own reads, so a row set is never torn.
         """
         return self._table.snapshot_rows()
 

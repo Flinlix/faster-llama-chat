@@ -95,15 +95,20 @@ class MessageTable:
     def snapshot_rows(self) -> list[dict]:
         """Return the layout as plain dict rows, read atomically.
 
+        ``text`` is what was submitted. A message truncated to fit the threshold
+        keeps its original text beside the tokens that survived, so the two can
+        disagree; the tokens are what the model saw.
+
         Returns:
-            One ``{"role", "n_tokens", "pos_start", "pos_end"}`` dict per
-            message, copied under the lock so positions are mutually consistent
-            even while another thread is restructuring the table.
+            One ``{"role", "text", "n_tokens", "pos_start", "pos_end"}`` dict
+            per message, copied under the lock so positions are mutually
+            consistent even while another thread is restructuring the table.
         """
         with self._lock:
             return [
                 {
                     "role": m.role,
+                    "text": m.text,
                     "n_tokens": m.n_tokens,
                     "pos_start": m.pos_start,
                     "pos_end": m.pos_end,
