@@ -7,12 +7,11 @@
 #   add --dev to any of the above to also install test dependencies
 #
 # The current llama_chat package imports the `llama_cpp` module (the pip package,
-# which bundles its own llama.cpp) -- it does NOT use a separate llama.cpp clone.
+# which bundles its own llama.cpp). It does NOT use a separate llama.cpp clone.
 #
-# Why build from source instead of the prebuilt wheel: the prebuilt wheel targets
-# a baseline ISA and ships no CUDA. GGML_NATIVE=ON compiles with -march=native,
-# enabling the CPU's own kernels (dot-product on Armv8.2, AVX2 on x86) -- the main
-# prefill speedup; GGML_CUDA=on compiles the CUDA backend so layers can offload.
+# Why build from source: the prebuilt wheel targets a baseline instruction set and
+# ships no CUDA. GGML_NATIVE=ON compiles with -march=native so the CPU's own
+# kernels are used; GGML_CUDA=on compiles the CUDA backend so layers can offload.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -73,7 +72,7 @@ import sys, llama_cpp
 from llama_chat._backend import Backend
 b = Backend()
 
-# The evict-and-shift core needs one working path per memory op -- either the new
+# The evict-and-shift core needs one working path per memory op: either the new
 # llama_memory_* API or the older llama_kv_self_* / llama_kv_cache_* fallback, the
 # same OR the backend itself uses.
 kv_ok = bool(
