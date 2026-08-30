@@ -1,6 +1,6 @@
 """Pure bookkeeping tests for the message table (no model required)."""
 
-from llama_chat.messages import Message, MessageTable, fit_newest_first
+from llama_chat.messages import Message, MessageTable, n_newest_that_fit
 
 
 def _msg(role, n):
@@ -81,10 +81,22 @@ def test_n_evictable():
 def test_fit_newest_first():
     # system=2, budget=10 -> 8 left. messages oldest..newest: [5,4,3]
     # newest-first: 3 (->5 used 3), 4 (->9), 5 would exceed -> stop. keep 2.
-    assert fit_newest_first([5, 4, 3], system_tokens=2, budget=10) == 2
+    assert n_newest_that_fit([5, 4, 3], system_tokens=2, budget=10) == 2
     # everything fits
-    assert fit_newest_first([1, 1, 1], system_tokens=2, budget=10) == 3
+    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10) == 3
     # nothing fits
-    assert fit_newest_first([20], system_tokens=2, budget=10) == 0
+    assert n_newest_that_fit([20], system_tokens=2, budget=10) == 0
     # empty history
-    assert fit_newest_first([], system_tokens=2, budget=10) == 0
+    assert n_newest_that_fit([], system_tokens=2, budget=10) == 0
+
+
+def test_fit_newest_first_stops_at_the_message_limit():
+    # Budget alone would keep all three; the limit is what binds here.
+    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10,
+                            max_messages=2) == 2
+    # Whichever limit is reached first stops the walk, so the tighter one wins.
+    assert n_newest_that_fit([5, 4, 3], system_tokens=2, budget=10,
+                            max_messages=3) == 2
+    # None leaves the budget as the only limit.
+    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10,
+                            max_messages=None) == 3

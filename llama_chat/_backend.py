@@ -1,12 +1,8 @@
-"""Thin adapter over llama-cpp-python's low-level (``llama_cpp.*``) API.
+"""Adapter over llama-cpp-python's low-level API, resolved once per build.
 
-llama.cpp's C API has churned across releases - most importantly the KV-cache
-functions migrated ``llama_kv_cache_seq_*`` -> ``llama_kv_self_seq_*`` -> the
-newer ``llama_memory_*`` handle API. This module resolves whichever symbols the
-installed build exposes, once, so the rest of the package can speak a single
-stable vocabulary on both the CPU and CUDA builds.
-
-Only the handful of primitives the wrapper actually needs are exposed here.
+llama.cpp's C API has churned across releases, so each symbol is looked up
+under every name it has had and the rest of the package speaks one vocabulary.
+Only the primitives the wrapper needs are exposed.
 """
 
 from __future__ import annotations
@@ -15,7 +11,7 @@ import ctypes
 import logging
 from typing import Callable
 
-try:  # pragma: no cover - import guard exercised only without the dep installed
+try:  # pragma: no cover (reachable only without the dependency installed)
     import llama_cpp
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
@@ -24,11 +20,7 @@ except ImportError as exc:  # pragma: no cover
         '  GPU:       CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python'
     ) from exc
 
-# Config log levels -> Python logging levels. llama-cpp-python installs a ggml
-# log callback at import that prints a message only when its "llama-cpp-python"
-# logger level is at or below the message's mapped level, so setting that
-# logger's level is all it takes to filter llama.cpp's output. "none" sits above
-# CRITICAL to also drop llama.cpp's unconditional (level-0) banners.
+# "none" sits above CRITICAL to drop llama.cpp's unconditional banners too.
 _LOG_LEVELS = {
     "debug": logging.DEBUG,
     "info": logging.INFO,
@@ -39,20 +31,12 @@ _LOG_LEVELS = {
 
 
 def set_log_level(level: str) -> None:
-    """Filter llama.cpp/ggml log output to ``level`` and above, process-wide.
-
-    Args:
-        level: One of :data:`~llama_chat.config.LOG_LEVELS`.
-    """
+    """Filter llama.cpp log output to ``level`` and above, process-wide."""
     logging.getLogger("llama-cpp-python").setLevel(_LOG_LEVELS[level])
 
 
-def _maybe(*names: str) -> Callable | None:
-    """Return the first attribute of ``llama_cpp`` that exists among ``names``.
-
-    Handles API renames across llama_cpp versions; returns ``None`` when no
-    name is present (the caller treats the capability as unavailable).
-    """
+def _optional_symbol(*names: str) -> Callable | None:
+    """Return the first of ``names`` this build defines, or ``None``."""
     for name in names:
         fn = getattr(llama_cpp, name, None)
         if fn is not None:
@@ -60,9 +44,13 @@ def _maybe(*names: str) -> Callable | None:
     return None
 
 
-def _first(*names: str) -> Callable:
-    """Like ``_maybe``, but raises when the symbol is mandatory and absent."""
-    fn = _maybe(*names)
+def _required_symbol(*names: str) -> Callable:
+    """Return the first of ``names`` this build defines.
+
+    Raises:
+        AttributeError: If it defines none of them.
+    """
+    fn = _optional_symbol(*names)
     if fn is None:
         raise AttributeError(
             f"none of {names} found in llama_cpp (version {getattr(llama_cpp, '__version__', '?')})"
@@ -71,50 +59,51 @@ def _first(*names: str) -> Callable:
 
 
 class Backend:
-    """Resolved, version-stable handles for the low-level calls we use."""
+    """Version-stable handles for the low-level calls this package makes."""
+
+    # Control tokens and the ones a fine-tune added. Both count as tags; see
+    # the README, "Tool calling". Defaults let import survive an older build.
+    _TAG_ATTRS = (getattr(llama_cpp, "LLAMA_TOKEN_ATTR_CONTROL", 1 << 3)
+                  | getattr(llama_cpp, "LLAMA_TOKEN_ATTR_USER_DEFINED", 1 << 4))
 
     def __init__(self) -> None:
-        self.lc = llama_cpp
-        self._load_model = _first("llama_model_load_from_file", "llama_load_model_from_file")
-        self._free_model = _first("llama_model_free", "llama_free_model")
-        self._new_ctx = _first("llama_init_from_model", "llama_new_context_with_model")
-        self._get_vocab = _maybe("llama_model_get_vocab")
+        self.llama_cpp = llama_cpp
+        self._load_model = _required_symbol("llama_model_load_from_file", "llama_load_model_from_file")
+        self._free_model = _required_symbol("llama_model_free", "llama_free_model")
+        self._new_ctx = _required_symbol("llama_init_from_model", "llama_new_context_with_model")
+        self._get_vocab = _optional_symbol("llama_model_get_vocab")
 
         # Memory / KV-cache handle ops, newest-API-first.
-        self._get_memory = _maybe("llama_get_memory")
-        self._mem_clear = _maybe("llama_memory_clear")
-        self._mem_rm = _maybe("llama_memory_seq_rm")
-        self._mem_add = _maybe("llama_memory_seq_add")
-        self._mem_can_shift = _maybe("llama_memory_can_shift")
-        self._kv_clear = _maybe("llama_kv_self_clear", "llama_kv_cache_clear")
-        self._kv_rm = _maybe("llama_kv_self_seq_rm", "llama_kv_cache_seq_rm")
-        self._kv_add = _maybe("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
+        self._get_memory = _optional_symbol("llama_get_memory")
+        self._mem_clear = _optional_symbol("llama_memory_clear")
+        self._mem_rm = _optional_symbol("llama_memory_seq_rm")
+        self._mem_add = _optional_symbol("llama_memory_seq_add")
+        self._mem_can_shift = _optional_symbol("llama_memory_can_shift")
+        self._kv_clear = _optional_symbol("llama_kv_self_clear", "llama_kv_cache_clear")
+        self._kv_rm = _optional_symbol("llama_kv_self_seq_rm", "llama_kv_cache_seq_rm")
+        self._kv_add = _optional_symbol("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
 
-        self._is_eog = _first("llama_vocab_is_eog", "llama_token_is_eog")
-        self._token_eos = _first("llama_vocab_eos", "llama_token_eos")
-        self._token_to_piece = _first("llama_token_to_piece")
-        self._is_control = _maybe("llama_vocab_is_control")
-        self._meta_val_str = _maybe("llama_model_meta_val_str")
-        self._sampler_reset = _maybe("llama_sampler_reset")
+        self._is_eog = _required_symbol("llama_vocab_is_eog", "llama_token_is_eog")
+        self._token_eos = _required_symbol("llama_vocab_eos", "llama_token_eos")
+        self._token_to_piece = _required_symbol("llama_token_to_piece")
+        self._is_control = _optional_symbol("llama_vocab_is_control")
+        self._get_attr = _optional_symbol("llama_vocab_get_attr", "llama_token_get_attr")
+        self._meta_val_str = _optional_symbol("llama_model_meta_val_str")
+        self._sampler_reset = _optional_symbol("llama_sampler_reset")
 
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int,
                    progress: Callable[[float], None] | None = None):
-        mparams = self.lc.llama_model_default_params()
+        mparams = self.llama_cpp.llama_model_default_params()
         mparams.n_gpu_layers = n_gpu_layers
         if progress is not None:
-            @self.lc.llama_progress_callback
-            def _cb(frac, _user_data):
+            @self.llama_cpp.llama_progress_callback
+            def _report_progress(frac, _user_data):
                 progress(float(frac))
-                # Return True to continue; False aborts the load. A raised
-                # exception is converted by ctypes into a False return, so a
-                # buggy `progress` would abort the load - callers must not raise.
-                return True
-            # llama.cpp holds the callback only as a raw C pointer, so keep a
-            # Python reference alive for the duration of the load or it is GC'd
-            # and the native call jumps into freed memory.
-            self._progress_cb = _cb
-            mparams.progress_callback = _cb
+                return True  # False aborts the load, and so does a raise
+            # Held as a raw C pointer, so a Python reference must outlive the load.
+            self._progress_callback = _report_progress
+            mparams.progress_callback = _report_progress
         model = self._load_model(path.encode("utf-8"), mparams)
         if not model:
             raise RuntimeError(f"failed to load model: {path}")
@@ -122,9 +111,9 @@ class Backend:
 
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool = False, type_k: int | None = None,
-                    type_v: int | None = None, offload_kqv_to_gpu: bool = True,
+                    type_v: int | None = None, kv_cache_on_gpu: bool = True,
                     n_threads_batch: int | None = None):
-        cparams = self.lc.llama_context_default_params()
+        cparams = self.llama_cpp.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
         cparams.n_ubatch = n_batch
@@ -132,12 +121,9 @@ class Backend:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
         if n_threads_batch:
-            # Prefill (batch) threads independently of decode threads: prefill
-            # is compute-bound and brief, so it can use every core even when
-            # decode deliberately leaves some free.
             cparams.n_threads_batch = n_threads_batch
         self._set_flash_attn(cparams, flash_attn)
-        self._set_offload_kqv_to_gpu(cparams, offload_kqv_to_gpu)
+        self._set_kv_cache_on_gpu(cparams, kv_cache_on_gpu)
         if type_k is not None:
             cparams.type_k = type_k
         if type_v is not None:
@@ -147,41 +133,33 @@ class Backend:
             raise RuntimeError("failed to create llama context")
         return ctx
 
-    def _set_offload_kqv_to_gpu(self, cparams, enable: bool) -> None:
-        """Place the KV cache (and the KQV ops) on GPU (``True``) or in host RAM
-        (``False``) via the bool ``offload_kqv`` param (llama.cpp's default:
-        True → VRAM).
+    def _set_kv_cache_on_gpu(self, cparams, enable: bool) -> None:
+        """Place the KV cache in VRAM (``True``) or in host RAM (``False``).
 
-        Keeping the cache in RAM trades generation speed for a large VRAM
-        saving on long contexts.
+        Raises:
+            RuntimeError: If ``False`` is asked of a build with no such param,
+                whose own default is VRAM.
         """
         if hasattr(cparams, "offload_kqv"):
             cparams.offload_kqv = enable
         elif not enable:
-            # No knob leaves llama.cpp at its own default (KV on GPU) which is
-            # exactly what enable=True asks for; only the RAM request (False,
-            # the non-default) is unachievable and must fail loudly.
             raise RuntimeError(
                 "this llama_cpp build exposes no KV-offload context param, so the "
-                "KV cache cannot be kept in RAM (offload_kqv_to_gpu=False)")
+                "KV cache cannot be kept in RAM (kv_cache_on_gpu=False)")
 
     def _set_flash_attn(self, cparams, enable: bool) -> None:
-        """Set flash attention across the param-struct churn.
+        """Set flash attention explicitly, whichever param this build exposes.
 
-        Older builds expose a bool ``flash_attn``; newer ones use a
-        ``flash_attn_type`` enum (DISABLED=0, ENABLED=1, AUTO=-1).
-        Always set explicitly so the build's default (AUTO on newer builds)
-        never silently overrides the caller's intent.
+        Raises:
+            RuntimeError: If ``True`` is asked of a build that has neither param.
         """
         if hasattr(cparams, "flash_attn"):
             cparams.flash_attn = enable
         elif hasattr(cparams, "flash_attn_type"):
             name = ("LLAMA_FLASH_ATTN_TYPE_ENABLED" if enable
                     else "LLAMA_FLASH_ATTN_TYPE_DISABLED")
-            cparams.flash_attn_type = getattr(self.lc, name, 1 if enable else 0)
+            cparams.flash_attn_type = getattr(self.llama_cpp, name, 1 if enable else 0)
         elif enable:
-            # No param means the build predates flash attention, so "off" (the
-            # default, enable=False) already holds; only enabling is unachievable.
             raise RuntimeError(
                 "this llama_cpp build exposes no flash-attention context param")
 
@@ -208,37 +186,33 @@ class Backend:
         self._free_model(model)
 
     def free_context(self, ctx) -> None:
-        self.lc.llama_free(ctx)
+        self.llama_cpp.llama_free(ctx)
 
     # ----- tokenize / detokenize ----------------------------------------
     def tokenize(self, vocab, text: str, add_special: bool,
                  parse_special: bool = True) -> list[int]:
-        """Convert ``text`` to a list of token IDs, optionally prepending a BOS token.
+        """Convert ``text`` to token ids, prepending BOS when ``add_special``.
 
-        ``parse_special`` controls whether special-token text is parsed into its
-        control token: template tags are tokenized with it on so their tags
-        become the right control tokens, while untrusted message content is
-        tokenized with it off so a literal tag in user text becomes ordinary
-        text tokens and cannot forge a turn boundary.
+        ``parse_special`` decides whether tag text resolves to its control
+        token. See the README, "Special tokens in message content".
         """
         raw = text.encode("utf-8")
         n_max = len(raw) + 16
-        buf = (self.lc.llama_token * n_max)()
-        n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
+        buf = (self.llama_cpp.llama_token * n_max)()
+        n = self.llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
         if n < 0:  # buffer too small; n is the negative required size
             n_max = -n
-            buf = (self.lc.llama_token * n_max)()
-            n = self.lc.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
+            buf = (self.llama_cpp.llama_token * n_max)()
+            n = self.llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
             if n < 0:
                 raise RuntimeError(f"llama_tokenize failed: required {-n} tokens")
         return list(buf[:n])
 
     def token_to_piece_bytes(self, vocab, token: int) -> bytes:
-        """Return the raw UTF-8 bytes for ``token`` (may be a partial codepoint).
+        """Return the raw UTF-8 bytes for ``token``, possibly a partial codepoint.
 
-        SentencePiece can split one codepoint across tokens, so callers stream
-        these bytes through an incremental decoder rather than decoding each
-        token in isolation.
+        A codepoint can be split across tokens, so callers stream these bytes
+        through an incremental decoder.
         """
         buf = (ctypes.c_char * 64)()
         n = self._token_to_piece(vocab, token, buf, len(buf), 0, True)
@@ -250,29 +224,31 @@ class Backend:
         return bytes(buf[:n])
 
     def token_to_piece(self, vocab, token: int) -> str:
-        """Decode a single token to text (standalone; not boundary-safe)."""
+        """Decode one token to text. Not safe across a codepoint boundary."""
         return self.token_to_piece_bytes(vocab, token).decode("utf-8", errors="replace")
 
     def is_eog(self, vocab_or_model, token: int) -> bool:
         return bool(self._is_eog(vocab_or_model, token))
 
     def eos_text(self, vocab) -> str:
-        """Rendered text of the end-of-sequence token (e.g. ``<eos>``)."""
+        """Rendered text of the end-of-sequence token."""
         return self.token_to_piece(vocab, self._token_eos(vocab))
 
     def token_eos(self, vocab) -> int:
-        """The end-of-sequence token id (may be negative if the model has none)."""
+        """The end-of-sequence token id, negative where the model has none."""
         return self._token_eos(vocab)
 
     def is_special(self, vocab, token: int) -> bool:
-        """True if ``token`` is a control/special token (rendered, not literal text)."""
+        """Whether the tokenizer resolves ``token`` as a tag rather than as text."""
+        if self._get_attr is not None:
+            return bool(self._get_attr(vocab, token) & self._TAG_ATTRS)
         if self._is_control is None:
             return False
         return bool(self._is_control(vocab, token))
 
     # ----- sampler -------------------------------------------------------
     def sampler_reset(self, sampler) -> None:
-        """Reset sampler-chain state (e.g. the repeat-penalty window), if supported."""
+        """Reset sampler-chain state, such as the penalty window, if supported."""
         if self._sampler_reset is not None:
             self._sampler_reset(sampler)
 
@@ -308,11 +284,10 @@ class Backend:
             raise RuntimeError("no KV-cache seq_add function available in this llama_cpp build")
 
     def can_shift(self, ctx) -> bool:
-        """True if the cache supports in-place position shifting after removal.
+        """Whether the cache supports in-place position shifting after removal.
 
-        False for caches that lose position information when tokens are dropped
-        (e.g. compact sliding-window or recurrent state). When unknown, assume
-        True - the modern handle API only exposes this for caches that need it.
+        ``True`` where the build cannot answer, which is where the question does
+        not arise.
         """
         mem = self._mem(ctx)
         if mem is None or self._mem_can_shift is None:
@@ -324,16 +299,14 @@ class Backend:
                want_logits: bool, n_batch: int) -> None:
         """Prefill ``token_ids`` at positions ``[start_pos, start_pos + n)``.
 
-        Long inputs are split into ``n_batch``-sized decode calls so a single
-        prefill never exceeds the context's batch limit. Logits are requested
-        only on the very last token, and only when generation will follow -
-        injection and history prefill skip them.
+        Chunked into ``n_batch``-sized decode calls. Logits are requested on the
+        last token only, and only when ``want_logits``.
         """
         n = len(token_ids)
         if n == 0:
             return
-        # One batch allocation sized for the largest chunk, reused across chunks.
-        batch = self.lc.llama_batch_init(min(n, n_batch), 0, 1)
+        # One allocation sized for the largest chunk, reused across chunks.
+        batch = self.llama_cpp.llama_batch_init(min(n, n_batch), 0, 1)
         try:
             for off in range(0, n, n_batch):
                 chunk = token_ids[off:off + n_batch]
@@ -347,8 +320,8 @@ class Backend:
                     batch.logits[i] = 0
                 batch.logits[m - 1] = 1 if (want_logits and is_last_chunk) else 0
                 batch.n_tokens = m
-                rc = self.lc.llama_decode(ctx, batch)
+                rc = self.llama_cpp.llama_decode(ctx, batch)
                 if rc != 0:
                     raise RuntimeError(f"llama_decode failed (rc={rc})")
         finally:
-            self.lc.llama_batch_free(batch)
+            self.llama_cpp.llama_batch_free(batch)

@@ -1,6 +1,13 @@
-"""Fragment-extraction tests driven by canned chat-template renderers (no model)."""
+"""Fragment-extraction tests driven by canned chat-template renderers (no model).
 
-from llama_chat.template_extract import extract_fragments
+A renderer that reproduces a real format carries that format's name, because the
+name is what says which shape is covered. One built to exercise a code path
+carries no model's name, because it reproduces none.
+"""
+
+from llama_chat.template import CallBody
+from llama_chat.template_extract import (extract_call_body, extract_fragments,
+                                         extract_tool_fragments)
 
 
 def _gemma_render(messages):
@@ -73,7 +80,7 @@ def _folding_render(messages):
 
 def test_folded_system_falls_back_to_user_tags():
     # No standalone system turn exists, so there is no clean fragment to
-    # recover - the extractor must fall back instead of capturing the user
+    # recover, so the extractor must fall back instead of capturing the user
     # sentinel inside the system suffix.
     f = extract_fragments(_folding_render)
     assert f.system_prefix == f.user_prefix == "<u>"
@@ -81,8 +88,10 @@ def test_folded_system_falls_back_to_user_tags():
 
 
 def _inconsistent_render(messages):
-    """Degenerate template that restructures the user turn in multi-message
-    renders, so the single-message user fragment never reappears."""
+    """Degenerate template whose user turn changes shape in a longer render.
+
+    The single-message user fragment therefore never reappears.
+    """
     if len(messages) == 1:
         return f"<u>{messages[0]['content']}</u>"
     return "".join(f"[{m['role']}]{m['content']}" for m in messages)
@@ -111,3 +120,298 @@ def test_empty_suffix_template_extracts_without_crashing():
     assert f.assistant_suffix == ""
     assert f.system_prefix == "<system>"
     assert f.system_suffix == ""
+
+
+def _quoted_value(value):
+    """Quotes a string argument and emits anything else bare."""
+    return f'<|"|>{value}<|"|>' if isinstance(value, str) else str(value)
+
+
+def _tool_calling_render(messages):
+    """A template with a real system role that puts tool calls on a model turn."""
+    out = []
+    for m in messages:
+        role = "model" if m["role"] == "assistant" else m["role"]
+        out.append(f"<|turn>{role}\n")
+        calls = m.get("tool_calls", ())
+        for call in calls:
+            fn = call["function"]
+            body = ",".join(f"{k}:{_quoted_value(v)}"
+                            for k, v in fn["arguments"].items())
+            out.append(f"<|tool_call>call:{fn['name']}{{{body}}}<tool_call|>")
+        out.append(m["content"].strip())
+        # A call still awaiting its result opens the result block instead of
+        # closing the turn.
+        out.append("<|tool_response>" if calls else "<turn|>\n")
+    return "".join(out)
+
+
+def test_a_tool_calling_template_yields_its_call_tags():
+    tools = extract_fragments(_tool_calling_render).tools
+    assert tools is not None
+    assert tools.call_open == "<|tool_call>call:"
+    # The argument's own text is gone; what is left is the call's closing tag
+    # plus the punctuation every body ends with.
+    assert tools.call_close == "}<tool_call|><|tool_response>"
+
+
+def test_a_template_that_ignores_tool_calls_has_no_tool_fragments():
+    # The canned renderers above build a turn out of `content` alone, which is
+    # exactly what a model without tool support looks like from here.
+    assert extract_fragments(_gemma_render).tools is None
+    assert extract_fragments(_chatml_render).tools is None
+
+
+def test_tool_extraction_does_not_disturb_the_role_fragments():
+    f = extract_fragments(_tool_calling_render)
+    assert f.user_prefix == "<|turn>user\n"
+    assert f.user_suffix == "<turn|>\n"
+    assert f.assistant_prefix == "<|turn>model\n"
+    assert f.system_prefix == "<|turn>system\n"
+
+
+def _untagged_call_render(messages):
+    """Degenerate template with no role tags at all, yet it renders tool calls."""
+    out = []
+    for m in messages:
+        for call in m.get("tool_calls", ()):
+            out.append(f"[call {call['function']['name']}]")
+        out.append(m["content"])
+    return "".join(out)
+
+
+def test_a_call_with_no_locatable_turn_yields_no_tool_fragments():
+    # Nothing marks where the turn holding the call begins, so the call's own
+    # opening cannot be told from the conversation before it.
+    assert extract_fragments(_untagged_call_render).tools is None
+
+
+def _argless_call_render(messages):
+    """Degenerate template that renders a call's name but drops its arguments."""
+    out = []
+    for m in messages:
+        out.append(f"<{m['role']}>")
+        for call in m.get("tool_calls", ()):
+            out.append(f"<c>{call['function']['name']}</c>")
+        out.append(m["content"])
+        out.append(f"</{m['role']}>")
+    return "".join(out)
+
+
+def test_a_template_that_drops_arguments_yields_no_tool_fragments():
+    # Both probes render identically, so their shared ending runs back past the
+    # call and describes the conversation rather than the call's closing tag.
+    assert extract_fragments(_argless_call_render).tools is None
+
+
+def _element_render(messages):
+    """A model that wraps each argument in an element of its own.
+
+    Deliberately unlike the delimited shape above: the name and every key sit
+    inside a tag, and nothing is quoted. What the extractor recovers from this
+    has to differ in every field.
+    """
+    out = []
+    for m in messages:
+        role = "model" if m["role"] == "assistant" else m["role"]
+        out.append(f"<|turn>{role}\n")
+        calls = m.get("tool_calls", ())
+        for call in calls:
+            fn = call["function"]
+            out.append(f"<tool_call>\n<function={fn['name']}>\n")
+            for key, value in fn["arguments"].items():
+                out.append(f"<parameter={key}>\n{value}\n</parameter>\n")
+            out.append("</function>\n</tool_call>")
+        out.append(m["content"].strip())
+        if not calls:
+            out.append("<turn|>\n")
+    return "".join(out)
+
+
+def test_the_call_body_of_a_delimited_model():
+    tools = extract_fragments(_tool_calling_render).tools
+    body = extract_call_body(_tool_calling_render, tools.call_open, "<tool_call|>")
+    assert body == CallBody(name_close="{", key_open="", key_close=":",
+                            pair_sep=",", body_close="}", empty_close="}",
+                            quote_open='<|"|>', quote_close='<|"|>')
+
+
+def test_the_call_body_of_an_element_shaped_model():
+    tools = extract_fragments(_element_render).tools
+    body = extract_call_body(_element_render, tools.call_open, "</tool_call>")
+    # Every field differs from the delimited model's, and nothing is quoted.
+    assert body == CallBody(name_close=">\n<", key_open="parameter=",
+                            key_close=">\n",
+                            pair_sep="\n</parameter>\n<parameter=",
+                            body_close="\n</parameter>\n</function>\n",
+                            empty_close="/function>\n",
+                            quote_open="", quote_close="")
+
+
+def test_a_model_that_renders_no_call_has_no_body_either():
+    tools = extract_fragments(_tool_calling_render).tools
+    # A closing tag this template never emits leaves nothing to measure.
+    assert extract_call_body(_tool_calling_render, tools.call_open, "<nope>") is None
+
+
+# ----- giving up rather than guessing -------------------------------------
+# Each renderer below is a template the probes cannot measure some delimiter
+# from. The extractor has to answer ``None``, because a guess would be written
+# into every prefill for the rest of the conversation.
+def _turn_tags(m, body):
+    """One turn of a delimited model, wrapping ``body`` in the usual tags."""
+    role = "model" if m["role"] == "assistant" else m["role"]
+    return f"<|turn>{role}\n{body}{m['content'].strip()}<turn|>\n"
+
+
+def _no_call_without_arguments_render(messages):
+    """Renders a call only when it has arguments, and nothing when it has none."""
+    out = []
+    for m in messages:
+        body = ""
+        for call in m.get("tool_calls", ()):
+            fn = call["function"]
+            if not fn["arguments"]:
+                continue
+            pairs = ",".join(f"{k}:'{v}'" for k, v in fn["arguments"].items())
+            body += f"<call>fn:{fn['name']}{{{pairs}}}</call>"
+        out.append(_turn_tags(m, body))
+    return "".join(out)
+
+
+def test_a_call_shape_that_vanishes_without_arguments_has_no_body():
+    tools = extract_fragments(_no_call_without_arguments_render).tools
+    assert tools is not None            # the tags are still recoverable
+    # But the no-argument probe renders no call, so `empty_close` cannot be
+    # measured and the whole call_body is refused.
+    assert extract_call_body(_no_call_without_arguments_render,
+                             tools.call_open, "</call>") is None
+
+
+def _nothing_after_the_name_render(messages):
+    """Writes the arguments straight after the name, with no delimiter at all."""
+    out = []
+    for m in messages:
+        body = ""
+        for call in m.get("tool_calls", ()):
+            fn = call["function"]
+            pairs = ",".join(f"{k}={v}" for k, v in fn["arguments"].items())
+            body += f"<call>fn:{fn['name']}{pairs}</call>"
+        out.append(_turn_tags(m, body))
+    return "".join(out)
+
+
+def test_a_name_that_runs_straight_into_its_arguments_has_no_body():
+    tools = extract_fragments(_nothing_after_the_name_render).tools
+    # The one-argument and no-argument renders share nothing after the name, so
+    # there is no `name_close` to find and nothing downstream can be trusted.
+    assert extract_call_body(_nothing_after_the_name_render,
+                             tools.call_open, "</call>") is None
+
+
+def _typed_key_render(messages):
+    """Spells the argument's type into its key, so no two probes agree on it."""
+    out = []
+    for m in messages:
+        body = ""
+        for call in m.get("tool_calls", ()):
+            fn = call["function"]
+            pairs = ",".join(
+                f"{k}:str='{v}'" if isinstance(v, str) else f"{k}:int={v}"
+                for k, v in fn["arguments"].items())
+            body += f"<call>fn:{fn['name']}{{{pairs}}}</call>"
+        out.append(_turn_tags(m, body))
+    return "".join(out)
+
+
+def test_a_key_that_changes_with_the_value_type_has_no_body():
+    tools = extract_fragments(_typed_key_render).tools
+    # The string probe writes `:str=` and the number probe `:int=`, so what
+    # stands between a key and its value cannot be told from the value itself.
+    assert extract_call_body(_typed_key_render, tools.call_open, "</call>") is None
+
+
+def _last_value_only_quoted_render(messages):
+    """Quotes only the final argument, so the quoting is not a fixed delimiter."""
+    out = []
+    for m in messages:
+        body = ""
+        for call in m.get("tool_calls", ()):
+            fn = call["function"]
+            items = list(fn["arguments"].items())
+            pairs = ",".join(
+                f"{k}:'{v}'" if at == len(items) - 1 and isinstance(v, str)
+                else f"{k}:{v}"
+                for at, (k, v) in enumerate(items))
+            body += f"<call>fn:{fn['name']}{{{pairs}}}</call>"
+        out.append(_turn_tags(m, body))
+    return "".join(out)
+
+
+def test_quoting_that_depends_on_position_has_no_body():
+    tools = extract_fragments(_last_value_only_quoted_render).tools
+    # One argument is quoted and the first of two is not, so what follows a
+    # value does not match what separates one value from the next key.
+    assert extract_call_body(_last_value_only_quoted_render,
+                             tools.call_open, "</call>") is None
+
+
+def _no_tool_render(messages):
+    """A template that refuses a message carrying a tool call outright."""
+    if any(m.get("tool_calls") for m in messages):
+        return None
+    return _chatml_render(messages)
+
+
+def test_a_template_that_refuses_tool_calls_has_no_tool_fragments():
+    assert extract_fragments(_no_tool_render).tools is None
+
+
+def _no_padded_render(messages):
+    """A template that refuses content with surrounding whitespace."""
+    if any(m["content"] != m["content"].strip() for m in messages):
+        return None
+    return _chatml_render(messages)
+
+
+def test_a_template_that_refuses_the_trim_probe_is_assumed_to_trim():
+    # Nothing can be measured, and trimming is what most templates do; assuming
+    # verbatim instead would put stray whitespace into every prefill.
+    assert extract_fragments(_no_padded_render).trim_content is True
+
+
+def _dropped_assistant_render(messages):
+    """Drops an assistant turn's content, yet still renders its tool calls.
+
+    The assistant fragment cannot be recovered from a render its sentinel never
+    reaches, so extraction falls back to the user tags, while a call probe
+    still produces a call.
+    """
+    out = []
+    for m in messages:
+        if m["role"] != "assistant":
+            out.append(f"<|turn>{m['role']}\n{m['content'].strip()}<turn|>\n")
+            continue
+        for call in m.get("tool_calls", ()):
+            fn = call["function"]
+            pairs = ",".join(f"{k}:'{v}'" for k, v in fn["arguments"].items())
+            out.append(f"<call>fn:{fn['name']}{{{pairs}}}</call>")
+    return "".join(out)
+
+
+def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
+    """The user tags standing in for a missing assistant tag locate nothing.
+
+    Splitting on them lands in the middle of the conversation, and what came
+    back would open a call with a turn tag rather than with the call's own.
+    """
+    fragments = extract_fragments(_dropped_assistant_render)
+    assert fragments.assistant_prefix == fragments.user_prefix   # it fell back
+    assert fragments.tools is None
+
+    # What the guard prevents: splitting on the substitute reaches back past the
+    # turn boundary, so the recovered opening starts inside the turn before the
+    # call and its first tag is that turn's terminator.
+    unguarded = extract_tool_fragments(_dropped_assistant_render,
+                                       fragments.assistant_prefix)
+    assert unguarded is not None and "<turn|>" in unguarded.call_open

@@ -1,15 +1,16 @@
 """End-to-end demo of the KV-cache manager against a real GGUF model.
 
-Config defaults to Gemma 4; change it to match your model and hardware.
+The model file is given on the command line; the rest of the config defaults
+to a CPU run and can be changed to match your hardware.
 
 Install the package first (see install.sh or README), then run:
 
-    python examples/demo.py /path/to/gemma_4_model.gguf                  # CPU
-    python examples/demo.py /path/to/gemma_4_model.gguf --gpu-layers -1  # GPU
+    python examples/demo.py /path/to/model.gguf                  # CPU
+    python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 
 The demo proves the core claim by logging how many tokens are *prefilled* per
-action: after ``begin`` primes the conversation, each ``request`` prefills only
-its own new prompt - never the surviving history. The eviction stress run uses
+action: after ``begin`` primes the conversation, each ``turn`` prefills only
+its own new prompt, never the surviving history. The eviction stress run uses
 a deliberately tiny context to show the oldest messages being dropped while the
 system prompt survives and the total never crosses ``context_size``.
 """
@@ -55,19 +56,19 @@ def show(w: ChatWrapper) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("model", help="path to a .gguf model")
-    ap.add_argument("--n-ctx", type=int, default=2048)
+    ap.add_argument("--context-size", type=int, default=2048)
     ap.add_argument("--gpu-layers", type=int, default=0)
-    ap.add_argument("--threshold", type=float, default=0.8)
+    ap.add_argument("--evict-above-fraction", type=float, default=0.8)
     args = ap.parse_args()
 
     # ---- Normal conversation: prove only-new-tokens prefill ----
     banner("CONVERSATION (reuse): only new tokens are prefilled per turn")
     cfg = Config(
         model_path=args.model,
-        context_size=args.n_ctx,
-        eviction_threshold=args.threshold,
+        context_size=args.context_size,
+        evict_above_fraction=args.evict_above_fraction,
         gpu_layers=args.gpu_layers,
-        max_tokens=64,
+        max_reply_tokens=64,
     )
     ctx = CountingContext(cfg, on_load_progress=load_bar)
     load_bar(1.0)           # snap to 100% (the loader may report just short) ...
@@ -87,36 +88,36 @@ def main() -> None:
 
     for q in ["What's my name?", "What am I building?", "Suggest one optimization."]:
         before = ctx.prefilled
-        turn = w.request(q)
+        turn = w.turn(q)
         print(f"\n> {q}")
         print(f"  reply: {turn.text.strip()[:200]}")
         print(
             f"  prefilled {ctx.prefilled - before} new tokens "
-            f"(prompt={turn.n_prefilled}, generated={turn.n_generated}, "
-            f"evicted={turn.n_evicted}, stop={turn.stop_reason})"
+            f"(prompt={turn.n_prefilled_tokens}, generated={turn.n_generated_tokens}, "
+            f"evicted={turn.n_evicted_messages}, stop={turn.stop_reason})"
         )
     show(w)
     w.close()
 
     # ---- Eviction stress: tiny context, watch the eviction ----
-    banner("EVICTION STRESS: tiny context - oldest messages get cut, system kept")
+    banner("EVICTION STRESS: a tiny context cuts the oldest messages, system kept")
     small = Config(
         model_path=args.model,
         context_size=512,
-        eviction_threshold=0.5,
+        evict_above_fraction=0.5,
         gpu_layers=args.gpu_layers,
-        max_tokens=32,
+        max_reply_tokens=32,
     )
     sw = ChatWrapper(small, context=KVContext(small))
     sw.begin("You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
-        turn = sw.request(f"Give me fact number {i} about the planet Mars, briefly.")
+        turn = sw.turn(f"Give me fact number {i} about the planet Mars, briefly.")
         roles = [r["role"] for r in sw.snapshot()]
         assert roles[0] == "system", "system prompt was evicted!"
         assert sw.total_tokens <= small.context_size, "context overflow!"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
-            f"messages={len(roles):>2} evicted={turn.n_evicted}"
+            f"messages={len(roles):>2} evicted={turn.n_evicted_messages}"
         )
     show(sw)
     sw.close()

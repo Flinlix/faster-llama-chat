@@ -6,11 +6,11 @@ cache stays in lockstep with the message table.
 
 Two correctness guarantees fall out of this fake:
 
-* ``prefill`` asserts ``start_pos == len(cache)`` - i.e. the wrapper only ever
+* ``prefill`` asserts ``start_pos == len(cache)``, so the wrapper only ever
   *appends*. It never re-prefills survivors. That is the whole point of the
   design, enforced mechanically.
 * After eviction the physical cache equals the concatenation of the surviving
-  messages' tokens - proving remove-and-shift closes the gap correctly.
+  messages' tokens, proving remove-and-shift closes the gap correctly.
 
 Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 ``add_special`` is set. Deterministic and easy to reason about.
@@ -20,23 +20,44 @@ from __future__ import annotations
 
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
-from llama_chat.template import Fragments
+from llama_chat.template import TemplateFragments, ToolCallFragments
 
 BOS = -1
 
-# Gemma-style tags; the default fragments for tests.
-GEMMA_FRAGMENTS = Fragments(
+# Synthetic control tokens, outside the 1:1 char tokenizer's range so they can
+# never be produced by ordinary text.
+TOOL_OPEN, TOOL_CLOSE = -10, -11
+
+# The default fragments for tests. The tags are invented, not any real
+# model's, so nothing can pass by matching a format hard-coded somewhere.
+DEFAULT_FRAGMENTS = TemplateFragments(
     system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
     user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
     assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
     trim_content=True,
 )
 
+# A second model, one that calls tools.
+TOOL_FRAGMENTS = TemplateFragments(
+    system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
+    user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
+    assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
+    trim_content=True,
+    tools=ToolCallFragments(call_open="<call>fn:", call_close="}</call>"),
+)
+
+
+def _fake_value(value):
+    """This fake model quotes a string and emits anything else bare."""
+    return f"'{value}'" if isinstance(value, str) else str(value)
+
 
 class FakeContext:
     def __init__(self, gen_len: int = 5, gen_text: str = "reply",
-                 can_shift: bool = True, fragments: Fragments = GEMMA_FRAGMENTS) -> None:
+                 can_shift: bool = True, fragments: TemplateFragments = DEFAULT_FRAGMENTS) -> None:
         self.cache: list[int] = []
+        # Call bodies this fake model will produce, one per generation.
+        self.call_script: list[str] = []
         self._fragments = fragments
         self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
@@ -64,7 +85,7 @@ class FakeContext:
                 + self.tokenize(content, parse_special=False)
                 + self.tokenize(suffix, parse_special=True))
 
-    def extract_fragments(self) -> Fragments:
+    def extract_fragments(self) -> TemplateFragments:
         return self._fragments
 
     # ----- cache edits ---------------------------------------------------
@@ -90,8 +111,59 @@ class FakeContext:
         del self.cache[ev.remove_start:ev.remove_end]  # remove + implicit shift
         self.evictions.append(ev)
 
-    def generate(self, start_pos: int, n_predict_max: int, stop: list[str],
-                 out: GenerationAccumulator | None = None, cancel=None):
+    def first_special_token(self, text: str) -> int | None:
+        """Resolve this fake model's two tags; everything else is plain text.
+
+        Answering this here is why a wrong criterion in the real backend went
+        unnoticed; `tests/test_backend.py` pins that one directly.
+        """
+        for tag, token in (("<call>", TOOL_OPEN), ("</call>", TOOL_CLOSE)):
+            if tag in text:
+                return token
+        return None
+
+    def token_text(self, token: int) -> str:
+        return {TOOL_OPEN: "<call>", TOOL_CLOSE: "</call>"}.get(token, "")
+
+    def render_with_model_template(self, messages: list[dict],
+                                   tools: list[dict] | None = None) -> str:
+        """Render just enough for the wrapper to slice declarations and results.
+
+        A call leaves its turn open, and the result and the prose after it stay
+        inside that same turn. That is the property the whole exchange rests on,
+        so this fake has to have it too.
+        """
+        out, turn_open = [], False
+        for m in messages:
+            role = "model" if m["role"] == "assistant" else m["role"]
+            if role == "tool":
+                out.append(f"<result>{m['name']}({m['content']})</result>")
+                continue
+            if role == "model" and turn_open:
+                out.append(m["content"].strip())
+                out.append("<turn|>\n")
+                turn_open = False
+                continue
+            out.append(f"<|turn>{role}\n")
+            calls = m.get("tool_calls", ())
+            for call in calls:
+                fn = call["function"]
+                body = ",".join(
+                    f"{k}:{_fake_value(v)}" for k, v in fn["arguments"].items())
+                out.append(f"<call>fn:{fn['name']}{{{body}}}</call>")
+            out.append(m["content"].strip())   # these fragments trim
+            if role == "system":
+                for declared in tools or ():
+                    out.append(f"<decl>{declared['function']['name']}</decl>")
+            if calls:
+                turn_open = True               # the result belongs in this turn
+            else:
+                out.append("<turn|>\n")
+        return "".join(out)
+
+    def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
+                 out: GenerationAccumulator | None = None, cancel=None,
+                 tool_tokens: tuple[int, int] | None = None):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,
@@ -101,26 +173,47 @@ class FakeContext:
         event (checked once per token) and a ``close()`` of the generator.
         """
         assert start_pos == len(self.cache)
-        gen = out if out is not None else GenerationAccumulator()
-        n = max(0, min(self._gen_len, n_predict_max))
+        generated = out if out is not None else GenerationAccumulator()
+        if tool_tokens is not None and self.call_script:
+            yield from self._generate_call(generated, tool_tokens)
+            return generated
+        n = max(0, min(self._gen_len, max_generated_tokens))
         for i in range(n):
             if cancel is not None and cancel.is_set():
-                gen.stop_reason = "interrupted"
+                generated.stop_reason = "interrupted"
                 break
             tok = self._next_gen + i
             self.cache.append(tok)  # decoded into the cache before surfacing text
-            gen.token_ids.append(tok)
+            generated.token_ids.append(tok)
             ch = self._gen_text[i] if i < len(self._gen_text) else "x"
-            gen.text += ch
+            generated.text += ch
             try:
                 yield ch
             except GeneratorExit:
-                gen.stop_reason = "interrupted"
+                generated.stop_reason = "interrupted"
                 raise
         else:
-            gen.stop_reason = "eog" if n == self._gen_len else "length"
+            generated.stop_reason = "end_of_turn" if n == self._gen_len else "token_limit"
         self._next_gen += n
-        return gen
+        return generated
+
+    def _generate_call(self, generated: GenerationAccumulator,
+                       tool_tokens: tuple[int, int]):
+        """Emit the next scripted call: open tag, body, close tag, no deltas.
+
+        Mirrors the real contract: every token reaches the cache, none of the
+        call's text is yielded, and the body lands on ``tool_call`` rather than
+        on ``text``.
+        """
+        body = self.call_script.pop(0)
+        opener, closer = tool_tokens
+        for token in (opener, *range(len(body)), closer):
+            self.cache.append(token)
+            generated.token_ids.append(token)
+        generated.tool_call = body
+        generated.stop_reason = "tool_call"
+        return
+        yield        # a generator either way, so the caller can drive it
 
     def close(self) -> None:
         pass

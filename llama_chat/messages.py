@@ -1,14 +1,9 @@
-"""Message bookkeeping - the single source of truth for the KV cache.
+"""Message bookkeeping: the single source of truth for the KV cache layout.
 
-This module is pure Python with no llama.cpp dependency. The cache for
-sequence 0 holds a contiguous run of token positions ``[0, total)``;
-each message owns a slice and the table below mirrors that layout exactly.
-
-Invariants (asserted after every structural change):
+Invariants, asserted after every structural change:
     * ``messages[0]`` is the system prompt and is never evicted.
-    * ``messages[i].pos_end == messages[i + 1].pos_start`` (no gaps/overlaps;
-      ``pos_end`` is an exclusive upper bound, so there is no overlap).
-    * ``messages[-1].pos_end == total`` (the next decode position).
+    * ``messages[i].pos_end == messages[i + 1].pos_start``.
+    * ``messages[-1].pos_end == total``, the next decode position.
 """
 
 from __future__ import annotations
@@ -23,7 +18,9 @@ class Message:
 
     Attributes:
         role: ``"system"``, ``"user"`` or ``"assistant"``.
-        text: The message text (without template tags).
+        text: What a reader saw: the message text without the template tags. An
+            assistant turn that called a tool leaves out the call and the result
+            it was handed as well, both of which are in ``token_ids``.
         token_ids: The token ids actually decoded into the cache, including the
             template tags. ``len(token_ids)`` equals the slice width.
         pos_start: First cache position owned by this message (inclusive).
@@ -43,11 +40,10 @@ class Message:
 
 @dataclass
 class Eviction:
-    """Describes a physical cache edit so the backend can apply it.
+    """One physical cache edit: remove a token range, then close the gap.
 
-    The backend should remove ``[remove_start, remove_end)`` then shift every
-    surviving token in ``[remove_end, old_total)`` down by ``-shift_delta`` to
-    close the gap.
+    Remove ``[remove_start, remove_end)``, then shift every surviving token in
+    ``[remove_end, old_total)`` down by ``shift_delta``.
 
     Attributes:
         remove_start: Inclusive start of the removed token range.
@@ -66,18 +62,15 @@ class Eviction:
 
 
 class MessageTable:
-    """Ordered list of messages with prefix-sum position bookkeeping.
+    """Ordered messages whose positions are derived, never stored independently.
 
-    Positions are always *derived* from the ordered token counts, so the table
-    cannot drift: any structural change recomputes ``pos_start``/``pos_end`` for
-    every message.
+    Any structural change recomputes ``pos_start``/``pos_end`` for every
+    message, so the table cannot drift from the cache it mirrors.
     """
 
     def __init__(self) -> None:
         self._messages: list[Message] = []
-        # Guards reads against structural changes so a snapshot taken from
-        # another thread is never torn mid-renumber. Reentrant lock: eviction's
-        # ``fits()`` callback re-enters through ``total``.
+        # Reentrant: eviction's ``fits()`` callback re-enters through ``total``.
         self._lock = threading.RLock()
 
     # ----- introspection -------------------------------------------------
@@ -95,14 +88,11 @@ class MessageTable:
     def snapshot_rows(self) -> list[dict]:
         """Return the layout as plain dict rows, read atomically.
 
-        ``text`` is what was submitted. A message truncated to fit the threshold
-        keeps its original text beside the tokens that survived, so the two can
-        disagree; the tokens are what the model saw.
-
         Returns:
             One ``{"role", "text", "n_tokens", "pos_start", "pos_end"}`` dict
-            per message, copied under the lock so positions are mutually
-            consistent even while another thread is restructuring the table.
+            per message, mutually consistent even while another thread is
+            restructuring the table. ``text`` is what was submitted, which a
+            truncated message keeps beside the tokens that survived.
         """
         with self._lock:
             return [
@@ -146,26 +136,24 @@ class MessageTable:
             self._assert_invariants()
             return message
 
-    def extend_last(self, token_ids: list[int]) -> None:
+    def extend_last(self, token_ids: list[int], text: str = "") -> None:
         """Widen the newest message by tokens decoded after it was appended.
 
-        The assistant turn's closing tag is decoded after the post-reply
-        eviction (so that decode absorbs the eviction's pending shift), which
-        means the message is recorded a moment before its last tokens exist.
-        Recording them here keeps the table equal to the cache at every point
-        the two are compared.
+        Raises:
+            IndexError: If there is no message to widen.
         """
         with self._lock:
             msg = self._messages[-1]
             msg.token_ids.extend(token_ids)
+            msg.text += text
             msg.pos_end = msg.pos_start + msg.n_tokens
             self._assert_invariants()
 
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
-        """Drop oldest non-system messages until ``fits()`` (or none remain).
+        """Drop oldest non-system messages until ``fits()``, or none remain.
 
-        The victims are always the contiguous block after the system prompt, so
-        the whole batch collapses to one removed range plus one survivor shift.
+        The victims are the contiguous block after the system prompt, so a whole
+        batch collapses into one removed range and one survivor shift.
 
         Returns:
             The combined :class:`Eviction` (``None`` if nothing was dropped) and
@@ -180,7 +168,7 @@ class MessageTable:
             count = 0
             while not fits() and self.n_evictable > 0:
                 del self._messages[idx]
-                self._renumber()  # cheap bookkeeping; keeps total/fits() correct each iteration
+                self._renumber()  # keeps total and fits() correct each iteration
                 count += 1
             self._assert_invariants()
             eviction = Eviction(
@@ -212,18 +200,23 @@ class MessageTable:
             assert self._messages[-1].pos_end == self.total
 
 
-def fit_newest_first(
-    n_tokens_per_message: list[int], system_tokens: int, budget: int
+def n_newest_that_fit(
+    n_tokens_per_message: list[int], system_tokens: int, budget: int,
+    max_messages: int | None = None,
 ) -> int:
     """Select how many of the most recent messages fit alongside the system prompt.
 
-    Walks the history newest-first, accumulating token counts until adding the
-    next (older) message would exceed ``budget``. The older excess is dropped.
+    Walks the history newest-first, accumulating token counts until the next
+    (older) message would cross ``budget`` or ``max_messages`` are already held.
+    The older excess is dropped. The two limits are independent, so whichever is
+    reached first stops the walk.
 
     Args:
         n_tokens_per_message: Token counts of history messages, oldest first.
         system_tokens: Tokens consumed by the system prompt (always kept).
-        budget: Maximum total tokens allowed (e.g. ``threshold_tokens``).
+        budget: Maximum total tokens allowed (e.g. ``evict_above_tokens``).
+        max_messages: Maximum messages to keep. ``None`` leaves ``budget`` as
+            the only limit.
 
     Returns:
         The number of *trailing* (most recent) messages that fit. Messages
@@ -233,6 +226,8 @@ def fit_newest_first(
     kept = 0
     for n in reversed(n_tokens_per_message):
         if used + n > budget:
+            break
+        if max_messages is not None and kept >= max_messages:
             break
         used += n
         kept += 1
