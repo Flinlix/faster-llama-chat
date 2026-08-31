@@ -6,6 +6,7 @@ nothing here can pass by matching a real model's format.
 """
 
 import json
+import re
 
 import pytest
 
@@ -293,6 +294,39 @@ def test_a_model_without_tool_tags_cannot_call_tools():
 
 def test_a_model_with_tool_tags_can():
     wrapper, _ = _wrapper()
+    assert wrapper.can_call_tools
+
+
+class _ConstantBodyContext(FakeContext):
+    """Tags a caller supplied, over a template that never renders an argument."""
+
+    def render_with_model_template(self, messages, tools=None):
+        rendered = super().render_with_model_template(messages, tools)
+        return re.sub(r"(<call>fn:\w+)\{[^}]*\}", r"\1{}", rendered)
+
+
+def test_tags_without_a_readable_grammar_cannot_call_tools():
+    """The tags resolve, so a call is still detected; nothing runnable comes out.
+
+    Reporting this as callable would only be found out by making a call and
+    getting an empty reply back.
+    """
+    fake = _ConstantBodyContext(fragments=TOOL_FRAGMENTS)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    assert wrapper._call_body is None           # the probes recovered nothing
+    assert not wrapper.can_call_tools
+
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    turn = wrapper.turn("los")
+    assert turn.stop_reason == "unreadable_tool_call"
+    assert turn.text == ""                      # the call never reaches the reply
+
+
+def test_a_supplied_grammar_makes_such_a_model_callable_again():
+    fake = _ConstantBodyContext(fragments=TOOL_FRAGMENTS)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake,
+                          call_body=FAKE)
     assert wrapper.can_call_tools
 
 

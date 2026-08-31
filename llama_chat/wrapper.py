@@ -634,8 +634,15 @@ class ChatWrapper:
 
     @property
     def can_call_tools(self) -> bool:
-        """Whether this model's template describes tool calls at all."""
-        return self._tool_tokens is not None
+        """Whether tools can be used with this model.
+
+        ``False`` where the template describes no call, and where it describes
+        one whose argument spelling the probes could not recover: such a call is
+        still detected, so :attr:`Turn.stop_reason` can still be
+        ``"unreadable_tool_call"``, but nothing runnable comes out of it. Supply
+        the spelling with ``ChatWrapper(call_body=...)`` to make this ``True``.
+        """
+        return self._tool_tokens is not None and self._call_body is not None
 
     @property
     def awaiting_tool_result(self) -> bool:

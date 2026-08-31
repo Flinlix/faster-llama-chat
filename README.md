@@ -278,7 +278,7 @@ None of these touch the cache, and all are safe to call from another thread.
 | `busy` | whether a turn is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
 | `wait_idle(timeout_s=None)` | block until no turn is running; `False` on timeout. Advisory in the same way |
 | `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but a latency cliff the first time history crosses the threshold |
-| `can_call_tools` | whether this model's template describes tool calls |
+| `can_call_tools` | whether tools can be used with this model: its template describes a call *and* the argument spelling was recovered |
 | `awaiting_tool_result` | whether a call is still owed a result |
 | `reply_open` | whether a reply is unfinished, so `turn`, `inject` and `declare_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `continue_stream()` |
 
@@ -561,8 +561,9 @@ for delta in chat.stream_answer("What is the weather in Munich?"):
     print(delta, end="")     # only prose; the calls happen inside
 ```
 
-`chat.can_call_tools` says whether the model can do this at all. A model whose
-template renders no tool call has no tools, and there is nothing to configure.
+`chat.can_call_tools` says whether the model can do this at all. It is `False`
+both for a template that renders no tool call and for one whose argument
+spelling could not be recovered, because neither yields a call you can run.
 
 ### Registering and declaring are two things
 
@@ -719,11 +720,13 @@ A delimiter runs only as far as the probes agree, which is why the element
 column splits `<` off its `<parameter=`: the no-argument render shares that
 character, so it lands in `name_close` rather than in what follows.
 
-Where the format cannot be recovered, the call is still detected, but its body
-is reported as unreadable and the turn closes with
+Where the format cannot be recovered, `can_call_tools` is `False`. The call is
+still detected, so its syntax never reaches the reply text, but its body is
+reported as unreadable and the turn closes with
 `stop_reason == "unreadable_tool_call"`. Nothing is guessed at. For such a model, pass
-the spelling in yourself with `ChatWrapper(call_body=CallBody(...))`, the same
-way `fragments=` covers a template that cannot be read.
+the spelling in yourself with `ChatWrapper(call_body=CallBody(...))`, which makes
+`can_call_tools` `True` again, the same way `fragments=` covers a template that
+cannot be read.
 
 One limit: a model that writes a batch of calls as a JSON array has all of them
 read and each owes a result, but any other shape ends at its closing tag, so
