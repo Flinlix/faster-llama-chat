@@ -280,6 +280,7 @@ None of these touch the cache, and all are safe to call from another thread.
 | `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but a latency cliff the first time history crosses the threshold |
 | `can_call_tools` | whether this model's template describes tool calls |
 | `awaiting_tool_result` | whether a call is still owed a result |
+| `reply_open` | whether a reply is unfinished, so `turn`, `inject` and `declare_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `continue_stream()` |
 
 `snapshot()` copies its rows under the table's own lock, so the positions in a
 row set are always mutually consistent even when another thread is mid-turn.
@@ -647,7 +648,8 @@ already; there is no separate drained form of `stream_events`.
   yourself: answer with `inject_tool_result(name, result)` once per call, in the
   order they were asked, then call `continue_stream()`. The order is enforced,
   because the name is what says which call is being answered.
-  `chat.awaiting_tool_result` says whether anything is still owed.
+  `chat.awaiting_tool_result` says whether anything is still owed, and
+  `chat.reply_open` whether the turn is still open.
 
 `answer` and `stream_answer` return one `Turn` for the whole exchange: the
 counts are sums over every generation, `stop_reason` is the last generation's, and
@@ -664,7 +666,9 @@ it wanted rather than choosing to stop.
 A turn that stopped on a call stays open until `continue_stream()` closes it,
 even once every result is in. Until then `turn`, `inject` and `declare_tools`
 refuse: a message appended there would sit inside a model turn that never ended.
-Finish the turn, or drop it with `begin()`.
+Finish the turn, or drop it with `begin()`. `reply_open` reports that state, and
+it is the one to branch on: `awaiting_tool_result` goes `False` the moment the
+last result lands, while the turn is still open.
 
 **Nothing is evicted while a turn is open**, because evicting would cut into the
 turn being written. A turn that calls several tools therefore grows past both

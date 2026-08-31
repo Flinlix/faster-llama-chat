@@ -558,6 +558,33 @@ def test_a_reset_ends_the_turn_a_call_was_holding_open():
     assert fake.cache == _flatten(wrapper)
 
 
+def test_reply_open_outlasts_the_calls_that_are_owed():
+    """The window the two properties disagree in is the one that refuses work.
+
+    Reading ``awaiting_tool_result`` as "may I start a new turn?" is wrong
+    exactly here, which is why ``reply_open`` answers it instead.
+    """
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.stream_events("wie spät?"))
+    assert wrapper.awaiting_tool_result and wrapper.reply_open
+
+    wrapper.inject_tool_result("clock", {"time": "09:00"})
+    assert not wrapper.awaiting_tool_result     # nothing is owed any more
+    assert wrapper.reply_open                   # but the turn has not closed
+    for action in (lambda: wrapper.turn("weiter"),
+                   lambda: wrapper.inject("kontext"),
+                   lambda: wrapper.declare_tools(
+                       [ToolSpec("x", "d", {"type": "object", "properties": {}})])):
+        with pytest.raises(ValueError, match="while a reply is open"):
+            action()
+
+    list(wrapper.continue_stream())
+    assert not wrapper.reply_open               # closed, and work is allowed again
+    wrapper.turn("weiter")
+
+
 # ----- what the whole exchange reports back -------------------------------
 def test_the_exchange_reports_what_the_reply_alone_cannot():
     """A reply that ended on an unreadable call reads as empty text.

@@ -143,6 +143,10 @@ class PersistentChat:
     def awaiting_tool_result(self) -> bool:
         return self._chat.awaiting_tool_result
 
+    @property
+    def reply_open(self) -> bool:
+        return self._chat.reply_open
+
     # ----- lifecycle -----------------------------------------------------------
     def close(self) -> None:
         self._chat.close()

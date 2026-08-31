@@ -235,6 +235,7 @@ def test_every_delegation_reaches_the_wrapper():
         assert chat.can_shift is False
         assert chat.busy is False
         assert chat.awaiting_tool_result is False
+        assert chat.reply_open is False
         assert chat.total_tokens == inner.total_tokens
         # Distinct values, so forwarding one under another's name shows.
         assert chat.context_size == 800

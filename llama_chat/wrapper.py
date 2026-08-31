@@ -642,6 +642,17 @@ class ChatWrapper:
         """Whether any call is still holding the current turn open."""
         return bool(self._pending_calls)
 
+    @property
+    def reply_open(self) -> bool:
+        """Whether a reply is unfinished, so no new message may be added.
+
+        Outlasts :attr:`awaiting_tool_result`: the last result empties the calls
+        while the turn stays open until :meth:`continue_stream` closes it. While
+        this is ``True``, :meth:`turn`, :meth:`inject` and :meth:`declare_tools`
+        refuse.
+        """
+        return self._reply_open
+
     # ----- lifecycle -----------------------------------------------------------
     def close(self) -> None:
         """Free the underlying context and model. Idempotent and thread-safe.
