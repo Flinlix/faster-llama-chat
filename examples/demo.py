@@ -9,7 +9,7 @@ Install the package first (see install.sh or README), then run:
     python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 
 The demo proves the core claim by logging how many tokens are *prefilled* per
-action: after ``begin`` primes the conversation, each ``turn`` prefills only
+action: after ``begin`` primes the conversation, each ``generate`` prefills only
 its own new prompt, never the surviving history. The eviction stress run uses
 a deliberately tiny context to show the oldest messages being dropped while the
 system prompt survives and the total never crosses ``context_size``.
@@ -62,7 +62,7 @@ def main() -> None:
     args = ap.parse_args()
 
     # ---- Normal conversation: prove only-new-tokens prefill ----
-    banner("CONVERSATION (reuse): only new tokens are prefilled per turn")
+    banner("CONVERSATION (reuse): only new tokens are prefilled")
     cfg = Config(
         model_path=args.model,
         context_size=args.context_size,
@@ -88,13 +88,14 @@ def main() -> None:
 
     for q in ["What's my name?", "What am I building?", "Suggest one optimization."]:
         before = ctx.prefilled
-        turn = w.turn(q)
+        reply = w.generate(q)
         print(f"\n> {q}")
-        print(f"  reply: {turn.text.strip()[:200]}")
+        print(f"  reply: {reply.text.strip()[:200]}")
         print(
             f"  prefilled {ctx.prefilled - before} new tokens "
-            f"(prompt={turn.n_prefilled_tokens}, generated={turn.n_generated_tokens}, "
-            f"evicted={turn.n_evicted_messages}, stop={turn.stop_reason})"
+            f"(prompt={reply.n_prefilled_tokens}, "
+            f"generated={reply.n_generated_tokens}, "
+            f"evicted={reply.n_evicted_messages}, stop={reply.stop_reason})"
         )
     show(w)
     w.close()
@@ -111,13 +112,13 @@ def main() -> None:
     sw = ChatWrapper(small, context=KVContext(small))
     sw.begin("You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
-        turn = sw.turn(f"Give me fact number {i} about the planet Mars, briefly.")
+        reply = sw.generate(f"Give me fact number {i} about the planet Mars, briefly.")
         roles = [r["role"] for r in sw.snapshot()]
         assert roles[0] == "system", "system prompt was evicted!"
         assert sw.total_tokens <= small.context_size, "context overflow!"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
-            f"messages={len(roles):>2} evicted={turn.n_evicted_messages}"
+            f"messages={len(roles):>2} evicted={reply.n_evicted_messages}"
         )
     show(sw)
     sw.close()

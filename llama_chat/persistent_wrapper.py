@@ -12,7 +12,7 @@ from typing import Protocol
 
 from .config import Config
 from .tools import ToolCall, ToolRegistry, ToolSpec
-from .wrapper import ChatWrapper, Turn
+from .wrapper import ChatWrapper, Reply
 
 
 class ConversationStore(Protocol):
@@ -75,28 +75,28 @@ class PersistentChat:
         return self._chat.inject(text, role)
 
     # ----- asking: one generation ----------------------------------------------
-    def stream_turn(self, text: str, **kwargs) -> Generator[str, None, Turn]:
-        return self._chat.stream_turn(text, **kwargs)
+    def generate_stream(self, text: str, **kwargs) -> Generator[str, None, Reply]:
+        return self._chat.generate_stream(text, **kwargs)
 
-    def turn(self, text: str, **kwargs) -> Turn:
-        return self._chat.turn(text, **kwargs)
+    def generate(self, text: str, **kwargs) -> Reply:
+        return self._chat.generate(text, **kwargs)
 
     # ----- asking: until it answers --------------------------------------------
-    def stream_answer(self, text: str, registry: ToolRegistry | None = None,
-                      **kwargs) -> Generator[str, None, Turn]:
-        return self._chat.stream_answer(text, registry, **kwargs)
+    def answer_stream(self, text: str, registry: ToolRegistry | None = None,
+                      **kwargs) -> Generator[str, None, Reply]:
+        return self._chat.answer_stream(text, registry, **kwargs)
 
     def answer(self, text: str, registry: ToolRegistry | None = None,
-               **kwargs) -> Turn:
+               **kwargs) -> Reply:
         return self._chat.answer(text, registry, **kwargs)
 
     # ----- tools: driving the loop yourself ------------------------------------
-    def stream_events(self, text: str,
-                      **kwargs) -> Generator[str | ToolCall, None, Turn]:
-        return self._chat.stream_events(text, **kwargs)
+    def generate_events(self, text: str,
+                      **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        return self._chat.generate_events(text, **kwargs)
 
-    def continue_stream(self, **kwargs) -> Generator[str | ToolCall, None, Turn]:
-        return self._chat.continue_stream(**kwargs)
+    def resume_events(self, **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        return self._chat.resume_events(**kwargs)
 
     def inject_tool_result(self, name: str, result) -> None:
         self._chat.inject_tool_result(name, result)

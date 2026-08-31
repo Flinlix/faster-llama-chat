@@ -19,7 +19,7 @@ model's call format is written down in this library.
   how the policy differs from llama.cpp's built-in context shift.
 - [**Install**](#install): building llama-cpp-python from source for CPU or CUDA.
 - [**Quick start**](#quick-start): the API in a few lines, plus what
-  `begin` / `inject` / `turn` / `stream_turn` each do.
+  `begin` / `inject` / `generate` / `generate_stream` each do.
 - [**Configuration**](#configuration): every `Config` field, with its default.
 - [**How eviction works**](#how-eviction-works): the in-place KV surgery and the
   shift / rebuild strategies.
@@ -27,7 +27,7 @@ model's call format is written down in this library.
 - [**Chat template**](#chat-template): per-role fragments and the load-time
   validation that catches a mismatched template.
 - [**Tool calling**](#tool-calling): registering functions, the loop
-  (`answer` / `stream_answer`) and driving it yourself.
+  (`answer` / `answer_stream`) and driving it yourself.
 - [**Verify**](#verify): running the tests and the real-model demo.
 - [**Layout**](#layout): a file-by-file map of the package.
 
@@ -159,12 +159,12 @@ chat.begin("You are a helpful assistant.",
 # inject: prefill one message as context, WITHOUT generating
 chat.inject("Reference: the deadline is Friday.")
 
-# turn: prefill only the new request text, then generate
-turn = chat.turn("What's the deadline?")
-print(turn.text)
+# generate: prefill only the new request text, then generate
+reply = chat.generate("What's the deadline?")
+print(reply.text)
 
-# stream: same, but yield text deltas as they are generated (low latency).
-for delta in chat.stream_turn("Summarize the plan."):
+# generate_stream: the same, yielding text deltas as they are sampled.
+for delta in chat.generate_stream("Summarize the plan."):
     print(delta, end="", flush=True)
 ```
 
@@ -192,26 +192,26 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   eviction limits. Returns the number of messages evicted. A message that could
   never fit is rejected (or truncated, per `oversize_policy`) *before* anything is
   evicted, so a rejected inject leaves the conversation untouched.
-- **`turn(text)`**: prefills just the request text and generates, evicting
+- **`generate(text)`**: prefills just the request text and generates, evicting
   oldest messages if either limit is crossed and capping generation so the total
-  never exceeds `context_size`. The reply is recorded so the next turn reuses
-  it. Returns a `Turn` (`text`, `n_prefilled_tokens`, `n_generated_tokens`,
+  never exceeds `context_size`. The reply is recorded so the next generation reuses
+  it. Returns a `Reply` (`text`, `n_prefilled_tokens`, `n_generated_tokens`,
   `n_evicted_messages`, `stop_reason`, `tool_calls`). If `min_reply_tokens` is
   set and the prompt would leave less than that for the reply, it raises
   `ContextOverflowError`
   before touching the cache. `max_reply_tokens=` and `stop=` override the config for
   one call; the stop strings are added to the configured ones rather than
   replacing them.
-- **`stream_turn(text)`**: the generator form of `turn`. It yields text
-  deltas as tokens are sampled and returns the same `Turn` summary on completion
+- **`generate_stream(text)`**: the generator form of `generate`. It yields text
+  deltas as tokens are sampled and returns the same `Reply` summary on completion
   (via `StopIteration.value`). Raises `ContextOverflowError` on the same
-  `min_reply_tokens` headroom check as `turn`. Bytes are decoded
+  `min_reply_tokens` headroom check as `generate`. Bytes are decoded
   incrementally, so a UTF-8 codepoint split across tokens is never mangled. Each
   token is committed to the cache *before* its text is surfaced, so abandoning
-  the stream early (barge-in via `gen.close()`) still records exactly the tokens
-  that reached the cache, and the next turn stays valid. To interrupt from
+  the stream early (barge-in via the generator's `close()`) still records exactly the tokens
+  that reached the cache, and the next generation stays valid. To interrupt from
   *another* thread (a generator must only be driven from its consuming thread),
-  pass `stream_turn(text, cancel=event)`: setting the `threading.Event` stops
+  pass `generate_stream(text, cancel=event)`: setting the `threading.Event` stops
   generation within one token and the stream ends normally with
   `stop_reason == "interrupted"`.
 
@@ -228,8 +228,8 @@ are: measure decode throughput on the host once, and set `decode_threads` below
 
 Both stop early if the model emits a tool call, whether or not you declared any:
 the reply ends with `stop_reason == "tool_call"`, the call is on
-`Turn.tool_calls`, and the turn is left **open** so the result can go inside it.
-Until `continue_stream()` closes that turn, `turn`, `inject` and
+`Reply.tool_calls`, and the turn is left **open** so the result can go inside it.
+Until `resume_events()` closes that turn, `generate`, `inject` and
 `declare_tools` refuse; `begin()` discards it. On a model whose template
 describes tool calls this can happen from a hallucinated call tag alone, so a
 caller not using tools should check `stop_reason`. [Tool
@@ -237,7 +237,7 @@ calling](#tool-calling) describes the whole mechanism.
 
 Cache-mutating actions are serialized with a lock, so the wrapper is safe to
 drive from a threaded environment. `close()` (also available via `with
-ChatWrapper(...) as chat:`) waits for any in-flight turn, frees the model, and
+ChatWrapper(...) as chat:`) waits for any in-flight generation, frees the model, and
 makes later actions raise; it is idempotent and thread-safe. It closes a context
 passed to the constructor as well, so a wrapper frees the model either way.
 
@@ -250,9 +250,9 @@ in this order, so the code reads in the order of this table.
 |------|------|
 | **setting up** | `ChatWrapper(model_path=...)`, then `begin(system_prompt, messages, tools)`. Pass `tools=registry` and it is declared and remembered |
 | **adding context** | `inject(text, role="user")`: prefilled, no reply |
-| **asking: one generation** | `turn(text)` drained, `stream_turn(text)` streaming. Stops at a tool call and leaves the turn open, with the call on `Turn.tool_calls` |
-| **asking: until it answers** | `answer(text)` drained, `stream_answer(text)` streaming. Runs whatever the model calls and keeps going until a generation ends without one, so the turn always closes. Returns one `Turn` summing every generation. Needs no tools to exist |
-| **tools: driving the loop yourself** | `stream_events(text)` -> `inject_tool_result(name, result)` -> `continue_stream()`; `declare_tools(specs)` adds one mid-conversation |
+| **asking: one generation** | `generate(text)` drained, `generate_stream(text)` streaming. Stops at a tool call and leaves the turn open, with the call on `Reply.tool_calls` |
+| **asking: until it answers** | `answer(text)` drained, `answer_stream(text)` streaming. Runs whatever the model calls and keeps going until a generation ends without one, so the turn always closes. Returns one `Reply` summing every generation. Needs no tools to exist |
+| **tools: driving the loop yourself** | `generate_events(text)` -> `inject_tool_result(name, result)` -> `resume_events()`; `declare_tools(specs)` adds one mid-conversation |
 | **introspection** | the table below; none of it touches the cache |
 | **lifecycle** | `close()`, or `with ChatWrapper(...) as chat:` |
 
@@ -275,15 +275,15 @@ None of these touch the cache, and all are safe to call from another thread.
 | `evict_above_tokens` | the total above which the oldest messages are evicted, already multiplied out of `evict_above_fraction` |
 | `max_history_messages` | the second eviction trigger, or `None` where the token threshold is the only one |
 | `snapshot()` | the conversation and its cache layout: one `{"role", "text", "n_tokens", "pos_start", "pos_end"}` row per message |
-| `busy` | whether a turn is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
-| `wait_idle(timeout_s=None)` | block until no turn is running; `False` on timeout. Advisory in the same way |
+| `busy` | whether a generation is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
+| `wait_idle(timeout_s=None)` | block until no generation is running; `False` on timeout. Advisory in the same way |
 | `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but a latency cliff the first time history crosses the threshold |
 | `can_call_tools` | whether tools can be used with this model: its template describes a call *and* the argument spelling was recovered |
 | `awaiting_tool_result` | whether a call is still owed a result |
-| `reply_open` | whether a reply is unfinished, so `turn`, `inject` and `declare_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `continue_stream()` |
+| `reply_open` | whether a reply is unfinished, so `generate`, `inject` and `declare_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `resume_events()` |
 
 `snapshot()` copies its rows under the table's own lock, so the positions in a
-row set are always mutually consistent even when another thread is mid-turn.
+row set are always mutually consistent even when another thread is mid-generation.
 `text` is what was submitted: a message truncated to fit the threshold keeps its
 original text beside the tokens that survived, so the two can disagree, and the
 tokens are what the model saw.
@@ -316,7 +316,7 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 | `context_size` | `4096` | The hard limit in tokens: generation never crosses it |
 | `evict_above_fraction` | `0.75` | Fraction of `context_size` above which the oldest messages are evicted. Must be in `(0, 1]` |
 | `max_history_messages` | `None` | The most non-system messages to keep, OR'd with `evict_above_fraction` as a second eviction trigger. Counts one per request, one per reply, one per `inject` and one per `declare_tools`. `None` leaves the token threshold as the only trigger; otherwise `>= 1` |
-| `max_reply_tokens` | `1024` | Cap on tokens generated per turn, capped again so the total stays inside `context_size` |
+| `max_reply_tokens` | `1024` | Cap on tokens per generation, capped again so the total stays inside `context_size` |
 | `oversize_policy` | `"reject"` | What happens to a message that cannot fit even with everything but the system prompt evicted. `"reject"` raises; `"truncate"` clips the content and re-appends the turn-terminator tag, so the clipped turn still closes |
 | `min_reply_tokens` | `32` | Refuse a request with `ContextOverflowError` when fewer than this many tokens would be left for the reply. `0` disables the guard |
 
@@ -387,9 +387,9 @@ re-prefilling them. It does not do that work where you call it: `seq_add` only
 marks the cells as shifted, and the RoPE K-shift over the whole cache is built
 into the graph of the **next** `llama_decode` (the shift is expensive only for
 a quantized cache). That cost is therefore paid by whatever decodes next,
-which is why `stream_turn` decodes the assistant turn's closing tag *after* the
+which is why `generate_stream` decodes the assistant turn's closing tag *after* the
 post-reply eviction rather than before it: a decode the turn performs anyway
-then carries the shift, instead of the next turn's prefill.
+then carries the shift, instead of the next generation's prefill.
 
 This reuse is *lossy* (the survivors' cached K/V were computed
 while attending to the now-removed tokens), which is the standard StreamingLLM
@@ -424,7 +424,7 @@ from llama_chat import PersistentChat, InMemoryStore
 
 chat = PersistentChat(InMemoryStore(), context_size=8192)  # kwargs forward to Config here as well
 chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
-chat.turn("What did we decide last time?")                  # auto-persisted
+chat.generate("What did we decide last time?")                  # auto-persisted
 ```
 
 A store is any object satisfying the `ConversationStore` protocol, which is
@@ -442,7 +442,7 @@ Redis, or files by implementing those two methods. Capture is driven by an optio
 own sink without `PersistentChat` if you prefer.
 
 `PersistentChat` forwards the whole wrapper API, tools included:
-`begin(cid, prompt, tools=registry)`, then `answer` / `stream_answer`, or the
+`begin(cid, prompt, tools=registry)`, then `answer` / `answer_stream`, or the
 manual loop. A call and the result it was given are not messages, so a tool turn
 is persisted exactly like any other: one user entry, one assistant entry holding
 what a reader saw. Declarations are not persisted either: they belong to the
@@ -452,8 +452,8 @@ system turn, which is rebuilt on every `begin`.
 
 The template must match the model, because its turn-terminator is what lets the
 model stop generating. A mismatched template tokenizes as plain text, so the
-model never emits its end-of-turn token and runs to the generation cap every
-turn.
+model never emits its end-of-turn token and runs to the token cap every
+generation.
 
 The template is expressed as per-role **fragments**: the literal text wrapped
 around each message, so one turn renders as `prefix + text + suffix`. Content is
@@ -552,12 +552,12 @@ print(chat.answer("What is the weather in Munich?").text)   # the call runs insi
 
 Handing `begin` the whole registry declares what that registry says should be
 declared and keeps it, so what the model was told about and what can actually
-run cannot drift apart. `answer` is `stream_answer` drained, the way `turn` is
-`stream_turn`; both return a `Turn` whose `text` is the reply. Use
-`stream_answer` where you want the deltas:
+run cannot drift apart. `answer` is `answer_stream` drained, the way `generate` is
+`generate_stream`; both return a `Reply` whose `text` is the reply. Use
+`answer_stream` where you want the deltas:
 
 ```python
-for delta in chat.stream_answer("What is the weather in Munich?"):
+for delta in chat.answer_stream("What is the weather in Munich?"):
     print(delta, end="")     # only prose; the calls happen inside
 ```
 
@@ -612,47 +612,53 @@ it goes on naming a tool whose declaration has since been evicted.
 ### Which entry point does what
 
 All of them keep a tool call out of the reply text, and all of them hand back a
-`Turn`. They differ in how far they carry the exchange and how the call reaches
-you: the last row runs the calls for you, so its `Turn` sums every generation
-of the exchange rather than describing one.
+`Reply`. Two things vary: how far the call is carried, and what the generator
+yields on the way.
 
-| | streaming | drained |
-|------|------|------|
-| one generation, call on the `Turn` | `stream_turn` | `turn` |
-| one generation, call yielded to you | `stream_events` | `turn` |
-| resume a turn a call left open | `continue_stream` | none |
-| until it answers, calls run for you | `stream_answer` | `answer` |
+| how far it carries the exchange | drained | yields text | yields text and calls |
+|------|------|------|------|
+| one generation, which may stop at a call | `generate(text)` | `generate_stream(text)` | `generate_events(text)` |
+| resume the reply a call interrupted | | | `resume_events()` |
+| as many generations as it takes, calls run for you | `answer(text)` | `answer_stream(text)` | |
 
-The last row needs no tools: on a conversation without them the `Turn` is the
-reply and no calls, and a call the model invented is answered saying so rather than raising,
-so the turn still closes. The first two rows are what you reach for when you
-want the `Turn` as well: `n_prefilled_tokens`, `n_generated_tokens`,
+The name says both. The stem is how far it goes: `generate` runs the model once,
+`answer` runs it as often as the tools require, `resume` picks up a reply a call
+left open. The suffix says what comes out: no suffix returns the `Reply`
+directly, `_stream` yields text deltas and returns the `Reply` through
+`StopIteration.value`, `_events` yields those deltas and each `ToolCall` as the
+model asks for it.
+
+The two empty cells are not gaps. `answer` runs the calls itself, so it has
+nothing to surface; and a resumption that ends on another call has to hand that
+call back, which is what an event stream is for.
+
+`answer` needs no tools: on a conversation without them the `Reply` is the reply
+and no calls, and a call the model invented is answered saying so rather than
+raising, so the turn still closes. `generate` is what you reach for when you want
+the counts for one generation: `n_prefilled_tokens`, `n_generated_tokens`,
 `n_evicted_messages`, `stop_reason`.
-
-`turn` fills two cells because the `Turn` it returns carries the calls
-already; there is no separate drained form of `stream_events`.
 
 ### Driving the loop, or driving it yourself
 
-- **`answer(text)`**: `stream_answer` drained, for a caller that does not want
+- **`answer(text)`**: `answer_stream` drained, for a caller that does not want
   the deltas.
-- **`stream_answer(text, registry=None, max_calls=4)`**: the whole loop.
+- **`answer_stream(text, registry=None, max_calls=4)`**: the whole loop.
   Generate, run whatever the model called, feed the results back, and resume
-  until it answers. Yields text deltas and returns the summed `Turn` (via
+  until it answers. Yields text deltas and returns the summed `Reply` (via
   `StopIteration.value`). `max_calls` limits how many tools one turn may use.
   The last round runs with the call tags withheld, so the model cannot ask for
   another one. Without that the limit would stop the loop but not the turn: a
   turn that ends on a call is deliberately left open, so it would never close.
   The registry defaults to the one `begin` was handed.
-- **`stream_events(text)`**: the same generation, yielding `str` deltas and
+- **`generate_events(text)`**: the same generation, yielding `str` deltas and
   then a `ToolCall` for each call the model made. Use this to run the loop
   yourself: answer with `inject_tool_result(name, result)` once per call, in the
-  order they were asked, then call `continue_stream()`. The order is enforced,
+  order they were asked, then call `resume_events()`. The order is enforced,
   because the name is what says which call is being answered.
   `chat.awaiting_tool_result` says whether anything is still owed, and
   `chat.reply_open` whether the turn is still open.
 
-`answer` and `stream_answer` return one `Turn` for the whole exchange: the
+`answer` and `answer_stream` return one `Reply` for the whole exchange: the
 counts are sums over every generation, `stop_reason` is the last generation's, and
 `tool_calls` holds every call the model made in order. `tool_limit_reached` says
 whether `max_calls` ran out, so the final generation ran with the call tokens
@@ -664,8 +670,8 @@ format could not be read from has empty `text`, and only
 nothing. And when `tool_limit_reached` is set, the model was cut off from a tool
 it wanted rather than choosing to stop.
 
-A turn that stopped on a call stays open until `continue_stream()` closes it,
-even once every result is in. Until then `turn`, `inject` and `declare_tools`
+A turn that stopped on a call stays open until `resume_events()` closes it,
+even once every result is in. Until then `generate`, `inject` and `declare_tools`
 refuse: a message appended there would sit inside a model turn that never ended.
 Finish the turn, or drop it with `begin()`. `reply_open` reports that state, and
 it is the one to branch on: `awaiting_tool_result` goes `False` the moment the
@@ -683,7 +689,7 @@ way out.
 
 A call never appears in the reply. Its tokens reach the cache, because the model
 has to see its own call when it reads the turn back, but they are not yielded as
-deltas and not part of `Turn.text`. On a voice pipeline that is the difference
+deltas and not part of `Reply.text`. On a voice pipeline that is the difference
 between a working assistant and one that reads its own function calls aloud.
 
 ### What is recovered, and what happens when it cannot be
@@ -786,7 +792,7 @@ never crosses `context_size`.
 | `llama_chat/_backend.py` | version-stable adapter over `llama_cpp.*` (handles API churn) |
 | `llama_chat/context.py` | `KVContext`: tokenize / prefill / streaming generate / evict |
 | `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`: declaring tools, running them, reading calls back |
-| `llama_chat/wrapper.py` | `ChatWrapper`, `Turn`, `ContextOverflowError`: `begin` / `inject` / `turn` / `stream_turn` / `answer` / `stream_answer` |
+| `llama_chat/wrapper.py` | `ChatWrapper`, `Reply`, `ContextOverflowError`: `begin` / `inject` / `generate` / `generate_stream` / `answer` / `answer_stream` |
 | `llama_chat/persistent_wrapper.py` | `PersistentChat`, `ConversationStore`, `InMemoryStore`: the same API, with every message mirrored to a durable store |
 
 Everything in that table is importable from `llama_chat` itself, apart from the

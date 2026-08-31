@@ -48,7 +48,7 @@ class Config:
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.
-        max_reply_tokens: Cap on tokens generated per turn, capped again so the
+        max_reply_tokens: Cap on tokens per generation, capped again so the
             total stays inside ``context_size``.
         oversize_policy: What happens to a message that cannot fit even with
             everything but the system prompt evicted: ``"reject"`` raises,

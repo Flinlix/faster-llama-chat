@@ -1,8 +1,8 @@
 """ChatWrapper: the public API, prefilling as little as possible.
 
 ``begin`` resets and prefills the system prompt plus what recent history fits;
-``inject`` prefills one message without generating; ``turn`` and ``stream_turn``
-prefill only the new request and then generate. Crossing either eviction limit
+``inject`` prefills one message without generating; ``generate`` and
+``generate_stream`` prefill only the new request and then generate. Crossing either eviction limit
 removes the oldest non-system messages and shifts the survivors down, reusing
 their KV.
 
@@ -41,7 +41,7 @@ class ContextOverflowError(RuntimeError):
 
 
 @dataclass
-class Turn:
+class Reply:
     """What one request produced.
 
     One generation, or, where tools ran, every generation of the exchange:
@@ -175,15 +175,15 @@ class ChatWrapper:
         self._begun = False
         self._warmed = False
         self._closed = False
-        # One KV sequence is shared across turns, so concurrent decodes would
-        # corrupt it. `stream_turn` holds this for the whole turn.
+        # One KV sequence is shared across generations, so concurrent decodes
+        # would corrupt it. `generate_stream` holds this for the whole one.
         self._lock = threading.Lock()
 
     def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None,
               tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
-        The first call also warms the generation graph, so the first ``turn``
+        The first call also warms the generation graph, so the first ``generate``
         streams without a cold start.
 
         Args:
@@ -287,17 +287,17 @@ class ChatWrapper:
             return evicted
 
     # ----- asking: one generation ----------------------------------------------
-    def stream_turn(
+    def generate_stream(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
-    ) -> Generator[str, None, Turn]:
+    ) -> Generator[str, None, Reply]:
         """Add a user request and stream the reply token by token.
 
         Lazy: nothing happens, the headroom check included, until the first
         iteration. Closing the stream early still terminates the turn and
-        records exactly the tokens that reached the cache, so the next turn
-        stays valid; a reply that stopped on a tool call is the exception, its
+        records exactly the tokens that reached the cache, so the next
+        generation stays valid; a reply that stopped on a tool call is the exception, its
         turn being left open on purpose.
 
         The generator must be driven from one thread at a time. To interrupt
@@ -307,7 +307,7 @@ class ChatWrapper:
         Args:
             text: The user request text, tokenized with special-token parsing
                 off. See the README, "Special tokens in message content".
-            max_reply_tokens: Override for the per-turn generation cap.
+            max_reply_tokens: Override for the per-generation cap.
             stop: Extra stop strings for this request, added to the config's.
             cancel: Setting it, from any thread, stops generation within one
                 token and closes the turn with ``stop_reason == "interrupted"``.
@@ -316,7 +316,7 @@ class ChatWrapper:
             Reply text deltas.
 
         Returns:
-            A :class:`Turn` describing the reply and the work performed.
+            A :class:`Reply` describing the reply and the work performed.
 
         Raises:
             ValueError: If a tool call has left a reply open.
@@ -354,18 +354,19 @@ class ChatWrapper:
             if self._on_message:
                 self._on_message("user", text)
 
-            return (yield from self._generate_into_turn(
+            return (yield from self._generate_into_reply(
                 open_tokens=open_tokens, close_tokens=close_tokens,
                 n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
                 cancel=cancel, allow_tools=True))
 
-    def turn(
+    def generate(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
-    ) -> Turn:
-        """Add a user request and generate a reply. :meth:`stream_turn`, drained."""
-        stream = self.stream_turn(text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)
+    ) -> Reply:
+        """Add a user request and generate a reply. :meth:`generate_stream`, drained."""
+        stream = self.generate_stream(text, max_reply_tokens=max_reply_tokens,
+                                      stop=stop, cancel=cancel)
         try:
             while True:
                 next(stream)
@@ -373,13 +374,13 @@ class ChatWrapper:
             return done.value
 
     # ----- asking: until it answers --------------------------------------------
-    def stream_answer(self, text: str, registry: ToolRegistry | None = None, *,
+    def answer_stream(self, text: str, registry: ToolRegistry | None = None, *,
                       max_calls: int = 4,
-                      **kwargs) -> Generator[str, None, Turn]:
+                      **kwargs) -> Generator[str, None, Reply]:
         """Answer ``text``, running whatever tools the model calls on the way.
 
         Yields the reply's text deltas and nothing else, and returns the
-        :class:`Turn` summing every generation. The last permitted round withholds
+        :class:`Reply` summing every generation. The last permitted round withholds
         the call tokens, so the turn always closes.
 
         Args:
@@ -397,16 +398,16 @@ class ChatWrapper:
                 the context. The turn is then open and cannot be continued.
         """
         registry = registry if registry is not None else self._registry
-        events = self.stream_events(text, **kwargs)
+        events = self.generate_events(text, **kwargs)
         calls_left = max_calls
         any_call_asked = False
-        generations: list[Turn] = []
+        generations: list[Reply] = []
         try:
             while True:
                 asked = []
                 while True:
                     # Driven by hand rather than with `for`, which would discard
-                    # the Turn each generation returns.
+                    # the Reply each generation returns.
                     try:
                         event = next(events)
                     except StopIteration as ended:
@@ -436,22 +437,22 @@ class ChatWrapper:
                                   "message": "no tool calls left in this turn; "
                                              f"the limit is {max_calls}"}
                     self.inject_tool_result(call.name, result)
-                events = self.continue_stream(
+                events = self.resume_events(
                     allow_tools=registry is not None and calls_left > 0,
                     **kwargs)
         finally:
             events.close()   # the current generation holds the wrapper's lock
 
     def answer(self, text: str, registry: ToolRegistry | None = None, *,
-               max_calls: int = 4, **kwargs) -> Turn:
+               max_calls: int = 4, **kwargs) -> Reply:
         """Answer ``text``, running whatever tools the model calls.
 
-        :meth:`stream_answer`, drained. Arguments and failures are its own.
+        :meth:`answer_stream`, drained. Arguments and failures are its own.
 
         Returns:
-            A :class:`Turn` summing every generation; the reply is its ``text``.
+            A :class:`Reply` summing every generation; the reply is its ``text``.
         """
-        stream = self.stream_answer(text, registry, max_calls=max_calls, **kwargs)
+        stream = self.answer_stream(text, registry, max_calls=max_calls, **kwargs)
         while True:
             try:
                 next(stream)
@@ -459,20 +460,20 @@ class ChatWrapper:
                 return ended.value
 
     # ----- tools: driving the loop yourself ------------------------------------
-    def stream_events(self, text: str,
-                      **kwargs) -> Generator[str | ToolCall, None, Turn]:
-        """As :meth:`stream_turn`, but yielding tool calls as well as text.
+    def generate_events(self, text: str,
+                      **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        """As :meth:`generate_stream`, but yielding tool calls as well as text.
 
         Yields ``str`` deltas, then one
         :class:`~llama_chat.tools.ToolCall` per call the model made. Answer each
-        with :meth:`inject_tool_result`, in order, then :meth:`continue_stream`.
+        with :meth:`inject_tool_result`, in order, then :meth:`resume_events`.
         """
-        return (yield from _as_events(self.stream_turn(text, **kwargs)))
+        return (yield from _as_events(self.generate_stream(text, **kwargs)))
 
-    def continue_stream(self, **kwargs) -> Generator[str | ToolCall, None, Turn]:
+    def resume_events(self, **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Resume the reply a tool call interrupted.
 
-        Yields events as :meth:`stream_events` does. Every result must be in
+        Yields events as :meth:`generate_events` does. Every result must be in
         first. ``allow_tools=False`` withholds the call tokens, so this generation
         cannot end on another call and the turn is certain to close.
         """
@@ -605,14 +606,14 @@ class ChatWrapper:
 
     @property
     def busy(self) -> bool:
-        """Whether a turn currently holds the wrapper. Advisory: it can be stale."""
+        """Whether a generation holds the wrapper. Advisory: it can be stale."""
         if not self._lock.acquire(blocking=False):
             return True
         self._lock.release()
         return False
 
     def wait_idle(self, timeout_s: float | None = None) -> bool:
-        """Block until no turn holds the wrapper. Advisory, as :attr:`busy` is.
+        """Block until no generation holds the wrapper. Advisory, as :attr:`busy` is.
 
         Args:
             timeout_s: Seconds to wait; ``None`` waits indefinitely.
@@ -628,7 +629,7 @@ class ChatWrapper:
     def snapshot(self) -> list[dict]:
         """Return the conversation and its cache layout, as plain dict rows.
 
-        Safe from any thread, including while another is mid-turn.
+        Safe from any thread, including while another is mid-generation.
         """
         return self._table.snapshot_rows()
 
@@ -638,7 +639,7 @@ class ChatWrapper:
 
         ``False`` where the template describes no call, and where it describes
         one whose argument spelling the probes could not recover: such a call is
-        still detected, so :attr:`Turn.stop_reason` can still be
+        still detected, so :attr:`Reply.stop_reason` can still be
         ``"unreadable_tool_call"``, but nothing runnable comes out of it. Supply
         the spelling with ``ChatWrapper(call_body=...)`` to make this ``True``.
         """
@@ -654,8 +655,8 @@ class ChatWrapper:
         """Whether a reply is unfinished, so no new message may be added.
 
         Outlasts :attr:`awaiting_tool_result`: the last result empties the calls
-        while the turn stays open until :meth:`continue_stream` closes it. While
-        this is ``True``, :meth:`turn`, :meth:`inject` and :meth:`declare_tools`
+        while the turn stays open until :meth:`resume_events` closes it. While
+        this is ``True``, :meth:`generate`, :meth:`inject` and :meth:`declare_tools`
         refuse.
         """
         return self._reply_open
@@ -664,7 +665,7 @@ class ChatWrapper:
     def close(self) -> None:
         """Free the underlying context and model. Idempotent and thread-safe.
 
-        Waits for any in-flight turn. Closes a context passed to the
+        Waits for any in-flight generation. Closes a context passed to the
         constructor as well. Every action after close raises ``RuntimeError``.
         """
         with self._lock:
@@ -691,7 +692,7 @@ class ChatWrapper:
                 raise ValueError(f"{len(self._pending_calls)} call(s) still owe "
                                  f"a result")
             if not self._reply_open:
-                raise ValueError("no reply is open; start one with stream_turn()")
+                raise ValueError("no reply is open; start one with generate_stream()")
             close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
             # See the README, "A resumed turn needs its generation prompt back".
@@ -701,7 +702,7 @@ class ChatWrapper:
                 self._context.prefill(open_tokens, start_pos=self._table.total,
                                   want_logits=True)
                 self._table.extend_last(open_tokens)
-            return (yield from self._generate_into_turn(
+            return (yield from self._generate_into_reply(
                 open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                 allow_tools=allow_tools))
@@ -815,12 +816,13 @@ class ChatWrapper:
         head, _, tail = rendered.partition(_RESULT)
         return head.rsplit(closer, 1)[1], tail.partition(_TAIL)[0]
 
-    def _generate_into_turn(self, *, open_tokens: list[int],
-                            close_tokens: list[int], n_prefilled_tokens: int,
-                            max_reply_tokens: int | None, stop: list[str] | None,
-                            cancel: threading.Event | None,
-                            allow_tools: bool) -> Generator[str, None, Turn]:
-        """Generate from the cache's end and book what it left, as a Turn.
+    def _generate_into_reply(self, *, open_tokens: list[int],
+                             close_tokens: list[int], n_prefilled_tokens: int,
+                             max_reply_tokens: int | None,
+                             stop: list[str] | None,
+                             cancel: threading.Event | None,
+                             allow_tools: bool) -> Generator[str, None, Reply]:
+        """Generate from the cache's end and book what it left, as a Reply.
 
         Shared by a fresh turn, whose generation prompt is prefilled but not yet
         in the table, and a resumed one, which brings none of its own.
@@ -828,8 +830,8 @@ class ChatWrapper:
         Args:
             open_tokens: The generation prompt, empty when resuming.
             close_tokens: The turn terminator, decoded once the turn closes.
-            n_prefilled_tokens: What the caller decoded to get here, for the Turn.
-            max_reply_tokens, stop, cancel: As :meth:`stream_turn`.
+            n_prefilled_tokens: What the caller decoded to get here, for the Reply.
+            max_reply_tokens, stop, cancel: As :meth:`generate_stream`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
         """
@@ -850,7 +852,7 @@ class ChatWrapper:
             n_evicted_messages = self._book_reply(generated, open_tokens,
                                                  close_tokens)
 
-        return Turn(
+        return Reply(
             text=generated.text,
             n_prefilled_tokens=n_prefilled_tokens,
             n_generated_tokens=len(generated.token_ids),
@@ -888,7 +890,7 @@ class ChatWrapper:
         if self._on_message:
             self._on_message("assistant", msg.text)
         # Trim back after the reply, so the cache rests inside both eviction
-        # limits for the next turn (and on barge-in too). The closer counts
+        # limits for the next generation (and on barge-in too). The closer counts
         # against the threshold even though it is decoded after the trim.
         n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
@@ -922,7 +924,7 @@ class ChatWrapper:
             raise ValueError(
                 f"cannot {action} while a reply is open: it stopped on a tool "
                 "call and its turn is unclosed. Finish it with "
-                "continue_stream(), or discard it with begin()."
+                "resume_events(), or discard it with begin()."
             )
 
     def _resolve_fragments(self) -> TemplateFragments:
@@ -941,7 +943,7 @@ class ChatWrapper:
         """Ensure the turn-terminator is a real special token of this model.
 
         A terminator that splits into plain text never lets the model stop, so
-        it would run to the token cap every turn.
+        it would run to the token cap every generation.
         """
         if not hasattr(self._context, "tokenizes_to_special"):
             return
@@ -1069,25 +1071,25 @@ def _as_events(stream):
     The wrapped generator is closed whatever happens, so an early close still
     ends the turn and releases the wrapper's lock.
     """
-    turn = None
+    reply = None
     try:
         while True:
             try:
                 delta = next(stream)
             except StopIteration as done:
-                turn = done.value
+                reply = done.value
                 break
             yield delta
     finally:
         stream.close()
-    for call in turn.tool_calls:
+    for call in reply.tool_calls:
         yield call
-    return turn
+    return reply
 
 
-def _sum_generations(generations: list[Turn], tool_limit_reached: bool) -> Turn:
-    """Sum the generations of one exchange into the Turn that describes it."""
-    return Turn(
+def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:
+    """Sum the generations of one exchange into the Reply that describes it."""
+    return Reply(
         text="".join(t.text for t in generations),
         n_prefilled_tokens=sum(t.n_prefilled_tokens for t in generations),
         n_generated_tokens=sum(t.n_generated_tokens for t in generations),

@@ -113,34 +113,34 @@ def test_inject_evicts_oldest_to_fit():
     _assert_consistent(w, fake)
 
 
-# ----- request -----------------------------------------------------------
-def test_request_prefills_only_new_tokens_and_reuses_context():
+# ----- generate ----------------------------------------------------------
+def test_generate_prefills_only_new_tokens_and_reuses_context():
     fake = FakeContext(gen_len=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0, max_reply_tokens=50), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "hello")])
     prefilled_after_begin = fake.total_prefilled()
 
-    turn = w.turn("what's up?")
+    reply = w.generate("what's up?")
 
     # The only new prefill is the request prompt (user fragment + assistant-open)
     # plus the turn-closing tag, never any survivor.
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
     new_prefill = fake.total_prefilled() - prefilled_after_begin
-    assert new_prefill == turn.n_prefilled_tokens + close_len
-    assert turn.n_generated_tokens == 4
-    assert turn.stop_reason == "end_of_turn"
+    assert new_prefill == reply.n_prefilled_tokens + close_len
+    assert reply.n_generated_tokens == 4
+    assert reply.stop_reason == "end_of_turn"
     # Assistant turn recorded for reuse next turn.
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
 
 
-def test_request_prompt_is_one_decode():
-    """The prompt reaches llama.cpp in a single call, closer aside.
+def test_the_request_and_its_opening_tag_are_one_decode():
+    """The prompt reaches the context in a single decode, closer aside.
 
     The request text and the assistant-open tag used to be two prefills, each
-    paying llama.cpp's per-decode fixed overhead on the one prefill a user is
-    actually waiting through. Splitting them again would be invisible to every
-    other assertion here, so it gets its own.
+    paying a decode's fixed overhead on the one prefill a user is actually
+    waiting through. Splitting them again would be invisible to every other
+    assertion here, so it gets its own.
     """
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
@@ -148,48 +148,48 @@ def test_request_prompt_is_one_decode():
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
     mark = len(fake.prefill_calls)
 
-    turn = w.turn("hi")
+    reply = w.generate("hi")
 
     prompt_call, close_call = fake.prefill_calls[mark:]
-    assert prompt_call[1] == turn.n_prefilled_tokens     # user fragment + assistant-open
+    assert prompt_call[1] == reply.n_prefilled_tokens     # user fragment + assistant-open
     assert prompt_call[2] is True                 # logits: generation follows
     assert close_call[1] == close_len             # the closer, decoded last
     assert close_call[2] is False
     _assert_consistent(w, fake)
 
 
-def test_second_request_does_not_reprefill_history():
+def test_a_second_generation_does_not_reprefill_history():
     fake = FakeContext(gen_len=3)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    w.turn("first")
+    w.generate("first")
     mark = fake.total_prefilled()
-    turn = w.turn("second")
-    # Second turn only prefills its own prompt + closer; the FakeContext's
+    reply = w.generate("second")
+    # The second generation prefills only its own prompt and closer; the fake's
     # append-only assertion already guarantees no survivor was re-prefilled.
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
-    assert fake.total_prefilled() - mark == turn.n_prefilled_tokens + close_len
+    assert fake.total_prefilled() - mark == reply.n_prefilled_tokens + close_len
     _assert_consistent(w, fake)
 
 
 # ----- streaming ---------------------------------------------------------
-def test_stream_yields_incremental_deltas():
+def test_generate_stream_yields_incremental_deltas():
     fake = FakeContext(gen_len=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    deltas = list(w.stream_turn("hi"))
+    deltas = list(w.generate_stream("hi"))
     assert "".join(deltas) == "abcd"
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
 
 
-def test_request_drains_stream_and_returns_turn():
+def test_generate_drains_generate_stream_and_returns_the_reply():
     fake = FakeContext(gen_len=3, gen_text="xyz")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    turn = w.turn("hi")
-    assert turn.text == "xyz"
-    assert turn.n_generated_tokens == 3
+    reply = w.generate("hi")
+    assert reply.text == "xyz"
+    assert reply.n_generated_tokens == 3
     _assert_consistent(w, fake)
 
 
@@ -199,7 +199,7 @@ def test_bargein_keeps_cache_consistent():
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
 
-    stream = w.stream_turn("hi")
+    stream = w.generate_stream("hi")
     first = next(stream)
     assert first == "a"
     stream.close()  # barge-in: stop early
@@ -209,9 +209,9 @@ def test_bargein_keeps_cache_consistent():
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
 
-    # A following turn proceeds normally on the consistent cache.
-    turn = w.turn("again")
-    assert turn.stop_reason == "end_of_turn"
+    # A following generation proceeds normally on the consistent cache.
+    reply = w.generate("again")
+    assert reply.stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
 
@@ -221,34 +221,34 @@ def test_cancel_event_interrupts_midstream():
     w.begin("s")
 
     cancel = threading.Event()
-    stream = w.stream_turn("hi", cancel=cancel)
+    stream = w.generate_stream("hi", cancel=cancel)
     assert next(stream) == "a"
     cancel.set()  # e.g. from another thread (barge-in)
     try:
         while True:
             next(stream)
     except StopIteration as done:
-        turn = done.value
+        reply = done.value
 
-    # The stream ends normally, so the Turn is delivered, unlike stream.close().
-    assert turn.stop_reason == "interrupted"
-    assert turn.n_generated_tokens == 1
+    # The stream ends normally, so the Reply is delivered, unlike stream.close().
+    assert reply.stop_reason == "interrupted"
+    assert reply.n_generated_tokens == 1
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
-    # The spent event is scoped to that call; the next turn runs normally.
-    assert w.turn("again").stop_reason == "end_of_turn"
+    # The spent event is scoped to that call; the next generation runs normally.
+    assert w.generate("again").stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
 
-def test_cancel_set_before_start_yields_empty_interrupted_turn():
+def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     fake = FakeContext(gen_len=5)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     cancel = threading.Event()
     cancel.set()
-    turn = w.turn("hi", cancel=cancel)
-    assert turn.stop_reason == "interrupted"
-    assert turn.n_generated_tokens == 0
+    reply = w.generate("hi", cancel=cancel)
+    assert reply.stop_reason == "interrupted"
+    assert reply.n_generated_tokens == 0
     # The empty assistant turn is still closed cleanly and recorded.
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
@@ -283,7 +283,7 @@ def test_close_after_stop_hit_keeps_stop_reason():
 
 
 def test_generator_close_marks_interrupted():
-    # stream.close() records the same stop reason on the accumulator (the Turn
+    # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).
     from llama_chat.context import GenerationAccumulator
 
@@ -295,36 +295,36 @@ def test_generator_close_marks_interrupted():
     assert acc.stop_reason == "interrupted"
 
 
-def test_request_caps_generation_to_context_size():
+def test_generation_is_capped_to_the_context_size():
     fake = FakeContext(gen_len=100)  # would generate 100 if uncapped
     w = ChatWrapper(_config(context_size=110, evict_above_fraction=1.0, max_reply_tokens=100), context=fake)
     w.begin("s")
-    turn = w.turn("hello")
+    reply = w.generate("hello")
     assert w.total_tokens <= 110
-    assert turn.n_generated_tokens < 100
+    assert reply.n_generated_tokens < 100
     _assert_consistent(w, fake)
 
 
-def test_request_evicts_then_stays_within_context():
+def test_generate_evicts_then_stays_within_context():
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.turn(f"message number {i} with some length")
+        w.generate(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"
         assert w.total_tokens <= w._config.context_size
         _assert_consistent(w, fake)
 
 
-def test_request_rests_under_threshold_after_turn():
+def test_the_cache_rests_under_the_threshold_after_a_generation():
     # The reply is appended first, then older turns are trimmed, so the cache
-    # rests at or below threshold once the turn returns.
+    # rests at or below threshold once the generation returns.
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.turn(f"message number {i} with some length")
+        w.generate(f"message number {i} with some length")
         assert w.total_tokens <= w._config.evict_above_tokens  # rests under threshold
         assert w.snapshot()[0]["role"] == "system"        # system survives
         assert w.snapshot()[-1]["role"] == "assistant"    # newest turn kept
@@ -332,9 +332,10 @@ def test_request_rests_under_threshold_after_turn():
 
 
 def test_turn_closes_after_the_eviction_not_before():
-    # llama.cpp applies an eviction's K-shift on the next decode, so the closer
-    # is decoded last: that decode absorbs the shift instead of leaving it for
-    # the next turn's prefill. Ordering is the whole point, hence the assertion.
+    # An eviction's K-shift lands on whatever decodes next, so the closer is
+    # decoded last and carries it instead of the next generation's prefill.
+    # Ordering is the whole point, hence the assertion. See the README,
+    # "How eviction works".
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
@@ -342,8 +343,8 @@ def test_turn_closes_after_the_eviction_not_before():
     evicting = 0
     for i in range(8):
         n_evictions = len(fake.evictions)
-        turn = w.turn(f"message number {i} with some length")
-        if turn.n_evicted_messages:
+        reply = w.generate(f"message number {i} with some length")
+        if reply.n_evicted_messages:
             evicting += 1
             # The eviction landed, and the closer is the turn's last prefill.
             assert len(fake.evictions) > n_evictions
@@ -363,7 +364,7 @@ def test_rebuild_mode_does_not_decode_the_closer_twice():
     rebuilt = 0
     for i in range(8):
         before = fake.rebuilds
-        w.turn(f"message number {i} with some length")
+        w.generate(f"message number {i} with some length")
         rebuilt += fake.rebuilds > before
         _assert_consistent(w, fake)          # would double-count the closer
     assert rebuilt
@@ -375,13 +376,13 @@ def _n_kept(wrapper):
     return len(wrapper.snapshot()) - 1
 
 
-def test_a_turn_evicts_down_to_the_message_limit():
+def test_a_generation_evicts_down_to_the_message_limit():
     # Far under the token threshold, so the message count is the only trigger.
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=4), context=fake)
     w.begin("s")
     for i in range(8):
-        w.turn(f"q{i}")
+        w.generate(f"q{i}")
         assert _n_kept(w) <= 4
         assert w.total_tokens < w._config.evict_above_tokens  # the tokens never bound
         assert w.snapshot()[0]["role"] == "system"       # system still survives
@@ -397,7 +398,7 @@ def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
         w = ChatWrapper(_config(context_size=400, **limits), context=fake)
         w.begin("s")
         for i in range(8):
-            w.turn(f"message number {i} with some length")
+            w.generate(f"message number {i} with some length")
         _assert_consistent(w, fake)
         return _n_kept(w)
 
@@ -414,7 +415,7 @@ def test_a_limit_that_never_binds_changes_nothing():
                         context=fake)
         w.begin("s")
         for i in range(8):
-            w.turn(f"message number {i} with some length")
+            w.generate(f"message number {i} with some length")
         return w.snapshot()
 
     assert snapshot_under() == snapshot_under(max_history_messages=100)
@@ -449,7 +450,7 @@ def test_a_limit_of_one_keeps_the_newest_message_and_the_system_prompt():
     w = ChatWrapper(_config(context_size=4000, max_history_messages=1), context=fake)
     w.begin("s")
     for i in range(3):
-        w.turn(f"q{i}")
+        w.generate(f"q{i}")
         assert [r["role"] for r in w.snapshot()] == ["system", "assistant"]
         _assert_consistent(w, fake)
 
@@ -463,7 +464,7 @@ def test_the_limit_holds_across_every_action_that_appends():
     for i in range(6):
         w.inject(f"context {i}")
         assert _n_kept(w) <= 3
-        w.turn(f"q{i}")
+        w.generate(f"q{i}")
         assert _n_kept(w) <= 3
         assert w.snapshot()[0]["role"] == "system"
         _assert_consistent(w, fake)
@@ -476,7 +477,7 @@ def test_eviction_shift_mode_does_not_rebuild():
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds  # begin() resets once
     for i in range(8):
-        w.turn(f"message number {i} with some length")
+        w.generate(f"message number {i} with some length")
     assert len(fake.evictions) > 0          # eviction did happen
     assert fake.rebuilds == rebuilds_after_begin  # but never via rebuild
     _assert_consistent(w, fake)
@@ -489,7 +490,7 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds
     for i in range(8):
-        w.turn(f"message number {i} with some length")
+        w.generate(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"             # system survives
         assert w.total_tokens <= w._config.context_size   # never overflows
@@ -582,16 +583,16 @@ def test_close_is_idempotent_and_blocks_actions():
     with pytest.raises(RuntimeError, match="closed"):
         w.inject("ctx")
     with pytest.raises(RuntimeError, match="closed"):
-        w.turn("hi")
+        w.generate("hi")
 
 
 def test_context_manager_closes_on_exit():
     fake = FakeContext(gen_len=2)
     with ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
         w.begin("s")
-        w.turn("hi")
+        w.generate("hi")
     with pytest.raises(RuntimeError, match="closed"):
-        w.turn("again")
+        w.generate("again")
 
 
 # ----- template formatting -----------------------------------------------
@@ -664,8 +665,8 @@ def test_content_is_tokenized_with_special_parsing_off():
     ]
 
 
-# ----- min-answer headroom guard -----------------------------------------
-def test_request_refuses_when_too_little_room_to_answer():
+# ----- min-reply headroom guard ------------------------------------------
+def test_generate_refuses_when_too_little_room_to_reply():
     fake = FakeContext(gen_len=2)
     # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
     w = ChatWrapper(
@@ -673,20 +674,20 @@ def test_request_refuses_when_too_little_room_to_answer():
     )
     w.begin("s")
     with pytest.raises(ContextOverflowError):
-        w.turn("hello")
+        w.generate("hello")
     # The refused request never touched the cache.
     assert w.snapshot()[-1]["role"] == "system"
     _assert_consistent(w, fake)
 
 
-def test_request_proceeds_when_headroom_sufficient():
+def test_generate_proceeds_when_headroom_is_sufficient():
     fake = FakeContext(gen_len=2)
     w = ChatWrapper(
         _config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=10), context=fake
     )
     w.begin("s")
-    turn = w.turn("hello")
-    assert turn.n_generated_tokens == 2
+    reply = w.generate("hello")
+    assert reply.n_generated_tokens == 2
     _assert_consistent(w, fake)
 
 
@@ -920,22 +921,22 @@ def test_wait_idle_is_true_when_nothing_holds_the_wrapper():
     assert w.wait_idle(timeout_s=0.1) is True
 
 
-def test_wait_idle_blocks_until_a_turn_releases_the_lock():
+def test_wait_idle_blocks_until_a_generation_releases_the_lock():
     fake = FakeContext(gen_len=3, gen_text="abc")
     w = ChatWrapper(_config(context_size=200), context=fake)
     w.begin("sys")
 
     entered, release = threading.Event(), threading.Event()
 
-    def turn():
-        stream = w.stream_turn("hi")
+    def generate():
+        stream = w.generate_stream("hi")
         next(stream)                 # takes the lock inside the generator body
         entered.set()
         release.wait(5)
         for _ in stream:
             pass
 
-    t = threading.Thread(target=turn, daemon=True)
+    t = threading.Thread(target=generate, daemon=True)
     t.start()
     entered.wait(5)
 
@@ -956,7 +957,7 @@ def test_a_formatter_factory_customises_how_generation_opens():
     fake = FakeContext()
     w = ChatWrapper(_config(context_size=200), context=fake, formatter=NoThink)
     w.begin("sys")
-    w.turn("hi")
+    w.generate("hi")
     # The suffix is really tokenized into the generation prompt ...
     assert any("<empty/>" in text for text, _special in fake.tokenize_calls)
     # ... and only there: the history-wrapping fragments are untouched, so the

@@ -253,7 +253,7 @@ class KVContext:
             out: Accumulator to fill. Pass one in to read what reached the cache
                 after abandoning the stream; a fresh one is used otherwise.
             cancel: Checked once per token. Setting it, from any thread, ends
-                the turn with ``stop_reason == "interrupted"``.
+                the generation with ``stop_reason == "interrupted"``.
             tool_tokens: The ``(open, close)`` tokens bracketing a tool call.
                 Given them, a call is recognized at its opening token, none of
                 it is yielded, and generation ends on the closing token with
