@@ -271,6 +271,9 @@ None of these touch the cache, and all are safe to call from another thread.
 | | |
 |------|------|
 | `total_tokens` | how many tokens the cache currently holds |
+| `context_size` | the hard limit those tokens count against |
+| `evict_above_tokens` | the total above which the oldest messages are evicted, already multiplied out of `evict_above_fraction` |
+| `max_history_messages` | the second eviction trigger, or `None` where the token threshold is the only one |
 | `snapshot()` | the conversation and its cache layout: one `{"role", "text", "n_tokens", "pos_start", "pos_end"}` row per message |
 | `busy` | whether a turn is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
 | `wait_idle(timeout_s=None)` | block until no turn is running; `False` on timeout. Advisory in the same way |

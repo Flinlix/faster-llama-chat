@@ -110,6 +110,18 @@ class PersistentChat:
         return self._chat.total_tokens
 
     @property
+    def context_size(self) -> int:
+        return self._chat.context_size
+
+    @property
+    def evict_above_tokens(self) -> int:
+        return self._chat.evict_above_tokens
+
+    @property
+    def max_history_messages(self) -> int | None:
+        return self._chat.max_history_messages
+
+    @property
     def can_shift(self) -> bool:
         return self._chat.can_shift
 

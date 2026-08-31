@@ -236,6 +236,10 @@ def test_every_delegation_reaches_the_wrapper():
         assert chat.busy is False
         assert chat.awaiting_tool_result is False
         assert chat.total_tokens == inner.total_tokens
+        # Distinct values, so forwarding one under another's name shows.
+        assert chat.context_size == 800
+        assert chat.evict_above_tokens == 600
+        assert chat.max_history_messages is None
 
         # A timeout that is actually forwarded gives up while the lock is held.
         held = threading.Event()

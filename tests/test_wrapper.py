@@ -888,6 +888,32 @@ def test_can_shift_reports_the_contexts_capability():
     assert ChatWrapper(_config(), context=FakeContext(can_shift=False)).can_shift is False
 
 
+def test_the_eviction_limits_are_readable_beside_the_total():
+    """total_tokens alone has no denominator, and kwargs hand back no Config."""
+    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS,
+                    context_size=800, evict_above_fraction=0.5,
+                    max_history_messages=7)
+    assert w.context_size == 800
+    # Multiplied out, so a caller does not redo the arithmetic to know the trigger.
+    assert w.evict_above_tokens == 400
+    assert w.max_history_messages == 7
+
+
+def test_no_message_limit_reads_back_as_none():
+    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS)
+    assert w.max_history_messages is None
+
+
+def test_the_limits_cannot_be_assigned_through_the_wrapper():
+    """Assignment would not reach the context, already built with the old size."""
+    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS,
+                    context_size=800)
+    for name in ("context_size", "evict_above_tokens", "max_history_messages"):
+        with pytest.raises(AttributeError):
+            setattr(w, name, 99)
+    assert w.context_size == 800
+
+
 def test_wait_idle_is_true_when_nothing_holds_the_wrapper():
     w = ChatWrapper(_config(context_size=200), context=FakeContext())
     assert w.busy is False

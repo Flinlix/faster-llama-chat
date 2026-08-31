@@ -580,6 +580,21 @@ class ChatWrapper:
         return self._table.total
 
     @property
+    def context_size(self) -> int:
+        """The hard limit in tokens, which :attr:`total_tokens` counts against."""
+        return self._config.context_size
+
+    @property
+    def evict_above_tokens(self) -> int:
+        """The total above which the oldest messages are evicted."""
+        return self._config.evict_above_tokens
+
+    @property
+    def max_history_messages(self) -> int | None:
+        """The most non-system messages kept, or ``None`` for no message limit."""
+        return self._config.max_history_messages
+
+    @property
     def can_shift(self) -> bool:
         """Whether eviction can shift surviving KV in place.
 
