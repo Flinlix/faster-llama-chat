@@ -141,6 +141,12 @@ def extract_call_body(render: Render, call_open: str,
                                                                   _KEY2: _STRING2})
     if any(r is None or _TOOL not in r for r in (empty, text, number, pair)):
         return None
+    # The sentinels the splits below index on. A template that drops one proves
+    # nothing about the delimiter that would have surrounded it.
+    if (_KEY not in text or _STRING not in text
+            or _KEY not in number or str(_NUMBER) not in number
+            or _STRING not in pair or _KEY2 not in pair):
+        return None
 
     # After the name: as far as the one-argument and the no-argument renders
     # agree. Past that they diverge into the first argument and into the end.

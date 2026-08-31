@@ -5,8 +5,12 @@ name is what says which shape is covered. One built to exercise a code path
 carries no model's name, because it reproduces none.
 """
 
+import itertools
+
 from llama_chat.template import CallBody
-from llama_chat.template_extract import (extract_call_body, extract_fragments,
+from llama_chat.template_extract import (_KEY, _KEY2, _NUMBER, _STRING,
+                                         _STRING2, _TOOL, extract_call_body,
+                                         extract_fragments,
                                          extract_tool_fragments)
 
 
@@ -309,6 +313,35 @@ def test_a_name_that_runs_straight_into_its_arguments_has_no_body():
                              tools.call_open, "</call>") is None
 
 
+def _constant_body_render(messages):
+    """Renders a fixed ``{}`` whatever the arguments, so no key ever appears.
+
+    What a template does when it reads the arguments from a field the caller
+    did not populate: the braces survive, the keys never do.
+    """
+    out = []
+    for m in messages:
+        body = ""
+        for call in m.get("tool_calls", ()):
+            body += f"<call>fn:{call['function']['name']}{{}}</call>"
+        out.append(_turn_tags(m, body))
+    return "".join(out)
+
+
+def test_a_body_that_never_shows_a_key_has_no_body():
+    """Reached when the tags are supplied rather than extracted.
+
+    ``extract_tool_fragments`` refuses this template itself, so the tags come
+    from ``ChatWrapper(fragments=...)`` and the body probes run against a
+    template they were never screened for.
+    """
+    assert extract_fragments(_constant_body_render).tools is None
+    # `{}` is common to both probes, so `name_close` is found and its guard
+    # passes; the keys the splits below index on are still absent. Refused
+    # rather than indexed off the end.
+    assert extract_call_body(_constant_body_render, "<call>fn:", "</call>") is None
+
+
 def _typed_key_render(messages):
     """Spells the argument's type into its key, so no two probes agree on it."""
     out = []
@@ -415,3 +448,43 @@ def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
     unguarded = extract_tool_fragments(_dropped_assistant_render,
                                        fragments.assistant_prefix)
     assert unguarded is not None and "<turn|>" in unguarded.call_open
+
+
+# The sentinels a render can drop, and the text each appears as.
+_SENTINELS = {"name": _TOOL, "key": _KEY, "key2": _KEY2,
+              "string": _STRING, "string2": _STRING2, "number": str(_NUMBER)}
+
+
+def _degenerate_render(dropped, constant_body):
+    """A delimited render with ``dropped`` sentinels deleted from every call."""
+    def render(messages, tools=None):
+        out = []
+        for m in messages:
+            body = ""
+            for call in m.get("tool_calls", ()):
+                fn = call["function"]
+                pairs = "" if constant_body else ",".join(
+                    f"{k}:{v!r}" if isinstance(v, str) else f"{k}:{v}"
+                    for k, v in fn["arguments"].items())
+                text = f"<call>fn:{fn['name']}{{{pairs}}}</call>"
+                for sentinel in dropped:
+                    text = text.replace(_SENTINELS[sentinel], "")
+                body += text
+            out.append(_turn_tags(m, body))
+        return "".join(out)
+    return render
+
+
+def test_no_render_makes_body_extraction_raise():
+    """Refusing is the only failure; a template cannot crash construction.
+
+    Every subset of the sentinels a template might drop, against both a
+    rendered and a constant body. Before the guard on them, some of these
+    indexed off the end of a split instead of returning None.
+    """
+    for size in range(len(_SENTINELS) + 1):
+        for dropped in itertools.combinations(_SENTINELS, size):
+            for constant_body in (False, True):
+                render = _degenerate_render(dropped, constant_body)
+                body = extract_call_body(render, "<call>fn:", "</call>")
+                assert body is None or isinstance(body, CallBody)
