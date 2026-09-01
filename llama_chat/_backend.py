@@ -283,6 +283,21 @@ class Backend:
         else:
             raise RuntimeError("no KV-cache seq_add function available in this llama_cpp build")
 
+    @property
+    def can_edit_cache(self) -> bool:
+        """Whether this build defines a function for each cache edit.
+
+        The symbols only: a build can define them and still hand out a context
+        whose memory handle answers none, which performing each edit once on a
+        real context settles.
+        """
+        return all(
+            (self._get_memory is not None and memory_op is not None)
+            or legacy_op is not None
+            for memory_op, legacy_op in ((self._mem_clear, self._kv_clear),
+                                         (self._mem_rm, self._kv_rm),
+                                         (self._mem_add, self._kv_add)))
+
     def can_shift(self, ctx) -> bool:
         """Whether the cache supports in-place position shifting after removal.
 

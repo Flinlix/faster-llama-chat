@@ -61,21 +61,13 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
         "user_suffix": user_suffix,
         "trim_content": _trims_content(render),
     }
-    assistant, assistant_recovered = _extract_assistant(
-        render, user_prefix, user_suffix)
-    fragments.update(assistant)
+    fragments.update(_extract_assistant(render, user_prefix, user_suffix))
     fragments.update(_extract_system(render, user_prefix, user_suffix))
-    # Only a tag the template really produced locates the turn a call sits in.
-    # Splitting on the user tags standing in for it lands mid-conversation, and
-    # what came back would open a call with a turn tag.
-    fragments["tools"] = (
-        extract_tool_fragments(render, fragments["assistant_prefix"])
-        if assistant_recovered else None)
     return TemplateFragments(**fragments)
 
 
 def extract_tool_fragments(render: Render,
-                           assistant_prefix: str) -> ToolCallFragments | None:
+                           fragments: TemplateFragments) -> ToolCallFragments | None:
     """Recover what a template wraps a generated tool call in.
 
     Two probes differing only in their argument's type, so what the renders
@@ -83,13 +75,19 @@ def extract_tool_fragments(render: Render,
 
     Args:
         render: As :func:`extract_fragments`.
-        assistant_prefix: The recovered assistant-open tag, where the turn
-            holding the call begins.
+        fragments: The recovered turn tags. The assistant tag is where the turn
+            holding a call begins, so a template whose assistant tag cannot be
+            told from its user tag cannot locate that turn at all: splitting on
+            the user tag lands mid-conversation, and what came back would open
+            a call with a turn tag.
 
     Returns:
         The tags, or ``None`` where nothing usable can be recovered, which is
         what a model that cannot call tools looks like from here.
     """
+    assistant_prefix = fragments.assistant_prefix
+    if not assistant_prefix or assistant_prefix == fragments.user_prefix:
+        return None
     text = _render_call(render, {_KEY: _STRING})
     number = _render_call(render, {_KEY: _NUMBER})
     if text is None or number is None:
@@ -99,7 +97,7 @@ def extract_tool_fragments(render: Render,
     head = text.split(_TOOL, 1)[0]
     # The turn holding the call has to be locatable, or there is no telling
     # where the conversation before it ends and the call's own opening begins.
-    if not assistant_prefix or assistant_prefix not in head:
+    if assistant_prefix not in head:
         return None
     call_open = head.rsplit(assistant_prefix, 1)[1]
     call_close = _common_suffix(text, number)
@@ -210,13 +208,8 @@ def _render_call(render: Render, arguments: dict) -> str | None:
 
 
 def _extract_assistant(render: Render, user_prefix: str,
-                       user_suffix: str) -> tuple[dict, bool]:
-    """Split off the assistant fragment from a user and assistant render.
-
-    Returns:
-        The fragments, and whether they were recovered rather than fallen back
-        to the user tags.
-    """
+                       user_suffix: str) -> dict:
+    """Split off the assistant fragment from a user and assistant render."""
     both = render([
         {"role": "user", "content": _USER},
         {"role": "assistant", "content": _ASSISTANT},
@@ -226,11 +219,10 @@ def _extract_assistant(render: Render, user_prefix: str,
         # The two-message render does not contain the expected user turn (or no
         # assistant sentinel at all); fall back to the user tags so generation
         # still has an open/close pair.
-        return fallback, False
+        return fallback
     tail = both.split(_USER + user_suffix, 1)[1]
     asst_prefix, _, asst_suffix = tail.partition(_ASSISTANT)
-    return {"assistant_prefix": asst_prefix,
-            "assistant_suffix": asst_suffix}, True
+    return {"assistant_prefix": asst_prefix, "assistant_suffix": asst_suffix}
 
 
 def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:

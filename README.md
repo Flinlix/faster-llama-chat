@@ -18,8 +18,8 @@ model's call format is written down in this library.
 - [**Comparison with llama.cpp**](#comparison-with-llamacpps-built-in-context-shift):
   how the policy differs from llama.cpp's built-in context shift.
 - [**Install**](#install): building llama-cpp-python from source for CPU or CUDA.
-- [**Quick start**](#quick-start): the API in a few lines, plus what
-  `begin` / `inject` / `generate` / `generate_stream` each do.
+- [**Quick start**](#quick-start): the API in a few lines, plus what `begin` /
+  `inject` / `reply_without_tools` / `reply_without_tools_stream` each do.
 - [**Configuration**](#configuration): every `Config` field, with its default.
 - [**How eviction works**](#how-eviction-works): the in-place KV surgery and the
   shift / rebuild strategies.
@@ -27,7 +27,7 @@ model's call format is written down in this library.
 - [**Chat template**](#chat-template): per-role fragments and the load-time
   validation that catches a mismatched template.
 - [**Tool calling**](#tool-calling): registering functions, the loop
-  (`answer` / `answer_stream`) and driving it yourself.
+  (`reply_with_tools` / `reply_with_tools_stream`) and driving it yourself.
 - [**Verify**](#verify): running the tests and the real-model demo.
 - [**Layout**](#layout): a file-by-file map of the package.
 
@@ -159,61 +159,65 @@ chat.begin("You are a helpful assistant.",
 # inject: prefill one message as context, WITHOUT generating
 chat.inject("Reference: the deadline is Friday.")
 
-# generate: prefill only the new request text, then generate
-reply = chat.generate("What's the deadline?")
+# reply_without_tools: prefill only the new request text, then generate
+reply = chat.reply_without_tools("What's the deadline?")
 print(reply.text)
 
-# generate_stream: the same, yielding text deltas as they are sampled.
-for delta in chat.generate_stream("Summarize the plan."):
+# reply_without_tools_stream: the same, yielding deltas as they are sampled
+for delta in chat.reply_without_tools_stream("Summarize the plan."):
     print(delta, end="", flush=True)
 ```
 
 **`decode_threads` and `prefill_threads` are separate on purpose.** Prefill is
-one brief compute-bound burst and wants every core. Decode is often faster with
-fewer, because filling the pool oversubscribes llama.cpp's spin-waiting workers.
+one brief compute-bound burst and scales with every core it is given. Decode
+is often faster with fewer, because filling the pool oversubscribes llama.cpp's
+spin-waiting workers.
 What carries over between machines is that the two should differ, not what they
 are: measure decode throughput on the host once, and set `decode_threads` below
 `prefill_threads` if that is what it shows.
 
 ### The core actions
 
-- **`begin(system_prompt, messages=None, tools=None)`**: full reset for a restart /
-  conversation switch. Prefills the system prompt (pinned at position 0, never
-  evicted) plus the most recent history that fits in a single decode, under the
-  token threshold and `max_history_messages` alike; older excess is dropped.
-  The first call also warms the generation graph (a throwaway decode,
-  immediately cleared) so the first reply
-  has no cold start. A system prompt that alone exceeds the threshold raises
-  `ValueError` before the previous conversation is touched. `tools` declares
-  functions to the model in the same decode; see
-  [Tool calling](#tool-calling).
+- **`begin(system_prompt, messages=None, tools=None)`**: full reset for a
+  restart / conversation switch. Prefills the system prompt (pinned at position
+  0, never evicted) plus the most recent history that fits in a single decode,
+  under the token threshold and `max_history_messages` alike; older excess is
+  dropped. The first call also warms the generation graph (a throwaway decode,
+  immediately cleared) so the first reply has no cold start. A system prompt
+  that alone exceeds the threshold raises `ValueError` before the previous
+  conversation is touched. `tools` declares functions to the model in the same
+  decode; see [Tool calling](#tool-calling). Nothing else may run before it:
+  `inject` and `reply_without_tools` refuse until a conversation has been
+  begun, because only `begin` prefills the sequence opener and the system
+  prompt.
 - **`inject(text, role="user")`**: adds context (e.g. retrieved documents) with
   no generation. Evicts the oldest messages first if needed to stay inside both
   eviction limits. Returns the number of messages evicted. A message that could
   never fit is rejected (or truncated, per `oversize_policy`) *before* anything is
   evicted, so a rejected inject leaves the conversation untouched.
-- **`generate(text)`**: prefills just the request text and generates, evicting
-  oldest messages if either limit is crossed and capping generation so the total
-  never exceeds `context_size`. The reply is recorded so the next generation reuses
-  it. Returns a `Reply` (`text`, `n_prefilled_tokens`, `n_generated_tokens`,
-  `n_evicted_messages`, `stop_reason`, `tool_calls`). If `min_reply_tokens` is
-  set and the prompt would leave less than that for the reply, it raises
-  `ContextOverflowError`
-  before touching the cache. `max_reply_tokens=` and `stop=` override the config for
-  one call; the stop strings are added to the configured ones rather than
+- **`reply_without_tools(text)`**: prefills just the request text and
+  generates, evicting oldest messages if either limit is crossed and capping
+  generation so the total never exceeds `context_size`. The reply is recorded so
+  the next generation reuses it. Returns a `Reply` (`text`,
+  `n_prefilled_tokens`, `n_generated_tokens`, `n_evicted_messages`,
+  `stop_reason`, `tool_calls`). If `min_reply_tokens` is set and the prompt
+  would leave less than that for the reply, it raises `ContextOverflowError`
+  before touching the cache. `max_reply_tokens=` and `stop=` override the config
+  for one call; the stop strings are added to the configured ones rather than
   replacing them.
-- **`generate_stream(text)`**: the generator form of `generate`. It yields text
-  deltas as tokens are sampled and returns the same `Reply` summary on completion
-  (via `StopIteration.value`). Raises `ContextOverflowError` on the same
-  `min_reply_tokens` headroom check as `generate`. Bytes are decoded
-  incrementally, so a UTF-8 codepoint split across tokens is never mangled. Each
-  token is committed to the cache *before* its text is surfaced, so abandoning
-  the stream early (barge-in via the generator's `close()`) still records exactly the tokens
-  that reached the cache, and the next generation stays valid. To interrupt from
-  *another* thread (a generator must only be driven from its consuming thread),
-  pass `generate_stream(text, cancel=event)`: setting the `threading.Event` stops
-  generation within one token and the stream ends normally with
-  `stop_reason == "interrupted"`.
+- **`reply_without_tools_stream(text)`**: the streaming form of
+  `reply_without_tools`. It returns a `ReplyStream`: iterate it for the text
+  deltas as tokens are sampled, then read `stream.reply` for the same summary.
+  Raises `ContextOverflowError` on the same `min_reply_tokens` headroom check as
+  `reply_without_tools`. Bytes are decoded incrementally, so a UTF-8 codepoint
+  split across tokens is never mangled. Each token is committed to the cache
+  *before* its text is surfaced, so abandoning the stream early (barge-in via
+  the generator's `close()`) still records exactly the tokens that reached the
+  cache, and the next generation stays valid. To interrupt from *another* thread
+  (a generator must only be driven from its consuming thread), pass
+  `reply_without_tools_stream(text, cancel=event)`: setting the
+  `threading.Event` stops generation within one token and the stream ends
+  normally with `stop_reason == "interrupted"`.
 
 `stop_reason` is one of:
 
@@ -223,17 +227,17 @@ are: measure decode throughput on the host once, and set `decode_threads` below
 | `"stop_string"` | one of the configured stop strings matched; the reply is trimmed just before it |
 | `"token_limit"` | `max_reply_tokens` ran out, or the remaining context did |
 | `"interrupted"` | a `cancel` event was set, or the stream was closed early |
-| `"tool_call"` | the reply stopped on a call, and the turn is left open |
-| `"unreadable_tool_call"` | it stopped on a call whose body this model's recovered format could not read; the turn is closed rather than left open with nothing to close it |
+| `"tool_call"` | the reply stopped on a call, and the turn is left open for a result |
+| `"unreadable_tool_call"` | it stopped on a call whose body this model's recovered format could not read. The model is told so and the reply carries on, so only `reply_until_tool` reports this |
 
 Both stop early if the model emits a tool call, whether or not you declared any:
-the reply ends with `stop_reason == "tool_call"`, the call is on
-`Reply.tool_calls`, and the turn is left **open** so the result can go inside it.
-Until `resume_events()` closes that turn, `generate`, `inject` and
-`declare_tools` refuse; `begin()` discards it. On a model whose template
-describes tool calls this can happen from a hallucinated call tag alone, so a
-caller not using tools should check `stop_reason`. [Tool
-calling](#tool-calling) describes the whole mechanism.
+on a model whose template describes calls this can happen from a hallucinated
+tag alone. The call is kept out of the reply text and reported on
+`Reply.tool_calls`. Neither leaves a turn open, so a caller that never mentioned
+tools needs no special handling: `reply_without_tools` tells the model the call
+failed and that no tool can be run, and it finishes its reply in words. Only
+`reply_until_tool` holds a turn open, because only it hands you the call to
+answer. [Tool calling](#tool-calling) describes the whole mechanism.
 
 Cache-mutating actions are serialized with a lock, so the wrapper is safe to
 drive from a threaded environment. `close()` (also available via `with
@@ -250,19 +254,39 @@ in this order, so the code reads in the order of this table.
 |------|------|
 | **setting up** | `ChatWrapper(model_path=...)`, then `begin(system_prompt, messages, tools)`. Pass `tools=registry` and it is declared and remembered |
 | **adding context** | `inject(text, role="user")`: prefilled, no reply |
-| **asking: one generation** | `generate(text)` drained, `generate_stream(text)` streaming. Stops at a tool call and leaves the turn open, with the call on `Reply.tool_calls` |
-| **asking: until it answers** | `answer(text)` drained, `answer_stream(text)` streaming. Runs whatever the model calls and keeps going until a generation ends without one, so the turn always closes. Returns one `Reply` summing every generation. Needs no tools to exist |
-| **tools: driving the loop yourself** | `generate_events(text)` -> `inject_tool_result(name, result)` -> `resume_events()`; `declare_tools(specs)` adds one mid-conversation |
+| **asking: without tools** | `reply_without_tools(text)` drained, `reply_without_tools_stream(text)` streaming. The one door where no tool runs, not even one `begin` was given and remembered: a call the model makes anyway is refused with an error and it answers in words instead |
+| **asking: with tools** | `reply_with_tools(text)` drained, `reply_with_tools_stream(text)` streaming. Runs whatever the model calls and keeps going until a generation ends without one, so the turn always closes. Returns one `Reply` summing every generation. Needs no tools to exist, and refuses a registry this model could never call |
+| **tools: driving the loop yourself** | `reply_until_tool(text)` -> `inject_tool_result(call, result)` -> `resume_until_tool()`; `declare_unknown_tools(registry)` adds one mid-conversation |
 | **introspection** | the table below; none of it touches the cache |
 | **lifecycle** | `close()`, or `with ChatWrapper(...) as chat:` |
 
 Building what the model may call is the registry's job, not the wrapper's:
-`@tool(...)`, `registry.register(fn)`, `registry.declare(name)`,
+`@registry.tool(...)`, `registry.register(fn)`, `registry.spec(name)`,
 `registry.call(call)`. And every row above works the same through
 `PersistentChat`, which mirrors the wrapper method for method.
 
 `begin` is a reset: it drops the history, the registry it was given, and any
 turn a call left open.
+
+### What fails at startup
+
+Whatever can be settled once is settled while the wrapper is being built, so a
+deployment that could never work says so at startup rather than several turns
+into a conversation. None of it is re-derived per turn.
+
+| settled at startup | what finding it out later would cost |
+|------|------|
+| every `Config` field, and the combinations no call could succeed under | every `reply_without_tools`, or every `begin`, raising |
+| `model_path` names a file | a failure from inside the loader rather than a path you can read |
+| each KV-cache edit, performed once on the empty cache | a build that cannot shift fails at the first eviction, a whole conversation in |
+| the cache context answers everything the wrapper and its template resolution call on it | the same, for a context of your own |
+| the template fragments round-trip through the model's own template, and the turn-terminator is one of its tags | a reply the model never ends, and a cache encoded as it was never trained |
+| the formatter keeps those turn tags: it may add to the generation prompt, the terminator and a resumption, but not replace them | a reply generated outside its turn, or a second turn opened inside the first |
+| tool calling, all four steps, as `can_call_tools` | a tool declared, called, and only then found unanswerable |
+
+What is left is what only a conversation can know: whether a request still fits
+(`ContextOverflowError`), whether the model calls a tool that exists, and what a
+tool does when it runs.
 
 ### Asking the wrapper where it stands
 
@@ -278,9 +302,9 @@ None of these touch the cache, and all are safe to call from another thread.
 | `busy` | whether a generation is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
 | `wait_idle(timeout_s=None)` | block until no generation is running; `False` on timeout. Advisory in the same way |
 | `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but a latency cliff the first time history crosses the threshold |
-| `can_call_tools` | whether tools can be used with this model: its template describes a call *and* the argument spelling was recovered |
+| `can_call_tools` | whether tools can be used with this model, every step of the way: its template describes a call, it renders the declarations that tell the model a tool exists, the argument spelling was recovered, and it renders a block to answer one in. Settled at construction, and exactly the condition `begin(tools=...)` checks |
 | `awaiting_tool_result` | whether a call is still owed a result |
-| `reply_open` | whether a reply is unfinished, so `generate`, `inject` and `declare_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `resume_events()` |
+| `reply_open` | whether a reply is unfinished, so `reply_without_tools`, `inject` and `declare_unknown_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `resume_until_tool()` |
 
 `snapshot()` copies its rows under the table's own lock, so the positions in a
 row set are always mutually consistent even when another thread is mid-generation.
@@ -298,7 +322,7 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 
 | field | default | meaning |
 |------|------|------|
-| `model_path` | `None` | Path to the GGUF file. Loading refuses without it |
+| `model_path` | `None` | Path to the GGUF file. Loading refuses without one, and refuses a path that names no file |
 | `temperature` | `1.0` | `<= 0` selects greedy decoding: `top_k`, `top_p`, `min_p` and `seed` then have no effect, while the three penalties still apply |
 | `top_k` | `64` | Top-k cutoff; `<= 0` disables |
 | `top_p` | `0.95` | Nucleus cutoff |
@@ -314,11 +338,11 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 | field | default | meaning |
 |------|------|------|
 | `context_size` | `4096` | The hard limit in tokens: generation never crosses it |
-| `evict_above_fraction` | `0.75` | Fraction of `context_size` above which the oldest messages are evicted. Must be in `(0, 1]` |
-| `max_history_messages` | `None` | The most non-system messages to keep, OR'd with `evict_above_fraction` as a second eviction trigger. Counts one per request, one per reply, one per `inject` and one per `declare_tools`. `None` leaves the token threshold as the only trigger; otherwise `>= 1` |
+| `evict_above_fraction` | `0.75` | Fraction of `context_size` above which the oldest messages are evicted. Must be in `(0, 1]`, and must come to at least one token |
+| `max_history_messages` | `None` | The most non-system messages to keep, OR'd with `evict_above_fraction` as a second eviction trigger. Counts one per request, one per reply, one per `inject` and one per `declare_unknown_tools`. `None` leaves the token threshold as the only trigger; otherwise `>= 1` |
 | `max_reply_tokens` | `1024` | Cap on tokens per generation, capped again so the total stays inside `context_size` |
 | `oversize_policy` | `"reject"` | What happens to a message that cannot fit even with everything but the system prompt evicted. `"reject"` raises; `"truncate"` clips the content and re-appends the turn-terminator tag, so the clipped turn still closes |
-| `min_reply_tokens` | `32` | Refuse a request with `ContextOverflowError` when fewer than this many tokens would be left for the reply. `0` disables the guard |
+| `min_reply_tokens` | `32` | Refuse a request with `ContextOverflowError` when fewer than this many tokens would be left for the reply. `0` disables the guard. It has to stay below `context_size`, which no request can leave entirely free |
 
 **Generation**
 
@@ -350,7 +374,11 @@ than at first use: a fraction outside `(0, 1]`, a `context_size`,
 negative `min_reply_tokens`, a
 `repetition_penalty` of zero or below, a seed outside its range, an unknown
 `oversize_policy`, `log_level` or `kv_cache_type`, and a quantized
-`kv_cache_type` without flash attention.
+`kv_cache_type` without flash attention. Two combinations are refused there as
+well, because no call could ever succeed under them: a `min_reply_tokens` at or
+above `context_size`, which would make every request raise, and an
+`evict_above_fraction` that rounds down to no tokens, which would make every
+`begin` raise.
 
 The rest of what `ChatWrapper` takes is keyword-only and deliberately outside
 `Config`, because none of it is a value to tune:
@@ -358,7 +386,7 @@ The rest of what `ChatWrapper` takes is keyword-only and deliberately outside
 | | |
 |------|------|
 | `fragments=` | the per-role template tags, for a model that ships none. See [Chat template](#chat-template) |
-| `call_body=` | how a call spells its arguments, for a model whose shape the probes cannot recover. See [Tool calling](#tool-calling) |
+| `tool_calls=` | the tags a call sits between, and optionally how it spells its arguments, for a model whose template describes neither. See [Tool calling](#tool-calling) |
 | `formatter=` | a `TemplateFormatter` subclass, where opening or closing a turn takes more than the tag. See [A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back) |
 | `on_message=` | called with `(role, text)` for every genuine new message. See [Persistence](#persistence) |
 | `on_load_progress=` | called with a fraction while the weights load. It must not raise: an exception there aborts the load |
@@ -385,11 +413,12 @@ llama_memory_seq_add(seq, b, total, -(b-a))  # shift survivors down to close the
 `seq_add` also fixes the RoPE positions, so the survivors stay coherent without
 re-prefilling them. It does not do that work where you call it: `seq_add` only
 marks the cells as shifted, and the RoPE K-shift over the whole cache is built
-into the graph of the **next** `llama_decode` (the shift is expensive only for
-a quantized cache). That cost is therefore paid by whatever decodes next,
-which is why `generate_stream` decodes the assistant turn's closing tag *after* the
-post-reply eviction rather than before it: a decode the turn performs anyway
-then carries the shift, instead of the next generation's prefill.
+into the graph of the **next** `llama_decode` (the shift is expensive only for a
+quantized cache). That cost is therefore paid by whatever decodes next, which is
+why `reply_without_tools_stream` decodes the assistant turn's closing tag
+*after* the post-reply eviction rather than before it: a decode the turn
+performs anyway then carries the shift, instead of the next generation's
+prefill.
 
 This reuse is *lossy* (the survivors' cached K/V were computed
 while attending to the now-removed tokens), which is the standard StreamingLLM
@@ -405,8 +434,8 @@ The strategy is chosen automatically at construction from
   Mamba state, where dropping tokens loses the position information shifting
   needs):
   drop the oldest messages from the bookkeeping, then re-prefill the surviving
-  conversation once. Correct, just not free; a non-shiftable model degrades
-  gracefully instead of corrupting the cache.
+  conversation once. Correct, and it costs one prefill of the survivors; a
+  non-shiftable model degrades gracefully instead of corrupting the cache.
 
 The backend (`_backend.py`) resolves the cache symbols defensively across
 llama.cpp API churn: the modern `llama_memory_*` handle API when present,
@@ -424,7 +453,7 @@ from llama_chat import PersistentChat, InMemoryStore
 
 chat = PersistentChat(InMemoryStore(), context_size=8192)  # kwargs forward to Config here as well
 chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
-chat.generate("What did we decide last time?")                  # auto-persisted
+chat.reply_without_tools("What did we decide last time?")   # auto-persisted
 ```
 
 A store is any object satisfying the `ConversationStore` protocol, which is
@@ -437,16 +466,19 @@ class ConversationStore(Protocol):
 ```
 
 `InMemoryStore` is a reference implementation (not durable); back it with SQLite,
-Redis, or files by implementing those two methods. Capture is driven by an optional
+Redis, or files by implementing those two methods. Both are checked where the
+store is adopted, because a store is written to mid-turn, and every entry point
+that would write a message refuses before prefilling anything until `begin` has
+selected a conversation. Capture is driven by an optional
 `on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
 own sink without `PersistentChat` if you prefer.
 
 `PersistentChat` forwards the whole wrapper API, tools included:
-`begin(cid, prompt, tools=registry)`, then `answer` / `answer_stream`, or the
-manual loop. A call and the result it was given are not messages, so a tool turn
-is persisted exactly like any other: one user entry, one assistant entry holding
-what a reader saw. Declarations are not persisted either: they belong to the
-system turn, which is rebuilt on every `begin`.
+`begin(cid, prompt, tools=registry)`, then `reply_with_tools` /
+`reply_with_tools_stream`, or the manual loop. A call and the result it was
+given are not messages, so a tool turn is persisted exactly like any other: one
+user entry, one assistant entry holding what a reader saw. Declarations are not persisted either: they
+belong to the system turn, which is rebuilt on every `begin`.
 
 ## Chat template
 
@@ -488,11 +520,17 @@ w = ChatWrapper(
 )
 ```
 
-For a model that ships no template *and* calls tools, add the call tags to those
-fragments with
-`TemplateFragments(..., tools=ToolCallFragments(call_open=..., call_close=...))`.
-Each is taken as it stands in a render, so either may carry fixed text around the
-tag itself; the wrapper narrows it to the one token the tag is.
+For a model that ships no template *and* calls tools, the call tags are their
+own argument:
+
+```python
+ChatWrapper(fragments=..., tool_calls=ToolCallFragments(
+    call_open="<|tool_call|>", call_close="<|/tool_call|>",
+    body=CallBody(...)))     # body optional: recovered when left out
+```
+ Each tag is taken as it stands in a render, so
+either may carry fixed text around the tag itself; the wrapper narrows it to the
+one token the tag is.
 
 The fragments say what wraps text that already exists. What is decoded *around
 sampling* is the formatter's, and `ChatWrapper(formatter=...)` takes a
@@ -500,7 +538,7 @@ sampling* is the formatter's, and `ChatWrapper(formatter=...)` takes a
 than the turn tag, an empty reasoning channel for instance. See
 [A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back).
 
-Two load-time checks make a mismatch fail loudly instead of degrading silently:
+The load-time checks make a mismatch fail loudly instead of degrading silently:
 
 - **At construction** the turn-terminator (`assistant_suffix`) is validated
   against the model's vocabulary: if it does not tokenize to a single special
@@ -516,6 +554,12 @@ Two load-time checks make a mismatch fail loudly instead of degrading silently:
   ship no chat template. The `system` fragment is not probed, because chat
   templates handle a system role inconsistently (some reject it, others fold it into
   the first user turn).
+- **At construction** the formatter is checked against those fragments: the
+  generation prompt has to open the assistant turn, the terminator has to close
+  it, and a resumption must not open it a second time. A `formatter=` may add to
+  any of the three, an empty reasoning channel for instance, but replacing one
+  encodes the turn as the model never saw it, and nothing but a worse reply
+  would say so.
 
 ### Special tokens in message content
 
@@ -542,48 +586,96 @@ def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
 
 registry = ToolRegistry()
-registry.register(get_weather, "Current weather for a city.", declare=True)
+registry.register(get_weather, "Current weather for a city.")
 
 chat = ChatWrapper(model_path="model.gguf")
 chat.begin("You are a terse assistant.", tools=registry)
 
-print(chat.answer("What is the weather in Munich?").text)   # the call runs inside
+print(chat.reply_with_tools("What is the weather in Munich?").text)   # the call runs inside
 ```
 
 Handing `begin` the whole registry declares what that registry says should be
-declared and keeps it, so what the model was told about and what can actually
-run cannot drift apart. `answer` is `answer_stream` drained, the way `generate` is
-`generate_stream`; both return a `Reply` whose `text` is the reply. Use
-`answer_stream` where you want the deltas:
+declared and keeps it, so what the model was told about and what can run
+cannot drift apart. `reply_with_tools` is `reply_with_tools_stream`
+drained, the way `reply_without_tools` is `reply_without_tools_stream`; both
+return a `Reply` whose `text` is the reply. Use `reply_with_tools_stream` where
+you want the deltas:
 
 ```python
-for delta in chat.answer_stream("What is the weather in Munich?"):
+for delta in chat.reply_with_tools_stream("What is the weather in Munich?"):
     print(delta, end="")     # only prose; the calls happen inside
 ```
 
-`chat.can_call_tools` says whether the model can do this at all. It is `False`
-both for a template that renders no tool call and for one whose argument
-spelling could not be recovered, because neither yields a call you can run.
+`chat.can_call_tools` says whether the model can do this at all, and answers
+for the whole chain: the template has to describe a call, it has to render the
+declarations that tell the model a tool exists, the argument spelling has to
+have been recovered, and there has to be a block to answer a call in. All four
+are settled at construction, so the answer costs nothing to ask and is available
+before the first turn, and it is exactly the condition `begin(tools=...)`
+checks.
 
-### Registering and declaring are two things
+You do not have to check it, either. **Tools a model could not use are refused
+where you hand them over**, by `begin(tools=...)`, by `declare_unknown_tools`,
+and by a `reply_with_tools` or `reply_with_tools_stream` given a registry that
+holds any, naming which of the four is missing. Declaring tools and handing over
+a registry to run them are the same promise, so the chain from the promise to a
+result the model can read is checked when the promise is made, rather than at
+the first call, where the reply would already be running. `begin` validates
+before it resets, so a refused one leaves the previous conversation untouched,
+and a refused `reply_with_tools` prefills nothing.
+
+Driving the loop yourself is not refused: `reply_until_tool` and
+`inject_tool_result` promise nothing, so a model that can call and be answered
+but not be told stays usable that way, with the tools described in the system
+prompt in your own words.
+
+`ChatWrapper(tool_calls=...)` reaches that check, so a model whose tags or
+spelling the probes could not recover is usable again as soon as you supply
+them. A model with
+no tool support at all stays perfectly usable without tools; only declaring is
+refused.
+
+### Registering, and where the declaration lands
 
 `register` makes a function runnable and returns the name the model calls it
-by. That name is also how you refer to the tool afterwards. Whether the model
-is *told* about the tool is a separate question, because telling it costs a
-prefill, and where that prefill lands depends on when you do it:
+by. That name is also how you refer to the tool afterwards. A tool the model is
+never told about could never be called, so the question is not *whether* to
+declare it but *where*, and that is what `in_system_prompt` decides:
 
 | | where the declaration lands | cost |
 |------|------|------|
-| `begin(..., tools=registry)` | in the system turn | none extra |
-| `chat.declare_tools([registry.declare("clock")])` | a message of its own | one prefill |
-| neither | nowhere; registered and silent | none |
+| `in_system_prompt=True` (the default), then `begin(..., tools=registry)` | in the system turn | none extra, and no eviction can take it back |
+| `in_system_prompt=False`, then `chat.declare_unknown_tools(registry)` | a message of its own | one prefill, evictable later |
+| registered, and neither door used | nowhere; the model never hears of it | none |
 
-A tool registered with `declare=False` still runs as soon as something names
-it. The only thing withheld is the model's knowledge that it exists. Registering
-a name that is already taken replaces it, `declare` state included.
+The tool runs either way from the moment it is registered: placement is only
+about what the model knows. Registering a name that is already taken replaces
+it, its placement included.
 
-The `@tool` decorator attaches the same declaration to the function itself, so
-`register` needs no description of its own:
+Hand the same registry to both doors and each takes its own half: `begin` writes
+what belongs in the system prompt, `declare_unknown_tools` writes whatever the
+conversation does not already declare. So after `begin(tools=registry)` a
+`declare_unknown_tools(registry)` writes exactly the tools marked for later,
+plus anything registered since, and calling it again writes nothing at all. What
+counts as already declared is read off the messages carrying it, so once a
+declaration message is evicted its tools count as unknown again and the next
+`declare_unknown_tools` writes them back. The system turn is never evicted, so
+what `begin` declared is known for good.
+
+`registry.tool(...)` is `register` in the form the function is written in, so
+the usual case is one step:
+
+```python
+@registry.tool("Current weather for a city.")
+def get_weather(city: str) -> dict:
+    return {"city": city, "celsius": 18}
+```
+
+The function comes back unchanged, so it stays callable as itself. Pass
+`in_system_prompt=False` to leave it for `declare_unknown_tools`. The
+module-level `@tool` decorator instead attaches the declaration to the function
+without registering it, for a spec handed straight to
+`begin(tools=[get_weather.spec])`:
 
 ```python
 from llama_chat import tool
@@ -591,8 +683,6 @@ from llama_chat import tool
 @tool("Current weather for a city.")
 def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
-
-registry.register(get_weather, declare=True)
 ```
 
 The parameters come from the annotations either way. A signature that cannot be
@@ -602,76 +692,130 @@ raises `TypeError`, and `parameters=` takes an explicit schema instead.
 Two consequences worth knowing. A declaration added later is an ordinary message
 and can be evicted from a long conversation, so one that has to survive belongs
 in `begin`. And `begin` is a reset, so a declaration made before one is thrown
-away; `declare_tools` refuses rather than writing something that will vanish.
+away; `declare_unknown_tools` refuses rather than writing something that will
+vanish.
 
-The registry does not track either of those. `specs_to_declare()` answers what
-the model *should* be told, which is what you hand to `begin` or
-`declare_tools`; it never claims to know what is still in the conversation, and
-it goes on naming a tool whose declaration has since been evicted.
+The registry does not track either of those. `specs_for_system_prompt()` and
+`specs()` answer what the model *should* be told and where, which is what the
+two doors read; neither claims to know what is still in the conversation, and
+both go on naming a tool whose declaration has since been evicted.
 
 ### Which entry point does what
 
 All of them keep a tool call out of the reply text, and all of them hand back a
-`Reply`. Two things vary: how far the call is carried, and what the generator
-yields on the way.
+`Reply`. What varies is **what becomes of a call**, and the name says which it
+is.
 
-| how far it carries the exchange | drained | yields text | yields text and calls |
+| what becomes of a tool call | drained | yields text | yields text and calls |
 |------|------|------|------|
-| one generation, which may stop at a call | `generate(text)` | `generate_stream(text)` | `generate_events(text)` |
-| resume the reply a call interrupted | | | `resume_events()` |
-| as many generations as it takes, calls run for you | `answer(text)` | `answer_stream(text)` | |
+| refused: the model is told the call failed and answers in words | `reply_without_tools(text)` | `reply_without_tools_stream(text)` | |
+| handed to you to run | | | `reply_until_tool(text)`, then `resume_until_tool()` |
+| run for you, until the model answers | `reply_with_tools(text)` | `reply_with_tools_stream(text)` | |
 
-The name says both. The stem is how far it goes: `generate` runs the model once,
-`answer` runs it as often as the tools require, `resume` picks up a reply a call
-left open. The suffix says what comes out: no suffix returns the `Reply`
-directly, `_stream` yields text deltas and returns the `Reply` through
-`StopIteration.value`, `_events` yields those deltas and each `ToolCall` as the
-model asks for it.
+What comes out follows the name as well: a name without `_stream` returns the
+`Reply` directly, while the `_stream` pair and both `*_until_tool` entry points
+return a `ReplyStream`. It yields text deltas, and, from the `*_until_tool`
+pair, each `ToolCall` as the model asks for it; the same `Reply` is on
+`stream.reply` once it has ended.
 
-The two empty cells are not gaps. `answer` runs the calls itself, so it has
-nothing to surface; and a resumption that ends on another call has to hand that
-call back, which is what an event stream is for.
+```python
+with chat.reply_without_tools_stream("Summarize the plan.") as stream:
+    for delta in stream:
+        print(delta, end="", flush=True)
+print(stream.reply.n_generated_tokens, stream.reply.stop_reason)
+```
 
-`answer` needs no tools: on a conversation without them the `Reply` is the reply
-and no calls, and a call the model invented is answered saying so rather than
-raising, so the turn still closes. `generate` is what you reach for when you want
-the counts for one generation: `n_prefilled_tokens`, `n_generated_tokens`,
-`n_evicted_messages`, `stop_reason`.
+`reply` is `None` until the stream ends of its own accord, so a stream you stop
+reading early has none: there is no summary of a reply nobody read to the end.
+The turn is closed either way. Closing is what an abandoned stream needs, since
+it holds the wrapper's lock until it is collected, which is what the `with`
+above is for; exhausting it does the same.
+
+**Being shown the calls is what holds the turn open for them**, so
+`reply_until_tool` and `resume_until_tool` are the only entry points that can
+leave a turn unfinished. The other two rows settle every call themselves and always come
+back with a finished reply, which is why a caller that never intends to use
+tools needs no special handling: on a model whose template describes calls, a
+hallucinated tag would otherwise leave a turn nothing could close.
+
+Every call is reported on `Reply.tool_calls` whatever became of it, so a refused
+one still says what the model asked for.
+
+What `reply_without_tools` guarantees is that **nothing runs**, not that
+exactly one generation happens: refusing a call costs a second one. It holds
+even for a registry `begin` was given and remembered, and that is the whole
+reason the pair exists: a turn that has to be free of side effects, in a
+conversation that otherwise uses tools. Where no registry exists anywhere,
+`reply_without_tools` and `reply_with_tools` are the same call and it makes no
+difference which you write; they part on the turn where something could run, and
+the method you chose is what decides it, rather than anything inferred from the
+state of the conversation.
 
 ### Driving the loop, or driving it yourself
 
-- **`answer(text)`**: `answer_stream` drained, for a caller that does not want
-  the deltas.
-- **`answer_stream(text, registry=None, max_calls=4)`**: the whole loop.
-  Generate, run whatever the model called, feed the results back, and resume
-  until it answers. Yields text deltas and returns the summed `Reply` (via
-  `StopIteration.value`). `max_calls` limits how many tools one turn may use.
-  The last round runs with the call tags withheld, so the model cannot ask for
-  another one. Without that the limit would stop the loop but not the turn: a
-  turn that ends on a call is deliberately left open, so it would never close.
-  The registry defaults to the one `begin` was handed.
-- **`generate_events(text)`**: the same generation, yielding `str` deltas and
+- **`reply_with_tools(text)`**: `reply_with_tools_stream` drained, for a
+  caller that does not want the deltas.
+- **`reply_with_tools_stream(text, registry=None, max_calls=None)`**: the whole
+  loop, and `max_reply_tokens=`, `stop=` and `cancel=` besides, which bound
+  every generation of the exchange rather than the exchange itself. Generate, run whatever the model called, feed the results back, and
+  resume until it answers. Yields text deltas, and its `reply` sums every
+  generation. The registry defaults to the one `begin` was handed. By default
+  the turn may call as often as the model asks, so the only bound is the
+  context: each call and its result stay inside the open turn, and a model that
+  never stops calling fills it, ending on a `ContextOverflowError` with the turn
+  open. `max_calls=n` puts a ceiling on it instead; the last permitted round
+  then runs with the call tags withheld, so the model cannot ask for another
+  one. Without that withholding a ceiling would stop the loop but not the turn:
+  a turn that ends on a call is deliberately left open, so it would never
+  close.
+- **`reply_until_tool(text)`**: the same generation, yielding `str` deltas and
   then a `ToolCall` for each call the model made. Use this to run the loop
-  yourself: answer with `inject_tool_result(name, result)` once per call, in the
-  order they were asked, then call `resume_events()`. The order is enforced,
-  because the name is what says which call is being answered.
+  yourself: answer with `inject_tool_result(call, result)` once per call, in the
+  order they were asked, then call `resume_until_tool()`. It returns how many
+  messages that cost, as `inject` does, which is none while a turn is open. The
+  order is enforced, because the name is what says which call is being
+  answered.
   `chat.awaiting_tool_result` says whether anything is still owed, and
   `chat.reply_open` whether the turn is still open.
 
-`answer` and `answer_stream` return one `Reply` for the whole exchange: the
-counts are sums over every generation, `stop_reason` is the last generation's, and
-`tool_calls` holds every call the model made in order. `tool_limit_reached` says
-whether `max_calls` ran out, so the final generation ran with the call tokens
-withheld; it is always `False` where no call was asked for.
+```python
+with chat.reply_until_tool("What is the weather in Munich?") as stream:
+    for event in stream:
+        if isinstance(event, ToolCall):
+            chat.inject_tool_result(event, registry.call(event))
+        else:
+            print(event, end="", flush=True)
 
-Two outcomes are visible only on that summary. A reply that ended on a call this model's
-format could not be read from has empty `text`, and only
-`stop_reason == "unreadable_tool_call"` tells it apart from a model that said
-nothing. And when `tool_limit_reached` is set, the model was cut off from a tool
-it wanted rather than choosing to stop.
+with chat.resume_until_tool() as rest:          # the turn stays open until this
+    for delta in rest:
+        print(delta, end="", flush=True)
+```
 
-A turn that stopped on a call stays open until `resume_events()` closes it,
-even once every result is in. Until then `generate`, `inject` and `declare_tools`
+The calls arrive after the deltas, and the wrapper's lock is already released by
+then, so answering one inside the loop is safe. `registry.call(event)` is one
+way to run it; anything that returns a value will do, and a call the model
+invented is yours to refuse with an error result of your own.
+
+`reply_with_tools` returns one `Reply` for the whole exchange, and
+`reply_with_tools_stream` carries the same one on its `reply`: the counts are
+sums over every generation, `stop_reason` is the
+last generation's, and `tool_calls` holds every call the model made in order.
+`tool_limit_reached` says whether a `max_calls` you set ran out, so the final
+generation ran with the call tokens withheld; it is always `False` where none
+was set and where no call was asked for.
+
+One outcome is visible only on that summary: when `tool_limit_reached` is set,
+the model was cut off from a tool it wanted rather than choosing to stop.
+
+A call whose body could not be read is the one the summary cannot show you. The
+model is told and answers in words, so the exchange ends on `"end_of_turn"` with
+no calls to report. `can_call_tools` is the durable signal: it is `False` for a
+model whose format was never recovered, which is when every call takes that
+path.
+
+A turn `reply_until_tool()` stopped on a call stays open until
+`resume_until_tool()` closes it, even once every result is in. Until then
+`reply_without_tools`, `inject` and `declare_unknown_tools`
 refuse: a message appended there would sit inside a model turn that never ended.
 Finish the turn, or drop it with `begin()`. `reply_open` reports that state, and
 it is the one to branch on: `awaiting_tool_result` goes `False` the moment the
@@ -691,6 +835,46 @@ A call never appears in the reply. Its tokens reach the cache, because the model
 has to see its own call when it reads the turn back, but they are not yielded as
 deltas and not part of `Reply.text`. On a voice pipeline that is the difference
 between a working assistant and one that reads its own function calls aloud.
+
+### Every failure is told to the model
+
+Whatever goes wrong with a call, the model is handed a result saying so, in its
+own template's result block, and the reply carries on from there. The message
+has three parts: that the call failed, why, and what to do next.
+
+| what went wrong | the reason it is given |
+|------|------|
+| the call's body could not be read | fixed text saying so |
+| no tool can be run, which is every call under `reply_without_tools` | fixed text saying so |
+| the name is not registered | the name it asked for |
+| the arguments do not fit the function | Python's own binding error |
+| the tool raised | the exception's type and message |
+| a `max_calls` ceiling is spent | the limit it ran into |
+
+The instruction is `try again` where another call is still allowed and
+`do not call again` where none is. It says only that, because what to do
+instead needs no saying: a model that cannot call a tool can only answer.
+Which one it gets is decided after every call in the round has been settled,
+because the last of them is what settles the budget, so the same failure ends
+in `try again` while a call remains and in `do not call again` once a ceiling
+is spent. Telling a model to retry where the call tags are about to be withheld
+would ask for the one thing it cannot do.
+
+An unreadable call is retryable like any other, and spends the budget like any
+other, so under a `max_calls` ceiling a model that cannot write a readable one
+gives up after that many attempts rather than looping. Under
+`reply_without_tools` the retry is skipped, since a second call could only be
+refused as well. It is the one failure whose
+result carries no instruction: it is written while the reply is being booked,
+before the round settles the budget, so there is nothing true to say yet.
+
+A result is a failure if it is a dict carrying `error`, so a tool that reports
+its own failure that way is presented as one too. Anything else reaches the
+model untouched.
+
+Two failures cannot be told, because there is no channel for them: a template
+that renders no result block has nowhere to put one, and a context with no room
+left cannot hold even an empty one. Both close the turn instead.
 
 ### What is recovered, and what happens when it cannot be
 
@@ -727,12 +911,20 @@ column splits `<` off its `<parameter=`: the no-argument render shares that
 character, so it lands in `name_close` rather than in what follows.
 
 Where the format cannot be recovered, `can_call_tools` is `False`. The call is
-still detected, so its syntax never reaches the reply text, but its body is
-reported as unreadable and the turn closes with
-`stop_reason == "unreadable_tool_call"`. Nothing is guessed at. For such a model, pass
-the spelling in yourself with `ChatWrapper(call_body=CallBody(...))`, which makes
-`can_call_tools` `True` again, the same way `fragments=` covers a template that
-cannot be read.
+still detected, so its syntax never reaches the reply text, and the model is
+told that its call could not be read, so it can write it again or answer in
+words instead.
+Nothing is guessed at. For such a model, pass
+the spelling in yourself with
+`ChatWrapper(tool_calls=ToolCallFragments(call_open=..., call_close=...,
+body=CallBody(...)))`, which makes `can_call_tools` `True` again, the same way
+`fragments=` covers a template that cannot be read.
+
+**Every call is answered, readable or not.** A result block has to name the
+function it answers, and here that is exactly what could not be read, so the
+block names `unknown` and its message says what happened. Writing nothing would
+leave a call with no result in the history, which no template produces and the
+model would read back on every later turn.
 
 One limit: a model that writes a batch of calls as a JSON array has all of them
 read and each owes a result, but any other shape ends at its closing tag, so
@@ -789,16 +981,18 @@ never crosses `context_size`.
 | `llama_chat/messages.py` | `MessageTable`, `Message`, `Eviction`, `n_newest_that_fit`: position bookkeeping, evict + shift (pure Python) |
 | `llama_chat/template.py` | `TemplateFragments`, `TemplateFormatter`, `ToolCallFragments`, `CallBody`: what a turn and a tool call are wrapped in |
 | `llama_chat/template_extract.py` | `extract_fragments`, `extract_tool_fragments`, `extract_call_body`: recover all of that from the model's GGUF template |
+| `llama_chat/resolved_template.py` | `ResolvedTemplate`: one model's template, recovered or supplied, validated against it, with the four tool-calling steps settled |
 | `llama_chat/_backend.py` | version-stable adapter over `llama_cpp.*` (handles API churn) |
 | `llama_chat/context.py` | `KVContext`: tokenize / prefill / streaming generate / evict |
-| `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`: declaring tools, running them, reading calls back |
-| `llama_chat/wrapper.py` | `ChatWrapper`, `Reply`, `ContextOverflowError`: `begin` / `inject` / `generate` / `generate_stream` / `answer` / `answer_stream` |
+| `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`: declaring tools and running the ones the model calls |
+| `llama_chat/call_parsing.py` | `parse_calls`: reading a call back out of what the model generated, JSON or this model's own delimiters |
+| `llama_chat/wrapper.py` | `ChatWrapper`, `Reply`, `ReplyStream`, `ContextOverflowError`: `begin` / `inject` / `reply_without_tools` / `reply_without_tools_stream` / `reply_with_tools` / `reply_with_tools_stream` |
 | `llama_chat/persistent_wrapper.py` | `PersistentChat`, `ConversationStore`, `InMemoryStore`: the same API, with every message mirrored to a durable store |
 
 Everything in that table is importable from `llama_chat` itself, apart from the
-three extraction functions: the wrapper runs those for you at construction, and
-`llama_chat.template_extract` is where to reach them to run against a template
-directly. `n_newest_that_fit` is the pure function `begin` uses to decide how
+three extraction functions and `ResolvedTemplate`: the wrapper runs those for
+you at construction, and `llama_chat.template_extract` is where to reach the
+extraction functions to run against a template directly. `n_newest_that_fit` is the pure function `begin` uses to decide how
 much history fits, exposed so that decision can be made before committing to it.
 
 The bookkeeping types are exported for one purpose: `ChatWrapper(context=...)`
@@ -806,4 +1000,6 @@ takes a cache context of your own in place of the one built from `Config`, and
 `Eviction` is what such a context is handed to apply. No subclassing and no
 registration: an object that answers what the wrapper calls on it is a cache
 context, and `tests/fake_context.py` is a worked one, over a plain list of ints
-with no llama.cpp in it.
+with no llama.cpp in it. What it has to answer is checked where the context is
+adopted, so a missing name is a `TypeError` from the constructor rather than an
+`AttributeError` from the first eviction that reaches it.

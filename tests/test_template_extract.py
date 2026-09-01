@@ -5,6 +5,7 @@ name is what says which shape is covered. One built to exercise a code path
 carries no model's name, because it reproduces none.
 """
 
+import dataclasses
 import itertools
 
 from llama_chat.template import CallBody
@@ -12,6 +13,11 @@ from llama_chat.template_extract import (_KEY, _KEY2, _NUMBER, _STRING,
                                          _STRING2, _TOOL, extract_call_body,
                                          extract_fragments,
                                          extract_tool_fragments)
+
+
+def _tool_fragments(render):
+    """The call tags a render yields, through both steps of the recovery."""
+    return extract_tool_fragments(render, extract_fragments(render))
 
 
 def _gemma_render(messages):
@@ -151,7 +157,7 @@ def _tool_calling_render(messages):
 
 
 def test_a_tool_calling_template_yields_its_call_tags():
-    tools = extract_fragments(_tool_calling_render).tools
+    tools = _tool_fragments(_tool_calling_render)
     assert tools is not None
     assert tools.call_open == "<|tool_call>call:"
     # The argument's own text is gone; what is left is the call's closing tag
@@ -162,8 +168,8 @@ def test_a_tool_calling_template_yields_its_call_tags():
 def test_a_template_that_ignores_tool_calls_has_no_tool_fragments():
     # The canned renderers above build a turn out of `content` alone, which is
     # exactly what a model without tool support looks like from here.
-    assert extract_fragments(_gemma_render).tools is None
-    assert extract_fragments(_chatml_render).tools is None
+    assert _tool_fragments(_gemma_render) is None
+    assert _tool_fragments(_chatml_render) is None
 
 
 def test_tool_extraction_does_not_disturb_the_role_fragments():
@@ -187,7 +193,7 @@ def _untagged_call_render(messages):
 def test_a_call_with_no_locatable_turn_yields_no_tool_fragments():
     # Nothing marks where the turn holding the call begins, so the call's own
     # opening cannot be told from the conversation before it.
-    assert extract_fragments(_untagged_call_render).tools is None
+    assert _tool_fragments(_untagged_call_render) is None
 
 
 def _argless_call_render(messages):
@@ -205,7 +211,7 @@ def _argless_call_render(messages):
 def test_a_template_that_drops_arguments_yields_no_tool_fragments():
     # Both probes render identically, so their shared ending runs back past the
     # call and describes the conversation rather than the call's closing tag.
-    assert extract_fragments(_argless_call_render).tools is None
+    assert _tool_fragments(_argless_call_render) is None
 
 
 def _element_render(messages):
@@ -233,7 +239,7 @@ def _element_render(messages):
 
 
 def test_the_call_body_of_a_delimited_model():
-    tools = extract_fragments(_tool_calling_render).tools
+    tools = _tool_fragments(_tool_calling_render)
     body = extract_call_body(_tool_calling_render, tools.call_open, "<tool_call|>")
     assert body == CallBody(name_close="{", key_open="", key_close=":",
                             pair_sep=",", body_close="}", empty_close="}",
@@ -241,7 +247,7 @@ def test_the_call_body_of_a_delimited_model():
 
 
 def test_the_call_body_of_an_element_shaped_model():
-    tools = extract_fragments(_element_render).tools
+    tools = _tool_fragments(_element_render)
     body = extract_call_body(_element_render, tools.call_open, "</tool_call>")
     # Every field differs from the delimited model's, and nothing is quoted.
     assert body == CallBody(name_close=">\n<", key_open="parameter=",
@@ -253,7 +259,7 @@ def test_the_call_body_of_an_element_shaped_model():
 
 
 def test_a_model_that_renders_no_call_has_no_body_either():
-    tools = extract_fragments(_tool_calling_render).tools
+    tools = _tool_fragments(_tool_calling_render)
     # A closing tag this template never emits leaves nothing to measure.
     assert extract_call_body(_tool_calling_render, tools.call_open, "<nope>") is None
 
@@ -284,7 +290,7 @@ def _no_call_without_arguments_render(messages):
 
 
 def test_a_call_shape_that_vanishes_without_arguments_has_no_body():
-    tools = extract_fragments(_no_call_without_arguments_render).tools
+    tools = _tool_fragments(_no_call_without_arguments_render)
     assert tools is not None            # the tags are still recoverable
     # But the no-argument probe renders no call, so `empty_close` cannot be
     # measured and the whole call_body is refused.
@@ -306,7 +312,7 @@ def _nothing_after_the_name_render(messages):
 
 
 def test_a_name_that_runs_straight_into_its_arguments_has_no_body():
-    tools = extract_fragments(_nothing_after_the_name_render).tools
+    tools = _tool_fragments(_nothing_after_the_name_render)
     # The one-argument and no-argument renders share nothing after the name, so
     # there is no `name_close` to find and nothing downstream can be trusted.
     assert extract_call_body(_nothing_after_the_name_render,
@@ -332,10 +338,10 @@ def test_a_body_that_never_shows_a_key_has_no_body():
     """Reached when the tags are supplied rather than extracted.
 
     ``extract_tool_fragments`` refuses this template itself, so the tags come
-    from ``ChatWrapper(fragments=...)`` and the body probes run against a
+    from ``ChatWrapper(tool_calls=...)`` and the body probes run against a
     template they were never screened for.
     """
-    assert extract_fragments(_constant_body_render).tools is None
+    assert _tool_fragments(_constant_body_render) is None
     # `{}` is common to both probes, so `name_close` is found and its guard
     # passes; the keys the splits below index on are still absent. Refused
     # rather than indexed off the end.
@@ -358,7 +364,7 @@ def _typed_key_render(messages):
 
 
 def test_a_key_that_changes_with_the_value_type_has_no_body():
-    tools = extract_fragments(_typed_key_render).tools
+    tools = _tool_fragments(_typed_key_render)
     # The string probe writes `:str=` and the number probe `:int=`, so what
     # stands between a key and its value cannot be told from the value itself.
     assert extract_call_body(_typed_key_render, tools.call_open, "</call>") is None
@@ -382,7 +388,7 @@ def _last_value_only_quoted_render(messages):
 
 
 def test_quoting_that_depends_on_position_has_no_body():
-    tools = extract_fragments(_last_value_only_quoted_render).tools
+    tools = _tool_fragments(_last_value_only_quoted_render)
     # One argument is quoted and the first of two is not, so what follows a
     # value does not match what separates one value from the next key.
     assert extract_call_body(_last_value_only_quoted_render,
@@ -397,7 +403,7 @@ def _no_tool_render(messages):
 
 
 def test_a_template_that_refuses_tool_calls_has_no_tool_fragments():
-    assert extract_fragments(_no_tool_render).tools is None
+    assert _tool_fragments(_no_tool_render) is None
 
 
 def _no_padded_render(messages):
@@ -440,13 +446,14 @@ def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
     """
     fragments = extract_fragments(_dropped_assistant_render)
     assert fragments.assistant_prefix == fragments.user_prefix   # it fell back
-    assert fragments.tools is None
+    assert extract_tool_fragments(_dropped_assistant_render, fragments) is None
 
     # What the guard prevents: splitting on the substitute reaches back past the
     # turn boundary, so the recovered opening starts inside the turn before the
     # call and its first tag is that turn's terminator.
-    unguarded = extract_tool_fragments(_dropped_assistant_render,
-                                       fragments.assistant_prefix)
+    unguarded = extract_tool_fragments(
+        _dropped_assistant_render,
+        dataclasses.replace(fragments, user_prefix="<never rendered>"))
     assert unguarded is not None and "<turn|>" in unguarded.call_open
 
 

@@ -7,6 +7,7 @@ here; that policy lives in the wrapper.
 from __future__ import annotations
 
 import codecs
+import os
 import threading
 import warnings
 from collections.abc import Callable
@@ -80,6 +81,12 @@ class KVContext:
         on_load_progress: Called during weight loading with a fraction in
             ``[0.0, 1.0]``. Must not re-enter the context and must not raise,
             because a raise aborts the load.
+
+    Raises:
+        ValueError: If ``config.model_path`` is unset.
+        FileNotFoundError: If it names no file.
+        RuntimeError: If the model or the context cannot be created, or this
+            build cannot perform one of the cache edits eviction rests on.
     """
 
     def __init__(
@@ -89,6 +96,8 @@ class KVContext:
         if not config.model_path:
             raise ValueError("config.model_path is unset; a model cannot be "
                              "loaded without one")
+        if not os.path.isfile(config.model_path):
+            raise FileNotFoundError(f"no model file at {config.model_path!r}")
         self._config = config
         set_log_level(config.log_level)  # filter llama.cpp's load-time logs too
         self._backend = Backend()
@@ -106,6 +115,7 @@ class KVContext:
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
             self._can_shift = self._backend.can_shift(self._llama_context)
+            self._verify_cache_edits()
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
         except BaseException:
@@ -346,6 +356,22 @@ class KVContext:
             self._backend.free_model(self._model)
 
     # ----- internals -----------------------------------------------------
+    def _verify_cache_edits(self) -> None:
+        """Perform each cache edit once, empty, so a build missing one fails here.
+
+        Removing an empty range and shifting it by nothing changes nothing.
+        Which function performs an edit is settled per build and per context,
+        so an edit that works here works for the rest of the conversation.
+        Left to the first eviction, a missing one would surface deep into a
+        conversation.
+
+        Raises:
+            RuntimeError: If this build offers no function for one of them.
+        """
+        self._backend.kv_seq_rm(self._llama_context, SEQ, 0, 0)
+        self._backend.kv_seq_add(self._llama_context, SEQ, 0, 0, 0)
+        self._backend.kv_clear(self._llama_context)
+
     def _build_sampler(self, config: Config):
         llama_cpp = self._backend.llama_cpp
         params = llama_cpp.llama_sampler_chain_default_params()

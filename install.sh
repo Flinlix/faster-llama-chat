@@ -72,14 +72,10 @@ import sys, llama_cpp
 from llama_chat._backend import Backend
 b = Backend()
 
-# The evict-and-shift core needs one working path per memory op: either the new
-# llama_memory_* API or the older llama_kv_self_* / llama_kv_cache_* fallback, the
-# same OR the backend itself uses.
-kv_ok = bool(
-    (b._mem_clear or b._kv_clear)
-    and (b._mem_rm or b._kv_rm)
-    and (b._mem_add or b._kv_add)
-)
+# The evict-and-shift core needs one working path per cache edit. Which names
+# count as one is the backend's own business, so ask it rather than repeat the
+# list here, where it would go stale without anything failing.
+kv_ok = b.can_edit_cache
 
 print("llama-cpp-python", llama_cpp.__version__)
 print("required symbols:", "OK")

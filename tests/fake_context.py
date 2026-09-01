@@ -1,8 +1,9 @@
 """A model-free stand-in for :class:`~llama_chat.context.KVContext`.
 
-It implements the exact surface :class:`~llama_chat.wrapper.ChatWrapper` uses and
-maintains a *physical cache* (a plain list of token ids) so tests can assert the
-cache stays in lockstep with the message table.
+It implements the surface :class:`~llama_chat.wrapper.ChatWrapper` and its
+resolved template call on a cache context, and maintains a *physical cache* (a
+plain list of token ids) so tests can assert the cache stays in lockstep with
+the message table.
 
 Two correctness guarantees fall out of this fake:
 
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
-from llama_chat.template import TemplateFragments, ToolCallFragments
+from llama_chat.template import TemplateFragments
 
 BOS = -1
 
@@ -37,15 +38,6 @@ DEFAULT_FRAGMENTS = TemplateFragments(
     trim_content=True,
 )
 
-# A second model, one that calls tools.
-TOOL_FRAGMENTS = TemplateFragments(
-    system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
-    user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
-    assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
-    trim_content=True,
-    tools=ToolCallFragments(call_open="<call>fn:", call_close="}</call>"),
-)
-
 
 def _fake_value(value):
     """This fake model quotes a string and emits anything else bare."""
@@ -53,19 +45,24 @@ def _fake_value(value):
 
 
 class FakeContext:
-    def __init__(self, gen_len: int = 5, gen_text: str = "reply",
-                 can_shift: bool = True, fragments: TemplateFragments = DEFAULT_FRAGMENTS) -> None:
+    def __init__(self, gen_tokens: int = 5, gen_text: str = "reply",
+                 can_shift: bool = True,
+                 fragments: TemplateFragments = DEFAULT_FRAGMENTS,
+                 calls_tools: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
         self._fragments = fragments
+        # A second model, one that writes tool calls. Its tags are recovered
+        # from the renders below, the way a real model's are.
+        self._calls_tools = calls_tools
         self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
         self.rebuilds = 0  # how many times the cache was rebuilt (no-shift path)
         self.warmups = 0  # how many times warmup() was called
-        self._gen_len = gen_len
+        self._gen_tokens = gen_tokens
         self._gen_text = gen_text
         self._next_gen = 1000
 
@@ -145,7 +142,7 @@ class FakeContext:
                 turn_open = False
                 continue
             out.append(f"<|turn>{role}\n")
-            calls = m.get("tool_calls", ())
+            calls = m.get("tool_calls", ()) if self._calls_tools else ()
             for call in calls:
                 fn = call["function"]
                 body = ",".join(
@@ -177,7 +174,7 @@ class FakeContext:
         if tool_tokens is not None and self.call_script:
             yield from self._generate_call(generated, tool_tokens)
             return generated
-        n = max(0, min(self._gen_len, max_generated_tokens))
+        n = max(0, min(self._gen_tokens, max_generated_tokens))
         for i in range(n):
             if cancel is not None and cancel.is_set():
                 generated.stop_reason = "interrupted"
@@ -193,7 +190,8 @@ class FakeContext:
                 generated.stop_reason = "interrupted"
                 raise
         else:
-            generated.stop_reason = "end_of_turn" if n == self._gen_len else "token_limit"
+            generated.stop_reason = ("end_of_turn" if n == self._gen_tokens
+                                    else "token_limit")
         self._next_gen += n
         return generated
 

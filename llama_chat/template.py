@@ -9,8 +9,8 @@ from dataclasses import dataclass
 class CallBody:
     """How a model spells a function name and its arguments between the tags.
 
-    Recovered from the model's own template, or supplied via
-    ``ChatWrapper(call_body=...)``. See the README, "Tool calling", for the
+    Recovered from the model's own template, or supplied as the ``body`` of
+    ``ChatWrapper(tool_calls=...)``. See the README, "Tool calling", for the
     shapes these fields take on real models.
 
     Attributes:
@@ -36,9 +36,9 @@ class CallBody:
 
 @dataclass(frozen=True)
 class ToolCallFragments:
-    """What a model's template puts around a tool call it generates.
+    """How a model writes a tool call: the tags around it, and what is inside.
 
-    Both fields are taken verbatim from a render, so either may carry fixed
+    The two tags are taken verbatim from a render, so either may carry fixed
     text past the tag itself. Narrowing one to the single tag it holds needs a
     vocabulary, which this module has none of.
 
@@ -47,10 +47,13 @@ class ToolCallFragments:
             name of the function being called.
         call_close: What stands between a call's last argument and whatever
             follows the call.
+        body: How the name and the arguments are spelled between the tags, or
+            ``None`` to have it recovered from the model.
     """
 
     call_open: str
     call_close: str
+    body: CallBody | None = None
 
 
 @dataclass(frozen=True)
@@ -58,7 +61,8 @@ class TemplateFragments:
     """The per-role template tags a turn is wrapped in.
 
     A turn renders as ``prefix + content + suffix``. Recovered from the model's
-    own GGUF chat template, or supplied via ``ChatWrapper(fragments=...)``.
+    own GGUF chat template, or supplied via ``ChatWrapper(fragments=...)``. What
+    a tool call is wrapped in is :class:`ToolCallFragments`, its own argument.
 
     Attributes:
         system_prefix, system_suffix: Wrap a system turn.
@@ -67,9 +71,6 @@ class TemplateFragments:
         trim_content: Strip surrounding whitespace from each message's content,
             matching templates that apply Jinja ``| trim``. ``False`` emits it
             verbatim.
-        tools: How this model brackets a tool call, or ``None`` where it does
-            not call tools. The brackets only; what a call spells between them
-            is :class:`CallBody`.
     """
 
     system_prefix: str
@@ -79,7 +80,6 @@ class TemplateFragments:
     assistant_prefix: str
     assistant_suffix: str
     trim_content: bool = True
-    tools: ToolCallFragments | None = None
 
 
 class TemplateFormatter:

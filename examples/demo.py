@@ -9,10 +9,11 @@ Install the package first (see install.sh or README), then run:
     python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 
 The demo proves the core claim by logging how many tokens are *prefilled* per
-action: after ``begin`` primes the conversation, each ``generate`` prefills only
-its own new prompt, never the surviving history. The eviction stress run uses
-a deliberately tiny context to show the oldest messages being dropped while the
-system prompt survives and the total never crosses ``context_size``.
+action: after ``begin`` primes the conversation, each ``reply_without_tools``
+prefills only its own new prompt, never the surviving history. The eviction
+stress run uses a deliberately tiny context to show the oldest messages being
+dropped while the system prompt survives and the total never crosses
+``context_size``.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def main() -> None:
 
     for q in ["What's my name?", "What am I building?", "Suggest one optimization."]:
         before = ctx.prefilled
-        reply = w.generate(q)
+        reply = w.reply_without_tools(q)
         print(f"\n> {q}")
         print(f"  reply: {reply.text.strip()[:200]}")
         print(
@@ -112,7 +113,8 @@ def main() -> None:
     sw = ChatWrapper(small, context=KVContext(small))
     sw.begin("You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
-        reply = sw.generate(f"Give me fact number {i} about the planet Mars, briefly.")
+        reply = sw.reply_without_tools(
+            f"Give me fact number {i} about the planet Mars, briefly.")
         roles = [r["role"] for r in sw.snapshot()]
         assert roles[0] == "system", "system prompt was evicted!"
         assert sw.total_tokens <= small.context_size, "context overflow!"

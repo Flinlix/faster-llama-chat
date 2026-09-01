@@ -113,14 +113,14 @@ def test_inject_evicts_oldest_to_fit():
     _assert_consistent(w, fake)
 
 
-# ----- generate ----------------------------------------------------------
-def test_generate_prefills_only_new_tokens_and_reuses_context():
-    fake = FakeContext(gen_len=4, gen_text="abcd")
+# ----- replying without tools --------------------------------------------
+def test_reply_without_tools_prefills_only_new_tokens_and_reuses_context():
+    fake = FakeContext(gen_tokens=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0, max_reply_tokens=50), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "hello")])
     prefilled_after_begin = fake.total_prefilled()
 
-    reply = w.generate("what's up?")
+    reply = w.reply_without_tools("what's up?")
 
     # The only new prefill is the request prompt (user fragment + assistant-open)
     # plus the turn-closing tag, never any survivor.
@@ -142,13 +142,13 @@ def test_the_request_and_its_opening_tag_are_one_decode():
     waiting through. Splitting them again would be invisible to every other
     assertion here, so it gets its own.
     """
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
     mark = len(fake.prefill_calls)
 
-    reply = w.generate("hi")
+    reply = w.reply_without_tools("hi")
 
     prompt_call, close_call = fake.prefill_calls[mark:]
     assert prompt_call[1] == reply.n_prefilled_tokens     # user fragment + assistant-open
@@ -159,12 +159,12 @@ def test_the_request_and_its_opening_tag_are_one_decode():
 
 
 def test_a_second_generation_does_not_reprefill_history():
-    fake = FakeContext(gen_len=3)
+    fake = FakeContext(gen_tokens=3)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    w.generate("first")
+    w.reply_without_tools("first")
     mark = fake.total_prefilled()
-    reply = w.generate("second")
+    reply = w.reply_without_tools("second")
     # The second generation prefills only its own prompt and closer; the fake's
     # append-only assertion already guarantees no survivor was re-prefilled.
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
@@ -173,21 +173,21 @@ def test_a_second_generation_does_not_reprefill_history():
 
 
 # ----- streaming ---------------------------------------------------------
-def test_generate_stream_yields_incremental_deltas():
-    fake = FakeContext(gen_len=4, gen_text="abcd")
+def test_reply_without_tools_stream_yields_incremental_deltas():
+    fake = FakeContext(gen_tokens=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    deltas = list(w.generate_stream("hi"))
+    deltas = list(w.reply_without_tools_stream("hi"))
     assert "".join(deltas) == "abcd"
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
 
 
-def test_generate_drains_generate_stream_and_returns_the_reply():
-    fake = FakeContext(gen_len=3, gen_text="xyz")
+def test_reply_without_tools_drains_its_own_stream():
+    fake = FakeContext(gen_tokens=3, gen_text="xyz")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    reply = w.generate("hi")
+    reply = w.reply_without_tools("hi")
     assert reply.text == "xyz"
     assert reply.n_generated_tokens == 3
     _assert_consistent(w, fake)
@@ -195,11 +195,11 @@ def test_generate_drains_generate_stream_and_returns_the_reply():
 
 def test_bargein_keeps_cache_consistent():
     # Consume only the first delta, then abandon the stream (close the generator).
-    fake = FakeContext(gen_len=8, gen_text="abcdefgh")
+    fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
 
-    stream = w.generate_stream("hi")
+    stream = w.reply_without_tools_stream("hi")
     first = next(stream)
     assert first == "a"
     stream.close()  # barge-in: stop early
@@ -210,18 +210,18 @@ def test_bargein_keeps_cache_consistent():
     _assert_consistent(w, fake)
 
     # A following generation proceeds normally on the consistent cache.
-    reply = w.generate("again")
+    reply = w.reply_without_tools("again")
     assert reply.stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
 
 def test_cancel_event_interrupts_midstream():
-    fake = FakeContext(gen_len=8, gen_text="abcdefgh")
+    fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
 
     cancel = threading.Event()
-    stream = w.generate_stream("hi", cancel=cancel)
+    stream = w.reply_without_tools_stream("hi", cancel=cancel)
     assert next(stream) == "a"
     cancel.set()  # e.g. from another thread (barge-in)
     try:
@@ -236,17 +236,17 @@ def test_cancel_event_interrupts_midstream():
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
     # The spent event is scoped to that call; the next generation runs normally.
-    assert w.generate("again").stop_reason == "end_of_turn"
+    assert w.reply_without_tools("again").stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
 
 def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
-    fake = FakeContext(gen_len=5)
+    fake = FakeContext(gen_tokens=5)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     cancel = threading.Event()
     cancel.set()
-    reply = w.generate("hi", cancel=cancel)
+    reply = w.reply_without_tools("hi", cancel=cancel)
     assert reply.stop_reason == "interrupted"
     assert reply.n_generated_tokens == 0
     # The empty assistant turn is still closed cleanly and recorded.
@@ -287,7 +287,7 @@ def test_generator_close_marks_interrupted():
     # itself is unreachable after close(): Python offers no return channel).
     from llama_chat.context import GenerationAccumulator
 
-    fake = FakeContext(gen_len=5, gen_text="abcde")
+    fake = FakeContext(gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
     g = fake.generate(0, 5, [], out=acc)
     next(g)
@@ -296,21 +296,21 @@ def test_generator_close_marks_interrupted():
 
 
 def test_generation_is_capped_to_the_context_size():
-    fake = FakeContext(gen_len=100)  # would generate 100 if uncapped
+    fake = FakeContext(gen_tokens=100)  # would generate 100 if uncapped
     w = ChatWrapper(_config(context_size=110, evict_above_fraction=1.0, max_reply_tokens=100), context=fake)
     w.begin("s")
-    reply = w.generate("hello")
+    reply = w.reply_without_tools("hello")
     assert w.total_tokens <= 110
     assert reply.n_generated_tokens < 100
     _assert_consistent(w, fake)
 
 
-def test_generate_evicts_then_stays_within_context():
-    fake = FakeContext(gen_len=2)
+def test_reply_without_tools_evicts_then_stays_within_context():
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.generate(f"message number {i} with some length")
+        w.reply_without_tools(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"
         assert w.total_tokens <= w._config.context_size
@@ -320,11 +320,11 @@ def test_generate_evicts_then_stays_within_context():
 def test_the_cache_rests_under_the_threshold_after_a_generation():
     # The reply is appended first, then older turns are trimmed, so the cache
     # rests at or below threshold once the generation returns.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.generate(f"message number {i} with some length")
+        w.reply_without_tools(f"message number {i} with some length")
         assert w.total_tokens <= w._config.evict_above_tokens  # rests under threshold
         assert w.snapshot()[0]["role"] == "system"        # system survives
         assert w.snapshot()[-1]["role"] == "assistant"    # newest turn kept
@@ -336,14 +336,14 @@ def test_turn_closes_after_the_eviction_not_before():
     # decoded last and carries it instead of the next generation's prefill.
     # Ordering is the whole point, hence the assertion. See the README,
     # "How eviction works".
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
 
     evicting = 0
     for i in range(8):
         n_evictions = len(fake.evictions)
-        reply = w.generate(f"message number {i} with some length")
+        reply = w.reply_without_tools(f"message number {i} with some length")
         if reply.n_evicted_messages:
             evicting += 1
             # The eviction landed, and the closer is the turn's last prefill.
@@ -358,13 +358,13 @@ def test_turn_closes_after_the_eviction_not_before():
 def test_rebuild_mode_does_not_decode_the_closer_twice():
     # can_shift=False re-prefills the whole table, closer included, so closing
     # the turn afterwards must be a no-op rather than a duplicate decode.
-    fake = FakeContext(gen_len=2, can_shift=False)
+    fake = FakeContext(gen_tokens=2, can_shift=False)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     rebuilt = 0
     for i in range(8):
         before = fake.rebuilds
-        w.generate(f"message number {i} with some length")
+        w.reply_without_tools(f"message number {i} with some length")
         rebuilt += fake.rebuilds > before
         _assert_consistent(w, fake)          # would double-count the closer
     assert rebuilt
@@ -378,11 +378,11 @@ def _n_kept(wrapper):
 
 def test_a_generation_evicts_down_to_the_message_limit():
     # Far under the token threshold, so the message count is the only trigger.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=4), context=fake)
     w.begin("s")
     for i in range(8):
-        w.generate(f"q{i}")
+        w.reply_without_tools(f"q{i}")
         assert _n_kept(w) <= 4
         assert w.total_tokens < w._config.evict_above_tokens  # the tokens never bound
         assert w.snapshot()[0]["role"] == "system"       # system still survives
@@ -394,11 +394,11 @@ def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
     # Same conversation under each limit alone, then under both: whichever
     # would evict more is what the pair evicts, because either one triggers.
     def kept_under(**limits):
-        fake = FakeContext(gen_len=2)
+        fake = FakeContext(gen_tokens=2)
         w = ChatWrapper(_config(context_size=400, **limits), context=fake)
         w.begin("s")
         for i in range(8):
-            w.generate(f"message number {i} with some length")
+            w.reply_without_tools(f"message number {i} with some length")
         _assert_consistent(w, fake)
         return _n_kept(w)
 
@@ -410,12 +410,12 @@ def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
 
 def test_a_limit_that_never_binds_changes_nothing():
     def snapshot_under(**limits):
-        fake = FakeContext(gen_len=2)
+        fake = FakeContext(gen_tokens=2)
         w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.5, **limits),
                         context=fake)
         w.begin("s")
         for i in range(8):
-            w.generate(f"message number {i} with some length")
+            w.reply_without_tools(f"message number {i} with some length")
         return w.snapshot()
 
     assert snapshot_under() == snapshot_under(max_history_messages=100)
@@ -424,7 +424,7 @@ def test_a_limit_that_never_binds_changes_nothing():
 def test_inject_evicts_to_leave_room_under_the_message_limit():
     # inject evicts before appending, so the arriving message counts against
     # the limit while it is still absent from the table.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=3), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")])
     assert _n_kept(w) == 3
@@ -436,7 +436,7 @@ def test_inject_evicts_to_leave_room_under_the_message_limit():
 
 def test_begin_prefills_no_more_than_the_message_limit():
     # Without the cap, begin would prefill history the first turn then evicts.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=2), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "d")])
     assert [r["text"] for r in w.snapshot()] == ["s", "c", "d"]  # newest two
@@ -446,11 +446,11 @@ def test_begin_prefills_no_more_than_the_message_limit():
 def test_a_limit_of_one_keeps_the_newest_message_and_the_system_prompt():
     # The floor: eviction stops with one message left, so a turn still closes
     # and the reply it just produced is the message that survives.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=1), context=fake)
     w.begin("s")
     for i in range(3):
-        w.generate(f"q{i}")
+        w.reply_without_tools(f"q{i}")
         assert [r["role"] for r in w.snapshot()] == ["system", "assistant"]
         _assert_consistent(w, fake)
 
@@ -458,13 +458,13 @@ def test_a_limit_of_one_keeps_the_newest_message_and_the_system_prompt():
 def test_the_limit_holds_across_every_action_that_appends():
     # The property, not three examples: whatever the mix of actions, the count
     # never exceeds the limit and the system prompt is never the one dropped.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=3), context=fake)
     w.begin("s", [("user", "old"), ("assistant", "older")])
     for i in range(6):
         w.inject(f"context {i}")
         assert _n_kept(w) <= 3
-        w.generate(f"q{i}")
+        w.reply_without_tools(f"q{i}")
         assert _n_kept(w) <= 3
         assert w.snapshot()[0]["role"] == "system"
         _assert_consistent(w, fake)
@@ -472,12 +472,12 @@ def test_the_limit_holds_across_every_action_that_appends():
 
 def test_eviction_shift_mode_does_not_rebuild():
     # Default cache supports shifting: eviction uses apply_eviction, never rebuild.
-    fake = FakeContext(gen_len=2)  # can_shift=True
+    fake = FakeContext(gen_tokens=2)  # can_shift=True
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds  # begin() resets once
     for i in range(8):
-        w.generate(f"message number {i} with some length")
+        w.reply_without_tools(f"message number {i} with some length")
     assert len(fake.evictions) > 0          # eviction did happen
     assert fake.rebuilds == rebuilds_after_begin  # but never via rebuild
     _assert_consistent(w, fake)
@@ -485,12 +485,12 @@ def test_eviction_shift_mode_does_not_rebuild():
 
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
     # Cache cannot shift: eviction drops oldest from bookkeeping and re-prefills.
-    fake = FakeContext(gen_len=2, can_shift=False)
+    fake = FakeContext(gen_tokens=2, can_shift=False)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds
     for i in range(8):
-        w.generate(f"message number {i} with some length")
+        w.reply_without_tools(f"message number {i} with some length")
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"             # system survives
         assert w.total_tokens <= w._config.context_size   # never overflows
@@ -509,7 +509,7 @@ def test_oversize_reject():
 
 def test_oversize_reject_leaves_history_intact():
     # Rejecting an unfittable message must not evict the history first.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.5, oversize_policy="reject"), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "yo")])
     before = w.snapshot()
@@ -562,7 +562,7 @@ def test_begin_rejects_system_prompt_over_threshold():
 
 
 def test_failed_begin_keeps_previous_conversation():
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=1000, evict_above_fraction=0.05), context=fake)
     w.begin("s", [("user", "hi")])
     before = w.snapshot()
@@ -573,7 +573,7 @@ def test_failed_begin_keeps_previous_conversation():
 
 
 def test_close_is_idempotent_and_blocks_actions():
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     w.close()
@@ -583,16 +583,16 @@ def test_close_is_idempotent_and_blocks_actions():
     with pytest.raises(RuntimeError, match="closed"):
         w.inject("ctx")
     with pytest.raises(RuntimeError, match="closed"):
-        w.generate("hi")
+        w.reply_without_tools("hi")
 
 
 def test_context_manager_closes_on_exit():
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     with ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
         w.begin("s")
-        w.generate("hi")
+        w.reply_without_tools("hi")
     with pytest.raises(RuntimeError, match="closed"):
-        w.generate("again")
+        w.reply_without_tools("again")
 
 
 # ----- template formatting -----------------------------------------------
@@ -666,27 +666,27 @@ def test_content_is_tokenized_with_special_parsing_off():
 
 
 # ----- min-reply headroom guard ------------------------------------------
-def test_generate_refuses_when_too_little_room_to_reply():
-    fake = FakeContext(gen_len=2)
+def test_reply_without_tools_refuses_when_too_little_room_to_reply():
+    fake = FakeContext(gen_tokens=2)
     # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
     w = ChatWrapper(
         _config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=60), context=fake
     )
     w.begin("s")
     with pytest.raises(ContextOverflowError):
-        w.generate("hello")
+        w.reply_without_tools("hello")
     # The refused request never touched the cache.
     assert w.snapshot()[-1]["role"] == "system"
     _assert_consistent(w, fake)
 
 
-def test_generate_proceeds_when_headroom_is_sufficient():
-    fake = FakeContext(gen_len=2)
+def test_reply_without_tools_proceeds_when_headroom_is_sufficient():
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(
         _config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=10), context=fake
     )
     w.begin("s")
-    reply = w.generate("hello")
+    reply = w.reply_without_tools("hello")
     assert reply.n_generated_tokens == 2
     _assert_consistent(w, fake)
 
@@ -922,14 +922,14 @@ def test_wait_idle_is_true_when_nothing_holds_the_wrapper():
 
 
 def test_wait_idle_blocks_until_a_generation_releases_the_lock():
-    fake = FakeContext(gen_len=3, gen_text="abc")
+    fake = FakeContext(gen_tokens=3, gen_text="abc")
     w = ChatWrapper(_config(context_size=200), context=fake)
     w.begin("sys")
 
     entered, release = threading.Event(), threading.Event()
 
     def generate():
-        stream = w.generate_stream("hi")
+        stream = w.reply_without_tools_stream("hi")
         next(stream)                 # takes the lock inside the generator body
         entered.set()
         release.wait(5)
@@ -957,10 +957,139 @@ def test_a_formatter_factory_customises_how_generation_opens():
     fake = FakeContext()
     w = ChatWrapper(_config(context_size=200), context=fake, formatter=NoThink)
     w.begin("sys")
-    w.generate("hi")
+    w.reply_without_tools("hi")
     # The suffix is really tokenized into the generation prompt ...
     assert any("<empty/>" in text for text, _special in fake.tokenize_calls)
     # ... and only there: the history-wrapping fragments are untouched, so the
     # cache layout and the template validation see exactly what they did before.
     plain = ChatWrapper(_config(context_size=200), context=FakeContext())
     assert "<empty/>" not in plain._formatter.fragment("assistant", "yo")
+
+
+def test_a_formatter_that_loses_the_models_turn_tags_is_refused():
+    """A generation prompt is an addition to the turn tag, never a replacement.
+
+    Left unchecked, the first encodes every reply outside the turn it belongs
+    to, the second leaves that turn unterminated, and the last opens a second
+    turn inside the first. All three are shapes no template produces, and all
+    three surface as a worse reply rather than as an error.
+    """
+    class Replaces(TemplateFormatter):
+        def assistant_open(self) -> str:
+            return "<oops>"
+
+    class Drops(TemplateFormatter):
+        def assistant_close(self) -> str:
+            return "\n"
+
+    class Reopens(TemplateFormatter):
+        def resume_open(self) -> str:
+            return DEFAULT_FRAGMENTS.assistant_prefix + "<empty/>"
+
+    for broken, complaint in ((Replaces, "assistant_open"),
+                              (Drops, "assistant_close"),
+                              (Reopens, "resume_open")):
+        with pytest.raises(ValueError, match=complaint):
+            ChatWrapper(_config(), context=FakeContext(), formatter=broken)
+
+
+def test_a_cache_context_missing_an_edit_is_refused_where_it_is_adopted():
+    """Eviction is the last thing a conversation reaches, and the first to fail.
+
+    A context that answers everything else runs for a whole conversation before
+    the threshold is crossed, so the check belongs where the context is taken.
+    """
+    class WithoutEviction:
+        """Everything the fake answers, minus the one edit eviction performs."""
+
+        def __init__(self) -> None:
+            self._real = FakeContext()
+
+        def __getattr__(self, name):
+            if name == "apply_eviction":
+                raise AttributeError(name)
+            return getattr(self._real, name)
+
+    with pytest.raises(TypeError, match="apply_eviction"):
+        ChatWrapper(_config(), context=WithoutEviction())
+
+
+# ----- a conversation has to be begun ------------------------------------
+def test_generating_before_begin_is_refused():
+    """Only begin prefills the sequence opener and the system prompt.
+
+    Generating without one asks the model to continue a conversation that has
+    no beginning, and nothing about the reply says so.
+    """
+    fake = FakeContext()
+    w = ChatWrapper(_config(context_size=200), context=fake)
+
+    with pytest.raises(ValueError, match="no conversation to generate into"):
+        w.reply_without_tools("hi")
+    with pytest.raises(ValueError, match="no conversation to inject into"):
+        w.inject("context")
+    assert fake.cache == []                 # and nothing was prefilled first
+
+    w.begin("sys")
+    assert w.reply_without_tools("hi").text == "reply"
+
+
+# ----- configurations that could never work ------------------------------
+def test_min_reply_tokens_at_the_context_size_is_refused():
+    """Every generate would raise, and the first one is too late to find out."""
+    with pytest.raises(ValueError, match="min_reply_tokens"):
+        _config(context_size=64, min_reply_tokens=64)
+    _config(context_size=64, min_reply_tokens=63)        # one token to reply in
+
+
+def test_an_eviction_threshold_that_rounds_to_nothing_is_refused():
+    with pytest.raises(ValueError, match="rounds down to no tokens"):
+        _config(context_size=8, evict_above_fraction=0.1)
+
+
+# ----- the stream and the reply it produced ------------------------------
+def test_a_stream_hands_back_the_reply_it_produced():
+    """A plain for loop leaves the summary behind, with no StopIteration to catch."""
+    fake = FakeContext(gen_tokens=3, gen_text="abc")
+    w = ChatWrapper(_config(context_size=200), context=fake)
+    w.begin("sys")
+
+    stream = w.reply_without_tools_stream("hi")
+    assert stream.reply is None                  # lazy: nothing has run yet
+    assert "".join(stream) == "abc"
+
+    assert stream.reply.n_generated_tokens == 3
+    assert stream.reply.stop_reason == "end_of_turn"
+    _assert_consistent(w, fake)
+
+
+def test_a_second_pass_over_a_finished_stream_keeps_the_reply():
+    """A spent generator returns ``None``, which must not replace the summary."""
+    fake = FakeContext(gen_tokens=3, gen_text="abc")
+    w = ChatWrapper(_config(context_size=200), context=fake)
+    w.begin("sys")
+
+    stream = w.reply_without_tools_stream("hi")
+    list(stream)
+    produced = stream.reply
+
+    assert list(stream) == []
+    assert stream.reply is produced
+
+
+def test_a_stream_closed_early_ends_the_turn_and_reports_no_reply():
+    """There is no summary of a reply nobody read to the end.
+
+    The turn is closed all the same, which is what the next request needs.
+    """
+    fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
+    w = ChatWrapper(_config(context_size=200), context=fake)
+    w.begin("sys")
+
+    with w.reply_without_tools_stream("hi") as stream:
+        assert next(stream) == "a"               # read one delta, then leave
+
+    assert stream.reply is None
+    assert not w.reply_open
+    _assert_consistent(w, fake)
+    assert w.reply_without_tools("weiter").stop_reason == "end_of_turn"

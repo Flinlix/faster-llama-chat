@@ -1,10 +1,10 @@
 """ChatWrapper: the public API, prefilling as little as possible.
 
 ``begin`` resets and prefills the system prompt plus what recent history fits;
-``inject`` prefills one message without generating; ``generate`` and
-``generate_stream`` prefill only the new request and then generate. Crossing either eviction limit
-removes the oldest non-system messages and shifts the survivors down, reusing
-their KV.
+``inject`` prefills one message without generating; ``reply_without_tools``
+and ``reply_without_tools_stream`` prefill only the new request and then
+generate. Crossing either eviction limit removes the oldest non-system messages
+and shifts the survivors down, reusing their KV.
 
 Two invariants hold after every action, and the tests enforce both: the physical
 cache equals the concatenation of the message table, and every prefill appends
@@ -17,23 +17,32 @@ it. See the README, "How eviction works".
 from __future__ import annotations
 
 import json
+import math
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
+from typing import Generic, TypeVar
 
+from .call_parsing import parse_calls
 from .config import Config
 from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, n_newest_that_fit
-from .template import CallBody, TemplateFragments, TemplateFormatter
-from .template_extract import extract_call_body
-from .tools import ToolCall, ToolRegistry, ToolSpec, parse_calls
+from .resolved_template import ResolvedTemplate, ensure_context_answers
+from .template import TemplateFragments, TemplateFormatter, ToolCallFragments
+from .tools import ToolCall, ToolRegistry, ToolSpec
 
 
-# Where the prompt, a tool result and the reply after it go in a render. No one
-# of them contains another, so a split on any lands where it means to.
-_PROMPT = "PROMPTMSG"
-_RESULT = "RESULTMSG"
-_TAIL = "TAILMSG"
+# The name a result block carries where no real one is to be had: answering a
+# call that could not be read that far. Which name is used does not change what
+# a template renders around it.
+_UNKNOWN_FUNCTION = "unknown"
+
+# What the wrapper calls on its cache context, checked where one is adopted
+# rather than at the first call that reaches what is missing. Resolving the
+# template checks what it calls for itself.
+_CACHE_CONTEXT_SURFACE = ("tokenize", "tokenize_fragment", "prefill", "reset",
+                          "warmup", "generate", "apply_eviction", "can_shift",
+                          "close")
 
 
 class ContextOverflowError(RuntimeError):
@@ -44,8 +53,8 @@ class ContextOverflowError(RuntimeError):
 class Reply:
     """What one request produced.
 
-    One generation, or, where tools ran, every generation of the exchange:
-    the counts are then sums and ``stop_reason`` is the last one's.
+    One generation, or, where the request took several, all of them: the counts
+    are then sums and ``stop_reason`` is the last one's.
 
     Attributes:
         text: The assistant's reply, trimmed at any stop string.
@@ -56,9 +65,9 @@ class Reply:
         stop_reason: One of ``"end_of_turn"``, ``"stop_string"``,
             ``"token_limit"``, ``"interrupted"``, ``"tool_call"`` or
             ``"unreadable_tool_call"``.
-        tool_calls: The calls the model made, in the order it made them. A reply
-            that stopped on one leaves its turn open until every one of them has
-            a result.
+        tool_calls: The calls the model made, in the order it made them.
+            Reported whatever became of them, so a call that was refused rather
+            than run still says what the model asked for.
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran with the call tokens withheld. Always ``False``
             where no call was asked for.
@@ -73,27 +82,54 @@ class Reply:
     tool_limit_reached: bool = False
 
 
-@dataclass(frozen=True)
-class _SystemTurnSplit:
-    """The system turn this model renders, with tools declared and without.
+_Delta = TypeVar("_Delta")
 
-    Split where the prompt goes, so the declarations are what the two renders
-    differ by. Which side of the prompt they land on is the template's business.
+
+class ReplyStream(Generic[_Delta]):
+    """One request's deltas, and the :class:`Reply` they add up to.
+
+    Iterate it for what the model produces, then read :attr:`reply` for the
+    summary. Closing it early ends the turn cleanly and leaves :attr:`reply`
+    unset, there being no summary of a reply nobody read to the end. Closing is
+    what an abandoned stream needs, so it is also a context manager.
 
     Attributes:
-        declared_head, declared_tail: What the render with tools puts before
-            and after the prompt.
-        plain_head, plain_tail: The same for the render without them.
+        reply: The summary, ``None`` until the stream has ended of its own
+            accord.
     """
 
-    declared_head: str
-    declared_tail: str
-    plain_head: str
-    plain_tail: str
+    def __init__(self, deltas: Generator[_Delta, None, Reply]) -> None:
+        self._deltas = deltas
+        self.reply: Reply | None = None
+
+    def __iter__(self) -> ReplyStream[_Delta]:
+        return self
+
+    def __next__(self) -> _Delta:
+        # A second pass over a finished stream yields nothing and leaves the
+        # summary standing, rather than replacing it with the None a spent
+        # generator returns.
+        if self.reply is not None:
+            raise StopIteration
+        try:
+            return next(self._deltas)
+        except StopIteration as ended:
+            self.reply = ended.value
+            raise
+
+    def close(self) -> None:
+        """Stop reading and end the turn. Idempotent, as a generator's is."""
+        self._deltas.close()
+
+    def __enter__(self) -> ReplyStream[_Delta]:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
 
 
 class ChatWrapper:
-    """Stateful single-conversation chat over llama.cpp with KV reuse."""
+    """Stateful single-conversation chat over a cache context, with KV reuse."""
 
     # ----- setting up ----------------------------------------------------------
     def __init__(
@@ -102,7 +138,7 @@ class ChatWrapper:
         context: KVContext | None = None,
         *,
         fragments: TemplateFragments | None = None,
-        call_body: CallBody | None = None,
+        tool_calls: ToolCallFragments | None = None,
         formatter: Callable[[TemplateFragments], TemplateFormatter] | None = None,
         on_message: Callable[[str, str], None] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
@@ -117,9 +153,10 @@ class ChatWrapper:
                 construction that fails part-way leaves it alone.
             fragments: Explicit chat-template fragments, for a model that ships
                 no embedded template. Recovered from the model otherwise.
-            call_body: Explicit argument spelling, for a model whose call shape
-                the probes cannot recover. Without one, such a model still
-                detects its calls and reports them unreadable.
+            tool_calls: Explicit call tags, and optionally the argument
+                spelling inside them, for a model whose template describes
+                neither. Without the spelling, such a model still detects its
+                calls and reports them unreadable.
             formatter: Factory building the :class:`TemplateFormatter` from the
                 resolved fragments, for a generation prompt that carries more
                 than the turn tag.
@@ -133,9 +170,12 @@ class ChatWrapper:
                 to build the config when ``config`` is not given.
 
         Raises:
-            TypeError: If both ``config`` and config ``**kwargs`` are passed.
-            ValueError: If the chat template cannot be recovered or fails
-                validation against the model.
+            TypeError: If both ``config`` and config ``**kwargs`` are passed,
+                or if ``context`` does not answer everything the wrapper calls
+                on it.
+            ValueError: If the chat template cannot be recovered, if it fails
+                validation against the model, or if ``formatter`` builds one
+                that does not keep the model's own turn tags.
         """
         if config is None:
             config = Config(**kwargs)
@@ -151,40 +191,42 @@ class ChatWrapper:
             if owns_context else context
         )
         self._config = config
+        # Everything that can be settled about this model is settled here, so
+        # that what fails, fails while the wrapper is being built.
         try:
-            self._fragments = fragments if fragments is not None else self._resolve_fragments()
-            self._validate_template(self._fragments)
-            self._formatter = (formatter or TemplateFormatter)(self._fragments)
-            self._check_fragments_match_model()
+            ensure_context_answers(self._context, _CACHE_CONTEXT_SURFACE)
+            self._template = ResolvedTemplate(
+                self._context, fragments=fragments, tool_calls=tool_calls,
+                formatter=formatter)
+            # Named here as well, being read on every turn.
+            self._formatter = self._template.formatter
         except BaseException:
             if owns_context:
                 self._context.close()
             raise
         self._table = MessageTable()
-        # None where this model cannot call tools at all.
-        self._tool_tokens, self._call_lead_in = self._resolve_tool_tokens()
-        self._call_body = (call_body if call_body is not None
-                           else self._resolve_call_body())
         self._registry = None
         # An open turn and the calls owing a result are not the same thing: the
         # last result empties the list while the turn is still open.
         self._reply_open = False
         self._pending_calls = []
-        # Not read off the table: `declare_tools` appends a system-role message,
+        # Not read off the table: `declare_unknown_tools` appends a system-role message,
         # so one stray call would make an unbegun table look begun.
         self._begun = False
         self._warmed = False
         self._closed = False
         # One KV sequence is shared across generations, so concurrent decodes
-        # would corrupt it. `generate_stream` holds this for the whole one.
+        # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
 
     def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None,
               tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
-        The first call also warms the generation graph, so the first ``generate``
-        streams without a cold start.
+        The first call also warms the generation graph, so the first request
+        streams without a cold start. Every other action refuses until this has
+        run, because only this prefills the sequence opener and the system
+        prompt.
 
         Args:
             system_prompt: Always kept, never evicted.
@@ -193,14 +235,20 @@ class ChatWrapper:
                 under both eviction limits; older excess is dropped.
             tools: Tools to declare, rendered into the system turn where this
                 model's template puts them, which is the one placement that
-                costs no extra prefill. A whole
-                :class:`~llama_chat.tools.ToolRegistry` is kept, so
-                :meth:`answer` needs no registry of its own; a list of specs is
-                declared and not kept.
+                costs no extra prefill and that no eviction can take back. From
+                a whole :class:`~llama_chat.tools.ToolRegistry`, what it marks
+                for the system prompt; the rest waits for
+                :meth:`declare_unknown_tools`. A registry is also kept, so
+                :meth:`reply_with_tools` needs none of its own; a list of specs
+                is declared and not kept. Refused up front where this model
+                could not use them, rather than at the first call.
 
         Raises:
             ValueError: If the system prompt alone exceeds
-                ``evict_above_tokens``. The previous conversation is left intact.
+                ``evict_above_tokens``, or if ``tools`` names anything and this
+                model cannot call tools: no call in its template, no
+                declarations, no recoverable argument spelling, or no result
+                block. The previous conversation is left intact either way.
         """
         messages = messages or []
         with self._lock:
@@ -208,7 +256,9 @@ class ChatWrapper:
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
             registry = tools if isinstance(tools, ToolRegistry) else None
-            specs = registry.specs_to_declare() if registry is not None else tools
+            specs = _specs_for_system_prompt(tools)
+            if specs:
+                self._template.ensure_tools_usable()
             sys_tokens = self._system_tokens(system_prompt, specs)
             if len(sys_tokens) > self._config.evict_above_tokens:
                 raise ValueError(
@@ -246,7 +296,9 @@ class ChatWrapper:
                 all_tokens.extend(toks)
             self._context.prefill(all_tokens, start_pos=0, want_logits=False)
 
-            self._table.append(Message("system", system_prompt, sys_tokens))
+            self._table.append(Message(
+                "system", system_prompt, sys_tokens,
+                declares=tuple(spec.name for spec in specs or [])))
             for (role, text), toks in zip(kept_messages, kept_tokens):
                 self._table.append(Message(role, text, toks))
             self._begun = True
@@ -262,12 +314,14 @@ class ChatWrapper:
             The number of messages evicted to make room.
 
         Raises:
-            ValueError: If a tool call has left a reply open, or if the message
-                cannot fit even after evicting every non-system message. Raised
-                before anything is evicted.
+            ValueError: If no conversation has been begun, if a tool call has
+                left a reply open, or if the message cannot fit even after
+                evicting every non-system message. Raised before anything is
+                evicted.
         """
         with self._lock:
             self._ensure_open()
+            self._ensure_begun("inject into")
             self._ensure_no_open_reply("inject")
             tokens = self._fragment_tokens(role, text)
             # Checked against the best case before anything is evicted, so a
@@ -286,23 +340,29 @@ class ChatWrapper:
                 self._on_message(role, text)
             return evicted
 
-    # ----- asking: one generation ----------------------------------------------
-    def generate_stream(
+    # ----- asking: without tools -----------------------------------------------
+    def reply_without_tools_stream(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
-    ) -> Generator[str, None, Reply]:
+    ) -> ReplyStream[str]:
         """Add a user request and stream the reply token by token.
 
         Lazy: nothing happens, the headroom check included, until the first
         iteration. Closing the stream early still terminates the turn and
         records exactly the tokens that reached the cache, so the next
-        generation stays valid; a reply that stopped on a tool call is the exception, its
-        turn being left open on purpose.
+        generation stays valid.
 
-        The generator must be driven from one thread at a time. To interrupt
-        from another, pass ``cancel``. An abandoned generator holds the
-        wrapper's lock until it is collected, so always exhaust or close it.
+        Runs no tool, ever, not even one :meth:`begin` was given. A call the
+        model makes anyway is kept out of the reply text, told that the call
+        failed and that no tool can be run, and the reply goes on from there, so
+        the model can say in words that it could not do the thing. That costs
+        one further generation and is the only case where this is not a single
+        one.
+
+        The stream must be driven from one thread at a time. To interrupt from
+        another, pass ``cancel``. An abandoned stream holds the wrapper's lock
+        until it is collected, so exhaust it, close it, or use it in a ``with``.
 
         Args:
             text: The user request text, tokenized with special-token parsing
@@ -312,174 +372,148 @@ class ChatWrapper:
             cancel: Setting it, from any thread, stops generation within one
                 token and closes the turn with ``stop_reason == "interrupted"``.
 
-        Yields:
-            Reply text deltas.
-
         Returns:
-            A :class:`Reply` describing the reply and the work performed.
+            A :class:`ReplyStream` of the text deltas, whose ``reply`` is the
+            :class:`Reply` once it has ended.
 
         Raises:
-            ValueError: If a tool call has left a reply open.
-            ContextOverflowError: If too little room remains for the reply.
+            ValueError: If no conversation has been begun, or if a tool call
+                has left a reply open.
+            ContextOverflowError: If too little room remains for the reply, or
+                if the error answering a call no longer fits. The turn is then
+                open and cannot be continued.
         """
-        with self._lock:
-            self._ensure_open()
-            self._ensure_no_open_reply("start a request")
-            user_tokens = self._fragment_tokens("user", text)
-            open_tokens = self._context.tokenize(self._formatter.assistant_open(), add_special=False)
-            close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
+        return ReplyStream(self._generate_until_answered(
+            text, registry=None, max_reply_tokens=max_reply_tokens,
+            stop=stop, cancel=cancel))
 
-            # The prompt plus its turn closer must fit in the context.
-            user_tokens = self._fit_or_raise(
-                user_tokens,
-                budget=self._config.context_size - len(open_tokens) - len(close_tokens) - self._table.total,
-                description="request", role="user",
-            )
-            n_prompt = len(user_tokens) + len(open_tokens)
-
-            # Refused before the cache is mutated.
-            free = self._config.context_size - self._table.total - n_prompt - len(close_tokens)
-            if free < self._config.min_reply_tokens:
-                raise ContextOverflowError(
-                    f"only {free} tokens free for the reply "
-                    f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
-                    f"the request or lower evict_above_fraction"
-                )
-
-            # One decode for the request text and the assistant-open tag: the
-            # backend flags logits on the final token only either way.
-            self._context.prefill(user_tokens + open_tokens,
-                              start_pos=self._table.total, want_logits=True)
-            self._table.append(Message("user", text, user_tokens))
-            if self._on_message:
-                self._on_message("user", text)
-
-            return (yield from self._generate_into_reply(
-                open_tokens=open_tokens, close_tokens=close_tokens,
-                n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
-                cancel=cancel, allow_tools=True))
-
-    def generate(
+    def reply_without_tools(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
     ) -> Reply:
-        """Add a user request and generate a reply. :meth:`generate_stream`, drained."""
-        stream = self.generate_stream(text, max_reply_tokens=max_reply_tokens,
-                                      stop=stop, cancel=cancel)
-        try:
-            while True:
-                next(stream)
-        except StopIteration as done:
-            return done.value
+        """Add a user request and generate a reply, no tool of any kind run.
 
-    # ----- asking: until it answers --------------------------------------------
-    def answer_stream(self, text: str, registry: ToolRegistry | None = None, *,
-                      max_calls: int = 4,
-                      **kwargs) -> Generator[str, None, Reply]:
-        """Answer ``text``, running whatever tools the model calls on the way.
+        :meth:`reply_without_tools_stream`, drained.
+        """
+        stream = self.reply_without_tools_stream(
+            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)
+        for _ in stream:
+            pass
+        return stream.reply     # set, the stream having ended of its own accord
 
-        Yields the reply's text deltas and nothing else, and returns the
-        :class:`Reply` summing every generation. The last permitted round withholds
-        the call tokens, so the turn always closes.
+    # ----- asking: with tools --------------------------------------------------
+    def reply_with_tools_stream(
+        self, text: str, registry: ToolRegistry | None = None, *,
+        max_calls: int | None = None, max_reply_tokens: int | None = None,
+        stop: list[str] | None = None,
+        cancel: threading.Event | None = None) -> ReplyStream[str]:
+        """Reply to ``text``, running whatever tools the model calls on the way.
+
+        Yields the reply's text deltas and nothing else; the stream's ``reply``
+        sums every generation. The last permitted round withholds the call
+        tokens, so the turn always closes.
 
         Args:
             text: The request.
             registry: What to run calls against. Defaults to the one
                 :meth:`begin` was given. Without either, a call the model
                 invented is answered saying so and the reply goes on.
-            max_calls: How many tools one turn may use. A call past the ceiling
-                is answered with an error result rather than run.
-            **kwargs: Passed to every generation, so ``max_reply_tokens``
-                bounds each one rather than the whole exchange.
+            max_calls: How many tools one turn may use. ``None``, the
+                default, sets no ceiling: the exchange runs until the model
+                stops calling, bounded only by the context. A call past a
+                ceiling is answered with an error result rather than run.
+            max_reply_tokens, stop, cancel: As
+                :meth:`reply_without_tools_stream`, and applied to every
+                generation of the exchange, so ``max_reply_tokens`` bounds each
+                one rather than the whole.
 
         Raises:
+            ValueError: If no conversation has been begun, or if a registry
+                holding tools is given to a model that could never call one.
+                Driving the loop yourself with :meth:`reply_until_tool` is not
+                refused, because nothing there promises a tool will run.
             ContextOverflowError: If a result no longer fits in what is left of
                 the context. The turn is then open and cannot be continued.
         """
-        registry = registry if registry is not None else self._registry
-        events = self.generate_events(text, **kwargs)
-        calls_left = max_calls
-        any_call_asked = False
-        generations: list[Reply] = []
-        try:
-            while True:
-                asked = []
-                while True:
-                    # Driven by hand rather than with `for`, which would discard
-                    # the Reply each generation returns.
-                    try:
-                        event = next(events)
-                    except StopIteration as ended:
-                        generations.append(ended.value)
-                        break
-                    if isinstance(event, ToolCall):
-                        asked.append(event)
-                    else:
-                        yield event
-                if not asked:
-                    # The ceiling binds only once a call has been asked for:
-                    # without one the last generation kept its call tokens.
-                    return _sum_generations(generations,
-                                            any_call_asked and calls_left == 0)
-                any_call_asked = True
-                # In the order asked, which is the order the template renders.
-                for call in asked:
-                    if registry is None:
-                        # Raising would leave the turn open with no way to end it.
-                        result = {"error": "no_tools",
-                                  "message": "this conversation has no tools"}
-                    elif calls_left > 0:
-                        result = registry.call(call)
-                        calls_left -= 1
-                    else:
-                        result = {"error": "tool_limit_reached",
-                                  "message": "no tool calls left in this turn; "
-                                             f"the limit is {max_calls}"}
-                    self.inject_tool_result(call.name, result)
-                events = self.resume_events(
-                    allow_tools=registry is not None and calls_left > 0,
-                    **kwargs)
-        finally:
-            events.close()   # the current generation holds the wrapper's lock
+        return ReplyStream(self._generate_until_answered(
+            text,
+            registry=registry if registry is not None else self._registry,
+            max_calls=max_calls, max_reply_tokens=max_reply_tokens, stop=stop,
+            cancel=cancel))
 
-    def answer(self, text: str, registry: ToolRegistry | None = None, *,
-               max_calls: int = 4, **kwargs) -> Reply:
-        """Answer ``text``, running whatever tools the model calls.
+    def reply_with_tools(self, text: str, registry: ToolRegistry | None = None,
+                         *, max_calls: int | None = None,
+                         max_reply_tokens: int | None = None,
+                         stop: list[str] | None = None,
+                         cancel: threading.Event | None = None) -> Reply:
+        """Reply to ``text``, running whatever tools the model calls.
 
-        :meth:`answer_stream`, drained. Arguments and failures are its own.
+        :meth:`reply_with_tools_stream`, drained. Arguments and failures are
+        its own.
 
         Returns:
             A :class:`Reply` summing every generation; the reply is its ``text``.
         """
-        stream = self.answer_stream(text, registry, max_calls=max_calls, **kwargs)
-        while True:
-            try:
-                next(stream)
-            except StopIteration as ended:
-                return ended.value
+        stream = self.reply_with_tools_stream(
+            text, registry, max_calls=max_calls,
+            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)
+        for _ in stream:
+            pass
+        return stream.reply     # set, the stream having ended of its own accord
 
     # ----- tools: driving the loop yourself ------------------------------------
-    def generate_events(self, text: str,
-                      **kwargs) -> Generator[str | ToolCall, None, Reply]:
-        """As :meth:`generate_stream`, but yielding tool calls as well as text.
+    def reply_until_tool(self, text: str, *,
+                         max_reply_tokens: int | None = None,
+                         stop: list[str] | None = None,
+                         cancel: threading.Event | None = None,
+                         ) -> ReplyStream[str | ToolCall]:
+        """Stream the reply, handing you each tool call as the model makes it.
 
         Yields ``str`` deltas, then one
         :class:`~llama_chat.tools.ToolCall` per call the model made. Answer each
-        with :meth:`inject_tool_result`, in order, then :meth:`resume_events`.
-        """
-        return (yield from _as_events(self.generate_stream(text, **kwargs)))
+        with :meth:`inject_tool_result`, in order, then :meth:`resume_until_tool`.
+        Asking to see the calls is what holds the turn open for them, so this
+        and :meth:`resume_until_tool` are the only entry points that leave one
+        unfinished.
 
-    def resume_events(self, **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        Raises:
+            ValueError: If no conversation has been begun, or if a tool call
+                has left a reply open.
+            ContextOverflowError: If too little room remains for the reply.
+        """
+        return ReplyStream(_deltas_then_calls(self._request_and_generate(
+            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)))
+
+    def resume_until_tool(self, *, max_reply_tokens: int | None = None,
+                          stop: list[str] | None = None,
+                          cancel: threading.Event | None = None,
+                          ) -> ReplyStream[str | ToolCall]:
         """Resume the reply a tool call interrupted.
 
-        Yields events as :meth:`generate_events` does. Every result must be in
-        first. ``allow_tools=False`` withholds the call tokens, so this generation
-        cannot end on another call and the turn is certain to close.
-        """
-        return (yield from _as_events(self._resume(**kwargs)))
+        Yields what :meth:`reply_until_tool` yields. Every result must be in
+        first, and this generation may itself end on another call, leaving the
+        turn open again for the same treatment.
 
-    def inject_tool_result(self, name: str, result) -> None:
+        Raises:
+            ValueError: If no reply is open, or if a call is still owed a
+                result.
+        """
+        return self._resume_until_tool(
+            allow_tools=True, max_reply_tokens=max_reply_tokens, stop=stop,
+            cancel=cancel)
+
+    def _resume_until_tool(self, *, allow_tools: bool,
+                           **kwargs) -> ReplyStream[str | ToolCall]:
+        """Resume, with the call tokens withheld where ``allow_tools`` is False.
+
+        Withholding is the exchange loop's business, not a caller's: it is what
+        makes the last permitted round certain to close the turn.
+        """
+        return ReplyStream(_deltas_then_calls(
+            self._resume(allow_tools=allow_tools, **kwargs)))
+
+    def inject_tool_result(self, call: ToolCall | str, result) -> int:
         """Hand the model what the tool it called returned.
 
         Prefilled inside the turn the call left open, wrapped the way this
@@ -488,15 +522,21 @@ class ChatWrapper:
         grows towards ``context_size``. See the README, "Tool calling".
 
         Args:
-            name: The function that ran. It must be the one the oldest
-                unanswered call asked for.
+            call: The call being answered, as it was handed to you, or its name
+                alone. Either way it must be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
 
+        Returns:
+            How many messages were evicted to make room, reported as
+            :meth:`inject` reports it. Nothing is evicted while a turn is open,
+            the result going inside it, so this is ``0``.
+
         Raises:
-            ValueError: If no call is waiting, or ``name`` is not the one owed.
+            ValueError: If no call is waiting, or this is not the one owed.
             ContextOverflowError: If not even the wrapping fits in what is left
                 of the context.
         """
+        name = call.name if isinstance(call, ToolCall) else call
         with self._lock:
             self._ensure_open()
             if not self._pending_calls:
@@ -506,55 +546,79 @@ class ChatWrapper:
                 raise ValueError(
                     f"the waiting call is {owed.name!r}, not {name!r}; results "
                     "are owed in the order the model asked for them")
-            # Everything that can fail happens before the first mutation.
-            prefix, suffix = self._result_wrapping(name)
-            tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
-            closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
-            body = self._context.tokenize(_result_text(result), add_special=False,
-                                      parse_special=False)
-            # The body is clipped to fit; the tags never are. See the README,
-            # "Tool calling".
-            free = self._config.context_size - self._table.total
-            if len(tags) + len(closing) > free:
-                raise ContextOverflowError(
-                    f"the result wrapping alone needs "
-                    f"{len(tags) + len(closing)} tokens but only {free} are "
-                    f"left in the context; this turn cannot be continued, "
-                    f"start a new conversation with begin()")
-            room = free - len(tags) - len(closing) - self._config.min_reply_tokens
-            tokens = tags + body[:max(0, room)] + closing
+            # Popped only once the write has succeeded, so a refused result
+            # leaves the call still owed.
+            self._write_tool_result(name, result)
             self._pending_calls.pop(0)      # results are owed in call order
-            self._context.prefill(tokens, start_pos=self._table.total, want_logits=True)
-            self._table.extend_last(tokens)
+            return 0
 
-    def declare_tools(self, specs: list[ToolSpec]) -> int:
-        """Tell the model about tools it was not told about at :meth:`begin`.
+    def _write_tool_result(self, name: str, result) -> None:
+        """Prefill one result block into the open turn. The lock must be held.
+
+        Raises:
+            ValueError: If this model's template renders no result block.
+            ContextOverflowError: If not even the wrapping fits in what is left
+                of the context.
+        """
+        # Everything that can fail happens before the first mutation.
+        prefix, suffix = self._template.result_wrapping(name)
+        tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
+        closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
+        body = self._context.tokenize(_result_text(result), add_special=False,
+                                      parse_special=False)
+        # The body is clipped to fit; the tags never are. See the README,
+        # "Tool calling".
+        free = self._config.context_size - self._table.total
+        if len(tags) + len(closing) > free:
+            raise ContextOverflowError(
+                f"the result wrapping alone needs "
+                f"{len(tags) + len(closing)} tokens but only {free} are "
+                f"left in the context; this turn cannot be continued, "
+                f"start a new conversation with begin()")
+        room = free - len(tags) - len(closing) - self._config.min_reply_tokens
+        tokens = tags + body[:max(0, room)] + closing
+        self._context.prefill(tokens, start_pos=self._table.total, want_logits=True)
+        self._table.extend_last(tokens)
+
+    def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
+        """Tell the model about the tools it has not been told about yet.
 
         Costs one prefill, and writes an ordinary message, so this declaration
         can be evicted later. One that has to survive belongs in ``begin``.
 
         Args:
-            specs: What to declare. An empty list does nothing.
+            tools: What to declare: a whole
+                :class:`~llama_chat.tools.ToolRegistry`, of which everything it
+                holds is taken, or the specs themselves. Nothing to
+                declare does nothing, and neither does a tool the conversation
+                already declares, wherever that declaration sits: the system
+                turn, which cannot be evicted, or a message this method wrote.
+                One whose message has since been evicted counts as unknown
+                again and is written back. The registry is not
+                kept, unlike ``begin``'s: which one a turn runs against is that
+                method's decision, and a declaration adds names rather than
+                replacing what can run.
 
         Returns:
             How many messages were evicted to make room.
 
         Raises:
             ValueError: If no conversation has been begun, if a tool call has
-                left a reply open, if this model's template declares no tools,
-                or if the declarations cannot fit beside the system prompt.
+                left a reply open, if this model cannot call tools at all (see
+                :meth:`begin`), if its template declares no tools, or if the
+                declarations cannot fit beside the system prompt.
         """
+        known = self._declared_names()
+        specs = [spec for spec in _all_specs(tools) or []
+                 if spec.name not in known]
         if not specs:
             return 0
         with self._lock:
             self._ensure_open()
+            self._ensure_begun("declare into")
             self._ensure_no_open_reply("declare tools")
-            # `begin` resets the table, so a declaration made before one would
-            # be thrown away without the caller ever learning of it.
-            if not self._begun:
-                raise ValueError("no conversation to declare into; call begin() "
-                                 "first, or pass tools= to it")
-            block = self._declaration_block(specs)
+            self._template.ensure_tools_usable()
+            block = self._template.declaration_block(specs)
             prefix, _, suffix = self._formatter.parts("system", "")
             # The model's own tags, so it joins the suffix and tokenizes
             # special-on. There is no caller text in this message.
@@ -571,7 +635,8 @@ class ChatWrapper:
             evicted = self._evict_until(
                 lambda: self._fits(len(tokens), arriving_messages=1))
             self._context.prefill(tokens, start_pos=self._table.total, want_logits=False)
-            self._table.append(Message("system", "", tokens))
+            self._table.append(Message("system", "", tokens,
+                                       declares=tuple(spec.name for spec in specs)))
             return evicted
 
     # ----- introspection -------------------------------------------------------
@@ -635,15 +700,19 @@ class ChatWrapper:
 
     @property
     def can_call_tools(self) -> bool:
-        """Whether tools can be used with this model.
+        """Whether tools can be used with this model, every step of the way.
 
-        ``False`` where the template describes no call, and where it describes
-        one whose argument spelling the probes could not recover: such a call is
+        Four things have to hold, and all are settled at construction: the
+        template describes a call, it renders the declarations that tell the
+        model a tool exists, the argument spelling was recovered, and it renders
+        a block to answer a call in. True here is exactly what :meth:`begin`
+        accepts ``tools`` for. Where only the spelling is missing a call is
         still detected, so :attr:`Reply.stop_reason` can still be
         ``"unreadable_tool_call"``, but nothing runnable comes out of it. Supply
-        the spelling with ``ChatWrapper(call_body=...)`` to make this ``True``.
+        the spelling as the body of ``ChatWrapper(tool_calls=...)`` to make
+        this ``True``.
         """
-        return self._tool_tokens is not None and self._call_body is not None
+        return self._template.can_call_tools
 
     @property
     def awaiting_tool_result(self) -> bool:
@@ -655,9 +724,9 @@ class ChatWrapper:
         """Whether a reply is unfinished, so no new message may be added.
 
         Outlasts :attr:`awaiting_tool_result`: the last result empties the calls
-        while the turn stays open until :meth:`resume_events` closes it. While
-        this is ``True``, :meth:`generate`, :meth:`inject` and :meth:`declare_tools`
-        refuse.
+        while the turn stays open until :meth:`resume_until_tool` closes it. While
+        this is ``True``, :meth:`reply_without_tools`, :meth:`inject` and
+        :meth:`declare_unknown_tools` refuse.
         """
         return self._reply_open
 
@@ -681,6 +750,169 @@ class ChatWrapper:
         self.close()
 
     # ----- internals -----------------------------------------------------------
+    def _generate_until_answered(
+        self, text: str, *, registry: ToolRegistry | None,
+        max_calls: int | None = None,
+        **kwargs) -> Generator[str, None, Reply]:
+        """Generate, settle whatever the model calls, and go on until it answers.
+
+        Args:
+            registry: What to run calls against, already resolved. ``None``
+                refuses every call with an error result rather than falling back
+                to anything, which is what makes a tool-free entry point
+                tool-free.
+            max_calls: How many tools one turn may use, ``None`` for no
+                ceiling. Nothing is run where ``registry`` is ``None``, so it
+                does not bind there.
+            text, **kwargs: As :meth:`reply_without_tools_stream`.
+
+        Raises:
+            ValueError: If ``registry`` holds tools this model could never
+                call, which is what
+                :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
+                decides.
+        """
+        # A registry is the same promise a declaration is, so it is checked the
+        # same way: an exchange that cannot run a tool is refused before it
+        # starts, not after the model has asked for one.
+        if registry is not None and len(registry) > 0:
+            self._template.ensure_tools_usable()
+        stream = self.reply_until_tool(text, **kwargs)
+        # An absent ceiling counts down without ever reaching zero, so the
+        # three places that read it need no case of their own.
+        calls_left = math.inf if max_calls is None else max_calls
+        any_call_asked = False
+        generations: list[Reply] = []
+        try:
+            while True:
+                asked, generation = yield from self._read_generation(stream)
+                generations.append(generation)
+                if not asked:
+                    if self.reply_open:
+                        # An unreadable call: its result is already written, and
+                        # the turn wants the reply that follows it. Nothing is
+                        # owed, since nothing could be read, so the resume is
+                        # free to run. It spends budget like any other failed
+                        # call, so a model that cannot write a readable one
+                        # retries at most `max_calls` times.
+                        any_call_asked = True
+                        if registry is not None and calls_left > 0:
+                            calls_left -= 1
+                        stream = self._resume_until_tool(
+                            allow_tools=registry is not None and calls_left > 0,
+                            **kwargs)
+                        continue
+                    # The ceiling binds only once a call has been asked for:
+                    # without one the last generation kept its call tokens.
+                    return _sum_generations(generations,
+                                            any_call_asked and calls_left == 0)
+                any_call_asked = True
+                settled, calls_left = self._settle_calls(
+                    asked, registry, calls_left, max_calls)
+                may_call_again = registry is not None and calls_left > 0
+                for call, result in settled:
+                    self.inject_tool_result(
+                        call, _explain_failure(result, may_call_again))
+                stream = self._resume_until_tool(allow_tools=may_call_again, **kwargs)
+        finally:
+            stream.close()   # the current generation holds the wrapper's lock
+
+    def _read_generation(self, stream):
+        """Yield one generation's text, and return what it left behind.
+
+        Driven by hand rather than with ``for``, which would discard the
+        :class:`Reply` the generation returns.
+
+        Returns:
+            The calls the model asked for, in the order it asked, and the
+            :class:`Reply` describing the generation.
+        """
+        asked = []
+        while True:
+            try:
+                event = next(stream)
+            except StopIteration as ended:
+                return asked, ended.value
+            if isinstance(event, ToolCall):
+                asked.append(event)
+            else:
+                yield event
+
+    def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
+                      calls_left, max_calls: int | None):
+        """Decide what every call of one round gets back, running what may run.
+
+        Settled before any of it is written, because what a failure tells the
+        model to do next depends on the budget the last call leaves. In the
+        order asked, which the template renders in.
+
+        Returns:
+            The ``(call, result)`` pairs, and what is left of the budget.
+        """
+        settled = []
+        for call in asked:
+            if registry is None:
+                # Not "no tools exist": `begin` may have declared some. Raising
+                # would leave the turn open with no way to end it.
+                result = {"error": "tools_not_run",
+                          "message": "no tool can be run for this request"}
+            elif calls_left > 0:
+                result = registry.call(call)
+                calls_left -= 1
+            else:
+                result = {"error": "tool_limit_reached",
+                          "message": "no tool calls left in this turn; "
+                                     f"the limit is {max_calls}"}
+            settled.append((call, result))
+        return settled, calls_left
+
+    def _request_and_generate(
+        self, text: str, *, max_reply_tokens: int | None = None,
+        stop: list[str] | None = None, cancel: threading.Event | None = None,
+    ) -> Generator[str, None, Reply]:
+        """Add the user request, then generate one reply from the cache's end.
+
+        One generation, so a call it stops on leaves the turn open for a result.
+        Every public entry point reaches generation through here.
+        """
+        with self._lock:
+            self._ensure_open()
+            self._ensure_begun("generate into")
+            self._ensure_no_open_reply("start a request")
+            user_tokens = self._fragment_tokens("user", text)
+            open_tokens = self._context.tokenize(self._formatter.assistant_open(), add_special=False)
+            close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
+
+            # The prompt plus its turn closer must fit in the context.
+            user_tokens = self._fit_or_raise(
+                user_tokens,
+                budget=self._config.context_size - len(open_tokens) - len(close_tokens) - self._table.total,
+                description="request", role="user",
+            )
+            n_prompt = len(user_tokens) + len(open_tokens)
+
+            # Refused before the cache is mutated.
+            free = self._config.context_size - self._table.total - n_prompt - len(close_tokens)
+            if free < self._config.min_reply_tokens:
+                raise ContextOverflowError(
+                    f"only {free} tokens free for the reply "
+                    f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
+                    f"the request or lower evict_above_fraction"
+                )
+
+            # One decode for the request text and the assistant-open tag: the
+            # backend flags logits on the final token only either way.
+            self._context.prefill(user_tokens + open_tokens,
+                              start_pos=self._table.total, want_logits=True)
+            self._table.append(Message("user", text, user_tokens))
+            if self._on_message:
+                self._on_message("user", text)
+
+            return (yield from self._generate_into_reply(
+                open_tokens=open_tokens, close_tokens=close_tokens,
+                n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
+                cancel=cancel, allow_tools=True))
+
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
                 cancel: threading.Event | None = None,
@@ -692,7 +924,7 @@ class ChatWrapper:
                 raise ValueError(f"{len(self._pending_calls)} call(s) still owe "
                                  f"a result")
             if not self._reply_open:
-                raise ValueError("no reply is open; start one with generate_stream()")
+                raise ValueError("no reply is open; start one with reply_until_tool()")
             close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
             # See the README, "A resumed turn needs its generation prompt back".
@@ -707,31 +939,6 @@ class ChatWrapper:
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                 allow_tools=allow_tools))
 
-    def _resolve_tool_tokens(self) -> tuple[tuple[int, int] | None, str]:
-        """This model's call tags as tokens, and the text it writes before a name."""
-        fragments = self._fragments.tools
-        if fragments is None:
-            return None, ""
-        opener = self._context.first_special_token(fragments.call_open)
-        closer = self._context.first_special_token(fragments.call_close)
-        if opener is None or closer is None:
-            return None, ""
-        tag = self._context.token_text(opener)
-        lead_in = fragments.call_open[len(tag):] \
-            if fragments.call_open.startswith(tag) else ""
-        return (opener, closer), lead_in
-
-    def _resolve_call_body(self) -> CallBody | None:
-        """This model's argument spelling, or ``None`` if it cannot be read.
-
-        A call stays detectable without it; only its contents do not.
-        """
-        if self._tool_tokens is None or self._fragments.tools is None:
-            return None
-        return extract_call_body(self._context.render_with_model_template,
-                                 self._fragments.tools.call_open,
-                                 self._context.token_text(self._tool_tokens[1]))
-
     def _system_tokens(self, system_prompt: str,
                        specs: list[ToolSpec] | None) -> list[int]:
         """The system turn, with any declarations where the template puts them.
@@ -744,77 +951,9 @@ class ChatWrapper:
             return self._context.tokenize_fragment(prefix, content, suffix,
                                                add_special=True)
         # Rendered whole: where declarations go is the template's business.
-        split = self._declaration_turn(specs)
-        return self._context.tokenize_fragment(split.declared_head, content,
-                                           split.declared_tail, add_special=True)
-
-    def _plain_system_turn(self) -> str | None:
-        """The system turn this model renders with no tools, prompt sentinelled."""
-        return self._context.render_with_model_template(
-            [{"role": "system", "content": _PROMPT}])
-
-    def _declaration_turn(self, specs: list[ToolSpec]) -> _SystemTurnSplit:
-        """The system turn this model renders for ``tools``, and without them.
-
-        Rendered by the template, so no declaration shape is written down here.
-
-        Raises:
-            ValueError: If the template renders no declarations.
-        """
-        rendered = self._context.render_with_model_template(
-            [{"role": "system", "content": _PROMPT}],
-            tools=[spec.as_declaration() for spec in specs])
-        plain = self._plain_system_turn()
-        if rendered is None or plain is None or _PROMPT not in rendered \
-                or _PROMPT not in plain or rendered == plain:
-            raise ValueError("this model's template declares no tools")
-        declared_head, _, declared_tail = rendered.partition(_PROMPT)
-        plain_head, _, plain_tail = plain.partition(_PROMPT)
-        return _SystemTurnSplit(declared_head, declared_tail,
-                                plain_head, plain_tail)
-
-    def _declaration_block(self, specs: list[ToolSpec]) -> str:
-        """Only the declarations, for adding to a conversation already begun.
-
-        What the two renders differ by, from whichever side of the prompt the
-        template put them on.
-
-        Raises:
-            ValueError: If the template renders no declarations.
-        """
-        split = self._declaration_turn(specs)
-        block = ""
-        if split.declared_head.startswith(split.plain_head):
-            block += split.declared_head[len(split.plain_head):]
-        if split.declared_tail.endswith(split.plain_tail):
-            block += split.declared_tail[:len(split.declared_tail)
-                                         - len(split.plain_tail)]
-        if not block:
-            raise ValueError("this model's template declares no tools")
-        return block
-
-    def _result_wrapping(self, name: str) -> tuple[str, str]:
-        """What this model's template wraps ``name``'s result in.
-
-        Recovered per result, because the wrapping names the function.
-
-        Raises:
-            ValueError: If the template renders no result block.
-        """
-        rendered = self._context.render_with_model_template([
-            {"role": "user", "content": _PROMPT},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c", "type": "function",
-                 "function": {"name": name, "arguments": {}}}]},
-            {"role": "tool", "name": name, "content": _RESULT},
-            {"role": "assistant", "content": _TAIL},
-        ])
-        closer = self._context.token_text(self._tool_tokens[1])
-        if rendered is None or _RESULT not in rendered \
-                or _TAIL not in rendered or closer not in rendered:
-            raise ValueError("this model's template renders no tool result")
-        head, _, tail = rendered.partition(_RESULT)
-        return head.rsplit(closer, 1)[1], tail.partition(_TAIL)[0]
+        head, tail = self._template.system_turn_declaring(specs)
+        return self._context.tokenize_fragment(head, content, tail,
+                                               add_special=True)
 
     def _generate_into_reply(self, *, open_tokens: list[int],
                              close_tokens: list[int], n_prefilled_tokens: int,
@@ -831,7 +970,7 @@ class ChatWrapper:
             open_tokens: The generation prompt, empty when resuming.
             close_tokens: The turn terminator, decoded once the turn closes.
             n_prefilled_tokens: What the caller decoded to get here, for the Reply.
-            max_reply_tokens, stop, cancel: As :meth:`generate_stream`.
+            max_reply_tokens, stop, cancel: As :meth:`reply_without_tools_stream`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
         """
@@ -845,12 +984,12 @@ class ChatWrapper:
             yield from self._context.generate(
                 gen_start, max(0, min(cap, budget)), stops, out=generated,
                 cancel=cancel,
-                tool_tokens=self._tool_tokens if allow_tools else None,
+                tool_tokens=self._template.tool_tokens if allow_tools else None,
             )
         finally:
             # Runs on normal completion and on early close alike.
             n_evicted_messages = self._book_reply(generated, open_tokens,
-                                                 close_tokens)
+                                                  close_tokens)
 
         return Reply(
             text=generated.text,
@@ -880,11 +1019,19 @@ class ChatWrapper:
             self._table.append(Message("assistant", generated.text, tokens))
         msg = self._table.messages[-1]
         self._pending_calls = self._read_calls(generated)
-        if generated.stop_reason == "tool_call" and not self._pending_calls:
-            # An unreadable call must not hold the turn open: nothing would ever
-            # close it. Closing costs the call and keeps the conversation usable.
+        unreadable = (generated.stop_reason == "tool_call"
+                      and not self._pending_calls)
+        if unreadable:
+            # Told, not dropped: a call left with no result is a shape no
+            # template produces, and the model would read it back every turn.
+            # The block needs a function name and there is none to read, so it
+            # carries `_UNKNOWN_FUNCTION` and the message says what happened.
             generated.stop_reason = "unreadable_tool_call"
-        self._reply_open = bool(self._pending_calls)
+            unreadable = self._try_write_tool_result(_UNKNOWN_FUNCTION, {
+                "error": "unreadable_call",
+                "message": "the tool call failed: the call could not be read",
+            })
+        self._reply_open = bool(self._pending_calls) or unreadable
         if self._reply_open:
             return 0
         if self._on_message:
@@ -896,6 +1043,24 @@ class ChatWrapper:
         self._close_turn(msg, close_tokens)
         return n_evicted_messages
 
+    def _try_write_tool_result(self, name: str, result) -> bool:
+        """Write a result block if this model and this context have room for one.
+
+        Booking a reply runs in a ``finally`` and is what leaves the cache and
+        the table agreeing, so it must not raise. Where the template renders no
+        result block, or what is left of the context cannot hold one, the model
+        cannot be told and the turn closes instead.
+
+        Returns:
+            Whether the result was written, and so whether the turn is still
+            open for the reply that answers it.
+        """
+        try:
+            self._write_tool_result(name, result)
+            return True
+        except (ValueError, ContextOverflowError):
+            return False
+
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
 
@@ -905,14 +1070,36 @@ class ChatWrapper:
         if generated.stop_reason != "tool_call":
             return []
         try:
-            return parse_calls(generated.tool_call, self._call_body,
-                               self._call_lead_in)
+            return parse_calls(generated.tool_call, self._template.call_body,
+                               self._template.call_lead_in)
         except Exception:
             return []
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("ChatWrapper is closed")
+
+    def _declared_names(self) -> set[str]:
+        """Every tool the conversation currently tells the model about.
+
+        Read off the table, so a declaration that was evicted stops counting on
+        its own and the next one writes it again.
+        """
+        return {name for message in self._table.messages
+                for name in message.declares}
+
+    def _ensure_begun(self, action: str) -> None:
+        """Refuse to work on a conversation that was never begun.
+
+        Only :meth:`begin` prefills the sequence-opening token and the system
+        prompt, so what is added before one reaches the model as a fragment of
+        a conversation it was never trained to see.
+
+        Raises:
+            ValueError: If :meth:`begin` has not run.
+        """
+        if not self._begun:
+            raise ValueError(f"no conversation to {action}; call begin() first")
 
     def _ensure_no_open_reply(self, action: str) -> None:
         """Refuse to append a message inside a turn a tool call left open.
@@ -924,70 +1111,7 @@ class ChatWrapper:
             raise ValueError(
                 f"cannot {action} while a reply is open: it stopped on a tool "
                 "call and its turn is unclosed. Finish it with "
-                "resume_events(), or discard it with begin()."
-            )
-
-    def _resolve_fragments(self) -> TemplateFragments:
-        """Recover the template fragments from the model's own chat template."""
-        if not hasattr(self._context, "extract_fragments"):
-            raise ValueError("context cannot supply template fragments")
-        fragments = self._context.extract_fragments()
-        if fragments is None:
-            raise ValueError(
-                "the model ships no chat template, so the fragments cannot be "
-                "derived; pass them explicitly with ChatWrapper(fragments=...)"
-            )
-        return fragments
-
-    def _validate_template(self, fragments: TemplateFragments) -> None:
-        """Ensure the turn-terminator is a real special token of this model.
-
-        A terminator that splits into plain text never lets the model stop, so
-        it would run to the token cap every generation.
-        """
-        if not hasattr(self._context, "tokenizes_to_special"):
-            return
-        terminator = fragments.assistant_suffix.strip()
-        if terminator and not self._context.tokenizes_to_special(terminator):
-            raise ValueError(
-                "chat template is not valid for this model: its turn-terminator "
-                f"{terminator!r} does not tokenize to a special token, so "
-                "generation would never stop. The model's embedded chat template "
-                "is malformed; supply correct tags with ChatWrapper(fragments=...)."
-            )
-
-    def _check_fragments_match_model(self) -> None:
-        """Assert the user and assistant fragments match the model's own template.
-
-        Tags that do not reproduce what the model saw in training make
-        incremental prefill write tokens it never learned. The system fragment
-        is not probed, there being no portable ground truth for it.
-        """
-        if not hasattr(self._context, "render_with_model_template"):
-            return
-        # The surrounding whitespace catches a wrong `trim_content` too.
-        probe = [
-            {"role": "user", "content": " ping "},
-            {"role": "assistant", "content": " pong "},
-        ]
-        rendered = self._context.render_with_model_template(probe)
-        if rendered is None:
-            return
-        model_tokens = self._context.tokenize(rendered, add_special=False)
-        # Built exactly as real prefill builds it, tags special-on and content
-        # special-off, so any mismatch is a tag or trim divergence.
-        fragment_tokens: list[int] = []
-        for m in probe:
-            fragment_tokens.extend(self._fragment_tokens(m["role"], m["content"]))
-        if model_tokens != fragment_tokens:
-            fragment_text = "".join(self._formatter.fragment(m["role"], m["content"]) for m in probe)
-            raise ValueError(
-                "chat template fragments do not match the model's trained "
-                "template:\n"
-                f"  model renders:    {rendered!r}\n"
-                f"  fragments render: {fragment_text!r}\n"
-                "The recovered fragments do not round-trip through the model's "
-                "template; supply correct tags with ChatWrapper(fragments=...)."
+                "resume_until_tool(), or discard it with begin()."
             )
 
     def _fits(self, arriving_tokens: int, arriving_messages: int = 0) -> bool:
@@ -1065,8 +1189,22 @@ class ChatWrapper:
         return self._context.tokenize_fragment(prefix, content, suffix, add_special=add_special)
 
 
-def _as_events(stream):
-    """Re-shape a delta stream into events, ending on the calls it stopped at.
+def _specs_for_system_prompt(tools) -> list[ToolSpec] | None:
+    """What ``tools`` puts in the system turn, registry or plain list."""
+    if isinstance(tools, ToolRegistry):
+        return tools.specs_for_system_prompt()
+    return tools
+
+
+def _all_specs(tools) -> list[ToolSpec] | None:
+    """Every declaration ``tools`` holds, registry or plain list."""
+    if isinstance(tools, ToolRegistry):
+        return tools.specs()
+    return tools
+
+
+def _deltas_then_calls(stream):
+    """Yield a generation's text deltas, then the calls it stopped at.
 
     The wrapped generator is closed whatever happens, so an early close still
     ends the turn and releases the wrapper's lock.
@@ -1098,6 +1236,23 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
     )
+
+
+def _explain_failure(result, may_call_again: bool):
+    """Say that the call failed and what to do next, leaving a real result alone.
+
+    A dict carrying ``error`` is a failure, whether the registry built it or a
+    tool returned one itself. Its ``message`` becomes the reason inside a
+    sentence that names the failure and ends in the one instruction that is not
+    already implied: whether another call is worth making. What to do instead is
+    left unsaid, there being nothing to do but answer.
+    """
+    if not isinstance(result, dict) or "error" not in result:
+        return result
+    reason = result.get("message") or result["error"]
+    return {**result,
+            "message": f"the tool call failed: {reason}. "
+                       + ("try again" if may_call_again else "do not call again")}
 
 
 def _result_text(result) -> str:

@@ -44,7 +44,8 @@ class Config:
             one per run.
         context_size: The hard limit in tokens; generation never crosses it.
         evict_above_fraction: Fraction of ``context_size`` above which the
-            oldest messages are evicted. Must be in ``(0, 1]``.
+            oldest messages are evicted. Must be in ``(0, 1]`` and must come
+            to at least one token.
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.
@@ -55,7 +56,9 @@ class Config:
             ``"truncate"`` clips the content and keeps the turn-terminator tag.
         min_reply_tokens: Refuse a request with
             :class:`~llama_chat.wrapper.ContextOverflowError` when fewer than
-            this many tokens would be left for the reply. ``0`` disables it.
+            this many tokens would be left for the reply. ``0`` disables it,
+            and it must stay below ``context_size``, which no request can leave
+            entirely free.
         stop_strings: Strings that end generation.
         gpu_layers: Layers to offload to GPU. ``0`` for a CPU-only build,
             ``-1`` for all of them.
@@ -120,12 +123,24 @@ class Config:
             raise ValueError("evict_above_fraction must be in (0, 1]")
         if self.context_size <= 0:
             raise ValueError("context_size must be positive")
+        if self.evict_above_tokens < 1:
+            raise ValueError(
+                f"evict_above_fraction ({self.evict_above_fraction}) of "
+                f"context_size ({self.context_size}) rounds down to no tokens, "
+                "so not even a system prompt would ever fit"
+            )
         if self.max_batch_tokens <= 0:
             raise ValueError("max_batch_tokens must be positive")
         if self.max_reply_tokens <= 0:
             raise ValueError("max_reply_tokens must be positive")
         if self.min_reply_tokens < 0:
             raise ValueError("min_reply_tokens must be >= 0")
+        if self.min_reply_tokens >= self.context_size:
+            raise ValueError(
+                f"min_reply_tokens ({self.min_reply_tokens}) must be below "
+                f"context_size ({self.context_size}); no request could leave "
+                "that many tokens free, so every one of them would be refused"
+            )
         if self.max_history_messages is not None and self.max_history_messages < 1:
             raise ValueError(
                 "max_history_messages must be None or >= 1 "

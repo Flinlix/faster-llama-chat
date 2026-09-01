@@ -11,23 +11,23 @@ def _config(**kw):
 
 
 # ----- core on_message hook ----------------------------------------------
-def test_on_message_fires_user_then_assistant_on_generate():
-    fake = FakeContext(gen_len=3, gen_text="xyz")
+def test_on_message_fires_user_then_assistant_on_a_request():
+    fake = FakeContext(gen_tokens=3, gen_text="xyz")
     seen = []
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake,
                     on_message=lambda role, text: seen.append((role, text)))
     w.begin("s")
-    w.generate("hi")
+    w.reply_without_tools("hi")
     assert seen == [("user", "hi"), ("assistant", "xyz")]
 
 
 def test_on_message_captures_bargein_partial():
-    fake = FakeContext(gen_len=8, gen_text="abcdefgh")
+    fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
     seen = []
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake,
                     on_message=lambda role, text: seen.append((role, text)))
     w.begin("s")
-    stream = w.generate_stream("hi")
+    stream = w.reply_without_tools_stream("hi")
     next(stream)          # consume one delta
     stream.close()        # barge-in
     # User persisted, plus the partial assistant reply that reached the cache.
@@ -37,7 +37,7 @@ def test_on_message_captures_bargein_partial():
 
 
 def test_on_message_fires_for_inject():
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     seen = []
     w = ChatWrapper(_config(context_size=1000, evict_above_fraction=1.0), context=fake,
                     on_message=lambda role, text: seen.append((role, text)))
@@ -47,7 +47,7 @@ def test_on_message_fires_for_inject():
 
 
 def test_on_message_not_fired_for_begin_replay():
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     seen = []
     w = ChatWrapper(_config(context_size=1000, evict_above_fraction=1.0), context=fake,
                     on_message=lambda role, text: seen.append((role, text)))
@@ -57,21 +57,21 @@ def test_on_message_not_fired_for_begin_replay():
 
 def test_default_wrapper_has_no_hook():
     # on_message defaults to None; existing behavior is unchanged.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    w.generate("hi")  # must not raise
+    w.reply_without_tools("hi")  # must not raise
     assert w.snapshot()[-1]["role"] == "assistant"
 
 
 # ----- PersistentChat ----------------------------------------------------
 def test_persistent_chat_records_turns():
-    fake = FakeContext(gen_len=3, gen_text="xyz")
+    fake = FakeContext(gen_tokens=3, gen_text="xyz")
     store = InMemoryStore()
     chat = PersistentChat(store, _config(context_size=500, evict_above_fraction=1.0), context=fake)
     chat.begin("conv-1", "s")
-    chat.generate("hi")
-    chat.generate("again")
+    chat.reply_without_tools("hi")
+    chat.reply_without_tools("again")
     assert store.load("conv-1") == [
         ("user", "hi"), ("assistant", "xyz"),
         ("user", "again"), ("assistant", "xyz"),
@@ -79,12 +79,12 @@ def test_persistent_chat_records_turns():
 
 
 def test_persistent_chat_persists_inject():
-    fake = FakeContext(gen_len=2, gen_text="rr")
+    fake = FakeContext(gen_tokens=2, gen_text="rr")
     store = InMemoryStore()
     chat = PersistentChat(store, _config(context_size=1000, evict_above_fraction=1.0), context=fake)
     chat.begin("conv-1", "s")
     chat.inject("doc: deadline is Friday")
-    chat.generate("when?")
+    chat.reply_without_tools("when?")
     assert store.load("conv-1") == [
         ("user", "doc: deadline is Friday"),
         ("user", "when?"), ("assistant", "rr"),
@@ -94,13 +94,13 @@ def test_persistent_chat_persists_inject():
 def test_persistent_chat_reloads_history_on_begin():
     store = InMemoryStore()
 
-    fake1 = FakeContext(gen_len=2, gen_text="ok")
+    fake1 = FakeContext(gen_tokens=2, gen_text="ok")
     s1 = PersistentChat(store, _config(context_size=1000, evict_above_fraction=1.0), context=fake1)
     s1.begin("conv-1", "s")
-    s1.generate("first question")
+    s1.reply_without_tools("first question")
 
     # A fresh session on the same store + id reloads the prior turns.
-    fake2 = FakeContext(gen_len=2, gen_text="ok")
+    fake2 = FakeContext(gen_tokens=2, gen_text="ok")
     s2 = PersistentChat(store, _config(context_size=1000, evict_above_fraction=1.0), context=fake2)
     s2.begin("conv-1", "s")
     roles = [m["role"] for m in s2.snapshot()]
@@ -108,35 +108,52 @@ def test_persistent_chat_reloads_history_on_begin():
 
 
 def test_persistent_chat_isolates_conversations():
-    fake = FakeContext(gen_len=2, gen_text="rr")
+    fake = FakeContext(gen_tokens=2, gen_text="rr")
     store = InMemoryStore()
     chat = PersistentChat(store, _config(context_size=1000, evict_above_fraction=1.0), context=fake)
 
     chat.begin("conv-a", "s")
-    chat.generate("a-question")
+    chat.reply_without_tools("a-question")
     chat.begin("conv-b", "s")
-    chat.generate("b-question")
+    chat.reply_without_tools("b-question")
 
     assert store.load("conv-a") == [("user", "a-question"), ("assistant", "rr")]
     assert store.load("conv-b") == [("user", "b-question"), ("assistant", "rr")]
 
 
 def test_persistent_chat_requires_begin():
-    fake = FakeContext(gen_len=2)
+    """And refuses before prefilling, not on the way to the store.
+
+    Noticed there, the request would already be in the cache, with the reply it
+    never generated missing from both the cache and the store.
+    """
+    fake = FakeContext(gen_tokens=2)
     chat = PersistentChat(InMemoryStore(), _config(context_size=500, evict_above_fraction=1.0), context=fake)
     with pytest.raises(RuntimeError, match="begin"):
-        chat.generate("hi")
+        chat.reply_without_tools("hi")
+    assert fake.cache == []
+    assert chat.snapshot() == []
+
+
+def test_a_store_that_cannot_append_is_refused_where_it_is_adopted():
+    """A store is written to mid-turn, which is far too late to find this out."""
+    class ReadOnly:
+        def load(self, conversation_id):
+            return []
+
+    with pytest.raises(TypeError, match="append"):
+        PersistentChat(ReadOnly(), _config(context_size=500), context=FakeContext())
 
 
 def test_persistent_chat_failed_begin_selects_no_conversation():
     # begin fails (system prompt over threshold) -> no conversation selected,
     # so a later request cannot persist into a never-loaded conversation.
-    fake = FakeContext(gen_len=2)
+    fake = FakeContext(gen_tokens=2)
     chat = PersistentChat(InMemoryStore(), _config(context_size=1000, evict_above_fraction=0.05), context=fake)
     with pytest.raises(ValueError):
         chat.begin("conv-1", "x" * 100)
     with pytest.raises(RuntimeError, match="begin"):
-        chat.generate("hi")
+        chat.reply_without_tools("hi")
 
 
 def test_in_memory_store_roundtrip():
@@ -149,8 +166,7 @@ def test_in_memory_store_roundtrip():
 
 # ----- tools through the facade -------------------------------------------
 def _tool_chat(store):
-    from tests.fake_context import TOOL_FRAGMENTS
-    fake = FakeContext(fragments=TOOL_FRAGMENTS, gen_text="18 Grad")
+    fake = FakeContext(calls_tools=True, gen_text="18 Grad")
     return PersistentChat(store, _config(context_size=800), context=fake), fake
 
 
@@ -160,7 +176,6 @@ def _weather():
     registry.register(lambda city: {"celsius": 18}, "Wetter.", name="weather",
                       parameters={"type": "object",
                                   "properties": {"city": {"type": "string"}}})
-    registry.declare("weather")
     return registry
 
 
@@ -171,7 +186,7 @@ def test_a_tool_turn_persists_only_what_a_reader_saw():
     chat.begin("c1", "persona", tools=_weather())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    reply = chat.answer("wetter?").text
+    reply = chat.reply_with_tools("wetter?").text
 
     assert store.load("c1") == [("user", "wetter?"), ("assistant", reply)]
     assert not chat.awaiting_tool_result
@@ -183,7 +198,7 @@ def test_a_tool_turn_reloads_as_an_ordinary_exchange():
     chat, fake = _tool_chat(store)
     chat.begin("c1", "persona", tools=_weather())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
-    chat.answer("wetter?")
+    chat.reply_with_tools("wetter?")
 
     chat.begin("c1", "persona", tools=_weather())     # same conversation again
     assert [m["role"] for m in chat.snapshot()] == ["system", "user", "assistant"]
@@ -195,11 +210,11 @@ def test_the_manual_loop_works_through_the_facade():
     chat.begin("c1", "persona")
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    events = list(chat.generate_events("wetter?"))
+    events = list(chat.reply_until_tool("wetter?"))
     assert chat.awaiting_tool_result
     chat.inject_tool_result(events[-1].name, {"celsius": 18})
     fake.call_script = []
-    list(chat.resume_events())
+    list(chat.resume_until_tool())
 
     assert not chat.awaiting_tool_result
     assert [r for r, _ in store.load("c1")] == ["user", "assistant"]
@@ -213,7 +228,6 @@ def test_every_delegation_reaches_the_wrapper():
     """
     import threading
 
-    from tests.fake_context import TOOL_FRAGMENTS
 
     from llama_chat import ToolRegistry, ToolSpec
 
@@ -226,7 +240,7 @@ def test_every_delegation_reaches_the_wrapper():
 
     store = InMemoryStore()
     # can_shift False while can_call_tools is True, so confusing the two shows.
-    fake = FakeContext(fragments=TOOL_FRAGMENTS, gen_text="18 Grad", can_shift=False)
+    fake = FakeContext(calls_tools=True, gen_text="18 Grad", can_shift=False)
     with PersistentChat(store, _config(context_size=800), context=fake) as chat:
         inner = chat._chat
         chat.begin("c1", "persona")
@@ -255,15 +269,15 @@ def test_every_delegation_reaches_the_wrapper():
         keeper.join()
         assert chat.wait_idle(0.5) is True
 
-        assert "".join(chat.generate_stream("hallo")) == "18 Gr"
+        assert "".join(chat.reply_without_tools_stream("hallo")) == "18 Gr"
 
-        # The registry has to arrive, or the call is answered "no_tools" instead.
+        # The registry has to arrive, or the call is refused instead of run.
         fake.call_script = ["fn:weather{city:'Bonn'}"]
-        assert "".join(chat.answer_stream("wetter?", registry)) == "18 Gr"
+        assert "".join(chat.reply_with_tools_stream("wetter?", registry)) == "18 Gr"
         assert ran == ["Bonn"]
 
         before = chat.total_tokens
-        assert chat.declare_tools(
+        assert chat.declare_unknown_tools(
             [ToolSpec("clock", "Zeit.", {"type": "object", "properties": {}})]) == 0
         assert chat.total_tokens > before        # the declaration was prefilled
 

@@ -11,22 +11,37 @@ import re
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.template import CallBody, TemplateFormatter
-from llama_chat.template_extract import extract_call_body, extract_fragments
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, parse_calls, tool
+from llama_chat.template import CallBody, TemplateFormatter, ToolCallFragments
+from llama_chat.template_extract import (extract_call_body, extract_fragments,
+                                         extract_tool_fragments)
+from llama_chat.call_parsing import parse_calls
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, tool
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
-from tests.fake_context import DEFAULT_FRAGMENTS, TOOL_FRAGMENTS, FakeContext
+from tests.fake_context import FakeContext
 
 # The call_body the fake model's renders yield, spelled out so the parser tests
 # read without a round trip through extraction.
 FAKE = CallBody(name_close="{", key_open="", key_close=":", pair_sep=",",
                 body_close="}", empty_close="}", quote_open="'", quote_close="'")
 
+# The same model's call tags, for the escape hatch: on their own where only the
+# spelling is unreadable, with the body where nothing could be recovered.
+FAKE_TAGS = ToolCallFragments(call_open="<call>fn:", call_close="}</call>")
+FAKE_CALLS = ToolCallFragments(call_open="<call>fn:", call_close="}</call>",
+                               body=FAKE)
+
 
 def _wrapper(**kw):
-    fake = FakeContext(fragments=TOOL_FRAGMENTS, **kw)
+    fake = FakeContext(calls_tools=True, **kw)
     return ChatWrapper(Config(context_size=512, evict_above_fraction=0.9),
                        context=fake), fake
+
+
+def _result_of(wrapper):
+    """The result block written into the newest turn, tags excluded."""
+    turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                   if 0 < t < 0x11000)
+    return turn.split("<result>")[1].split("</result>")[0]
 
 
 def _flatten(wrapper):
@@ -125,7 +140,7 @@ def test_a_call_ends_the_stream_and_holds_the_turn_open():
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
 
-    events = list(wrapper.generate_events("wie spät?"))
+    events = list(wrapper.reply_until_tool("wie spät?"))
 
     assert events == [ToolCall(name="clock", arguments={})]
     assert wrapper.awaiting_tool_result
@@ -134,15 +149,115 @@ def test_a_call_ends_the_stream_and_holds_the_turn_open():
     assert fake.cache == _flatten(wrapper)
 
 
+def test_a_call_refused_without_tools_still_lets_the_reply_go_on():
+    """The model is told there are no tools, not left with its call ignored.
+
+    Dropping the call would leave a turn holding a call and no result, which no
+    template produces and the model reads back on every later turn, and would
+    hand the caller silence where it asked a question.
+    """
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    reply = wrapper.reply_without_tools("wie spät?")
+
+    assert reply.text == "reply"                 # it answered in words
+    assert reply.tool_calls == [ToolCall(name="clock", arguments={})]
+    assert not wrapper.reply_open
+    # The turn holds the call, an error result for it, and the reply after.
+    written = wrapper.snapshot()[-1]["text"]
+    assert written == "reply"
+    assert fake.cache == _flatten(wrapper)
+    # And the conversation goes on, which is what the result bought.
+    assert wrapper.reply_without_tools("und sonst?").stop_reason == "end_of_turn"
+
+
+def test_the_refusal_reaches_the_model_as_a_result_block():
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    wrapper.reply_without_tools("wie spät?")
+
+    turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                   if 0 < t < 0x11000)
+    assert "<result>clock(" in turn and "tools_not_run" in turn
+
+
+def test_the_refusal_does_not_deny_a_tool_the_model_was_told_about():
+    """The system turn declared it; saying it does not exist contradicts that.
+
+    `reply_without_tools` runs no tool either way, so the refusal says that rather than
+    denying the tool.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_without_tools("wie spät?")
+
+    declared = "".join(chr(t) for t in wrapper._table.messages[0].token_ids
+                       if 0 < t < 0x11000)
+    turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                   if 0 < t < 0x11000)
+    assert "<decl>clock</decl>" in declared      # the model was told it exists
+    assert "no tools" not in turn                # so it is not told otherwise
+    assert "tools_not_run" in turn
+
+
+def test_reply_without_tools_runs_none_even_one_begin_was_given():
+    """The tool-free entry point runs nothing; a registry runs under the other.
+
+    Even the registry ``begin`` was handed, which this conversation has.
+    """
+    registry = ToolRegistry()
+    ran = []
+    registry.register(lambda: ran.append("ran") or "12:00", "Die Zeit.",
+                      name="clock")
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_without_tools("wie spät?")
+    assert ran == []
+
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_with_tools("wie spät?")
+    assert ran == ["ran"]
+
+
+def test_the_reported_calls_are_not_the_wrappers_own_list():
+    """A Reply that aliased ``_pending_calls`` would empty as results arrive."""
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    events = wrapper.reply_until_tool("wie spät?")
+    reply = None
+    while True:
+        try:
+            next(events)
+        except StopIteration as done:
+            reply = done.value
+            break
+    wrapper.inject_tool_result("clock", {"time": "09:00"})
+
+    assert not wrapper.awaiting_tool_result          # the wrapper's list emptied
+    assert [c.name for c in reply.tool_calls] == ["clock"]   # the Reply's did not
+
+
 def test_a_result_resumes_the_same_turn():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     wrapper.inject_tool_result("clock", {"time": "09:00"})
     fake.call_script = []
-    events = list(wrapper.resume_events())
+    events = list(wrapper.resume_until_tool())
 
     assert "".join(e for e in events if isinstance(e, str))
     assert not wrapper.awaiting_tool_result
@@ -155,15 +270,15 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:first{}"]
-    assert list(wrapper.generate_events("los")) == [ToolCall("first", {})]
+    assert list(wrapper.reply_until_tool("los")) == [ToolCall("first", {})]
 
     wrapper.inject_tool_result("first", "ok")
     fake.call_script = ["fn:second{}"]
-    assert list(wrapper.resume_events()) == [ToolCall("second", {})]
+    assert list(wrapper.resume_until_tool()) == [ToolCall("second", {})]
 
     wrapper.inject_tool_result("second", "ok")
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
 
     assert [m["role"] for m in wrapper.snapshot()] == ["system", "user", "assistant"]
     assert fake.cache == _flatten(wrapper)
@@ -176,17 +291,17 @@ def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
     is allowed to be exceeded until the turn closes, and enforced again the
     moment it does.
     """
-    fake = FakeContext(fragments=TOOL_FRAGMENTS)
+    fake = FakeContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=4000, max_history_messages=2),
                           context=fake)
     wrapper.begin("persona", [("user", "alt"), ("assistant", "älter")])
     fake.call_script = ["fn:first{}"]
-    assert list(wrapper.generate_events("los")) == [ToolCall("first", {})]
+    assert list(wrapper.reply_until_tool("los")) == [ToolCall("first", {})]
     assert len(wrapper.snapshot()) - 1 > 2      # over the limit, turn still open
 
     wrapper.inject_tool_result("first", "ok")
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
     assert len(wrapper.snapshot()) - 1 == 2     # back inside it once closed
     assert wrapper.snapshot()[0]["role"] == "system"
     assert fake.cache == _flatten(wrapper)
@@ -198,7 +313,7 @@ def test_a_result_under_the_wrong_name_is_refused():
     wrapper.begin("persona")
     fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
-    list(wrapper.generate_events("los"))
+    list(wrapper.reply_until_tool("los"))
 
     with pytest.raises(ValueError, match="the waiting call is 'clock'"):
         wrapper.inject_tool_result("other", "b")
@@ -207,7 +322,7 @@ def test_a_result_under_the_wrong_name_is_refused():
     wrapper.inject_tool_result("clock", "a")
     wrapper.inject_tool_result("other", "b")
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
     assert fake.cache == _flatten(wrapper)
 
 
@@ -220,7 +335,7 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     before = len(fake.cache)
     wrapper._config = Config(context_size=before + 1, evict_above_fraction=0.9)
@@ -244,7 +359,7 @@ def test_resuming_with_no_open_reply_is_refused():
     wrapper, _ = _wrapper()
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="no reply is open"):
-        list(wrapper.resume_events())
+        list(wrapper.resume_until_tool())
 
 
 def test_a_new_turn_cannot_open_inside_a_reply_a_call_left_open():
@@ -257,19 +372,19 @@ def test_a_new_turn_cannot_open_inside_a_reply_a_call_left_open():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     wrapper.inject_tool_result("clock", "ok")
     assert not wrapper.awaiting_tool_result
 
-    for action in (lambda: wrapper.generate("etwas anderes"),
+    for action in (lambda: wrapper.reply_without_tools("etwas anderes"),
                    lambda: wrapper.inject("etwas anderes"),
-                   lambda: wrapper.declare_tools([ToolSpec("x", "d", {})])):
+                   lambda: wrapper.declare_unknown_tools([ToolSpec("x", "d", {})])):
         with pytest.raises(ValueError, match="while a reply is open"):
             action()
 
     # Refusing left the turn untouched: it still resumes and closes normally.
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
     assert [m["role"] for m in wrapper.snapshot()] == ["system", "user", "assistant"]
     assert fake.cache == _flatten(wrapper)
 
@@ -278,16 +393,16 @@ def test_begin_discards_a_reply_a_call_left_open():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     wrapper.begin("persona")
-    wrapper.generate("etwas anderes")     # the open turn went with the reset
+    wrapper.reply_without_tools("etwas anderes")   # the turn went with the reset
     assert [m["role"] for m in wrapper.snapshot()] == ["system", "user", "assistant"]
     assert fake.cache == _flatten(wrapper)
 
 
 def test_a_model_without_tool_tags_cannot_call_tools():
-    fake = FakeContext(fragments=DEFAULT_FRAGMENTS)
+    fake = FakeContext()
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     assert not wrapper.can_call_tools
 
@@ -308,25 +423,26 @@ class _ConstantBodyContext(FakeContext):
 def test_tags_without_a_readable_grammar_cannot_call_tools():
     """The tags resolve, so a call is still detected; nothing runnable comes out.
 
-    Reporting this as callable would only be found out by making a call and
-    getting an empty reply back.
+    Every call such a model makes is unreadable, so it is told so and answers in
+    words. Reporting it as callable would promise a result that never arrives.
     """
-    fake = _ConstantBodyContext(fragments=TOOL_FRAGMENTS)
-    wrapper = ChatWrapper(Config(context_size=512), context=fake)
-    assert wrapper._call_body is None           # the probes recovered nothing
+    fake = _ConstantBodyContext(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake,
+                          tool_calls=FAKE_TAGS)
+    assert wrapper._template.call_body is None  # the probes recovered nothing
     assert not wrapper.can_call_tools
 
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    reply = wrapper.generate("los")
-    assert reply.stop_reason == "unreadable_tool_call"
-    assert reply.text == ""                      # the call never reaches the reply
+    reply = wrapper.reply_without_tools("los")
+    assert reply.text == "reply"                 # it answered instead
+    assert not wrapper.reply_open
 
 
 def test_a_supplied_grammar_makes_such_a_model_callable_again():
-    fake = _ConstantBodyContext(fragments=TOOL_FRAGMENTS)
+    fake = _ConstantBodyContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          call_body=FAKE)
+                          tool_calls=FAKE_CALLS)
     assert wrapper.can_call_tools
 
 
@@ -334,7 +450,7 @@ def test_an_oversized_result_is_clipped_and_keeps_its_tags():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     before = len(fake.cache)
     wrapper.inject_tool_result("clock", "x" * 10_000)
@@ -368,18 +484,17 @@ def test_a_tool_may_be_called_something_other_than_its_function():
     assert "calendar_add" in registry and "_add_v2" not in registry
 
 
-def test_only_declared_tools_are_offered_to_the_model():
+def test_the_flag_says_where_a_declaration_lands_not_whether():
+    """Every registered tool is meant to be told; the flag picks which door."""
     registry = ToolRegistry()
-    registry.register(lambda: {}, "laut", name="loud", declare=True)
-    registry.register(lambda: {}, "leise", name="quiet")
+    registry.register(lambda: {}, "gleich", name="early")
+    registry.register(lambda: {}, "später", name="late", in_system_prompt=False)
 
-    assert [s.name for s in registry.specs_to_declare()] == ["loud"]
-    # Registered and silent is still registered: it runs the moment it is named.
-    assert registry.call(ToolCall("quiet", {})) == {}
-
-    spec = registry.declare("quiet")
-    assert spec.name == "quiet"
-    assert sorted(s.name for s in registry.specs_to_declare()) == ["loud", "quiet"]
+    assert [s.name for s in registry.specs_for_system_prompt()] == ["early"]
+    assert sorted(s.name for s in registry.specs()) == ["early", "late"]
+    assert registry.spec("late").description == "später"
+    # Runnable from the moment it is registered, wherever it is declared.
+    assert registry.call(ToolCall("late", {})) == {}
 
 
 def test_a_tool_runs_with_the_arguments_the_model_gave():
@@ -398,6 +513,18 @@ def test_a_parameter_the_schema_cannot_describe_is_refused_at_registration():
     # The same rule the decorator enforces, at the other entry point.
     with pytest.raises(TypeError, match="not a type this can describe"):
         ToolRegistry().register(lambda title: {}, "…", name="add")
+
+
+def test_a_function_with_no_name_to_call_it_by_is_refused_at_registration():
+    """Registered under a name no model would ever write, it never runs.
+
+    Nothing later says so: the tool is declared, sits in the system turn for the
+    whole conversation, and is never called.
+    """
+    with pytest.raises(TypeError, match="pass name="):
+        ToolRegistry().register(lambda: "12:00", "Die Zeit.")
+    assert ToolRegistry().register(lambda: "12:00", "Die Zeit.",
+                                   name="clock") == "clock"
 
 
 def test_an_unknown_tool_becomes_a_result_rather_than_an_exception():
@@ -419,7 +546,7 @@ def test_the_models_mistake_and_the_tools_failure_are_told_apart():
 
 
 # ----- the local loop -----------------------------------------------------
-def test_answer_stream_runs_the_tool_and_yields_only_prose():
+def test_reply_with_tools_stream_runs_the_tool_and_yields_only_prose():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     registry = ToolRegistry()
@@ -428,7 +555,7 @@ def test_answer_stream_runs_the_tool_and_yields_only_prose():
                       "Sagt die Zeit.", name="clock")
     fake.call_script = ["fn:clock{}"]
 
-    out = "".join(wrapper.answer_stream("wie spät?", registry))
+    out = "".join(wrapper.reply_with_tools_stream("wie spät?", registry))
 
     assert seen == ["ran"]
     assert out                        # the reply after the result
@@ -436,7 +563,7 @@ def test_answer_stream_runs_the_tool_and_yields_only_prose():
     assert fake.cache == _flatten(wrapper)
 
 
-def test_answer_stops_calling_at_the_ceiling_and_still_closes_the_turn():
+def test_reply_with_tools_stops_calling_at_the_ceiling_and_closes_the_turn():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     registry = ToolRegistry()
@@ -445,7 +572,7 @@ def test_answer_stops_calling_at_the_ceiling_and_still_closes_the_turn():
     # The fake would call forever; the ceiling is what has to stop it.
     fake.call_script = ["fn:clock{}"] * 10
 
-    list(wrapper.answer_stream("los", registry, max_calls=2))
+    list(wrapper.reply_with_tools_stream("los", registry, max_calls=2))
 
     assert len(runs) == 2
     assert not wrapper.awaiting_tool_result
@@ -459,7 +586,7 @@ def test_a_declaration_added_later_reaches_the_model():
     registry = ToolRegistry()
     registry.register(lambda: {}, "Sagt die Zeit.", name="clock")
 
-    wrapper.declare_tools([registry.declare("clock")])
+    wrapper.declare_unknown_tools([registry.spec("clock")])
 
     written = "".join(chr(t) for t in fake.cache if t >= 0)
     assert "<decl>clock</decl>" in written
@@ -470,7 +597,7 @@ def test_declaring_nothing_writes_nothing():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     before = list(fake.cache)
-    assert wrapper.declare_tools([]) == 0
+    assert wrapper.declare_unknown_tools([]) == 0
     assert fake.cache == before
 
 
@@ -482,11 +609,10 @@ def test_declarations_too_large_to_fit_are_refused_rather_than_truncated():
     # The fake renders one <decl>NAME</decl> per tool, so many long names
     # overrun the threshold.
     for i in range(200):
-        registry.register(lambda: {}, "…", name=f"tool_with_a_long_name_{i}",
-                          declare=True)
+        registry.register(lambda: {}, "…", name=f"tool_with_a_long_name_{i}")
 
     with pytest.raises(ValueError, match="declare fewer tools"):
-        wrapper.declare_tools(registry.specs_to_declare())
+        wrapper.declare_unknown_tools(registry.specs())
 
     # A refused declaration leaves the conversation exactly as it was.
     assert fake.cache == before
@@ -502,7 +628,7 @@ def test_an_empty_parameter_schema_is_a_caller_saying_no_parameters():
     assert anything.spec.parameters == {}
     registry = ToolRegistry()
     registry.register(anything, "…", parameters={})
-    assert registry.specs_to_declare() == []
+    assert registry.specs()[0].parameters == {}
 
 
 def test_a_builtin_with_no_readable_signature_is_still_usable():
@@ -524,23 +650,23 @@ def test_a_builtin_registered_without_a_schema_says_what_to_do():
 def test_declaring_before_a_conversation_is_refused():
     wrapper, fake = _wrapper()
     registry = ToolRegistry()
-    registry.register(lambda: {}, "…", name="clock", declare=True)
+    registry.register(lambda: {}, "…", name="clock")
 
     # `begin` would reset the table and throw the declaration away, so writing
     # it here would be a silent loss rather than a declaration.
     with pytest.raises(ValueError, match="no conversation to declare into"):
-        wrapper.declare_tools(registry.specs_to_declare())
+        wrapper.declare_unknown_tools(registry.specs())
 
     assert fake.cache == []
 
 
 def test_a_model_without_tool_support_still_reports_the_missing_conversation():
     # The caller's own mistake is named before the model's limits are.
-    fake = FakeContext(fragments=DEFAULT_FRAGMENTS)
+    fake = FakeContext()
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     spec = ToolSpec("clock", "…", {"type": "object", "properties": {}})
     with pytest.raises(ValueError, match="no conversation to declare into"):
-        wrapper.declare_tools([spec])
+        wrapper.declare_unknown_tools([spec])
 
 
 def test_a_call_this_parser_cannot_read_still_closes_the_turn():
@@ -549,7 +675,7 @@ def test_a_call_this_parser_cannot_read_still_closes_the_turn():
     # A body in another model's format, which this model's fragments cannot read.
     fake.call_script = ["\n<function=clock>\n<parameter=x>\n1\n</parameter>\n</function>\n"]
 
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     # Left open, nothing would ever close it and the next request would prefill
     # into a model turn that never ended.
@@ -562,7 +688,7 @@ def test_an_unreadable_call_says_why():
     wrapper.begin("persona")
     fake.call_script = ["<function=clock>"]
 
-    events = wrapper.generate_events("wie spät?")
+    events = wrapper.reply_until_tool("wie spät?")
     while True:
         try:
             next(events)
@@ -578,7 +704,7 @@ def test_a_reset_ends_the_turn_a_call_was_holding_open():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     assert wrapper.awaiting_tool_result
 
     wrapper.begin("neue persona")
@@ -601,37 +727,159 @@ def test_reply_open_outlasts_the_calls_that_are_owed():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     assert wrapper.awaiting_tool_result and wrapper.reply_open
 
     wrapper.inject_tool_result("clock", {"time": "09:00"})
     assert not wrapper.awaiting_tool_result     # nothing is owed any more
     assert wrapper.reply_open                   # but the turn has not closed
-    for action in (lambda: wrapper.generate("weiter"),
+    for action in (lambda: wrapper.reply_without_tools("weiter"),
                    lambda: wrapper.inject("kontext"),
-                   lambda: wrapper.declare_tools(
+                   lambda: wrapper.declare_unknown_tools(
                        [ToolSpec("x", "d", {"type": "object", "properties": {}})])):
         with pytest.raises(ValueError, match="while a reply is open"):
             action()
 
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
     assert not wrapper.reply_open               # closed, and work is allowed again
-    wrapper.generate("weiter")
+    wrapper.reply_without_tools("weiter")
 
 
 # ----- what the whole exchange reports back -------------------------------
-def test_the_exchange_reports_what_the_reply_alone_cannot():
-    """A reply that ended on an unreadable call reads as empty text.
+def test_an_unreadable_call_is_told_so_and_the_reply_goes_on():
+    """The model is told its call could not be read, and answers in words.
 
-    Only the ``stop_reason`` tells that apart from a model that said nothing,
-    which is why the exchange carries one.
+    Dropping it would leave a call with no result in the history and hand the
+    caller silence, which is what the readable refusal already avoids.
     """
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["nonsense with no name"]
-    reply = wrapper.answer("los")
-    assert reply.text == ""
-    assert reply.stop_reason == "unreadable_tool_call"
+
+    reply = wrapper.reply_with_tools("los")
+
+    assert reply.text == "reply"
+    assert not wrapper.reply_open
+    turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                   if 0 < t < 0x11000)
+    assert "unreadable_call" in turn
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_a_failed_call_is_named_as_one_and_told_to_try_again():
+    """The reason alone reads as data; the model has to know the call failed."""
+    registry = ToolRegistry()
+    registry.register(lambda: 1 / 0, "Die Zeit.", name="clock")
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    wrapper.reply_with_tools("wie spät?", registry, max_calls=4)
+
+    told = _result_of(wrapper)
+    assert "the tool call failed" in told
+    assert "ZeroDivisionError: division by zero" in told   # the reason survives
+    assert "try again" in told
+
+
+def test_an_unreadable_call_may_be_written_again():
+    """A malformed call is a mistake the model can correct, so let it.
+
+    Bounded by ``max_calls`` like any other failure, or a model whose format was
+    never recovered would retry for ever: nothing it writes can ever be read.
+    """
+    ran = []
+    registry = ToolRegistry()
+    registry.register(lambda: ran.append(1) or "12:00", "Die Zeit.", name="clock")
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["nonsense with no name", "fn:clock{}"]
+
+    reply = wrapper.reply_with_tools("wie spät?", registry)
+
+    assert ran == [1]                                # the second one ran
+    assert [c.name for c in reply.tool_calls] == ["clock"]
+    assert not wrapper.reply_open
+
+
+def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["nonsense with no name"] * 20
+
+    wrapper.reply_with_tools("wie spät?", registry, max_calls=3)
+
+    assert len(fake.call_script) == 17               # three tries, then words
+    assert not wrapper.reply_open
+
+
+def test_reply_without_tools_does_not_retry_an_unreadable_call():
+    """A retry could only be refused, this path running no tool either way."""
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["nonsense with no name"] * 5
+
+    wrapper.reply_without_tools("wie spät?")
+
+    assert len(fake.call_script) == 4                # one try, then words
+    assert not wrapper.reply_open
+
+
+def test_a_ceiling_of_zero_binds_an_unreadable_call_too():
+    """The budget is spent only while there is budget, or it goes negative.
+
+    ``tool_limit_reached`` compares it to zero, so overshooting reports that the
+    ceiling did not bind when it is the only reason nothing was retried.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["nonsense with no name"] * 5
+
+    reply = wrapper.reply_with_tools("wie spät?", registry, max_calls=0)
+
+    assert reply.tool_limit_reached
+    assert len(fake.call_script) == 4                # no retry was allowed
+    assert not wrapper.reply_open
+
+
+def test_the_instruction_matches_what_the_model_may_still_do():
+    """The same failure ends differently once no call is left to make.
+
+    Telling a model to try again where the tags are about to be withheld would
+    ask for the one thing it cannot do.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: 1 / 0, "Die Zeit.", name="clock")
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_with_tools("q", registry, max_calls=1)   # the only call there was
+    assert "do not call again" in _result_of(wrapper)
+
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_with_tools("q", registry, max_calls=2)          # one still to spend
+    assert "try again" in _result_of(wrapper)
+
+
+def test_a_result_that_is_not_a_failure_reaches_the_model_untouched():
+    registry = ToolRegistry()
+    registry.register(lambda: {"time": "12:00"}, "Die Zeit.", name="clock")
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    wrapper.reply_with_tools("wie spät?", registry)
+
+    told = _result_of(wrapper)
+    assert '{"time": "12:00"}' in told
+    assert "failed" not in told
 
 
 def test_the_exchange_says_when_the_tool_ceiling_bound():
@@ -640,7 +888,7 @@ def test_the_exchange_says_when_the_tool_ceiling_bound():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"] * 6
-    reply = wrapper.answer("los", registry, max_calls=2)
+    reply = wrapper.reply_with_tools("los", registry, max_calls=2)
     assert reply.tool_limit_reached
     # Two ran, and the ceiling then withheld the call tokens rather than
     # letting a third be asked for.
@@ -651,7 +899,7 @@ def test_the_exchange_says_when_the_tool_ceiling_bound():
 def test_an_exchange_that_never_called_anything_says_so():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
-    reply = wrapper.answer("los")
+    reply = wrapper.reply_with_tools("los")
     assert reply.tool_calls == []
     assert not reply.tool_limit_reached
     assert reply.stop_reason == "end_of_turn"
@@ -661,7 +909,7 @@ def test_a_ceiling_of_zero_does_not_bind_a_reply_that_asked_for_nothing():
     """The flag reports a call that was refused, not a budget that went unused."""
     wrapper, _ = _wrapper()
     wrapper.begin("persona")
-    reply = wrapper.answer("los", max_calls=0)
+    reply = wrapper.reply_with_tools("los", max_calls=0)
     assert reply.tool_calls == []
     assert not reply.tool_limit_reached
 
@@ -673,11 +921,11 @@ def test_the_exchange_sums_every_generation_it_spanned():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    with_call = wrapper.answer("los", registry)
+    with_call = wrapper.reply_with_tools("los", registry)
 
     wrapper2, fake2 = _wrapper()
     wrapper2.begin("persona")
-    without = wrapper2.answer("los", registry)
+    without = wrapper2.reply_with_tools("los", registry)
 
     assert with_call.n_generated_tokens > without.n_generated_tokens
     assert with_call.n_prefilled_tokens >= without.n_prefilled_tokens
@@ -689,7 +937,7 @@ def test_the_streamed_deltas_join_into_the_exchange_text():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    stream = wrapper.answer_stream("los", registry)
+    stream = wrapper.reply_with_tools_stream("los", registry)
     deltas = []
     while True:
         try:
@@ -803,7 +1051,7 @@ def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
                        + ("" if calls else "<turn|>\n"))
         return "".join(out)
 
-    tools = extract_fragments(render).tools
+    tools = extract_tool_fragments(render, extract_fragments(render))
     call_body = extract_call_body(render, tools.call_open, "</tc>")
     lead_in = tools.call_open[len("<tc>"):]
 
@@ -813,13 +1061,15 @@ def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
 
 def test_a_grammar_may_be_supplied_where_the_probes_cannot_recover_one():
     # The same escape hatch `fragments=` is for a template that cannot be read.
-    fake = FakeContext(fragments=TOOL_FRAGMENTS)
+    fake = FakeContext(calls_tools=True)
     spelled = CallBody(name_close="(", key_open="", key_close="=",
                        pair_sep=",", body_close=")", empty_close=")",
                        quote_open='"', quote_close='"')
     wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          call_body=spelled)
-    assert wrapper._call_body is spelled
+                          tool_calls=ToolCallFragments(
+                              call_open="<call>fn:", call_close="}</call>",
+                              body=spelled))
+    assert wrapper._template.call_body is spelled
 
 
 # ----- a model that writes a batch -----------------------------------------
@@ -843,23 +1093,23 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
 
-    asked = list(wrapper.generate_events("los"))
+    asked = list(wrapper.reply_until_tool("los"))
     assert asked == [ToolCall("clock", {}), ToolCall("other", {})]
     assert wrapper.awaiting_tool_result
 
     wrapper.inject_tool_result("clock", "a")
     # One down, one still owed: resuming now would leave a call unanswered.
     with pytest.raises(ValueError, match="1 call"):
-        list(wrapper.resume_events())
+        list(wrapper.resume_until_tool())
 
     wrapper.inject_tool_result("other", "b")
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
     assert not wrapper.awaiting_tool_result
     assert fake.cache == _flatten(wrapper)
 
 
-def test_answer_stream_answers_every_call_of_a_batch():
+def test_reply_with_tools_stream_answers_every_call_of_a_batch():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     registry = ToolRegistry()
@@ -869,7 +1119,7 @@ def test_answer_stream_answers_every_call_of_a_batch():
     fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
 
-    list(wrapper.answer_stream("los", registry))
+    list(wrapper.reply_with_tools_stream("los", registry))
 
     assert ran == ["clock", "other"]
     assert fake.cache == _flatten(wrapper)
@@ -885,17 +1135,17 @@ def test_a_resumed_turn_gets_back_what_the_generation_prompt_carries():
         def resume_open(self) -> str:
             return "<chan>"
 
-    fake = FakeContext(fragments=TOOL_FRAGMENTS)
+    fake = FakeContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9),
                           context=fake, formatter=Channelled)
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     wrapper.inject_tool_result("clock", "ok")
 
     before = len(fake.cache)
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
 
     written = "".join(chr(c) for c in fake.cache[before:] if c >= 0)
     assert written.startswith("<chan>")
@@ -907,16 +1157,16 @@ def test_a_model_needing_nothing_extra_gets_nothing():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     wrapper.inject_tool_result("clock", "ok")
 
     before = len(fake.cache)
     fake.call_script = []
-    list(wrapper.resume_events())
+    list(wrapper.resume_until_tool())
 
     # What the generation holds is the sampled tokens and the turn's closing
     # tag, and nothing in front of them.
-    generated = fake._gen_len
+    generated = fake._gen_tokens
     closing = len("<turn|>\n")
     assert len(fake.cache) - before == generated + closing
 
@@ -992,8 +1242,8 @@ def test_register_takes_what_the_tool_declaration_already_said():
         return "09:00"
 
     registry = ToolRegistry()
-    registry.register(clock, declare=True)
-    spec = registry.specs_to_declare()[0]
+    registry.register(clock)
+    spec = registry.specs()[0]
     assert spec.description == "Sagt die Zeit."
     assert spec.parameters["properties"] == {"city": {"type": "string"}}
     assert len(registry) == 1 and "clock" in registry
@@ -1008,14 +1258,17 @@ def test_register_without_a_description_or_a_declaration_is_refused():
         ToolRegistry().register(bare)
 
 
-def test_registering_a_name_again_replaces_it_and_its_declare_state():
+def test_registering_a_name_again_replaces_it_and_where_it_is_declared():
     registry = ToolRegistry()
-    registry.register(lambda: "first", "Erste.", name="clock", declare=True)
-    assert registry.specs_to_declare()[0].description == "Erste."
+    registry.register(lambda: "first", "Erste.", name="clock",
+                      in_system_prompt=False)
+    assert registry.specs()[0].description == "Erste."
+    assert registry.specs_for_system_prompt() == []
 
     registry.register(lambda: "second", "Zweite.", name="clock")
     assert len(registry) == 1
-    assert registry.specs_to_declare() == []          # declare went with it
+    # The placement was replaced along with the rest of it.
+    assert [s.name for s in registry.specs_for_system_prompt()] == ["clock"]
     assert registry.call(ToolCall("clock", {})) == "second"
 
 
@@ -1029,7 +1282,7 @@ def test_variadic_parameters_are_left_out_of_the_schema():
 
 
 def test_a_parser_that_fails_unexpectedly_still_closes_the_turn(monkeypatch):
-    """A reply that stopped on a call must close, whatever reading it does.
+    """A reply that stopped on a call must finish, whatever reading it does.
 
     ``_read_calls`` runs with the turn still open. A failure escaping it would
     skip the closing tag while leaving ``_reply_open`` False, so nothing would
@@ -1045,21 +1298,21 @@ def test_a_parser_that_fails_unexpectedly_still_closes_the_turn(monkeypatch):
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
 
-    reply = wrapper.generate("wie spät?")
-    assert reply.stop_reason == "unreadable_tool_call"
+    reply = wrapper.reply_without_tools("wie spät?")
     assert reply.tool_calls == []
+    assert not wrapper.reply_open               # the turn finished either way
     assert not wrapper.awaiting_tool_result
 
     # The turn really closed: an ordinary request follows it, and the cache
     # still equals the table.
-    wrapper.generate("etwas anderes")
+    wrapper.reply_without_tools("etwas anderes")
     assert [m["role"] for m in wrapper.snapshot()] == [
         "system", "user", "assistant", "user", "assistant"]
     assert fake.cache == _flatten(wrapper)
 
 
 def test_the_registry_keeps_naming_a_declaration_the_cache_dropped():
-    """``specs_to_declare`` is intent, not a record of what the model knows.
+    """``specs`` is intent, not a record of what the model knows.
 
     A declaration prefilled mid-conversation is an ordinary message, so a long
     conversation evicts it. Nothing tells the registry, and nothing should: it
@@ -1071,20 +1324,20 @@ def test_the_registry_keeps_naming_a_declaration_the_cache_dropped():
     registry = ToolRegistry()
     registry.register(clock, "Sagt die Zeit.")
 
-    fake = FakeContext(fragments=TOOL_FRAGMENTS)
+    fake = FakeContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5),
                           context=fake)
     wrapper.begin("persona")
-    wrapper.declare_tools([registry.declare("clock")])
+    wrapper.declare_unknown_tools([registry.spec("clock")])
     assert [m["role"] for m in wrapper.snapshot()] == ["system", "system"]
 
     for i in range(6):
-        wrapper.generate(f"frage {i}")
+        wrapper.reply_without_tools(f"frage {i}")
 
     # The declaration went with the oldest messages; only the prompt is pinned.
     assert [m["role"] for m in wrapper.snapshot()][:2] == ["system", "user"]
     # And the registry still names it, so another begin() would declare it again.
-    assert [s.name for s in registry.specs_to_declare()] == ["clock"]
+    assert [s.name for s in registry.specs()] == ["clock"]
     assert fake.cache == _flatten(wrapper)
 
 
@@ -1244,17 +1497,17 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     came before the call.
     """
     seen = []
-    fake = FakeContext(fragments=TOOL_FRAGMENTS, gen_text="neun Uhr")
+    fake = FakeContext(calls_tools=True, gen_text="neun Uhr")
     wrapper = ChatWrapper(Config(context_size=512), context=fake,
                           on_message=lambda role, text: seen.append((role, text)))
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
     assert wrapper.snapshot()[-1]["text"] == ""     # nothing visible yet
 
     wrapper.inject_tool_result("clock", {"time": "09:00"})
     fake.call_script = []
-    resumed = "".join(e for e in wrapper.resume_events() if isinstance(e, str))
+    resumed = "".join(e for e in wrapper.resume_until_tool() if isinstance(e, str))
 
     row = wrapper.snapshot()[-1]
     assert resumed and row["text"] == resumed       # every visible delta, once
@@ -1281,7 +1534,7 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     fake.call_script = ['[{"name":"clock","arguments":{}},'
                         ' {"name":"clock","arguments":{}},'
                         ' {"name":"clock","arguments":{}}]']
-    list(wrapper.answer_stream("frage", registry, max_calls=1))
+    list(wrapper.reply_with_tools_stream("frage", registry, max_calls=1))
 
     assert len(ran) == 1                       # only the permitted one ran
     refusals = [text for text, _ in fake.tokenize_calls
@@ -1295,13 +1548,9 @@ def test_tags_that_resolve_to_no_token_leave_tool_calling_off():
     """TemplateFragments can name tags this model's vocabulary does not have."""
     from llama_chat.template import TemplateFragments, ToolCallFragments
 
-    unknown = TemplateFragments(
-        system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
-        user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
-        assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
-        tools=ToolCallFragments(call_open="OPEN:", call_close=":CLOSE"))
-    wrapper = ChatWrapper(Config(context_size=512),
-                          context=FakeContext(fragments=unknown))
+    wrapper = ChatWrapper(
+        Config(context_size=512), context=FakeContext(),
+        tool_calls=ToolCallFragments(call_open="OPEN:", call_close=":CLOSE"))
     assert not wrapper.can_call_tools
 
 
@@ -1313,7 +1562,7 @@ class _NoDeclarations(FakeContext):
 
 
 def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
-    fake = _NoDeclarations(fragments=TOOL_FRAGMENTS)
+    fake = _NoDeclarations(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     spec = ToolSpec("clock", "Zeit.", {"type": "object", "properties": {}})
 
@@ -1323,7 +1572,7 @@ def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
     # And afterwards, where they would be a message of their own.
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="declares no tools"):
-        wrapper.declare_tools([spec])
+        wrapper.declare_unknown_tools([spec])
 
 
 class _NoResultBlock(FakeContext):
@@ -1334,12 +1583,225 @@ class _NoResultBlock(FakeContext):
         return super().render_with_model_template(kept, tools=tools)
 
 
+def test_booking_a_reply_survives_a_template_with_nowhere_to_tell_it():
+    """Telling the model is best effort; keeping the cache consistent is not.
+
+    Booking runs in a ``finally`` and is what leaves the cache and the table
+    agreeing, so a template that renders no result block must make it fall back
+    to closing the turn, not raise out of it.
+    """
+    fake = _NoResultBlock(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    wrapper.begin("persona")
+    fake.call_script = ["nonsense with no name"]
+
+    reply = wrapper.reply_without_tools("wie spät?")          # must not raise
+
+    assert reply.stop_reason == "unreadable_tool_call"
+    assert not wrapper.reply_open
+    turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                   if 0 < t < 0x11000)
+    assert turn.endswith("<turn|>\n")             # the terminator still landed
+    assert fake.cache == _flatten(wrapper)
+    assert wrapper.reply_without_tools("weiter").stop_reason == "end_of_turn"
+
+
+def test_can_call_tools_answers_for_the_whole_chain_at_startup():
+    """No probing by hand and no waiting for the first call to find out.
+
+    A template that renders a call but no block to answer one in used to report
+    True here, which is the promise that hurts: the tool is declared, called,
+    and only then does the result turn out to have nowhere to go. True is
+    exactly what begin(tools=...) accepts, so each of these refuses one.
+    """
+    assert not ChatWrapper(Config(context_size=1024),
+                           context=FakeContext()
+                           ).can_call_tools
+    assert not ChatWrapper(Config(context_size=1024),
+                           context=_NoDeclarations(calls_tools=True)
+                           ).can_call_tools
+    assert not ChatWrapper(Config(context_size=1024), tool_calls=FAKE_TAGS,
+                           context=_ConstantBodyContext(calls_tools=True)
+                           ).can_call_tools
+    assert not ChatWrapper(Config(context_size=1024),
+                           context=_NoResultBlock(calls_tools=True)
+                           ).can_call_tools
+    assert ChatWrapper(Config(context_size=1024),
+                       context=FakeContext(calls_tools=True)).can_call_tools
+    # And the escape hatch still reaches it.
+    assert ChatWrapper(Config(context_size=1024), tool_calls=FAKE_CALLS,
+                       context=_ConstantBodyContext(calls_tools=True)
+                       ).can_call_tools
+
+
+@pytest.mark.parametrize("build", [
+    lambda: ChatWrapper(Config(context_size=1024), context=FakeContext()),
+    lambda: ChatWrapper(Config(context_size=1024),
+                        context=_NoDeclarations(calls_tools=True)),
+    lambda: ChatWrapper(Config(context_size=1024), tool_calls=FAKE_TAGS,
+                        context=_ConstantBodyContext(calls_tools=True)),
+    lambda: ChatWrapper(Config(context_size=1024),
+                        context=_NoResultBlock(calls_tools=True)),
+    lambda: ChatWrapper(Config(context_size=1024),
+                        context=FakeContext(calls_tools=True)),
+])
+def test_can_call_tools_is_exactly_what_declaring_will_accept(build):
+    """One question, one answer: reading it must predict what begin does.
+
+    Two predicates over the same four steps would drift, and the property is
+    read precisely to avoid the raise.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    wrapper = build()
+
+    if wrapper.can_call_tools:
+        wrapper.begin("persona", tools=registry)
+    else:
+        with pytest.raises(ValueError):
+            wrapper.begin("persona", tools=registry)
+
+
+def test_a_context_that_throws_while_probing_still_loads():
+    """The probe decides an optional capability, so it cannot refuse the model.
+
+    A cache context of your own may raise where the bundled one returns None.
+    Letting that escape would deny a conversation that never wanted tools.
+    """
+    class Throws(FakeContext):
+        def render_with_model_template(self, messages, tools=None):
+            if any(m["role"] == "tool" for m in messages):
+                raise RuntimeError("template blew a gasket")
+            return super().render_with_model_template(messages, tools)
+
+    wrapper = ChatWrapper(Config(context_size=1024),
+                          context=Throws(calls_tools=True))
+
+    assert not wrapper.can_call_tools
+    wrapper.begin("persona")
+    assert wrapper.reply_without_tools("hallo").text == "reply"
+
+
+def test_the_result_block_is_probed_once_not_per_result():
+    """A property read must not render a template, so the answer is kept."""
+    class Counting(FakeContext):
+        renders = 0
+        def render_with_model_template(self, messages, tools=None):
+            Counting.renders += 1
+            return super().render_with_model_template(messages, tools)
+
+    fake = Counting(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    after_construction = Counting.renders
+    for _ in range(5):
+        assert wrapper.can_call_tools
+    assert Counting.renders == after_construction
+
+
+def test_declaring_refuses_a_model_that_could_never_call():
+    """A declaration is a promise, so the whole chain is checked when it is made.
+
+    Failing at the first call instead would surface mid-reply, after the model
+    was already told the tool exists.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+
+    no_calls = FakeContext()
+    wrapper = ChatWrapper(Config(context_size=1024), context=no_calls)
+    with pytest.raises(ValueError, match="describes no tool call"):
+        wrapper.begin("persona", tools=registry)
+
+    unreadable = _ConstantBodyContext(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=unreadable,
+                          tool_calls=FAKE_TAGS)
+    with pytest.raises(ValueError, match="call format could not be recovered"):
+        wrapper.begin("persona", tools=registry)
+
+    no_result = _NoResultBlock(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=no_result)
+    with pytest.raises(ValueError, match="renders no tool result"):
+        wrapper.begin("persona", tools=registry)
+
+
+def test_a_registry_handed_to_reply_with_tools_is_checked_the_same_way():
+    """Handing tools over to be run is the same promise as declaring them.
+
+    Unchecked, the exchange runs to the end and never calls anything,
+    with nothing anywhere saying why.
+    """
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    fake = _NoResultBlock(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin("persona")
+    before = wrapper.snapshot()
+
+    with pytest.raises(ValueError, match="renders no tool result"):
+        wrapper.reply_with_tools("wie spät?", registry)
+    with pytest.raises(ValueError, match="renders no tool result"):
+        list(wrapper.reply_with_tools_stream("wie spät?", registry))
+
+    assert wrapper.snapshot() == before          # refused before the request
+    assert fake.cache == _flatten(wrapper)
+    # A registry with nothing in it promises nothing, and the tool-free path
+    # was never promising anything either.
+    assert wrapper.reply_with_tools("hallo", ToolRegistry()).text == "reply"
+    assert wrapper.reply_without_tools("hallo").text == "reply"
+
+
+def test_a_supplied_call_body_makes_the_declaration_go_through():
+    """The escape hatch has to reach the check, or it would not be one."""
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    fake = _ConstantBodyContext(calls_tools=True)
+
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake,
+                          tool_calls=FAKE_CALLS)
+    wrapper.begin("persona", tools=registry)          # must not raise
+
+    assert wrapper.can_call_tools
+
+
+def test_declaring_later_is_checked_the_same_way():
+    fake = _NoResultBlock(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin("persona")
+    with pytest.raises(ValueError, match="renders no tool result"):
+        wrapper.declare_unknown_tools(
+            [ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})])
+
+
+def test_a_refused_declaration_leaves_the_conversation_alone():
+    """begin validates before it resets, and that must include this check."""
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    fake = _NoResultBlock(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin("erste persona")
+    wrapper.reply_without_tools("hallo")
+    before = wrapper.snapshot()
+
+    with pytest.raises(ValueError, match="renders no tool result"):
+        wrapper.begin("zweite persona", tools=registry)
+
+    assert wrapper.snapshot() == before
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_a_model_without_tools_is_still_fine_without_them():
+    fake = FakeContext()
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin("persona")                          # no tools, no complaint
+    assert wrapper.reply_without_tools("hallo").text == "reply"
+
+
 def test_a_template_with_no_result_block_refuses_the_result():
-    fake = _NoResultBlock(fragments=TOOL_FRAGMENTS)
+    fake = _NoResultBlock(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.generate_events("wie spät?"))
+    list(wrapper.reply_until_tool("wie spät?"))
 
     with pytest.raises(ValueError, match="renders no tool result"):
         wrapper.inject_tool_result("clock", "ok")
@@ -1363,15 +1825,16 @@ class _UnsliceableDeclarations(FakeContext):
 
 
 def test_declarations_that_cannot_be_cut_out_are_refused():
-    fake = _UnsliceableDeclarations(fragments=TOOL_FRAGMENTS)
+    fake = _UnsliceableDeclarations(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
     spec = ToolSpec("clock", "Zeit.", {"type": "object", "properties": {}})
 
-    # The two renders differ, so the template does declare something, but the
-    # difference is not a block that can be lifted out and prefilled on its own.
-    with pytest.raises(ValueError, match="declares no tools"):
-        wrapper.declare_tools([spec])
+    # The two renders differ, so the template does declare something, and the
+    # refusal says the thing that is actually wrong: the difference is not a
+    # block that can be lifted out and prefilled on its own.
+    with pytest.raises(ValueError, match="lifted out of the system turn"):
+        wrapper.declare_unknown_tools([spec])
     assert [m["role"] for m in wrapper.snapshot()] == ["system"]
     assert fake.cache == _flatten(wrapper)
 
@@ -1382,15 +1845,227 @@ def test_no_render_sentinel_contains_another():
     ``PROBE`` used to sit inside ``RESULTPROBE`` and ``TAILPROBE``, so a render
     carrying all three could be cut six characters into the wrong sentinel.
     """
-    from llama_chat import wrapper
+    from llama_chat import resolved_template
 
-    sentinels = {name: getattr(wrapper, name)
+    sentinels = {name: getattr(resolved_template, name)
                  for name in ("_PROMPT", "_RESULT", "_TAIL")}
     assert len(set(sentinels.values())) == len(sentinels)
     for name, value in sentinels.items():
         others = [v for n, v in sentinels.items() if n != name]
         assert not any(value in other for other in others), \
             f"{name}={value!r} occurs inside another sentinel"
+
+
+# ----- what a caller has to write -----------------------------------------
+def test_the_decorator_registers_and_declares_in_one_step():
+    """The two steps a tool always needed, in the form the function is written."""
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.")
+    def clock(city: str) -> dict:
+        return {"time": "12:00", "city": city}
+
+    assert "clock" in registry
+    assert [spec.name for spec in registry.specs()] == ["clock"]
+    assert registry.specs()[0].parameters["properties"] == {
+        "city": {"type": "string"}}
+    # Returned unchanged, so it stays an ordinary function.
+    assert clock("Bonn") == {"time": "12:00", "city": "Bonn"}
+    assert registry.call(ToolCall("clock", {"city": "Bonn"}))["city"] == "Bonn"
+
+
+def test_the_decorator_can_leave_a_tool_for_the_later_door():
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.", in_system_prompt=False)
+    def clock() -> dict:
+        return {}
+
+    assert "clock" in registry
+    assert registry.specs_for_system_prompt() == []      # not at begin
+    assert [spec.name for spec in registry.specs()] == ["clock"]
+
+
+def test_a_result_is_injected_under_the_call_it_answers():
+    """The call you were handed is what you hand back, not its name spelled out."""
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    events = wrapper.reply_until_tool("wie spät?")
+    call = [event for event in events if isinstance(event, ToolCall)][0]
+    wrapper.inject_tool_result(call, registry.call(call))
+
+    assert not wrapper.awaiting_tool_result
+    assert "12:00" in _result_of(wrapper)
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_declaring_takes_a_registry_the_way_begin_does():
+    """One shape for both doors, since both are handed the same thing."""
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.")
+    def clock() -> dict:
+        return {}
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    wrapper.declare_unknown_tools(registry)
+
+    declared = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                       if 0 < t < 0x11000)
+    assert "<decl>clock</decl>" in declared
+    assert fake.cache == _flatten(wrapper)
+    # Read, not kept: which registry a turn runs against stays begin's decision,
+    # so this one has to be handed over again to be run from.
+    fake.call_script = ["fn:clock{}"]
+    wrapper.reply_with_tools("wie spät?")
+    assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)
+
+
+def _declared_in(wrapper, index):
+    """The declarations the message at ``index`` carries, as rendered text."""
+    return "".join(chr(t) for t in wrapper._table.messages[index].token_ids
+                   if 0 < t < 0x11000)
+
+
+def test_the_two_doors_split_a_registry_by_where_each_tool_belongs():
+    """One registry, handed to both: begin takes its half, the other door the rest."""
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.")
+    def clock() -> dict:
+        return {}
+
+    @registry.tool("Sagt das Wetter.", in_system_prompt=False)
+    def weather(city: str) -> dict:
+        return {}
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona", tools=registry)
+
+    assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
+    assert "<decl>weather</decl>" not in _declared_in(wrapper, 0)
+
+    wrapper.declare_unknown_tools(registry)          # the rest, in a message of its own
+
+    assert "<decl>weather</decl>" in _declared_in(wrapper, -1)
+    assert "<decl>clock</decl>" not in _declared_in(wrapper, -1)
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_declaring_the_same_registry_again_writes_nothing():
+    """What the conversation already says is not worth a second prefill."""
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.", in_system_prompt=False)
+    def clock() -> dict:
+        return {}
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona", tools=registry)
+    wrapper.declare_unknown_tools(registry)
+    once = wrapper.snapshot()
+
+    wrapper.declare_unknown_tools(registry)
+    wrapper.declare_unknown_tools(registry)
+
+    assert wrapper.snapshot() == once
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_a_declaration_the_cache_dropped_is_written_again():
+    """Known is read off the messages, so eviction takes the knowledge with it."""
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.", in_system_prompt=False)
+    def clock() -> dict:
+        return {}
+
+    fake = FakeContext(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5),
+                          context=fake)
+    wrapper.begin("persona")
+    wrapper.declare_unknown_tools(registry)
+    assert [m["role"] for m in wrapper.snapshot()] == ["system", "system"]
+
+    for i in range(6):
+        wrapper.reply_without_tools(f"frage {i}")
+    assert [m["role"] for m in wrapper.snapshot()][:2] == ["system", "user"]
+
+    wrapper.declare_unknown_tools(registry)      # the model no longer knows it
+    assert "<decl>clock</decl>" in _declared_in(wrapper, -1)
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_declaring_skips_what_the_system_turn_already_holds():
+    """Repeating those is pure cost: the system turn is never evicted.
+
+    A tool declared later is written again, because the message carrying that
+    declaration can be evicted, and then the model no longer knows it.
+    """
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt die Zeit.")
+    def clock() -> dict:
+        return {}
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona", tools=registry)
+    before = wrapper.snapshot()
+
+    assert wrapper.declare_unknown_tools(registry) == 0
+    assert wrapper.snapshot() == before          # nothing was written at all
+
+    @registry.tool("Sagt das Wetter.")
+    def weather(city: str) -> dict:
+        return {}
+
+    wrapper.declare_unknown_tools(registry)              # only the one it has not heard
+    declared = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                       if 0 < t < 0x11000)
+    assert "<decl>weather</decl>" in declared
+    assert "<decl>clock</decl>" not in declared
+
+    wrapper.begin("persona")                     # a reset forgets what was said
+    wrapper.declare_unknown_tools(registry)
+    declared = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
+                       if 0 < t < 0x11000)
+    assert "<decl>clock</decl>" in declared
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_a_turn_may_call_as_often_as_it_likes_by_default():
+    """No ceiling unless one is asked for, so nothing is refused for counting."""
+    ran = []
+    registry = ToolRegistry()
+    registry.register(lambda: ran.append(1) or "12:00", "Die Zeit.", name="clock")
+
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"] * 9
+
+    reply = wrapper.reply_with_tools("los", registry)
+
+    assert len(ran) == 9                         # every one of them ran
+    assert not reply.tool_limit_reached
+    assert not any("tool_limit_reached" in text for text, _ in fake.tokenize_calls)
+    assert fake.cache == _flatten(wrapper)
+
+
+def test_a_stream_of_calls_hands_back_its_reply_too():
+    wrapper, fake = _wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    events = wrapper.reply_until_tool("wie spät?")
+    calls = [event for event in events if isinstance(event, ToolCall)]
+
+    assert events.reply.stop_reason == "tool_call"
+    assert events.reply.tool_calls == calls
 
 
 # ----- the registry the wrapper remembers ---------------------------------
@@ -1400,7 +2075,6 @@ def _weather_registry():
                       "Wetter.", name="weather",
                       parameters={"type": "object",
                                   "properties": {"city": {"type": "string"}}})
-    registry.declare("weather")
     return registry
 
 
@@ -1411,17 +2085,17 @@ def test_begin_keeps_the_registry_it_declared_from():
     wrapper.begin("persona", tools=registry)
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    assert "".join(wrapper.answer_stream("wetter?")) == "reply"
+    assert "".join(wrapper.reply_with_tools_stream("wetter?")) == "reply"
     assert fake.cache == _flatten(wrapper)
 
 
-def test_answer_is_answer_stream_drained():
+def test_reply_with_tools_is_its_own_stream_drained():
     registry = _weather_registry()
     wrapper, fake = _wrapper()
     wrapper.begin("persona", tools=registry)
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    assert wrapper.answer("wetter?").text == "reply"
+    assert wrapper.reply_with_tools("wetter?").text == "reply"
 
 
 def test_a_registry_passed_here_beats_the_remembered_one():
@@ -1433,7 +2107,7 @@ def test_a_registry_passed_here_beats_the_remembered_one():
     wrapper.begin("persona", tools=_weather_registry())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    wrapper.answer("wetter?", other)
+    wrapper.reply_with_tools("wetter?", other)
     assert any("aus der anderen" in text for text, _ in fake.tokenize_calls)
 
 
@@ -1441,7 +2115,7 @@ def test_a_conversation_with_no_tools_needs_no_registry():
     """The easy path is the easy path whether or not tools are involved."""
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
-    assert wrapper.answer("hallo").text == "reply"
+    assert wrapper.reply_with_tools("hallo").text == "reply"
     assert fake.cache == _flatten(wrapper)
 
 
@@ -1451,9 +2125,9 @@ def test_a_call_invented_with_no_tools_declared_is_answered_not_raised():
     wrapper.begin("persona")            # nothing declared, no registry
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    assert wrapper.answer("wetter?").text == "reply"     # the reply still arrives
+    assert wrapper.reply_with_tools("wetter?").text == "reply"   # it still arrives
     assert not wrapper._reply_open                  # and the turn closed
-    assert any("no_tools" in text for text, _ in fake.tokenize_calls)
+    assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)
     assert fake.cache == _flatten(wrapper)
 
 
@@ -1464,13 +2138,12 @@ def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
                       name="weather",
                       parameters={"type": "object",
                                   "properties": {"city": {"type": "string"}}})
-    registry.declare("weather")
 
     wrapper, fake = _wrapper()
     wrapper.begin("persona", tools=registry)
     wrapper.begin("persona")            # a reset drops it with everything else
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    wrapper.answer("wetter?")
+    wrapper.reply_with_tools("wetter?")
     assert ran == []                    # the tool the old conversation had is gone
-    assert any("no_tools" in text for text, _ in fake.tokenize_calls)
+    assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)

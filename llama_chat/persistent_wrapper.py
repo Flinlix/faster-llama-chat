@@ -7,12 +7,11 @@ while the cache holds only the recent window that fits.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Generator
 from typing import Protocol
 
 from .config import Config
 from .tools import ToolCall, ToolRegistry, ToolSpec
-from .wrapper import ChatWrapper, Reply
+from .wrapper import ChatWrapper, Reply, ReplyStream
 
 
 class ConversationStore(Protocol):
@@ -50,6 +49,21 @@ class PersistentChat:
 
     # ----- setting up ----------------------------------------------------------
     def __init__(self, store: ConversationStore, config: Config | None = None, **kwargs) -> None:
+        """Build the chat and adopt the store every message is mirrored to.
+
+        Args:
+            store: Where turns are persisted. Checked here rather than at the
+                first message, which is written mid-turn.
+            config, **kwargs: As :class:`~llama_chat.wrapper.ChatWrapper`.
+
+        Raises:
+            TypeError: If ``store`` is not a :class:`ConversationStore`.
+        """
+        missing = [name for name in ("load", "append") if not hasattr(store, name)]
+        if missing:
+            raise TypeError(
+                f"this conversation store is missing {missing}; one answers "
+                f"load(conversation_id) and append(conversation_id, role, text)")
         self._store = store
         self._conversation_id: str | None = None
         self._chat = ChatWrapper(config, on_message=self._persist, **kwargs)
@@ -58,8 +72,8 @@ class PersistentChat:
               tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
         """Select the conversation and prefill its recent history.
 
-        A failed begin selects nothing, so later turns cannot persist into a
-        conversation whose history was never loaded.
+        A failed begin selects nothing new, so later turns cannot persist into
+        a conversation whose history was never loaded.
 
         Args:
             conversation_id: Which conversation to load and persist into.
@@ -72,37 +86,44 @@ class PersistentChat:
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
+        self._ensure_conversation_selected()
         return self._chat.inject(text, role)
 
-    # ----- asking: one generation ----------------------------------------------
-    def generate_stream(self, text: str, **kwargs) -> Generator[str, None, Reply]:
-        return self._chat.generate_stream(text, **kwargs)
+    # ----- asking: without tools -----------------------------------------------
+    def reply_without_tools_stream(self, text: str, **kwargs) -> ReplyStream[str]:
+        self._ensure_conversation_selected()
+        return self._chat.reply_without_tools_stream(text, **kwargs)
 
-    def generate(self, text: str, **kwargs) -> Reply:
-        return self._chat.generate(text, **kwargs)
+    def reply_without_tools(self, text: str, **kwargs) -> Reply:
+        self._ensure_conversation_selected()
+        return self._chat.reply_without_tools(text, **kwargs)
 
-    # ----- asking: until it answers --------------------------------------------
-    def answer_stream(self, text: str, registry: ToolRegistry | None = None,
-                      **kwargs) -> Generator[str, None, Reply]:
-        return self._chat.answer_stream(text, registry, **kwargs)
+    # ----- asking: with tools --------------------------------------------------
+    def reply_with_tools_stream(self, text: str,
+                                registry: ToolRegistry | None = None,
+                                **kwargs) -> ReplyStream[str]:
+        self._ensure_conversation_selected()
+        return self._chat.reply_with_tools_stream(text, registry, **kwargs)
 
-    def answer(self, text: str, registry: ToolRegistry | None = None,
-               **kwargs) -> Reply:
-        return self._chat.answer(text, registry, **kwargs)
+    def reply_with_tools(self, text: str, registry: ToolRegistry | None = None,
+                          **kwargs) -> Reply:
+        self._ensure_conversation_selected()
+        return self._chat.reply_with_tools(text, registry, **kwargs)
 
     # ----- tools: driving the loop yourself ------------------------------------
-    def generate_events(self, text: str,
-                      **kwargs) -> Generator[str | ToolCall, None, Reply]:
-        return self._chat.generate_events(text, **kwargs)
+    def reply_until_tool(self, text: str,
+                        **kwargs) -> ReplyStream[str | ToolCall]:
+        self._ensure_conversation_selected()
+        return self._chat.reply_until_tool(text, **kwargs)
 
-    def resume_events(self, **kwargs) -> Generator[str | ToolCall, None, Reply]:
-        return self._chat.resume_events(**kwargs)
+    def resume_until_tool(self, **kwargs) -> ReplyStream[str | ToolCall]:
+        return self._chat.resume_until_tool(**kwargs)
 
-    def inject_tool_result(self, name: str, result) -> None:
-        self._chat.inject_tool_result(name, result)
+    def inject_tool_result(self, call: ToolCall | str, result) -> int:
+        return self._chat.inject_tool_result(call, result)
 
-    def declare_tools(self, specs: list[ToolSpec]) -> int:
-        return self._chat.declare_tools(specs)
+    def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
+        return self._chat.declare_unknown_tools(tools)
 
     # ----- introspection -------------------------------------------------------
     @property
@@ -158,7 +179,20 @@ class PersistentChat:
         self.close()
 
     # ----- internals -----------------------------------------------------------
-    def _persist(self, role: str, text: str) -> None:
+    def _ensure_conversation_selected(self) -> None:
+        """Refuse before ``begin``, which is what selects where turns go.
+
+        Checked at every entry point that can write a message, and again where
+        one is persisted: a message noticed only on its way to the store has
+        already been prefilled, and the cache would keep what the store never
+        got.
+
+        Raises:
+            RuntimeError: If no conversation is selected.
+        """
         if self._conversation_id is None:
-            raise RuntimeError("call begin() before sending turns")
+            raise RuntimeError("no conversation selected; call begin() first")
+
+    def _persist(self, role: str, text: str) -> None:
+        self._ensure_conversation_selected()
         self._store.append(self._conversation_id, role, text)

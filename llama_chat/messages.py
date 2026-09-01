@@ -25,6 +25,8 @@ class Message:
             template tags. ``len(token_ids)`` equals the slice width.
         pos_start: First cache position owned by this message (inclusive).
         pos_end: One past the last cache position (exclusive).
+        declares: The tools this message tells the model about, if any. Held
+            here so that evicting the message takes the declaration with it.
     """
 
     role: str
@@ -32,6 +34,7 @@ class Message:
     token_ids: list[int]
     pos_start: int = 0
     pos_end: int = 0
+    declares: tuple[str, ...] = ()
 
     @property
     def n_tokens(self) -> int:
