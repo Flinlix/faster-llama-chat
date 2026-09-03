@@ -9,12 +9,11 @@ from __future__ import annotations
 import codecs
 import os
 import threading
-import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ._backend import Backend, set_log_level
-from .config import KV_CACHE_GGML_TYPES, Config
+from .config import Config
 from .messages import Eviction
 from .template import TemplateFragments
 
@@ -106,7 +105,8 @@ class KVContext:
         self._llama_context = None
         self._sampler = None
         try:
-            kv_type = KV_CACHE_GGML_TYPES.get(config.kv_cache_type)
+            kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
+                       if config.kv_cache_type else None)
             self._llama_context = self._backend.new_context(
                 self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
                 flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type,
@@ -121,7 +121,7 @@ class KVContext:
         except BaseException:
             # Free whatever was created before the failure.
             if self._sampler is not None:
-                self._backend.llama_cpp.llama_sampler_free(self._sampler)
+                self._backend.free_sampler(self._sampler)
             if self._llama_context is not None:
                 self._backend.free_context(self._llama_context)
             self._backend.free_model(self._model)
@@ -205,13 +205,8 @@ class KVContext:
         template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
         if not template:
             return None
-        from llama_cpp.llama_chat_format import Jinja2ChatFormatter
-        return Jinja2ChatFormatter(
-            template=template,
-            eos_token=self._backend.eos_text(self._vocab),
-            bos_token="",
-            add_generation_prompt=False,
-        )
+        return self._backend.template_renderer(
+            template, self._backend.eos_text(self._vocab))
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
@@ -285,7 +280,7 @@ class KVContext:
             if cancel is not None and cancel.is_set():
                 generated.stop_reason = "interrupted"
                 break
-            tok = self._backend.llama_cpp.llama_sampler_sample(self._sampler, self._llama_context, -1)
+            tok = self._backend.sample(self._sampler, self._llama_context)
             if self._backend.is_eog(self._vocab, tok):
                 generated.stop_reason = "end_of_turn"
                 break
@@ -350,7 +345,7 @@ class KVContext:
             return
         self._closed = True
         try:
-            self._backend.llama_cpp.llama_sampler_free(self._sampler)
+            self._backend.free_sampler(self._sampler)
         finally:
             self._backend.free_context(self._llama_context)
             self._backend.free_model(self._model)
@@ -373,38 +368,27 @@ class KVContext:
         self._backend.kv_clear(self._llama_context)
 
     def _build_sampler(self, config: Config):
-        llama_cpp = self._backend.llama_cpp
-        params = llama_cpp.llama_sampler_chain_default_params()
-        chain = llama_cpp.llama_sampler_chain_init(params)
-        add = llama_cpp.llama_sampler_chain_add
+        """Assemble the sampler chain ``config`` asks for, in sampling order."""
+        backend = self._backend
+        chain = backend.sampler_chain()
         if config.repetition_penalty != 1.0 \
                 or config.presence_penalty or config.frequency_penalty:
-            try:
-                add(chain, llama_cpp.llama_sampler_init_penalties(
-                    config.penalty_window_tokens, config.repetition_penalty,
-                    config.frequency_penalty, config.presence_penalty))
-            except TypeError:
-                warnings.warn(
-                    "this llama_cpp build has an incompatible "
-                    "llama_sampler_init_penalties signature; "
-                    "repetition/presence/frequency penalties are ignored",
-                    RuntimeWarning,
-                )
+            backend.add_penalties(chain, config.penalty_window_tokens,
+                                  config.repetition_penalty,
+                                  config.frequency_penalty,
+                                  config.presence_penalty)
         if config.temperature <= 0.0:
-            add(chain, llama_cpp.llama_sampler_init_greedy())
+            backend.add_greedy(chain)
             return chain
         if config.top_k > 0:
-            add(chain, llama_cpp.llama_sampler_init_top_k(config.top_k))
-        add(chain, llama_cpp.llama_sampler_init_top_p(config.top_p, 1))
+            backend.add_top_k(chain, config.top_k)
+        backend.add_top_p(chain, config.top_p)
         if config.min_p > 0.0:
-            add(chain, llama_cpp.llama_sampler_init_min_p(config.min_p, 1))
-        add(chain, llama_cpp.llama_sampler_init_temp(config.temperature))
-        if config.seed is not None:
-            seed = config.seed
-        else:
-            # LLAMA_DEFAULT_SEED asks for a fresh random seed per run.
-            seed = getattr(llama_cpp, "LLAMA_DEFAULT_SEED", 0xFFFFFFFF)
-        add(chain, llama_cpp.llama_sampler_init_dist(seed))
+            backend.add_min_p(chain, config.min_p)
+        backend.add_temperature(chain, config.temperature)
+        # An unset seed asks for a fresh random one on every run.
+        seed = config.seed if config.seed is not None else backend.fresh_seed_per_run
+        backend.add_distribution(chain, seed)
         return chain
 
 

@@ -4,15 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Quantization names -> ggml type ids (ggml.h, `enum ggml_type`).
-KV_CACHE_GGML_TYPES = {
-    "f16": 1,
-    "q8_0": 8,
-    "q5_1": 7,
-    "q5_0": 6,
-    "q4_1": 3,
-    "q4_0": 2,
-}
+# The quantizations a caller may name. Which type id each one is worth is
+# llama.cpp's own numbering, resolved where llama.cpp is named.
+KV_CACHE_TYPES = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
 
 # The one type here that is not quantized, and so the only one usable without
 # flash attention. Naming it is the same as leaving kv_cache_type unset.
@@ -71,7 +65,7 @@ class Config:
             prefill is chunked to this.
         flash_attention: Enable flash attention. Required by a quantized
             ``kv_cache_type``.
-        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_GGML_TYPES``,
+        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``,
             or ``None`` for llama.cpp's own default. Every one of them but
             ``UNQUANTIZED_KV_CACHE_TYPE`` requires ``flash_attention=True``.
         log_level: llama.cpp's own verbosity, one of ``LOG_LEVELS``. Applied
@@ -158,9 +152,9 @@ class Config:
         if self.log_level not in LOG_LEVELS:
             raise ValueError(f"log_level must be one of {list(LOG_LEVELS)}")
         if self.kv_cache_type is not None:
-            if self.kv_cache_type not in KV_CACHE_GGML_TYPES:
+            if self.kv_cache_type not in KV_CACHE_TYPES:
                 raise ValueError(
-                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_GGML_TYPES)}"
+                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_TYPES)}"
                 )
             if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE \
                     and not self.flash_attention:

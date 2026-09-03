@@ -1353,7 +1353,7 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
     sampled = iter(order)
     ctx = object.__new__(KVContext)
     ctx._backend = SimpleNamespace(
-        llama_cpp=SimpleNamespace(llama_sampler_sample=lambda s, c, i: next(sampled)),
+        sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == eog,
         decode=lambda *_a: None,
         token_to_piece_bytes=lambda vocab, token: pieces[token])

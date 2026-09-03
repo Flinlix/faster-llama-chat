@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import warnings
 from typing import Callable
 
 try:  # pragma: no cover (reachable only without the dependency installed)
@@ -30,12 +31,16 @@ _LOG_LEVELS = {
 }
 
 
+# The C API's floor on how many candidates a truncating stage may leave.
+_MIN_CANDIDATES = 1
+
+
 def set_log_level(level: str) -> None:
     """Filter llama.cpp log output to ``level`` and above, process-wide."""
     logging.getLogger("llama-cpp-python").setLevel(_LOG_LEVELS[level])
 
 
-def _optional_symbol(*names: str) -> Callable | None:
+def _optional_symbol(*names: str):
     """Return the first of ``names`` this build defines, or ``None``."""
     for name in names:
         fn = getattr(llama_cpp, name, None)
@@ -44,7 +49,7 @@ def _optional_symbol(*names: str) -> Callable | None:
     return None
 
 
-def _required_symbol(*names: str) -> Callable:
+def _required_symbol(*names: str):
     """Return the first of ``names`` this build defines.
 
     Raises:
@@ -67,7 +72,7 @@ class Backend:
                   | getattr(llama_cpp, "LLAMA_TOKEN_ATTR_USER_DEFINED", 1 << 4))
 
     def __init__(self) -> None:
-        self.llama_cpp = llama_cpp
+        self._llama_cpp = llama_cpp
         self._load_model = _required_symbol("llama_model_load_from_file", "llama_load_model_from_file")
         self._free_model = _required_symbol("llama_model_free", "llama_free_model")
         self._new_ctx = _required_symbol("llama_init_from_model", "llama_new_context_with_model")
@@ -91,13 +96,28 @@ class Backend:
         self._meta_val_str = _optional_symbol("llama_model_meta_val_str")
         self._sampler_reset = _optional_symbol("llama_sampler_reset")
 
+        # Sampler chain: one name each so far, resolved here anyway so a build
+        # missing one is refused at construction like every other symbol.
+        self._chain_params = _required_symbol("llama_sampler_chain_default_params")
+        self._chain_init = _required_symbol("llama_sampler_chain_init")
+        self._chain_add = _required_symbol("llama_sampler_chain_add")
+        self._init_penalties = _required_symbol("llama_sampler_init_penalties")
+        self._init_greedy = _required_symbol("llama_sampler_init_greedy")
+        self._init_top_k = _required_symbol("llama_sampler_init_top_k")
+        self._init_top_p = _required_symbol("llama_sampler_init_top_p")
+        self._init_min_p = _required_symbol("llama_sampler_init_min_p")
+        self._init_temp = _required_symbol("llama_sampler_init_temp")
+        self._init_dist = _required_symbol("llama_sampler_init_dist")
+        self._sampler_sample = _required_symbol("llama_sampler_sample")
+        self._sampler_free = _required_symbol("llama_sampler_free")
+
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int,
                    progress: Callable[[float], None] | None = None):
-        mparams = self.llama_cpp.llama_model_default_params()
+        mparams = self._llama_cpp.llama_model_default_params()
         mparams.n_gpu_layers = n_gpu_layers
         if progress is not None:
-            @self.llama_cpp.llama_progress_callback
+            @self._llama_cpp.llama_progress_callback
             def _report_progress(frac, _user_data):
                 progress(float(frac))
                 return True  # False aborts the load, and so does a raise
@@ -113,7 +133,7 @@ class Backend:
                     flash_attn: bool = False, type_k: int | None = None,
                     type_v: int | None = None, kv_cache_on_gpu: bool = True,
                     n_threads_batch: int | None = None):
-        cparams = self.llama_cpp.llama_context_default_params()
+        cparams = self._llama_cpp.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
         cparams.n_ubatch = n_batch
@@ -158,13 +178,31 @@ class Backend:
         elif hasattr(cparams, "flash_attn_type"):
             name = ("LLAMA_FLASH_ATTN_TYPE_ENABLED" if enable
                     else "LLAMA_FLASH_ATTN_TYPE_DISABLED")
-            cparams.flash_attn_type = getattr(self.llama_cpp, name, 1 if enable else 0)
+            cparams.flash_attn_type = getattr(self._llama_cpp, name, 1 if enable else 0)
         elif enable:
             raise RuntimeError(
                 "this llama_cpp build exposes no flash-attention context param")
 
     def vocab(self, model):
         return self._get_vocab(model) if self._get_vocab else model
+
+    def kv_cache_type_id(self, name: str) -> int:
+        """The type id this build gives the KV-cache quantization ``name``.
+
+        Raises:
+            AttributeError: If this build defines no quantization of that name.
+        """
+        return int(_required_symbol(f"GGML_TYPE_{name.upper()}"))
+
+    def template_renderer(self, template: str, eos_token: str):
+        """A renderer for one GGUF chat template, called with messages and tools.
+
+        BOS is suppressed and no generation prompt is added, so what it returns
+        aligns with a fragment prefill.
+        """
+        from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+        return Jinja2ChatFormatter(template=template, eos_token=eos_token,
+                                   bos_token="", add_generation_prompt=False)
 
     def metadata_value(self, model, key: str) -> str | None:
         """Return the GGUF metadata string for ``key``, or ``None`` if absent."""
@@ -186,7 +224,7 @@ class Backend:
         self._free_model(model)
 
     def free_context(self, ctx) -> None:
-        self.llama_cpp.llama_free(ctx)
+        self._llama_cpp.llama_free(ctx)
 
     # ----- tokenize / detokenize ----------------------------------------
     def tokenize(self, vocab, text: str, add_special: bool,
@@ -198,12 +236,12 @@ class Backend:
         """
         raw = text.encode("utf-8")
         n_max = len(raw) + 16
-        buf = (self.llama_cpp.llama_token * n_max)()
-        n = self.llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
+        buf = (self._llama_cpp.llama_token * n_max)()
+        n = self._llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
         if n < 0:  # buffer too small; n is the negative required size
             n_max = -n
-            buf = (self.llama_cpp.llama_token * n_max)()
-            n = self.llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
+            buf = (self._llama_cpp.llama_token * n_max)()
+            n = self._llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
             if n < 0:
                 raise RuntimeError(f"llama_tokenize failed: required {-n} tokens")
         return list(buf[:n])
@@ -247,6 +285,62 @@ class Backend:
         return bool(self._is_control(vocab, token))
 
     # ----- sampler -------------------------------------------------------
+    # Each of these adds one stage to a chain, in the order the caller adds
+    # them. Which stages a chain gets is the wrapper's policy, not this file's.
+    def sampler_chain(self):
+        """An empty sampler chain, to be freed with :meth:`free_sampler`."""
+        return self._chain_init(self._chain_params())
+
+    def add_penalties(self, chain, window_tokens: int, repetition: float,
+                      frequency: float, presence: float) -> None:
+        """Add the three repetition penalties over the last ``window_tokens``.
+
+        Warns and adds no stage where this build's signature differs, leaving
+        generation unpenalized rather than refusing to start.
+        """
+        try:
+            self._chain_add(chain, self._init_penalties(
+                window_tokens, repetition, frequency, presence))
+        except TypeError:
+            warnings.warn(
+                "this llama_cpp build has an incompatible "
+                "llama_sampler_init_penalties signature; "
+                "repetition/presence/frequency penalties are ignored",
+                RuntimeWarning,
+            )
+
+    def add_greedy(self, chain) -> None:
+        """Add the stage that takes the most likely token."""
+        self._chain_add(chain, self._init_greedy())
+
+    def add_top_k(self, chain, top_k: int) -> None:
+        self._chain_add(chain, self._init_top_k(top_k))
+
+    def add_top_p(self, chain, top_p: float) -> None:
+        self._chain_add(chain, self._init_top_p(top_p, _MIN_CANDIDATES))
+
+    def add_min_p(self, chain, min_p: float) -> None:
+        self._chain_add(chain, self._init_min_p(min_p, _MIN_CANDIDATES))
+
+    def add_temperature(self, chain, temperature: float) -> None:
+        self._chain_add(chain, self._init_temp(temperature))
+
+    def add_distribution(self, chain, seed: int) -> None:
+        """Add the stage that draws from what the earlier stages left."""
+        self._chain_add(chain, self._init_dist(seed))
+
+    @property
+    def fresh_seed_per_run(self) -> int:
+        """The seed value that asks for a new random seed on every run."""
+        return getattr(self._llama_cpp, "LLAMA_DEFAULT_SEED", 0xFFFFFFFF)
+
+    def sample(self, sampler, ctx) -> int:
+        """Draw the next token from the logits of the most recent decode."""
+        return self._sampler_sample(sampler, ctx, -1)
+
+    def free_sampler(self, sampler) -> None:
+        self._sampler_free(sampler)
+
     def sampler_reset(self, sampler) -> None:
         """Reset sampler-chain state, such as the penalty window, if supported."""
         if self._sampler_reset is not None:
@@ -321,7 +415,7 @@ class Backend:
         if n == 0:
             return
         # One allocation sized for the largest chunk, reused across chunks.
-        batch = self.llama_cpp.llama_batch_init(min(n, n_batch), 0, 1)
+        batch = self._llama_cpp.llama_batch_init(min(n, n_batch), 0, 1)
         try:
             for off in range(0, n, n_batch):
                 chunk = token_ids[off:off + n_batch]
@@ -335,8 +429,8 @@ class Backend:
                     batch.logits[i] = 0
                 batch.logits[m - 1] = 1 if (want_logits and is_last_chunk) else 0
                 batch.n_tokens = m
-                rc = self.llama_cpp.llama_decode(ctx, batch)
+                rc = self._llama_cpp.llama_decode(ctx, batch)
                 if rc != 0:
                     raise RuntimeError(f"llama_decode failed (rc={rc})")
         finally:
-            self.llama_cpp.llama_batch_free(batch)
+            self._llama_cpp.llama_batch_free(batch)

@@ -266,7 +266,7 @@ def test_close_after_stop_hit_keeps_stop_reason():
     toks = iter([0, 1])
     ctx = object.__new__(KVContext)
     ctx._backend = SimpleNamespace(
-        llama_cpp=SimpleNamespace(llama_sampler_sample=lambda s, c, i: next(toks)),
+        sample=lambda sampler, ctx: next(toks),
         is_eog=lambda vocab, tok: False,
         decode=lambda ctx_, ids, pos, seq, logits, batch: None,
         token_to_piece_bytes=lambda vocab, tok: pieces[tok],
@@ -762,7 +762,7 @@ def _set_flash_attn(cparams, enable, llama_cpp=None):
     from types import SimpleNamespace
     from llama_chat._backend import Backend
 
-    Backend._set_flash_attn(SimpleNamespace(llama_cpp=llama_cpp), cparams, enable)
+    Backend._set_flash_attn(SimpleNamespace(_llama_cpp=llama_cpp), cparams, enable)
 
 
 @pytest.mark.parametrize("enable", [True, False])
@@ -813,7 +813,7 @@ def _set_offload(cparams, enable):
     from types import SimpleNamespace
     from llama_chat._backend import Backend
 
-    Backend._set_kv_cache_on_gpu(SimpleNamespace(llama_cpp=None), cparams, enable)
+    Backend._set_kv_cache_on_gpu(SimpleNamespace(_llama_cpp=None), cparams, enable)
 
 
 def test_offload_kqv_to_gpu_defaults_off():

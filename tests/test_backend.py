@@ -8,11 +8,16 @@ everywhere else, which answers that question itself and so cannot test it. See
 the README, "Tool calling".
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import llama_cpp
+import pytest
+
+import llama_chat
 
 from llama_chat._backend import Backend
+from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.context import SEQ, KVContext
 
 
@@ -110,3 +115,49 @@ def test_a_cache_edit_counts_from_either_api():
     assert legacy_api.can_edit_cache
     assert not no_shift.can_edit_cache      # closing the gap is an edit too
     assert not no_handle.can_edit_cache     # no way to reach the memory ops
+
+
+def _raises_type_error(*_args):
+    raise TypeError("this build takes a different argument list")
+
+
+def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused():
+    """A model still generates without them; refusing to load would cost more.
+
+    The penalties are the one sampler stage whose argument list has changed
+    across releases, so it is the one whose absence has to be survivable.
+    """
+    added = []
+    backend = Backend.__new__(Backend)
+    backend._chain_add = lambda chain, stage: added.append(stage)
+    backend._init_penalties = _raises_type_error
+
+    with pytest.warns(RuntimeWarning, match="penalties"):
+        backend.add_penalties(object(), 64, 1.1, 0.0, 0.0)
+    assert added == []
+
+
+def test_only_this_layer_names_llama_cpp():
+    """The seam is what the rest of the package is written against.
+
+    Every symbol llama.cpp has renamed is resolved in one file so the churn
+    costs one edit; a second file reaching for the module puts the next rename
+    somewhere nobody thinks to look. Read as source rather than imported,
+    because an import that has not run yet would not be found.
+    """
+    package = Path(llama_chat.__file__).parent
+    reaching = sorted(f.name for f in package.glob("*.py")
+                      if f.name != "_backend.py" and "llama_cpp" in f.read_text())
+    assert reaching == [], (
+        f"{reaching} name llama_cpp directly; the handle belongs in _backend.py")
+
+
+def test_every_cache_quantization_config_offers_resolves_to_a_type_id():
+    """The names a caller may pass and this build's numbering have to agree.
+
+    ``Config`` offers the names and llama.cpp numbers them, so nothing else
+    would notice a name it cannot resolve until a model is loaded with it.
+    """
+    backend = Backend.__new__(Backend)
+    type_ids = [backend.kv_cache_type_id(name) for name in KV_CACHE_TYPES]
+    assert len(set(type_ids)) == len(KV_CACHE_TYPES)

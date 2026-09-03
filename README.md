@@ -985,7 +985,7 @@ never crosses `context_size`.
 | `llama_chat/template.py` | `TemplateFragments`, `TemplateFormatter`, `ToolCallFragments`, `CallBody`: what a turn and a tool call are wrapped in |
 | `llama_chat/template_extract.py` | `extract_fragments`, `extract_tool_fragments`, `extract_call_body`: recover all of that from the model's GGUF template |
 | `llama_chat/resolved_template.py` | `ResolvedTemplate`: one model's template, recovered or supplied, validated against it, with the four tool-calling steps settled |
-| `llama_chat/_backend.py` | `Backend`: version-stable adapter over `llama_cpp.*`, which renames its symbols across releases |
+| `llama_chat/_backend.py` | `Backend`: version-stable adapter over `llama_cpp.*`, which renames its symbols across releases. The only file in the package that names it, pinned by a test |
 | `llama_chat/context.py` | `KVContext`: tokenize / prefill / streaming generate / evict |
 | `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`: declaring tools and running the ones the model calls |
 | `llama_chat/call_parsing.py` | `parse_calls`: reading a call back out of what the model generated, JSON or this model's own delimiters |

@@ -135,7 +135,7 @@ class ChatWrapper:
     def __init__(
         self,
         config: Config | None = None,
-        context: KVContext | None = None,
+        context=None,
         *,
         fragments: TemplateFragments | None = None,
         tool_calls: ToolCallFragments | None = None,
