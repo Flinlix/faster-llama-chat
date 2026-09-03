@@ -17,22 +17,21 @@ model's call format is written down in this library.
   trimming fails to achieve it.
 - [**Comparison with llama.cpp**](#comparison-with-llamacpps-built-in-context-shift):
   how the policy differs from llama.cpp's built-in context shift.
+- [**How eviction works**](#how-eviction-works): the in-place cache edit and the
+  shift / rebuild strategies.
 - [**Install**](#install): building llama-cpp-python from source for CPU or CUDA.
 - [**Quick start**](#quick-start): the API in a few lines, plus what `begin` /
   `inject` / `reply_without_tools` / `reply_without_tools_stream` each do.
 - [**Configuration**](#configuration): every `Config` field, with its default.
-- [**How eviction works**](#how-eviction-works): the in-place cache edit and the
-  shift / rebuild strategies.
+- [**Tool calling**](#tool-calling): registering functions, the loop
+  (`reply_with_tools` / `reply_with_tools_stream`) and driving it yourself.
 - [**Persistence**](#persistence): keeping the full history beyond the cache window.
 - [**Chat template**](#chat-template): per-role fragments and the load-time
   validation that catches a mismatched template.
-- [**Tool calling**](#tool-calling): registering functions, the loop
-  (`reply_with_tools` / `reply_with_tools_stream`) and driving it yourself.
 - [**Verify**](#verify): running the tests and the real-model demo.
 - [**Layout**](#layout): a file-by-file map of the package.
 
 ## Goals
-
 
 1. **Minimum prefill:** only ever process genuinely *new* tokens. The KV cache
    from previous turns must survive and be reused.
@@ -86,6 +85,55 @@ llama.cpp's server has its own context-shift mechanism. Both use the same
 - *llama.cpp*: no message-level record; client and cache can diverge silently.
 - *llama_chat*: `MessageTable` mirrors the cache exactly, invariants asserted
   after every change, `snapshot()` exposes a copy of the conversation and its layout.
+
+## How eviction works
+
+Eviction has two triggers, and they are OR'd: the cache is trimmed when it
+crosses `evict_above_fraction × context_size`, and again when it holds more than
+`max_history_messages` non-system messages. Whichever binds first evicts, so a
+verbose conversation is bounded by its tokens and a long one by its message
+count. The second is off by default.
+
+A pure-Python `MessageTable` is the single source of truth: the cache for
+sequence 0 is a contiguous run `[0, total)`, each message owns a `[start, stop)`
+slice, and the table recomputes every position after any structural change. To
+evict the oldest non-system message at `[a, b)`:
+
+```
+llama_memory_seq_rm(seq, a, b)               # drop those tokens
+llama_memory_seq_add(seq, b, total, -(b-a))  # shift survivors down to close the gap
+```
+
+`seq_add` also fixes the RoPE positions, so the survivors stay coherent without
+re-prefilling them. It does not do that work where you call it: `seq_add` only
+marks the cells as shifted, and the RoPE K-shift over the whole cache is built
+into the graph of the **next** `llama_decode` (the shift is expensive only for a
+quantized cache). That cost is therefore paid by whatever decodes next, which is
+why `reply_without_tools_stream` decodes the assistant turn's closing tag
+*after* the post-reply eviction rather than before it: a decode the turn
+performs anyway then carries the shift, instead of the next generation's
+prefill.
+
+This reuse is *lossy* (the survivors' cached K/V were computed
+while attending to the now-removed tokens), which is the standard StreamingLLM
+trade-off: fast, with slight quality drift. The system prompt is never evicted.
+
+The strategy is chosen automatically at construction from
+`llama_memory_can_shift()`:
+
+- **shift** (default, the fast path): the in-place edit above, applied
+  incrementally as messages are dropped. Used everywhere it can be, including
+  sliding-window models under a full-size cache.
+- **rebuild** (caches that cannot shift: compact sliding-window, recurrent or
+  Mamba state, where dropping tokens loses the position information shifting
+  needs):
+  drop the oldest messages from the bookkeeping, then re-prefill the surviving
+  conversation once. Correct, and it costs one prefill of the survivors; a
+  non-shiftable model degrades gracefully instead of corrupting the cache.
+
+`_backend.py` resolves the cache symbols defensively across llama.cpp API
+churn: the modern `llama_memory_*` handle API when present, falling back to the
+older `llama_kv_self_*` / `llama_kv_cache_*` names.
 
 ## Install
 
@@ -394,201 +442,22 @@ The rest of what `ChatWrapper` takes is keyword-only and deliberately outside
 | `on_load_progress=` | called with a fraction while the weights load. It must not raise: an exception there aborts the load |
 | `context=` | a cache context of your own, in place of the one built from `Config`. See [Layout](#layout) |
 
-## How eviction works
-
-Eviction has two triggers, and they are OR'd: the cache is trimmed when it
-crosses `evict_above_fraction × context_size`, and again when it holds more than
-`max_history_messages` non-system messages. Whichever binds first evicts, so a
-verbose conversation is bounded by its tokens and a long one by its message
-count. The second is off by default.
-
-A pure-Python `MessageTable` is the single source of truth: the cache for
-sequence 0 is a contiguous run `[0, total)`, each message owns a `[start, stop)`
-slice, and the table recomputes every position after any structural change. To
-evict the oldest non-system message at `[a, b)`:
-
-```
-llama_memory_seq_rm(seq, a, b)               # drop those tokens
-llama_memory_seq_add(seq, b, total, -(b-a))  # shift survivors down to close the gap
-```
-
-`seq_add` also fixes the RoPE positions, so the survivors stay coherent without
-re-prefilling them. It does not do that work where you call it: `seq_add` only
-marks the cells as shifted, and the RoPE K-shift over the whole cache is built
-into the graph of the **next** `llama_decode` (the shift is expensive only for a
-quantized cache). That cost is therefore paid by whatever decodes next, which is
-why `reply_without_tools_stream` decodes the assistant turn's closing tag
-*after* the post-reply eviction rather than before it: a decode the turn
-performs anyway then carries the shift, instead of the next generation's
-prefill.
-
-This reuse is *lossy* (the survivors' cached K/V were computed
-while attending to the now-removed tokens), which is the standard StreamingLLM
-trade-off: fast, with slight quality drift. The system prompt is never evicted.
-
-The strategy is chosen automatically at construction from
-`llama_memory_can_shift()`:
-
-- **shift** (default, the fast path): the in-place edit above, applied
-  incrementally as messages are dropped. Used everywhere it can be, including
-  sliding-window models under a full-size cache.
-- **rebuild** (caches that cannot shift: compact sliding-window, recurrent or
-  Mamba state, where dropping tokens loses the position information shifting
-  needs):
-  drop the oldest messages from the bookkeeping, then re-prefill the surviving
-  conversation once. Correct, and it costs one prefill of the survivors; a
-  non-shiftable model degrades gracefully instead of corrupting the cache.
-
-`_backend.py` resolves the cache symbols defensively across llama.cpp API
-churn: the modern `llama_memory_*` handle API when present, falling back to the
-older `llama_kv_self_*` / `llama_kv_cache_*` names.
-
-## Persistence
-
-The KV cache only holds the recent window that fits `context_size`; eviction drops older
-turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
-every message (user, assistant, and injected context, so everything but the
-system prompt) into a durable store, then replays the prior turns at `begin`:
-
-```python
-from llama_chat import PersistentChat, InMemoryStore
-
-chat = PersistentChat(InMemoryStore(), context_size=8192)  # kwargs forward to Config here as well
-chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
-chat.reply_without_tools("What did we decide last time?")   # auto-persisted
-```
-
-A store is any object satisfying the `ConversationStore` protocol, which is
-two methods keyed by conversation id:
-
-```python
-class ConversationStore(Protocol):
-    def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
-    def append(self, conversation_id: str, role: str, text: str) -> None: ...
-```
-
-`InMemoryStore` is a reference implementation (not durable); back it with SQLite,
-Redis, or files by implementing those two methods. Both are checked where the
-store is adopted, because a store is written to mid-turn, and every entry point
-that would write a message refuses before prefilling anything until `begin` has
-selected a conversation. Capture is driven by an optional
-`on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
-own sink without `PersistentChat` if you prefer.
-
-`PersistentChat` forwards the whole wrapper API, tools included:
-`begin(cid, prompt, tools=registry)`, then `reply_with_tools` /
-`reply_with_tools_stream`, or the manual loop. A call and the result it was
-given are not messages, so a tool turn is persisted exactly like any other: one
-user entry, one assistant entry holding what a reader saw. Declarations are not persisted either: they
-belong to the system turn, which is rebuilt on every `begin`.
-
-## Chat template
-
-The template must match the model, because its turn-terminator is what lets the
-model stop generating. A mismatched template tokenizes as plain text, so the
-model never emits its end-of-turn token and runs to the token cap every
-generation.
-
-The template is expressed as per-role **fragments**: the literal text wrapped
-around each message, so one turn renders as `prefix + text + suffix`. Content is
-stripped first when `trim_content` is set, matching templates that apply Jinja
-`| trim`; it is `False` for templates that emit content verbatim.
-
-**The fragments are derived from the model automatically.** At construction the
-wrapper reads the model's own chat template from the GGUF
-(`tokenizer.chat_template`) and recovers the per-role fragments from it. It works by rendering
-short probes through the model's template with sentinel content and splitting the
-render on the sentinels to recover each role's `prefix`/`suffix` (the inverse of
-the validation probe below), plus a whitespace-padded probe to detect
-`trim_content`. The `system` role has no portable ground truth, because some models
-have no distinct system role (some reject it, others fold it into the first user
-turn). So when the system probe does not survive, the system fragment falls back
-to the user tags, the same convention llama.cpp uses.
-
-For a model that ships **no** embedded chat template, pass the tags explicitly via
-`ChatWrapper(fragments=...)`:
-
-```python
-from llama_chat import ChatWrapper, Config, TemplateFragments
-
-# ChatML, for example:
-w = ChatWrapper(
-    Config(model_path="model.gguf"),
-    fragments=TemplateFragments(
-        system_prefix="<|im_start|>system\n", system_suffix="<|im_end|>\n",
-        user_prefix="<|im_start|>user\n",     user_suffix="<|im_end|>\n",
-        assistant_prefix="<|im_start|>assistant\n", assistant_suffix="<|im_end|>\n",
-    ),
-)
-```
-
-For a model that ships no template *and* calls tools, the call tags are their
-own argument:
-
-```python
-ChatWrapper(fragments=..., tool_calls=ToolCallFragments(
-    call_open="<|tool_call|>", call_close="<|/tool_call|>",
-    body=CallBody(...)))     # body optional: recovered when left out
-```
- Each tag is taken as it stands in a render, so
-either may carry fixed text around the tag itself; the wrapper narrows it to the
-one token the tag is.
-
-The fragments say what wraps text that already exists. What is decoded *around
-sampling* is the formatter's, and `ChatWrapper(formatter=...)` takes a
-`TemplateFormatter` subclass for a model whose generation prompt carries more
-than the turn tag, an empty reasoning channel for instance. See
-[A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back).
-
-The load-time checks make a mismatch fail loudly instead of degrading silently:
-
-- **At construction** the turn-terminator (`assistant_suffix`) is validated
-  against the model's vocabulary: if it does not tokenize to a single special
-  token, which is the silent mismatch described above, construction raises.
-- **At construction** the `user`/`assistant` fragments are checked against the
-  model's own chat template read from the GGUF: a fixed probe (with surrounding
-  whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
-  must tokenize identically, a self-consistency check that the recovered (or
-  explicitly supplied) fragments round-trip through the model's template before
-  they corrupt the cache. The fragment side is tokenized exactly as real prefill
-  is (tags special-on, content special-off), so this also confirms the two agree
-  across the tag/content boundaries. It is skipped automatically for models that
-  ship no chat template. The `system` fragment is not probed, because chat
-  templates handle a system role inconsistently (some reject it, others fold it into
-  the first user turn).
-- **At construction** the formatter is checked against those fragments: the
-  generation prompt has to open the assistant turn, the terminator has to close
-  it, and a resumption must not open it a second time. A `formatter=` may add to
-  any of the three, an empty reasoning channel for instance, but replacing one
-  encodes the turn as the model never saw it, and nothing but a worse reply
-  would say so.
-
-### Special tokens in message content
-
-*Message content* is tokenized with special-token parsing **off**, while the
-structural template tags (the fragment prefix/suffix) are tokenized with it
-**on**. So a user typing a literal template
-tag (e.g. `<end_of_turn>`) yields ordinary text tokens that can never become a
-control token, while the wrapping tags still tokenize to their real control
-tokens. This closes token-level prompt injection (forging turn boundaries) at
-the source: it is robust even on models that mis-type a control-looking token
-in the GGUF or on llama.cpp builds lacking the `llama_vocab_is_control` symbol.
-
 ## Tool calling
 
 Register real Python functions; the model calls them by name and the reply
 resumes with what they returned. Nothing about any model's call format is
 written down here: the tags and the argument spelling are recovered from the
-model's own chat template, the same way the per-role fragments above are.
+model's own chat template, the same way the per-role fragments in
+[Chat template](#chat-template) are.
 
 ```python
 from llama_chat import ChatWrapper, ToolRegistry
 
+registry = ToolRegistry()
+
+@registry.tool("Current weather for a city.")
 def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
-
-registry = ToolRegistry()
-registry.register(get_weather, "Current weather for a city.")
 
 chat = ChatWrapper(model_path="model.gguf")
 chat.begin("You are a terse assistant.", tools=registry)
@@ -639,10 +508,39 @@ refused.
 
 ### Registering, and where the declaration lands
 
-`register` makes a function runnable and returns the name the model calls it
-by. That name is also how you refer to the tool afterwards. A tool the model is
-never told about could never be called, so the question is not *whether* to
-declare it but *where*, and that is what `in_system_prompt` decides:
+`registry.tool(...)` declares a function and makes it runnable in one step,
+where the function is written:
+
+```python
+@registry.tool("Current weather for a city.")
+def get_weather(city: str) -> dict:
+    return {"city": city, "celsius": 18}
+```
+
+The function comes back unchanged, so it stays callable as itself. The
+module-level `@tool` decorator instead attaches the declaration to the function
+without registering it, for a spec handed straight to
+`begin(tools=[get_weather.spec])`:
+
+```python
+from llama_chat import tool
+
+@tool("Current weather for a city.")
+def get_weather(city: str) -> dict:
+    return {"city": city, "celsius": 18}
+```
+
+The parameters come from the annotations either way. A signature that cannot be
+described (an unannotated argument, or a type with no JSON Schema equivalent)
+raises `TypeError`, and `parameters=` takes an explicit schema instead.
+
+`registry.register(fn, description)` is the same step for a function written
+elsewhere. It makes the function runnable and returns the name the model calls
+it by, and that name is also how you refer to the tool afterwards.
+
+A tool the model is never told about could never be called, so the question is
+not *whether* to declare it but *where*, and that is what `in_system_prompt`
+decides, on `registry.tool` and `register` alike:
 
 | | where the declaration lands | cost |
 |------|------|------|
@@ -663,33 +561,6 @@ writes nothing at all. What counts as already declared is read off the messages
 carrying it, so once a declaration message is evicted its tools count as
 unknown again and the next `declare_unknown_tools` writes them back. The system
 turn is never evicted, so what `begin` declared is known for good.
-
-`registry.tool(...)` is `register` in the form the function is written in, so
-the usual case is one step:
-
-```python
-@registry.tool("Current weather for a city.")
-def get_weather(city: str) -> dict:
-    return {"city": city, "celsius": 18}
-```
-
-The function comes back unchanged, so it stays callable as itself. Pass
-`in_system_prompt=False` to leave it for `declare_unknown_tools`. The
-module-level `@tool` decorator instead attaches the declaration to the function
-without registering it, for a spec handed straight to
-`begin(tools=[get_weather.spec])`:
-
-```python
-from llama_chat import tool
-
-@tool("Current weather for a city.")
-def get_weather(city: str) -> dict:
-    return {"city": city, "celsius": 18}
-```
-
-The parameters come from the annotations either way. A signature that cannot be
-described (an unannotated argument, or a type with no JSON Schema equivalent)
-raises `TypeError`, and `parameters=` takes an explicit schema instead.
 
 Two consequences worth knowing. A declaration added later is an ordinary message
 and can be evicted from a long conversation, so one that has to survive belongs
@@ -883,11 +754,10 @@ left cannot hold even an empty one. Both close the turn instead.
 
 The call tags are found by probing the model's template, then resolving each
 one to the single token it stands for. A tag counts as such if it is either a
-control token or **a token added by a fine-tune**. Both are needed: on the
-models this was tested against, the tags around a tool call are added tokens,
-and `llama_vocab_is_control` returns false for every one of them. A check that
-accepts only control tokens therefore turns tool calling off without saying
-so.
+control token or **a token added by a fine-tune**. Both are needed: a fine-tune
+commonly adds the tags around a tool call as ordinary added tokens, for which
+`llama_vocab_is_control` returns false, so a check that accepts only control
+tokens turns tool calling off without saying so.
 
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
@@ -956,6 +826,137 @@ class Channelled(TemplateFormatter):
 
 ChatWrapper(model_path="model.gguf", formatter=Channelled)
 ```
+
+## Persistence
+
+The KV cache only holds the recent window that fits `context_size`; eviction drops older
+turns. To keep the *full* history, `PersistentChat` wraps `ChatWrapper` and mirrors
+every message (user, assistant, and injected context, so everything but the
+system prompt) into a durable store, then replays the prior turns at `begin`:
+
+```python
+from llama_chat import PersistentChat, InMemoryStore
+
+chat = PersistentChat(InMemoryStore(), context_size=8192)  # kwargs forward to Config here as well
+chat.begin("conversation-42", "You are a helpful assistant.")  # loads prior turns
+chat.reply_without_tools("What did we decide last time?")   # auto-persisted
+```
+
+A store is any object satisfying the `ConversationStore` protocol, which is
+two methods keyed by conversation id:
+
+```python
+class ConversationStore(Protocol):
+    def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
+    def append(self, conversation_id: str, role: str, text: str) -> None: ...
+```
+
+`InMemoryStore` is a reference implementation (not durable); back it with SQLite,
+Redis, or files by implementing those two methods. Both are checked where the
+store is adopted, because a store is written to mid-turn, and every entry point
+that would write a message refuses before prefilling anything until `begin` has
+selected a conversation. Capture is driven by an optional
+`on_message(role, text)` hook on `ChatWrapper` itself, so you can persist to your
+own sink without `PersistentChat` if you prefer.
+
+`PersistentChat` forwards the whole wrapper API, tools included:
+`begin(cid, prompt, tools=registry)`, then `reply_with_tools` /
+`reply_with_tools_stream`, or the manual loop. A call and the result it was
+given are not messages, so a tool turn is persisted exactly like any other: one
+user entry, one assistant entry holding what a reader saw. Declarations are not persisted either: they
+belong to the system turn, which is rebuilt on every `begin`.
+
+## Chat template
+
+The template must match the model, because its turn-terminator is what lets the
+model stop generating. A mismatched template tokenizes as plain text, so the
+model never emits its end-of-turn token and runs to the token cap every
+generation.
+
+The template is expressed as per-role **fragments**: the literal text wrapped
+around each message, so one turn renders as `prefix + text + suffix`. Content is
+stripped first when `trim_content` is set, matching templates that apply Jinja
+`| trim`; it is `False` for templates that emit content verbatim.
+
+**The fragments are derived from the model automatically.** At construction the
+wrapper reads the model's own chat template from the GGUF
+(`tokenizer.chat_template`) and recovers the per-role fragments from it. It works by rendering
+short probes through the model's template with sentinel content and splitting the
+render on the sentinels to recover each role's `prefix`/`suffix` (the inverse of
+the validation probe below), plus a whitespace-padded probe to detect
+`trim_content`. The `system` role has no portable ground truth, because some models
+have no distinct system role (some reject it, others fold it into the first user
+turn). So when the system probe does not survive, the system fragment falls back
+to the user tags, the same convention llama.cpp uses.
+
+For a model that ships **no** embedded chat template, pass the tags explicitly via
+`ChatWrapper(fragments=...)`:
+
+```python
+from llama_chat import ChatWrapper, Config, TemplateFragments
+
+# ChatML, for example:
+w = ChatWrapper(
+    Config(model_path="model.gguf"),
+    fragments=TemplateFragments(
+        system_prefix="<|im_start|>system\n", system_suffix="<|im_end|>\n",
+        user_prefix="<|im_start|>user\n",     user_suffix="<|im_end|>\n",
+        assistant_prefix="<|im_start|>assistant\n", assistant_suffix="<|im_end|>\n",
+    ),
+)
+```
+
+For a model that ships no template *and* calls tools, the call tags are their
+own argument:
+
+```python
+ChatWrapper(fragments=..., tool_calls=ToolCallFragments(
+    call_open="<|tool_call|>", call_close="<|/tool_call|>",
+    body=CallBody(...)))     # body optional: recovered when left out
+```
+ Each tag is taken as it stands in a render, so
+either may carry fixed text around the tag itself; the wrapper narrows it to the
+one token the tag is.
+
+The fragments say what wraps text that already exists. What is decoded *around
+sampling* is the formatter's, and `ChatWrapper(formatter=...)` takes a
+`TemplateFormatter` subclass for a model whose generation prompt carries more
+than the turn tag, an empty reasoning channel for instance. See
+[A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back).
+
+The load-time checks make a mismatch fail loudly instead of degrading silently:
+
+- **At construction** the turn-terminator (`assistant_suffix`) is validated
+  against the model's vocabulary: if it does not tokenize to a single special
+  token, which is the silent mismatch described above, construction raises.
+- **At construction** the `user`/`assistant` fragments are checked against the
+  model's own chat template read from the GGUF: a fixed probe (with surrounding
+  whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
+  must tokenize identically, a self-consistency check that the recovered (or
+  explicitly supplied) fragments round-trip through the model's template before
+  they corrupt the cache. The fragment side is tokenized exactly as real prefill
+  is (tags special-on, content special-off), so this also confirms the two agree
+  across the tag/content boundaries. It is skipped automatically for models that
+  ship no chat template. The `system` fragment is not probed, because chat
+  templates handle a system role inconsistently (some reject it, others fold it into
+  the first user turn).
+- **At construction** the formatter is checked against those fragments: the
+  generation prompt has to open the assistant turn, the terminator has to close
+  it, and a resumption must not open it a second time. A `formatter=` may add to
+  any of the three, an empty reasoning channel for instance, but replacing one
+  encodes the turn as the model never saw it, and nothing but a worse reply
+  would say so.
+
+### Special tokens in message content
+
+*Message content* is tokenized with special-token parsing **off**, while the
+structural template tags (the fragment prefix/suffix) are tokenized with it
+**on**. So a user typing a literal template
+tag (e.g. `<end_of_turn>`) yields ordinary text tokens that can never become a
+control token, while the wrapping tags still tokenize to their real control
+tokens. This closes token-level prompt injection (forging turn boundaries) at
+the source: it is robust even on models that mis-type a control-looking token
+in the GGUF or on llama.cpp builds lacking the `llama_vocab_is_control` symbol.
 
 ## Verify
 
