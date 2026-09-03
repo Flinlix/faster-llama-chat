@@ -961,7 +961,7 @@ class ChatWrapper:
                              stop: list[str] | None,
                              cancel: threading.Event | None,
                              allow_tools: bool) -> Generator[str, None, Reply]:
-        """Generate from the cache's end and book what it left, as a Reply.
+        """Generate from the cache's end and record what it left, as a Reply.
 
         Shared by a fresh turn, whose generation prompt is prefilled but not yet
         in the table, and a resumed one, which brings none of its own.
@@ -988,8 +988,8 @@ class ChatWrapper:
             )
         finally:
             # Runs on normal completion and on early close alike.
-            n_evicted_messages = self._book_reply(generated, open_tokens,
-                                                  close_tokens)
+            n_evicted_messages = self._record_reply(generated, open_tokens,
+                                                    close_tokens)
 
         return Reply(
             text=generated.text,
@@ -1000,8 +1000,8 @@ class ChatWrapper:
             tool_calls=list(self._pending_calls),
         )
 
-    def _book_reply(self, generated: GenerationAccumulator,
-                    open_tokens: list[int], close_tokens: list[int]) -> int:
+    def _record_reply(self, generated: GenerationAccumulator,
+                      open_tokens: list[int], close_tokens: list[int]) -> int:
         """Record what one generation left.
 
         The turn is closed unless a call is waiting for its result. The
@@ -1037,8 +1037,8 @@ class ChatWrapper:
         if self._on_message:
             self._on_message("assistant", msg.text)
         # Trim back after the reply, so the cache rests inside both eviction
-        # limits for the next generation (and on barge-in too). The closer counts
-        # against the threshold even though it is decoded after the trim.
+        # limits for the next generation, an early close included. The closer
+        # counts against the threshold even though it is decoded after the trim.
         n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
         return n_evicted_messages
@@ -1046,7 +1046,7 @@ class ChatWrapper:
     def _try_write_tool_result(self, name: str, result) -> bool:
         """Write a result block if this model and this context have room for one.
 
-        Booking a reply runs in a ``finally`` and is what leaves the cache and
+        Recording a reply runs in a ``finally`` and is what leaves the cache and
         the table agreeing, so it must not raise. Where the template renders no
         result block, or what is left of the context cannot hold one, the model
         cannot be told and the turn closes instead.

@@ -193,7 +193,7 @@ def test_reply_without_tools_drains_its_own_stream():
     _assert_consistent(w, fake)
 
 
-def test_bargein_keeps_cache_consistent():
+def test_an_early_close_keeps_cache_consistent():
     # Consume only the first delta, then abandon the stream (close the generator).
     fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
@@ -202,7 +202,7 @@ def test_bargein_keeps_cache_consistent():
     stream = w.reply_without_tools_stream("hi")
     first = next(stream)
     assert first == "a"
-    stream.close()  # barge-in: stop early
+    stream.close()  # stop early
 
     # The assistant turn was still recorded, and the cache equals the table:
     # exactly the tokens that reached the cache were recorded, no more.
@@ -223,7 +223,7 @@ def test_cancel_event_interrupts_midstream():
     cancel = threading.Event()
     stream = w.reply_without_tools_stream("hi", cancel=cancel)
     assert next(stream) == "a"
-    cancel.set()  # e.g. from another thread (barge-in)
+    cancel.set()  # e.g. from another thread
     try:
         while True:
             next(stream)
@@ -334,7 +334,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
 def test_turn_closes_after_the_eviction_not_before():
     # An eviction's K-shift lands on whatever decodes next, so the closer is
     # decoded last and carries it instead of the next generation's prefill.
-    # Ordering is the whole point, hence the assertion. See the README,
+    # The assertion is what pins that ordering. See the README,
     # "How eviction works".
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
@@ -958,7 +958,7 @@ def test_a_formatter_factory_customises_how_generation_opens():
     w = ChatWrapper(_config(context_size=200), context=fake, formatter=NoThink)
     w.begin("sys")
     w.reply_without_tools("hi")
-    # The suffix is really tokenized into the generation prompt ...
+    # The suffix is tokenized into the generation prompt ...
     assert any("<empty/>" in text for text, _special in fake.tokenize_calls)
     # ... and only there: the history-wrapping fragments are untouched, so the
     # cache layout and the template validation see exactly what they did before.

@@ -85,4 +85,4 @@ if not kv_ok:
     sys.exit(1)
 PY
 
-echo "Done!"
+echo "Done."

@@ -1,7 +1,7 @@
 """Adapter over llama-cpp-python's low-level API, resolved once per build.
 
-llama.cpp's C API has churned across releases, so each symbol is looked up
-under every name it has had and the rest of the package speaks one vocabulary.
+llama.cpp has renamed C symbols across releases, so each one is looked up under
+every name it has had and the rest of the package uses a single name for it.
 Only the primitives the wrapper needs are exposed.
 """
 

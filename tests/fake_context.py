@@ -8,8 +8,8 @@ the message table.
 Two correctness guarantees fall out of this fake:
 
 * ``prefill`` asserts ``start_pos == len(cache)``, so the wrapper only ever
-  *appends*. It never re-prefills survivors. That is the whole point of the
-  design, enforced mechanically.
+  *appends*. It never re-prefills survivors. That is the design guarantee,
+  checked mechanically.
 * After eviction the physical cache equals the concatenation of the surviving
   messages' tokens, proving remove-and-shift closes the gap correctly.
 
@@ -165,9 +165,9 @@ class FakeContext:
 
         Each token is appended to the cache *before* its text delta is yielded,
         and ``out`` is filled incrementally, so an early ``close()`` leaves the
-        cache and ``out.token_ids`` in agreement (the barge-in guarantee).
-        Both abort routes record ``stop_reason == "interrupted"``: the ``cancel``
-        event (checked once per token) and a ``close()`` of the generator.
+        cache and ``out.token_ids`` in agreement. Both abort routes record
+        ``stop_reason == "interrupted"``: the ``cancel`` event (checked once per
+        token) and a ``close()`` of the generator.
         """
         assert start_pos == len(self.cache)
         generated = out if out is not None else GenerationAccumulator()

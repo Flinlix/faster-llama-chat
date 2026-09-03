@@ -21,7 +21,7 @@ model's call format is written down in this library.
 - [**Quick start**](#quick-start): the API in a few lines, plus what `begin` /
   `inject` / `reply_without_tools` / `reply_without_tools_stream` each do.
 - [**Configuration**](#configuration): every `Config` field, with its default.
-- [**How eviction works**](#how-eviction-works): the in-place KV surgery and the
+- [**How eviction works**](#how-eviction-works): the in-place cache edit and the
   shift / rebuild strategies.
 - [**Persistence**](#persistence): keeping the full history beyond the cache window.
 - [**Chat template**](#chat-template): per-role fragments and the load-time
@@ -42,11 +42,12 @@ model's call format is written down in this library.
 
 Naive prompt trimming defeats goal 1: removing old messages from the start of
 the sequence shifts every later token's position and **invalidates the entire
-cached prefix → full reprefill every turn.** llama-server's `cache_prompt` has
-the same problem: the moment any non-prefix message is dropped, the common
-prefix collapses to the system prompt. The correct mechanism is **in-place KV
-surgery**: remove the oldest message's token span and *shift the survivors' RoPE
-positions down* to close the gap, so kept messages are never re-processed.
+cached prefix, so every turn re-prefills in full.** llama-server's
+`cache_prompt` has the same problem: the moment any non-prefix message is
+dropped, the common prefix collapses to the system prompt. The correct
+mechanism is an **in-place KV cache edit**: remove the oldest message's token
+span and *shift the survivors' RoPE positions down* to close the gap, so kept
+messages are never re-processed.
 
 ## Comparison with llama.cpp's built-in context shift
 
@@ -119,10 +120,11 @@ Only `Config` differs between targets: `model_path`, `context_size`,
 `evict_above_fraction`, and `gpu_layers` (`0` for a CPU-only build, `-1` to
 offload every layer on a GPU). The wrapper code is identical; `seq_rm` /
 `seq_add` work on both backends. On a GPU, `flash_attention=True` with
-`kv_cache_type="q8_0"` roughly halves KV-cache memory at near-zero quality cost
-(a quantized `kv_cache_type` requires flash attention). `kv_cache_on_gpu`
-picks where the KV cache lives: `True` places it in VRAM for fastest
-generation, `False` keeps it in host RAM, trading speed for VRAM headroom.
+`kv_cache_type="q8_0"` roughly halves the memory the KV cache occupies, at a
+small cost in output quality (a quantized `kv_cache_type` requires flash
+attention). `kv_cache_on_gpu` picks where the KV cache lives: `True` places it
+in VRAM for fastest generation, `False` keeps it in host RAM, trading speed for
+VRAM headroom.
 [Configuration](#configuration) lists every field.
 
 ## Quick start
@@ -211,8 +213,8 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   Raises `ContextOverflowError` on the same `min_reply_tokens` headroom check as
   `reply_without_tools`. Bytes are decoded incrementally, so a UTF-8 codepoint
   split across tokens is never mangled. Each token is committed to the cache
-  *before* its text is surfaced, so abandoning the stream early (barge-in via
-  the generator's `close()`) still records exactly the tokens that reached the
+  *before* its text is surfaced, so abandoning the stream early (the
+  generator's `close()`) still records exactly the tokens that reached the
   cache, and the next generation stays valid. To interrupt from *another* thread
   (a generator must only be driven from its consuming thread), pass
   `reply_without_tools_stream(text, cancel=event)`: setting the
@@ -254,7 +256,7 @@ in this order, so the code reads in the order of this table.
 |------|------|
 | **setting up** | `ChatWrapper(model_path=...)`, then `begin(system_prompt, messages, tools)`. Pass `tools=registry` and it is declared and remembered |
 | **adding context** | `inject(text, role="user")`: prefilled, no reply |
-| **asking: without tools** | `reply_without_tools(text)` drained, `reply_without_tools_stream(text)` streaming. The one door where no tool runs, not even one `begin` was given and remembered: a call the model makes anyway is refused with an error and it answers in words instead |
+| **asking: without tools** | `reply_without_tools(text)` drained, `reply_without_tools_stream(text)` streaming. The one entry point where no tool runs, not even one `begin` was given and remembered: a call the model makes anyway is refused with an error and it answers in words instead |
 | **asking: with tools** | `reply_with_tools(text)` drained, `reply_with_tools_stream(text)` streaming. Runs whatever the model calls and keeps going until a generation ends without one, so the turn always closes. Returns one `Reply` summing every generation. Needs no tools to exist, and refuses a registry this model could never call |
 | **tools: driving the loop yourself** | `reply_until_tool(text)` -> `inject_tool_result(call, result)` -> `resume_until_tool()`; `declare_unknown_tools(registry)` adds one mid-conversation |
 | **introspection** | the table below; none of it touches the cache |
@@ -301,7 +303,7 @@ None of these touch the cache, and all are safe to call from another thread.
 | `snapshot()` | the conversation and its cache layout: one `{"role", "text", "n_tokens", "pos_start", "pos_end"}` row per message |
 | `busy` | whether a generation is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
 | `wait_idle(timeout_s=None)` | block until no generation is running; `False` on timeout. Advisory in the same way |
-| `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but a latency cliff the first time history crosses the threshold |
+| `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but one long prefill the first time history crosses the threshold |
 | `can_call_tools` | whether tools can be used with this model, every step of the way: its template describes a call, it renders the declarations that tell the model a tool exists, the argument spelling was recovered, and it renders a block to answer one in. Settled at construction, and exactly the condition `begin(tools=...)` checks |
 | `awaiting_tool_result` | whether a call is still owed a result |
 | `reply_open` | whether a reply is unfinished, so `reply_without_tools`, `inject` and `declare_unknown_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `resume_until_tool()` |
@@ -437,9 +439,9 @@ The strategy is chosen automatically at construction from
   conversation once. Correct, and it costs one prefill of the survivors; a
   non-shiftable model degrades gracefully instead of corrupting the cache.
 
-The backend (`_backend.py`) resolves the cache symbols defensively across
-llama.cpp API churn: the modern `llama_memory_*` handle API when present,
-falling back to the older `llama_kv_self_*` / `llama_kv_cache_*` names.
+`_backend.py` resolves the cache symbols defensively across llama.cpp API
+churn: the modern `llama_memory_*` handle API when present, falling back to the
+older `llama_kv_self_*` / `llama_kv_cache_*` names.
 
 ## Persistence
 
@@ -646,21 +648,21 @@ declare it but *where*, and that is what `in_system_prompt` decides:
 |------|------|------|
 | `in_system_prompt=True` (the default), then `begin(..., tools=registry)` | in the system turn | none extra, and no eviction can take it back |
 | `in_system_prompt=False`, then `chat.declare_unknown_tools(registry)` | a message of its own | one prefill, evictable later |
-| registered, and neither door used | nowhere; the model never hears of it | none |
+| registered, and neither entry point used | nowhere; the model never hears of it | none |
 
 The tool runs either way from the moment it is registered: placement is only
 about what the model knows. Registering a name that is already taken replaces
 it, its placement included.
 
-Hand the same registry to both doors and each takes its own half: `begin` writes
-what belongs in the system prompt, `declare_unknown_tools` writes whatever the
-conversation does not already declare. So after `begin(tools=registry)` a
-`declare_unknown_tools(registry)` writes exactly the tools marked for later,
-plus anything registered since, and calling it again writes nothing at all. What
-counts as already declared is read off the messages carrying it, so once a
-declaration message is evicted its tools count as unknown again and the next
-`declare_unknown_tools` writes them back. The system turn is never evicted, so
-what `begin` declared is known for good.
+Hand the same registry to both entry points and each takes its own half:
+`begin` writes what belongs in the system prompt, `declare_unknown_tools`
+writes whatever the conversation does not already declare. So after
+`begin(tools=registry)` a `declare_unknown_tools(registry)` writes exactly the
+tools marked for later, plus anything registered since, and calling it again
+writes nothing at all. What counts as already declared is read off the messages
+carrying it, so once a declaration message is evicted its tools count as
+unknown again and the next `declare_unknown_tools` writes them back. The system
+turn is never evicted, so what `begin` declared is known for good.
 
 `registry.tool(...)` is `register` in the form the function is written in, so
 the usual case is one step:
@@ -697,8 +699,9 @@ vanish.
 
 The registry does not track either of those. `specs_for_system_prompt()` and
 `specs()` answer what the model *should* be told and where, which is what the
-two doors read; neither claims to know what is still in the conversation, and
-both go on naming a tool whose declaration has since been evicted.
+two entry points read; neither claims to know what is still in the
+conversation, and both go on naming a tool whose declaration has since been
+evicted.
 
 ### Which entry point does what
 
@@ -828,13 +831,13 @@ once it closes. Until then `context_size` is the only bound: a result too large
 for what is left is clipped to leave `min_reply_tokens` free,
 and one whose wrapping alone does not fit raises `ContextOverflowError`. The
 wrapping itself is never clipped, because half a result block is something no
-template ever produced, so such a turn cannot be continued and `begin()` is the
-way out.
+template ever produced, so such a turn cannot be continued: start a new
+conversation with `begin()`.
 
 A call never appears in the reply. Its tokens reach the cache, because the model
 has to see its own call when it reads the turn back, but they are not yielded as
-deltas and not part of `Reply.text`. On a voice pipeline that is the difference
-between a working assistant and one that reads its own function calls aloud.
+deltas and not part of `Reply.text`, so a consumer that renders the deltas as
+they arrive never renders the call syntax.
 
 ### Every failure is told to the model
 
@@ -865,7 +868,7 @@ other, so under a `max_calls` ceiling a model that cannot write a readable one
 gives up after that many attempts rather than looping. Under
 `reply_without_tools` the retry is skipped, since a second call could only be
 refused as well. It is the one failure whose
-result carries no instruction: it is written while the reply is being booked,
+result carries no instruction: it is written while the reply is being recorded,
 before the round settles the budget, so there is nothing true to say yet.
 
 A result is a failure if it is a dict carrying `error`, so a tool that reports
@@ -965,7 +968,7 @@ python examples/demo.py /path/to/model.gguf                  # CPU
 python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 ```
 
-The test suite uses a model-free fake backend whose `prefill` asserts
+The test suite uses a model-free fake cache context whose `prefill` asserts
 `start_pos == len(cache)`, so the wrapper can only ever *append*, never
 re-prefill a survivor. That assertion is the design guarantee, checked
 mechanically. The demo proves the same claim against a real model by logging how
@@ -982,7 +985,7 @@ never crosses `context_size`.
 | `llama_chat/template.py` | `TemplateFragments`, `TemplateFormatter`, `ToolCallFragments`, `CallBody`: what a turn and a tool call are wrapped in |
 | `llama_chat/template_extract.py` | `extract_fragments`, `extract_tool_fragments`, `extract_call_body`: recover all of that from the model's GGUF template |
 | `llama_chat/resolved_template.py` | `ResolvedTemplate`: one model's template, recovered or supplied, validated against it, with the four tool-calling steps settled |
-| `llama_chat/_backend.py` | version-stable adapter over `llama_cpp.*` (handles API churn) |
+| `llama_chat/_backend.py` | `Backend`: version-stable adapter over `llama_cpp.*`, which renames its symbols across releases |
 | `llama_chat/context.py` | `KVContext`: tokenize / prefill / streaming generate / evict |
 | `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`: declaring tools and running the ones the model calls |
 | `llama_chat/call_parsing.py` | `parse_calls`: reading a call back out of what the model generated, JSON or this model's own delimiters |
@@ -990,10 +993,11 @@ never crosses `context_size`.
 | `llama_chat/persistent_wrapper.py` | `PersistentChat`, `ConversationStore`, `InMemoryStore`: the same API, with every message mirrored to a durable store |
 
 Everything in that table is importable from `llama_chat` itself, apart from the
-three extraction functions and `ResolvedTemplate`: the wrapper runs those for
-you at construction, and `llama_chat.template_extract` is where to reach the
-extraction functions to run against a template directly. `n_newest_that_fit` is the pure function `begin` uses to decide how
-much history fits, exposed so that decision can be made before committing to it.
+extraction functions and `ResolvedTemplate`: the wrapper runs those for you at
+construction, and `llama_chat.template_extract` is where to reach the extraction
+functions to run against a template directly. `n_newest_that_fit` is the pure
+function `begin` uses to decide how much history fits, exposed so that decision
+can be made before committing to it.
 
 The bookkeeping types are exported for one purpose: `ChatWrapper(context=...)`
 takes a cache context of your own in place of the one built from `Config`, and

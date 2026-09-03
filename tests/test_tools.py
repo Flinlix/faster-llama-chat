@@ -485,7 +485,7 @@ def test_a_tool_may_be_called_something_other_than_its_function():
 
 
 def test_the_flag_says_where_a_declaration_lands_not_whether():
-    """Every registered tool is meant to be told; the flag picks which door."""
+    """Every registered tool is meant to be told; the flag picks where."""
     registry = ToolRegistry()
     registry.register(lambda: {}, "gleich", name="early")
     registry.register(lambda: {}, "später", name="late", in_system_prompt=False)
@@ -1342,8 +1342,8 @@ def test_the_registry_keeps_naming_a_declaration_the_cache_dropped():
 
 
 # ----- detecting a call as it is generated --------------------------------
-# These drive the real KVContext.generate over a stubbed backend, because the
-# fake context reimplements this contract and so cannot test it.
+# These drive the real KVContext.generate over a stubbed backend, because
+# the fake context reimplements this contract and so cannot test it.
 def _generating(pieces: dict, order: list, eog: int | None = None):
     """A KVContext that samples ``order`` and renders each token from ``pieces``."""
     from types import SimpleNamespace
@@ -1393,7 +1393,7 @@ def test_the_held_back_tail_is_released_when_a_call_opens():
 
 
 def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
-    """The release above is a yield like any other, so barge-in counts there.
+    """The release above is a yield like any other, so an early close counts there.
 
     It used to sit outside the ``GeneratorExit`` handler, and a consumer that
     closed exactly then saw ``stop_reason == "token_limit"``.
@@ -1583,10 +1583,10 @@ class _NoResultBlock(FakeContext):
         return super().render_with_model_template(kept, tools=tools)
 
 
-def test_booking_a_reply_survives_a_template_with_nowhere_to_tell_it():
+def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
     """Telling the model is best effort; keeping the cache consistent is not.
 
-    Booking runs in a ``finally`` and is what leaves the cache and the table
+    Recording runs in a ``finally`` and is what leaves the cache and the table
     agreeing, so a template that renders no result block must make it fall back
     to closing the turn, not raise out of it.
     """
@@ -1904,7 +1904,7 @@ def test_a_result_is_injected_under_the_call_it_answers():
 
 
 def test_declaring_takes_a_registry_the_way_begin_does():
-    """One shape for both doors, since both are handed the same thing."""
+    """One shape for both entry points, since both are handed the same thing."""
     registry = ToolRegistry()
 
     @registry.tool("Sagt die Zeit.")
@@ -1932,8 +1932,8 @@ def _declared_in(wrapper, index):
                    if 0 < t < 0x11000)
 
 
-def test_the_two_doors_split_a_registry_by_where_each_tool_belongs():
-    """One registry, handed to both: begin takes its half, the other door the rest."""
+def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
+    """One registry for both: begin takes its half, declaring takes the rest."""
     registry = ToolRegistry()
 
     @registry.tool("Sagt die Zeit.")

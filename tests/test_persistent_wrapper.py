@@ -21,7 +21,7 @@ def test_on_message_fires_user_then_assistant_on_a_request():
     assert seen == [("user", "hi"), ("assistant", "xyz")]
 
 
-def test_on_message_captures_bargein_partial():
+def test_on_message_captures_the_partial_reply_of_an_early_close():
     fake = FakeContext(gen_tokens=8, gen_text="abcdefgh")
     seen = []
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake,
@@ -29,7 +29,7 @@ def test_on_message_captures_bargein_partial():
     w.begin("s")
     stream = w.reply_without_tools_stream("hi")
     next(stream)          # consume one delta
-    stream.close()        # barge-in
+    stream.close()        # stop early
     # User persisted, plus the partial assistant reply that reached the cache.
     assert seen[0] == ("user", "hi")
     assert seen[1][0] == "assistant"

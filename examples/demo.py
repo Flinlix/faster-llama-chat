@@ -116,8 +116,8 @@ def main() -> None:
         reply = sw.reply_without_tools(
             f"Give me fact number {i} about the planet Mars, briefly.")
         roles = [r["role"] for r in sw.snapshot()]
-        assert roles[0] == "system", "system prompt was evicted!"
-        assert sw.total_tokens <= small.context_size, "context overflow!"
+        assert roles[0] == "system", "system prompt was evicted"
+        assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
             f"messages={len(roles):>2} evicted={reply.n_evicted_messages}"
