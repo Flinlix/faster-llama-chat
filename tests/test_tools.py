@@ -1545,8 +1545,8 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
 
 
 def test_tags_that_resolve_to_no_token_leave_tool_calling_off():
-    """TemplateFragments can name tags this model's vocabulary does not have."""
-    from llama_chat.template import TemplateFragments, ToolCallFragments
+    """ToolCallFragments can name tags this model's vocabulary does not have."""
+    from llama_chat.template import ToolCallFragments
 
     wrapper = ChatWrapper(
         Config(context_size=512), context=FakeContext(),
