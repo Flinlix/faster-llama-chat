@@ -608,13 +608,13 @@ class ChatWrapper:
                 :meth:`begin`), if its template declares no tools, or if the
                 declarations cannot fit beside the system prompt.
         """
-        known = self._declared_names()
-        specs = [spec for spec in _all_specs(tools) or []
-                 if spec.name not in known]
-        if not specs:
-            return 0
         with self._lock:
             self._ensure_open()
+            known = self._declared_names()
+            specs = [spec for spec in _all_specs(tools) or []
+                     if spec.name not in known]
+            if not specs:
+                return 0
             self._ensure_begun("declare into")
             self._ensure_no_open_reply("declare tools")
             self._template.ensure_tools_usable()

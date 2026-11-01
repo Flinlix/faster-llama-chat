@@ -584,6 +584,8 @@ def test_close_is_idempotent_and_blocks_actions():
         w.inject("ctx")
     with pytest.raises(RuntimeError, match="closed"):
         w.reply_without_tools("hi")
+    with pytest.raises(RuntimeError, match="closed"):
+        w.declare_unknown_tools([])     # even with nothing to declare
 
 
 def test_context_manager_closes_on_exit():
