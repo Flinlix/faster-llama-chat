@@ -1,8 +1,8 @@
 """Declaring tools, reading calls back, and the turn a call holds open.
 
 Model-free throughout: :class:`~tests.fake_context.FakeContext` plays a second
-model whose tool tags are deliberately spelled unlike the bundled one's, so
-nothing here can pass by matching a real model's format.
+model whose tool tags are invented, spelled unlike any real model's, so nothing
+here can pass by matching a real model's format.
 """
 
 import json

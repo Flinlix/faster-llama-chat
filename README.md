@@ -199,7 +199,8 @@ chat = ChatWrapper(
 # with a fraction 0.0..1.0 while the model weights load. It is keyword-only
 # (not a Config field) and must not raise.
 chat = ChatWrapper(
-    on_load_progress=lambda f: print(f"\rloading model {f * 100:3.0f}%", end="", flush=True)
+    model_path="models/your-model.gguf",
+    on_load_progress=lambda f: print(f"\rloading model {f * 100:3.0f}%", end="", flush=True),
 )
 
 # begin: reset + prefill the system prompt and as much recent history as fits
@@ -262,9 +263,9 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   `reply_without_tools`. Bytes are decoded incrementally, so a UTF-8 codepoint
   split across tokens is never mangled. Each token is committed to the cache
   *before* its text is surfaced, so abandoning the stream early (the
-  generator's `close()`) still records exactly the tokens that reached the
+  stream's `close()`) still records exactly the tokens that reached the
   cache, and the next generation stays valid. To interrupt from *another* thread
-  (a generator must only be driven from its consuming thread), pass
+  (a stream must only be driven from its consuming thread), pass
   `reply_without_tools_stream(text, cancel=event)`: setting the
   `threading.Event` stops generation within one token and the stream ends
   normally with `stop_reason == "interrupted"`.
@@ -278,7 +279,7 @@ are: measure decode throughput on the host once, and set `decode_threads` below
 | `"token_limit"` | `max_reply_tokens` ran out, or the remaining context did |
 | `"interrupted"` | a `cancel` event was set, or the stream was closed early |
 | `"tool_call"` | the reply stopped on a call, and the turn is left open for a result |
-| `"unreadable_tool_call"` | it stopped on a call whose body this model's recovered format could not read. The model is told so and the reply carries on, so only `reply_until_tool` reports this |
+| `"unreadable_tool_call"` | it stopped on a call whose body this model's recovered format could not read. The model is told so and the reply carries on, so this is the final reason only from `reply_until_tool`, or where the template renders no result block to tell the model in |
 
 Both stop early if the model emits a tool call, whether or not you declared any:
 on a model whose template describes calls this can happen from a hallucinated
@@ -430,8 +431,9 @@ above `context_size`, which would make every request raise, and an
 `evict_above_fraction` that rounds down to no tokens, which would make every
 `begin` raise.
 
-The rest of what `ChatWrapper` takes is keyword-only and deliberately outside
-`Config`, because none of it is a value to tune:
+The rest of what `ChatWrapper` takes is deliberately outside `Config`, because
+none of it is a value to tune. All of it is keyword-only except `context`, the
+second positional parameter:
 
 | | |
 |------|------|
@@ -645,7 +647,7 @@ state of the conversation.
 - **`reply_until_tool(text)`**: the same generation, yielding `str` deltas and
   then a `ToolCall` for each call the model made. Use this to run the loop
   yourself: answer with `inject_tool_result(call, result)` once per call, in the
-  order they were asked, then call `resume_until_tool()`. It returns how many
+  order they were asked (`call` may also be just the call's name), then call `resume_until_tool()`. It returns how many
   messages that cost, as `inject` does, which is none while a turn is open. The
   order is enforced, because the name is what says which call is being
   answered.
