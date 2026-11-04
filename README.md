@@ -159,7 +159,7 @@ Equivalent manual build:
 CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"
 
 # Nvidia GPU (CUDA offload)
-CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.0"
+CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"
 
 pip install -e ".[test]"
 ```

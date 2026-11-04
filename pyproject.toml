@@ -20,7 +20,7 @@ requires-python = ">=3.11"
 dependencies = [
     # Build llama-cpp-python from source per machine (see install.sh):
     #   CPU:        CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python
-    #   Nvidia GPU: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+    #   Nvidia GPU: CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python
     "llama-cpp-python>=0.3.0",
 ]
 
