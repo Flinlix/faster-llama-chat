@@ -211,8 +211,6 @@ class KVContext:
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
         self._backend.kv_clear(self._llama_context)
-        # The penalty window goes with the cache it was measured over.
-        self._backend.sampler_reset(self._sampler)
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         self._backend.decode(self._llama_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
@@ -279,6 +277,10 @@ class KVContext:
         own_sampler = None
         if sampling is not None and sampling.overrides:
             own_sampler = self._build_sampler(sampling.applied_to(self._config))
+        else:
+            # Penalties count this generation's tokens only, and a seed
+            # starts over, as in a chain built for this generation alone.
+            self._backend.sampler_reset(self._sampler)
         try:
             yield from self._sample_into(
                 own_sampler if own_sampler is not None else self._sampler,

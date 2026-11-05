@@ -270,6 +270,7 @@ def test_close_after_stop_hit_keeps_stop_reason():
         is_eog=lambda vocab, tok: False,
         decode=lambda ctx_, ids, pos, seq, logits, batch: None,
         token_to_piece_bytes=lambda vocab, tok: pieces[tok],
+        sampler_reset=lambda sampler: None,
     )
     ctx._sampler = ctx._vocab = ctx._llama_context = None
     ctx._max_batch_tokens = 8

@@ -76,6 +76,7 @@ def _stub_context(chains):
         decode=lambda *args: None,
         token_to_piece_bytes=lambda vocab, tok: b"x",
         free_sampler=lambda sampler: chains["freed"].append(sampler),
+        sampler_reset=lambda sampler: chains.setdefault("reset", []).append(sampler),
     )
     ctx._sampler, ctx._vocab, ctx._llama_context = "loaded", None, None
     ctx._max_batch_tokens = 8
@@ -100,6 +101,14 @@ def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
     stream.close()
     assert chains["sampled"] == [("own", 0.3)]
     assert chains["freed"] == [("own", 0.3)]
+
+
+def test_every_generation_starts_its_penalties_and_its_seed_afresh():
+    chains = {"sampled": [], "freed": []}
+    ctx = _stub_context(chains)
+    list(ctx.generate(0, 1, [], out=GenerationAccumulator()))
+    list(ctx.generate(1, 1, [], out=GenerationAccumulator(), sampling=Sampling()))
+    assert chains["reset"] == ["loaded", "loaded"]
 
 
 # ----- cutting the newest reply ------------------------------------------

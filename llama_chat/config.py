@@ -33,9 +33,12 @@ class Config:
             (``0`` disables).
         frequency_penalty: Penalty scaled by how often a token occurs in the
             penalty window (``0`` disables).
-        penalty_window_tokens: How far back the three penalties look.
-        seed: Sampling RNG seed in ``[0, 2**32 - 2]``. ``None`` draws a fresh
-            one per run.
+        penalty_window_tokens: How far back the three penalties look, within
+            the tokens of the generation being sampled: each generation starts
+            with an empty window, and a turn resumed after a tool result is a
+            generation of its own.
+        seed: Sampling RNG seed in ``[0, 2**32 - 2]``, which every generation
+            starts from. ``None`` draws a fresh one per generation.
         context_size: The hard limit in tokens; generation never crosses it.
         evict_above_fraction: Fraction of ``context_size`` above which the
             oldest messages are evicted. Must be in ``(0, 1]`` and must come

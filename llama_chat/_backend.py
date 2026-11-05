@@ -94,7 +94,6 @@ class Backend:
         self._is_control = _optional_symbol("llama_vocab_is_control")
         self._get_attr = _optional_symbol("llama_vocab_get_attr", "llama_token_get_attr")
         self._meta_val_str = _optional_symbol("llama_model_meta_val_str")
-        self._sampler_reset = _optional_symbol("llama_sampler_reset")
 
         # Sampler chain: one name each so far, resolved here anyway so a build
         # missing one is refused at construction like every other symbol.
@@ -110,6 +109,7 @@ class Backend:
         self._init_dist = _required_symbol("llama_sampler_init_dist")
         self._sampler_sample = _required_symbol("llama_sampler_sample")
         self._sampler_free = _required_symbol("llama_sampler_free")
+        self._sampler_reset = _required_symbol("llama_sampler_reset")
 
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int,
@@ -342,9 +342,8 @@ class Backend:
         self._sampler_free(sampler)
 
     def sampler_reset(self, sampler) -> None:
-        """Reset sampler-chain state, such as the penalty window, if supported."""
-        if self._sampler_reset is not None:
-            self._sampler_reset(sampler)
+        """Reset sampler-chain state: the penalty window, and the seed it draws from."""
+        self._sampler_reset(sampler)
 
     # ----- KV / memory edits --------------------------------------------
     def _mem(self, ctx):

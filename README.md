@@ -395,8 +395,8 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 | `repetition_penalty` | `1.0` | Applied over `penalty_window_tokens`; `1.0` disables |
 | `presence_penalty` | `0.0` | Flat penalty on any token already in the window; `0` disables |
 | `frequency_penalty` | `0.0` | Penalty scaled by how often a token occurs in the window; `0` disables |
-| `penalty_window_tokens` | `64` | How far back the three penalties look |
-| `seed` | `None` | Sampling RNG seed in `[0, 2**32 - 2]`, for reproducible generation. `None` draws a fresh one per run |
+| `penalty_window_tokens` | `64` | How far back the three penalties look, within the generation being sampled: each starts with an empty window, and a turn resumed after a tool result is a generation of its own |
+| `seed` | `None` | Sampling RNG seed in `[0, 2**32 - 2]`, which every generation starts from, for reproducible generation. `None` draws a fresh one per generation |
 
 **Context management**
 

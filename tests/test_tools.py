@@ -1356,7 +1356,8 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == eog,
         decode=lambda *_a: None,
-        token_to_piece_bytes=lambda vocab, token: pieces[token])
+        token_to_piece_bytes=lambda vocab, token: pieces[token],
+        sampler_reset=lambda sampler: None)
     ctx._sampler = ctx._vocab = ctx._llama_context = None
     ctx._max_batch_tokens = 8
     return ctx
