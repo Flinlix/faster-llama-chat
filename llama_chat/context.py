@@ -413,7 +413,7 @@ class KVContext:
         chain = backend.sampler_chain()
         if config.repetition_penalty != 1.0 \
                 or config.presence_penalty or config.frequency_penalty:
-            backend.add_penalties(chain, config.penalty_window_tokens,
+            backend.add_penalties(chain, self._vocab, config.penalty_window_tokens,
                                   config.repetition_penalty,
                                   config.frequency_penalty,
                                   config.presence_penalty)

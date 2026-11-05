@@ -194,4 +194,3 @@ def test_a_cut_on_a_cache_that_cannot_shift_rebuilds_it_from_the_conversation():
     assert fake.rebuilds == rebuilds + 1
     assert w.snapshot()[-1]["text"] == "Eins."
     _assert_consistent(w, fake)
-

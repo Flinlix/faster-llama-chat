@@ -131,10 +131,32 @@ def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused():
     backend = Backend.__new__(Backend)
     backend._chain_add = lambda chain, stage: added.append(stage)
     backend._init_penalties = _raises_type_error
+    backend._penalties_take_vocab_size = False
 
     with pytest.warns(RuntimeWarning, match="penalties"):
-        backend.add_penalties(object(), 64, 1.1, 0.0, 0.0)
+        backend.add_penalties(object(), "vocab", 64, 1.1, 0.0, 0.0)
     assert added == []
+
+
+@pytest.mark.parametrize("takes_vocab_size, arguments", [
+    (True, (32000, 64, 1.1, 0.5, 0.25)), (False, (64, 1.1, 0.5, 0.25))])
+def test_the_penalties_get_the_argument_list_this_build_takes(takes_vocab_size, arguments):
+    passed = []
+    backend = Backend.__new__(Backend)
+    backend._chain_add = lambda chain, stage: None
+    backend._init_penalties = lambda *args: passed.append(args)
+    backend._penalties_take_vocab_size = takes_vocab_size
+    backend._vocab_n_tokens = lambda vocab: 32000
+    backend.add_penalties(object(), "vocab", 64, 1.1, 0.5, 0.25)
+    assert passed == [arguments]
+
+
+def test_a_bindings_argument_count_is_read_from_its_types_or_its_signature():
+    from types import SimpleNamespace
+
+    from llama_chat._backend import _parameter_count
+    assert _parameter_count(SimpleNamespace(argtypes=[1, 2, 3, 4, 5])) == 5
+    assert _parameter_count(lambda a, b, c, d: None) == 4
 
 
 def test_only_this_layer_names_llama_cpp():

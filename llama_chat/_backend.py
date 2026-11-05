@@ -8,6 +8,7 @@ Only the primitives the wrapper needs are exposed.
 from __future__ import annotations
 
 import ctypes
+import inspect
 import logging
 import warnings
 from typing import Callable
@@ -47,6 +48,14 @@ def _optional_symbol(*names: str):
         if fn is not None:
             return fn
     return None
+
+
+def _parameter_count(fn) -> int:
+    """How many arguments a binding takes, from its ctypes types or its signature."""
+    argtypes = getattr(fn, "argtypes", None)
+    if argtypes is not None:
+        return len(argtypes)
+    return len(inspect.signature(fn).parameters)
 
 
 def _required_symbol(*names: str):
@@ -101,6 +110,12 @@ class Backend:
         self._chain_init = _required_symbol("llama_sampler_chain_init")
         self._chain_add = _required_symbol("llama_sampler_chain_add")
         self._init_penalties = _required_symbol("llama_sampler_init_penalties")
+        # Releases differ in whether the vocabulary size comes first; one that
+        # asks for it must also say it.
+        self._penalties_take_vocab_size = _parameter_count(self._init_penalties) == 5
+        self._vocab_n_tokens = (
+            _required_symbol("llama_vocab_n_tokens", "llama_n_vocab")
+            if self._penalties_take_vocab_size else None)
         self._init_greedy = _required_symbol("llama_sampler_init_greedy")
         self._init_top_k = _required_symbol("llama_sampler_init_top_k")
         self._init_top_p = _required_symbol("llama_sampler_init_top_p")
@@ -291,16 +306,19 @@ class Backend:
         """An empty sampler chain, to be freed with :meth:`free_sampler`."""
         return self._chain_init(self._chain_params())
 
-    def add_penalties(self, chain, window_tokens: int, repetition: float,
+    def add_penalties(self, chain, vocab, window_tokens: int, repetition: float,
                       frequency: float, presence: float) -> None:
         """Add the three repetition penalties over the last ``window_tokens``.
 
-        Warns and adds no stage where this build's signature differs, leaving
+        Passes ``vocab``'s size first where this build's function takes it.
+        Warns and adds no stage where its signature is another still, leaving
         generation unpenalized rather than refusing to start.
         """
+        leading = ((self._vocab_n_tokens(vocab),)
+                   if self._penalties_take_vocab_size else ())
         try:
             self._chain_add(chain, self._init_penalties(
-                window_tokens, repetition, frequency, presence))
+                *leading, window_tokens, repetition, frequency, presence))
         except TypeError:
             warnings.warn(
                 "this llama_cpp build has an incompatible "
