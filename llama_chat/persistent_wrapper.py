@@ -25,6 +25,10 @@ class ConversationStore(Protocol):
         """Append one turn to the conversation's durable log."""
         ...
 
+    def replace_last(self, conversation_id: str, text: str) -> None:
+        """Give the conversation's newest turn ``text`` instead of its own."""
+        ...
+
 
 class InMemoryStore:
     """Reference :class:`ConversationStore` backed by a dict. Not durable."""
@@ -37,6 +41,10 @@ class InMemoryStore:
 
     def append(self, conversation_id: str, role: str, text: str) -> None:
         self._convos[conversation_id].append((role, text))
+
+    def replace_last(self, conversation_id: str, text: str) -> None:
+        turns = self._convos[conversation_id]
+        turns[-1] = (turns[-1][0], text)
 
 
 class PersistentChat:
@@ -59,11 +67,13 @@ class PersistentChat:
         Raises:
             TypeError: If ``store`` is not a :class:`ConversationStore`.
         """
-        missing = [name for name in ("load", "append") if not hasattr(store, name)]
+        missing = [name for name in ("load", "append", "replace_last")
+                   if not hasattr(store, name)]
         if missing:
             raise TypeError(
                 f"this conversation store is missing {missing}; one answers "
-                f"load(conversation_id) and append(conversation_id, role, text)")
+                f"load(conversation_id), append(conversation_id, role, text) and "
+                f"replace_last(conversation_id, text)")
         self._store = store
         self._conversation_id: str | None = None
         self._chat = ChatWrapper(config, on_message=self._persist, **kwargs)
@@ -124,6 +134,19 @@ class PersistentChat:
 
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         return self._chat.declare_unknown_tools(tools)
+
+    # ----- cutting the newest reply -------------------------------------------
+    def truncate_last_reply(self, keep_text: str) -> None:
+        """As the wrapper's, with the stored turn shortened to match.
+
+        The store is written only once the cache has taken the cut, so a
+        refused cut changes neither. A store that fails to write leaves the
+        cache cut and the stored turn whole, as a failed ``append`` leaves a
+        message in the cache that the store lacks.
+        """
+        self._ensure_conversation_selected()
+        self._chat.truncate_last_reply(keep_text)
+        self._store.replace_last(self._conversation_id, keep_text)
 
     # ----- introspection -------------------------------------------------------
     @property

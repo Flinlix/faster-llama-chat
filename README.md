@@ -861,16 +861,17 @@ chat.reply_without_tools("What did we decide last time?")   # auto-persisted
 ```
 
 A store is any object satisfying the `ConversationStore` protocol, which is
-two methods keyed by conversation id:
+three methods keyed by conversation id:
 
 ```python
 class ConversationStore(Protocol):
     def load(self, conversation_id: str) -> list[tuple[str, str]]: ...  # (role, text), oldest first
     def append(self, conversation_id: str, role: str, text: str) -> None: ...
+    def replace_last(self, conversation_id: str, text: str) -> None: ...  # after a cut
 ```
 
 `InMemoryStore` is a reference implementation (not durable); back it with SQLite,
-Redis, or files by implementing those two methods. Both are checked where the
+Redis, or files by implementing those three methods. All are checked where the
 store is adopted, because a store is written to mid-turn, and every entry point
 that would write a message refuses before prefilling anything until `begin` has
 selected a conversation. Capture is driven by an optional

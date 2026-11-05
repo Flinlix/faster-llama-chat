@@ -145,6 +145,18 @@ def test_a_store_that_cannot_append_is_refused_where_it_is_adopted():
         PersistentChat(ReadOnly(), _config(context_size=500), context=FakeContext())
 
 
+def test_a_store_that_cannot_replace_its_last_turn_is_refused_where_it_is_adopted():
+    class AppendOnly:
+        def load(self, conversation_id):
+            return []
+
+        def append(self, conversation_id, role, text):
+            pass
+
+    with pytest.raises(TypeError, match="replace_last"):
+        PersistentChat(AppendOnly(), _config(context_size=500), context=FakeContext())
+
+
 def test_persistent_chat_failed_begin_selects_no_conversation():
     # begin fails (system prompt over threshold) -> no conversation selected,
     # so a later request cannot persist into a never-loaded conversation.
@@ -282,3 +294,29 @@ def test_every_delegation_reaches_the_wrapper():
         assert chat.total_tokens > before        # the declaration was prefilled
 
     assert [r for r, _ in store.load("c1")] == ["user", "assistant"] * 2
+
+
+def test_a_cut_reply_is_stored_as_it_was_cut_and_comes_back_so():
+    store = InMemoryStore()
+    config = _config(context_size=500, evict_above_fraction=1.0)
+    chat = PersistentChat(store, config, context=FakeContext(gen_tokens=8,
+                                                             gen_text="Eins. Zw"))
+    chat.begin("conv-1", "s")
+    chat.reply_without_tools("hi")
+    chat.truncate_last_reply("Eins.")
+    assert store.load("conv-1") == [("user", "hi"), ("assistant", "Eins.")]
+    again = PersistentChat(store, config, context=FakeContext())
+    again.begin("conv-1", "s")
+    assert again.snapshot()[-1]["text"] == "Eins."
+
+
+def test_a_refused_cut_leaves_the_stored_turn_alone():
+    store = InMemoryStore()
+    chat = PersistentChat(store, _config(context_size=500, evict_above_fraction=1.0),
+                          context=FakeContext(gen_tokens=5, gen_text="Hallo"))
+    chat.begin("conv-1", "s")
+    chat.reply_without_tools("hi")
+    with pytest.raises(ValueError):
+        chat.truncate_last_reply("Tschüss")
+    assert store.load("conv-1")[-1] == ("assistant", "Hallo")
+
