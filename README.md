@@ -279,7 +279,9 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   a prefix of its text, for a reply that was cut short where it was being read
   or heard, so the model holds only what the reader got. The cut is at the
   cache's end: the tokens the shortened message shares with the old one are not
-  decoded again, and the rest, the turn's closing tag at least, is. A generated
+  decoded again, and the rest, the turn's closing tag at least, is. A cache that
+  cannot shift is instead re-prefilled from the whole conversation on every cut,
+  as its eviction is; see "How eviction works". A generated
   reply keeps its generation prompt and a prefilled one the template's opening.
   Refused where a reply is open, the newest message is not the assistant's or
   holds a tool call, or `keep_text` is not a prefix.

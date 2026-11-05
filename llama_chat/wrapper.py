@@ -599,8 +599,9 @@ class ChatWrapper:
         model is left holding only what the reader got. The cut is at the
         cache's end, so the tokens the shortened message shares with the old
         one are not decoded again; the rest of it, its closing tag at least, is.
-        The message keeps the opening it had: a generated reply its generation
-        prompt, a prefilled one the template's.
+        A cache that cannot shift is rebuilt from the whole conversation
+        instead, as its eviction is. The message keeps the opening it had: a
+        generated reply its generation prompt, a prefilled one the template's.
 
         Args:
             keep_text: What stays, a prefix of the message's text. The whole
@@ -636,6 +637,12 @@ class ChatWrapper:
                 tokens = open_tokens + kept + close_tokens
             else:
                 tokens = self._fragment_tokens("assistant", keep_text)
+            if not self._context.can_shift:
+                # Such a cache may not take a partial removal, or may have
+                # reused the cells before it; see the README, "How eviction works".
+                self._table.replace_last(tokens, keep_text)
+                self._rebuild_cache()
+                return
             shared = _shared_prefix_length(msg.token_ids, tokens)
             self._context.remove_from(msg.pos_start + shared)
             self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,

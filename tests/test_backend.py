@@ -161,3 +161,19 @@ def test_every_cache_quantization_config_offers_resolves_to_a_type_id():
     backend = Backend.__new__(Backend)
     type_ids = [backend.kv_cache_type_id(name) for name in KV_CACHE_TYPES]
     assert len(set(type_ids)) == len(KV_CACHE_TYPES)
+
+
+def test_a_removal_the_cache_refuses_is_raised():
+    context = object.__new__(KVContext)
+    context._llama_context = "the context"
+    context._backend = SimpleNamespace(kv_seq_rm=lambda *args: False)
+    with pytest.raises(RuntimeError, match="refused"):
+        context.remove_from(3)
+
+
+@pytest.mark.parametrize("answer, taken", [(True, True), (False, False), (None, True)])
+def test_a_removal_reports_the_caches_answer_and_takes_none_for_yes(answer, taken):
+    backend = object.__new__(Backend)
+    backend._mem = lambda ctx: "the memory"
+    backend._mem_rm = lambda *args: answer
+    assert backend.kv_seq_rm("the context", 0, 3, -1) is taken

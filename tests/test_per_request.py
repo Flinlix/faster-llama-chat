@@ -184,3 +184,14 @@ def test_a_reply_that_called_a_tool_cannot_be_cut():
 def test_a_seed_out_of_range_is_refused_before_anything_is_prefilled():
     with pytest.raises(ValueError, match="seed"):
         Sampling(seed=2**40)
+
+
+def test_a_cut_on_a_cache_that_cannot_shift_rebuilds_it_from_the_conversation():
+    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw", can_shift=False)
+    w.reply_without_tools("hi")
+    rebuilds = fake.rebuilds
+    w.truncate_last_reply("Eins.")
+    assert fake.rebuilds == rebuilds + 1
+    assert w.snapshot()[-1]["text"] == "Eins."
+    _assert_consistent(w, fake)
+

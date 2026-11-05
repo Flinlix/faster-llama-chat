@@ -358,12 +358,13 @@ class Backend:
         else:
             raise RuntimeError("no KV-cache clear function available in this llama_cpp build")
 
-    def kv_seq_rm(self, ctx, seq: int, p0: int, p1: int) -> None:
+    def kv_seq_rm(self, ctx, seq: int, p0: int, p1: int) -> bool:
+        """Remove positions ``[p0, p1)``; ``False`` where the cache refused."""
         mem = self._mem(ctx)
         if mem is not None and self._mem_rm is not None:
-            self._mem_rm(mem, seq, p0, p1)
+            return self._mem_rm(mem, seq, p0, p1) is not False
         elif self._kv_rm is not None:
-            self._kv_rm(ctx, seq, p0, p1)
+            return self._kv_rm(ctx, seq, p0, p1) is not False
         else:
             raise RuntimeError("no KV-cache seq_rm function available in this llama_cpp build")
 

@@ -228,16 +228,29 @@ class KVContext:
         self.reset()  # kv_clear -> cache empty again for the real prefill
 
     def apply_eviction(self, ev: Eviction) -> None:
-        """Remove the evicted tokens, then shift survivors to close the gap."""
-        self._backend.kv_seq_rm(self._llama_context, SEQ, ev.remove_start, ev.remove_end)
+        """Remove the evicted tokens, then shift survivors to close the gap.
+
+        Raises:
+            RuntimeError: If the cache refuses the removal, which a cache that
+                can shift does only when it is corrupted.
+        """
+        if not self._backend.kv_seq_rm(self._llama_context, SEQ, ev.remove_start,
+                                       ev.remove_end):
+            raise RuntimeError(f"the cache refused to remove tokens "
+                               f"{ev.remove_start} to {ev.remove_end}")
         if ev.remove_end < ev.old_total:
             self._backend.kv_seq_add(
                 self._llama_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
             )
 
     def remove_from(self, pos: int) -> None:
-        """Remove every cached token from ``pos`` to the end of the sequence."""
-        self._backend.kv_seq_rm(self._llama_context, SEQ, pos, -1)
+        """Remove every cached token from ``pos`` to the end of the sequence.
+
+        Raises:
+            RuntimeError: If the cache refuses a partial removal.
+        """
+        if not self._backend.kv_seq_rm(self._llama_context, SEQ, pos, -1):
+            raise RuntimeError(f"the cache refused to remove its tokens from {pos} on")
 
     # ----- generation ----------------------------------------------------
     def generate(
