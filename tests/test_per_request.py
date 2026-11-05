@@ -194,3 +194,101 @@ def test_a_cut_on_a_cache_that_cannot_shift_rebuilds_it_from_the_conversation():
     assert fake.rebuilds == rebuilds + 1
     assert w.snapshot()[-1]["text"] == "Eins."
     _assert_consistent(w, fake)
+
+
+# ----- what the conversation keeps of a reply ----------------------------
+def _keeping(recorded_text, config=None, **fake_kw):
+    fake = FakeContext(**fake_kw)
+    w = ChatWrapper(config or Config(context_size=500, evict_above_fraction=1.0),
+                    context=fake, recorded_text=recorded_text)
+    w.begin("s")
+    return w, fake
+
+
+def _answer(text):
+    return text.split("|")[-1]
+
+
+def test_a_reply_the_option_changes_is_kept_as_a_past_reply_and_the_cache_agrees():
+    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.")
+    w.reply_without_tools("hi")
+    assert w.snapshot()[-1]["text"] == "Antwort."
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
+    _assert_consistent(w, fake)
+    w.reply_without_tools("weiter")
+    _assert_consistent(w, fake)
+
+
+def test_only_what_differs_from_the_generated_reply_is_decoded_again():
+    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.",
+                       tokens_spell_text=True)
+    before = len(fake.prefill_calls)
+    w.reply_without_tools("hi")
+    *_, (start, n, _logits) = fake.prefill_calls[before:]
+    opening = fake.tokenize(w._formatter.assistant_open())
+    kept = w._fragment_tokens("assistant", "Antwort.")
+    assert (start, n) == (w.snapshot()[-1]["pos_start"] + len(opening),
+                          len(kept) - len(opening))
+
+
+def test_the_eviction_after_a_reply_is_sized_by_what_is_kept():
+    config = Config(context_size=200, evict_above_fraction=0.8)
+
+    def history_left(recorded_text):
+        w, fake = _keeping(recorded_text, config, gen_tokens=60, gen_text="x" * 60)
+        w.inject("hist", "user")
+        w.inject("hist", "assistant")
+        w.reply_without_tools("hi")
+        _assert_consistent(w, fake)
+        return [m["text"] for m in w.snapshot()].count("hist")
+
+    assert history_left(None) < 2           # the whole reply would evict history
+    assert history_left(lambda text: "ok") == 2
+
+
+def test_a_reply_kept_as_nothing_is_removed():
+    w, fake = _keeping(lambda text: "", gen_tokens=8, gen_text="Denken")
+    w.reply_without_tools("hi")
+    assert [m["role"] for m in w.snapshot()] == ["system", "user"]
+    _assert_consistent(w, fake)
+    w.reply_without_tools("weiter")
+    _assert_consistent(w, fake)
+
+
+def test_a_reply_kept_on_a_cache_that_cannot_shift_rebuilds_it():
+    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.",
+                       can_shift=False)
+    rebuilds = fake.rebuilds
+    w.reply_without_tools("hi")
+    assert fake.rebuilds == rebuilds + 1
+    _assert_consistent(w, fake)
+
+
+def test_an_option_that_raises_leaves_the_reply_as_generated():
+    def broken(text):
+        raise RuntimeError("kaputt")
+    w, fake = _keeping(broken, gen_tokens=15, gen_text="Denken|Antwort.")
+    w.reply_without_tools("hi")
+    assert w.snapshot()[-1]["text"] == "Denken|Antwort."
+    _assert_consistent(w, fake)
+
+
+def test_a_reply_that_called_a_tool_is_kept_as_generated():
+    w, fake = _keeping(lambda text: "", calls_tools=True)
+    fake.call_script.append("uhr{}")
+    w.begin("s", tools=[ToolSpec("uhr", "", {})])
+    for event in w.reply_until_tool("wie spät?"):
+        call = event
+    w.inject_tool_result(call, {"zeit": "12:00"})
+    for _event in w.resume_until_tool():
+        pass
+    assert w.snapshot()[-1]["role"] == "assistant"
+    _assert_consistent(w, fake)
+
+
+def test_a_kept_reply_is_cut_as_the_past_reply_it_now_is():
+    w, fake = _keeping(lambda text: "Eins. Zwei.", gen_tokens=8, gen_text="Denken")
+    w.reply_without_tools("hi")
+    w.truncate_last_reply("Eins. ")
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Eins. ")
+    _assert_consistent(w, fake)

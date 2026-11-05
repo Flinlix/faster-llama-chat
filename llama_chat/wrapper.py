@@ -141,6 +141,7 @@ class ChatWrapper:
         tool_calls: ToolCallFragments | None = None,
         formatter: Callable[[TemplateFragments], TemplateFormatter] | None = None,
         on_message: Callable[[str, str], None] | None = None,
+        recorded_text: Callable[[str], str] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
         **kwargs,
     ) -> None:
@@ -163,6 +164,13 @@ class ChatWrapper:
             on_message: Invoked with ``(role, text)`` for every genuine new
                 message, so not for the system prompt or a ``begin`` replay.
                 Runs under the lock, so it must not call back into the wrapper.
+            recorded_text: Given a finished reply's generated text, the text the
+                conversation keeps of it, for a model that writes more than its
+                reader gets, such as reasoning before the answer. A reply it
+                changes is kept as the template writes a past reply, before the
+                post-reply eviction is sized; one it reduces to nothing is
+                removed. A reply that holds a tool call is kept as generated.
+                Runs under the lock and must not raise.
             on_load_progress: Invoked during model loading with a fraction in
                 ``[0.0, 1.0]``. Must not raise. Ignored when ``context`` is
                 supplied.
@@ -185,6 +193,7 @@ class ChatWrapper:
                 f"(got config and {sorted(kwargs)})"
             )
         self._on_message = on_message
+        self._recorded_text = recorded_text
         owns_context = context is None
         self._context = (
             KVContext(config, on_load_progress=on_load_progress)
@@ -613,23 +622,15 @@ class ChatWrapper:
                 call, or if ``keep_text`` is not a prefix of its text.
         """
         with self._lock:
-            self._ensure_open()
-            self._ensure_begun("truncate in")
-            self._ensure_no_open_reply("truncate a reply")
-            msg = self._table.messages[-1]
-            if msg.role != "assistant":
-                raise ValueError("the newest message is not an assistant reply")
+            msg = self._newest_reply("truncate")
             if not msg.text.startswith(keep_text):
                 raise ValueError("keep_text is not a prefix of the newest reply")
-            tool_tokens = self._template.tool_tokens
-            if tool_tokens is not None and tool_tokens[0] in msg.token_ids:
-                raise ValueError("the newest reply holds a tool call, which a "
-                                 "cut would separate from its result")
             if keep_text == msg.text:
                 return
             open_tokens = self._context.tokenize(self._formatter.assistant_open(),
                                                  add_special=False)
-            if msg.token_ids[:len(open_tokens)] == open_tokens:
+            prefilled = msg.token_ids == self._fragment_tokens("assistant", msg.text)
+            if not prefilled and msg.token_ids[:len(open_tokens)] == open_tokens:
                 close_tokens = self._context.tokenize(
                     self._formatter.assistant_close(), add_special=False)
                 kept = self._context.tokenize(keep_text, add_special=False,
@@ -637,17 +638,46 @@ class ChatWrapper:
                 tokens = open_tokens + kept + close_tokens
             else:
                 tokens = self._fragment_tokens("assistant", keep_text)
-            if not self._context.can_shift:
-                # Such a cache may not take a partial removal, or may have
-                # reused the cells before it; see the README, "How eviction works".
-                self._table.replace_last(tokens, keep_text)
-                self._rebuild_cache()
-                return
-            shared = _shared_prefix_length(msg.token_ids, tokens)
-            self._context.remove_from(msg.pos_start + shared)
-            self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,
-                                  want_logits=False)
-            self._table.replace_last(tokens, keep_text)
+            self._rewrite_newest(msg, tokens, keep_text)
+
+    def _newest_reply(self, action: str):
+        """The newest message, refused unless it is an assistant reply that may change."""
+        self._ensure_open()
+        self._ensure_begun(f"{action} in")
+        self._ensure_no_open_reply(f"{action} a reply")
+        msg = self._table.messages[-1]
+        if msg.role != "assistant":
+            raise ValueError("the newest message is not an assistant reply")
+        if self._holds_call(msg):
+            raise ValueError("the newest reply holds a tool call, which would "
+                             "be separated from its result")
+        return msg
+
+    def _holds_call(self, msg) -> bool:
+        tool_tokens = self._template.tool_tokens
+        return tool_tokens is not None and tool_tokens[0] in msg.token_ids
+
+    def _remove_newest(self, msg) -> None:
+        """Drop the newest message from the table and the cache."""
+        self._table.remove_last()
+        if not self._context.can_shift:
+            self._rebuild_cache()
+            return
+        self._context.remove_from(msg.pos_start)
+
+    def _rewrite_newest(self, msg, tokens: list[int], text: str) -> None:
+        """Give the newest message ``tokens``, decoding only where they differ."""
+        if not self._context.can_shift:
+            # Such a cache may not take a partial removal, or may have
+            # reused the cells before it; see the README, "How eviction works".
+            self._table.replace_last(tokens, text)
+            self._rebuild_cache()
+            return
+        shared = _shared_prefix_length(msg.token_ids, tokens)
+        self._context.remove_from(msg.pos_start + shared)
+        self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,
+                              want_logits=False)
+        self._table.replace_last(tokens, text)
 
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
@@ -1109,6 +1139,9 @@ class ChatWrapper:
         self._reply_open = bool(self._pending_calls) or unreadable
         if self._reply_open:
             return 0
+        kept = self._kept_text(msg)
+        if kept is not None:
+            return self._record_kept(msg, kept)
         if self._on_message:
             self._on_message("assistant", msg.text)
         # Trim back after the reply, so the cache rests inside both eviction
@@ -1117,6 +1150,30 @@ class ChatWrapper:
         n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
         return n_evicted_messages
+
+    def _kept_text(self, msg) -> str | None:
+        """What ``recorded_text`` keeps of the reply, or ``None`` to keep it as generated."""
+        if self._recorded_text is None or self._holds_call(msg):
+            return None
+        try:
+            kept = self._recorded_text(msg.text)
+        except Exception:
+            return None                 # recording must not raise; see _try_write_tool_result
+        return None if kept == msg.text else kept
+
+    def _record_kept(self, msg, kept: str) -> int:
+        """Keep the newest reply as ``kept``, a past reply's form, or drop it if empty.
+
+        Returns:
+            How many messages were evicted.
+        """
+        if kept:
+            self._rewrite_newest(msg, self._fragment_tokens("assistant", kept), kept)
+            if self._on_message:
+                self._on_message("assistant", kept)
+        else:
+            self._remove_newest(msg)
+        return self._evict_until(lambda: self._fits(0))
 
     def _try_write_tool_result(self, name: str, result) -> bool:
         """Write a result block if this model and this context have room for one.

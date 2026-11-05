@@ -285,6 +285,15 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   reply keeps its generation prompt and a prefilled one the template's opening.
   Refused where a reply is open, the newest message is not the assistant's or
   holds a tool call, or `keep_text` is not a prefix.
+- **`recorded_text=`**, given to the constructor: a function from a finished
+  reply's generated text to the text the conversation keeps of it, for a model
+  that writes more than its reader gets, such as reasoning before the answer.
+  A reply it changes is kept as the template writes a past reply, under the
+  same lock as the generation and before the post-reply eviction is sized, so a
+  long thought evicts nothing; the tokens the kept form shares with the
+  generated one are not decoded again. A reply it reduces to nothing is
+  removed, and one that holds a tool call is kept as generated. It must not
+  raise; one that does leaves the reply as generated.
 
 `stop_reason` is one of:
 

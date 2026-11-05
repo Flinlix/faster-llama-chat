@@ -165,6 +165,16 @@ class MessageTable:
             msg.pos_end = msg.pos_start + msg.n_tokens
             self._assert_invariants()
 
+    def remove_last(self) -> None:
+        """Drop the newest message.
+
+        Raises:
+            IndexError: If there is no message to drop.
+        """
+        with self._lock:
+            self._messages.pop()
+            self._assert_invariants()
+
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
         """Drop oldest non-system messages until ``fits()``, or none remain.
 
