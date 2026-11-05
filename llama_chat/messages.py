@@ -152,6 +152,19 @@ class MessageTable:
             msg.pos_end = msg.pos_start + msg.n_tokens
             self._assert_invariants()
 
+    def replace_last(self, token_ids: list[int], text: str) -> None:
+        """Give the newest message other tokens and text, in place.
+
+        Raises:
+            IndexError: If there is no message to replace.
+        """
+        with self._lock:
+            msg = self._messages[-1]
+            msg.token_ids = list(token_ids)
+            msg.text = text
+            msg.pos_end = msg.pos_start + msg.n_tokens
+            self._assert_invariants()
+
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
         """Drop oldest non-system messages until ``fits()``, or none remain.
 

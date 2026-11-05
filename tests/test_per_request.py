@@ -6,6 +6,7 @@ import pytest
 
 from llama_chat.config import Config, Sampling
 from llama_chat.context import GenerationAccumulator, KVContext
+from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
 
@@ -99,6 +100,76 @@ def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
     stream.close()
     assert chains["sampled"] == [("own", 0.3)]
     assert chains["freed"] == [("own", 0.3)]
+
+
+# ----- cutting the newest reply ------------------------------------------
+def test_a_cut_keeps_the_prefix_and_the_cache_agrees():
+    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
+    w.reply_without_tools("hi")
+    w.truncate_last_reply("Eins.")
+    assert w.snapshot()[-1]["text"] == "Eins."
+    _assert_consistent(w, fake)
+
+
+def test_after_a_cut_the_next_request_appends_at_the_cache_end():
+    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
+    w.reply_without_tools("hi")
+    w.truncate_last_reply("Eins.")
+    w.reply_without_tools("weiter")
+    _assert_consistent(w, fake)
+
+
+def test_the_tokens_that_stay_are_not_decoded_again():
+    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw", tokens_spell_text=True)
+    w.reply_without_tools("hi")
+    before = list(fake.prefill_calls)
+    w.truncate_last_reply("Eins.")
+    (start, n, _logits), = fake.prefill_calls[len(before):]
+    closing = fake.tokenize(w._formatter.assistant_close())
+    assert n == len(closing)
+    assert start == w.snapshot()[-1]["pos_start"] + w.snapshot()[-1]["n_tokens"] - n
+
+
+def test_keeping_the_whole_text_changes_nothing():
+    w, fake = _wrapper(gen_tokens=5, gen_text="Hallo")
+    w.reply_without_tools("hi")
+    cache = list(fake.cache)
+    w.truncate_last_reply("Hallo")
+    assert fake.cache == cache
+
+
+def test_a_text_that_is_not_a_prefix_is_refused_and_changes_nothing():
+    w, fake = _wrapper(gen_tokens=5, gen_text="Hallo")
+    w.reply_without_tools("hi")
+    cache = list(fake.cache)
+    with pytest.raises(ValueError, match="prefix"):
+        w.truncate_last_reply("Tschüss")
+    assert fake.cache == cache
+
+
+def test_only_an_assistant_reply_can_be_cut():
+    w, _fake = _wrapper()
+    w.inject("nebenbei", "user")
+    with pytest.raises(ValueError, match="assistant"):
+        w.truncate_last_reply("")
+
+
+def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
+    w, fake = _wrapper()
+    w.inject("Eins. Zwei.", "assistant")
+    w.truncate_last_reply("Eins.")
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Eins.")
+    _assert_consistent(w, fake)
+
+
+def test_a_reply_that_called_a_tool_cannot_be_cut():
+    w, fake = _wrapper(calls_tools=True)
+    fake.call_script.append("uhr{}")
+    w.begin("s", tools=[ToolSpec("uhr", "", {})])
+    for _event in w.reply_until_tool("wie spät?"):
+        pass
+    with pytest.raises(ValueError, match="tool call"):
+        w.truncate_last_reply("")
 
 
 def test_a_seed_out_of_range_is_refused_before_anything_is_prefilled():

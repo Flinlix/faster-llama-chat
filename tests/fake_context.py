@@ -48,7 +48,8 @@ class FakeContext:
     def __init__(self, gen_tokens: int = 5, gen_text: str = "reply",
                  can_shift: bool = True,
                  fragments: TemplateFragments = DEFAULT_FRAGMENTS,
-                 calls_tools: bool = False) -> None:
+                 calls_tools: bool = False,
+                 tokens_spell_text: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -64,6 +65,9 @@ class FakeContext:
         self.warmups = 0  # how many times warmup() was called
         self._gen_tokens = gen_tokens
         self._gen_text = gen_text
+        # Generated tokens are the characters' own, as the tokenizer would
+        # give them, rather than ids no tokenization reproduces.
+        self._tokens_spell_text = tokens_spell_text
         self._next_gen = 1000
         self.samplings = []  # the sampling each generation was handed
 
@@ -103,6 +107,10 @@ class FakeContext:
         )
         self.cache.extend(token_ids)
         self.prefill_calls.append((start_pos, len(token_ids), want_logits))
+
+    def remove_from(self, pos: int) -> None:
+        assert 0 <= pos <= len(self.cache)
+        del self.cache[pos:]
 
     def apply_eviction(self, ev: Eviction) -> None:
         assert len(self.cache) == ev.old_total
@@ -181,10 +189,10 @@ class FakeContext:
             if cancel is not None and cancel.is_set():
                 generated.stop_reason = "interrupted"
                 break
-            tok = self._next_gen + i
+            ch = self._gen_text[i] if i < len(self._gen_text) else "x"
+            tok = ord(ch) if self._tokens_spell_text else self._next_gen + i
             self.cache.append(tok)  # decoded into the cache before surfacing text
             generated.token_ids.append(tok)
-            ch = self._gen_text[i] if i < len(self._gen_text) else "x"
             generated.text += ch
             try:
                 yield ch

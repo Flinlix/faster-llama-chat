@@ -41,8 +41,8 @@ _UNKNOWN_FUNCTION = "unknown"
 # rather than at the first call that reaches what is missing. Resolving the
 # template checks what it calls for itself.
 _CACHE_CONTEXT_SURFACE = ("tokenize", "tokenize_fragment", "prefill", "reset",
-                          "warmup", "generate", "apply_eviction", "can_shift",
-                          "close")
+                          "warmup", "generate", "apply_eviction", "remove_from",
+                          "can_shift", "close")
 
 
 class ContextOverflowError(RuntimeError):
@@ -592,6 +592,56 @@ class ChatWrapper:
         self._table.extend_last(tokens)
 
     # ----- shortening the newest reply -----------------------------------------
+    def truncate_last_reply(self, keep_text: str) -> None:
+        """Shorten the newest assistant message to ``keep_text``.
+
+        For a reply that was cut short where it was being read or heard: the
+        model is left holding only what the reader got. The cut is at the
+        cache's end, so the tokens the shortened message shares with the old
+        one are not decoded again; the rest of it, its closing tag at least, is.
+        The message keeps the opening it had: a generated reply its generation
+        prompt, a prefilled one the template's.
+
+        Args:
+            keep_text: What stays, a prefix of the message's text. The whole
+                text changes nothing.
+
+        Raises:
+            ValueError: If no conversation has been begun, if a reply is open,
+                if the newest message is not the assistant's or holds a tool
+                call, or if ``keep_text`` is not a prefix of its text.
+        """
+        with self._lock:
+            self._ensure_open()
+            self._ensure_begun("truncate in")
+            self._ensure_no_open_reply("truncate a reply")
+            msg = self._table.messages[-1]
+            if msg.role != "assistant":
+                raise ValueError("the newest message is not an assistant reply")
+            if not msg.text.startswith(keep_text):
+                raise ValueError("keep_text is not a prefix of the newest reply")
+            tool_tokens = self._template.tool_tokens
+            if tool_tokens is not None and tool_tokens[0] in msg.token_ids:
+                raise ValueError("the newest reply holds a tool call, which a "
+                                 "cut would separate from its result")
+            if keep_text == msg.text:
+                return
+            open_tokens = self._context.tokenize(self._formatter.assistant_open(),
+                                                 add_special=False)
+            if msg.token_ids[:len(open_tokens)] == open_tokens:
+                close_tokens = self._context.tokenize(
+                    self._formatter.assistant_close(), add_special=False)
+                kept = self._context.tokenize(keep_text, add_special=False,
+                                              parse_special=False)
+                tokens = open_tokens + kept + close_tokens
+            else:
+                tokens = self._fragment_tokens("assistant", keep_text)
+            shared = _shared_prefix_length(msg.token_ids, tokens)
+            self._context.remove_from(msg.pos_start + shared)
+            self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,
+                                  want_logits=False)
+            self._table.replace_last(tokens, keep_text)
+
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
@@ -1205,6 +1255,16 @@ class ChatWrapper:
         """Tokenize one message: tags special-on, content special-off."""
         prefix, content, suffix = self._formatter.parts(role, text)
         return self._context.tokenize_fragment(prefix, content, suffix, add_special=add_special)
+
+
+def _shared_prefix_length(a: list[int], b: list[int]) -> int:
+    """How many leading tokens ``a`` and ``b`` have in common."""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
 
 
 def _specs_for_system_prompt(tools) -> list[ToolSpec] | None:

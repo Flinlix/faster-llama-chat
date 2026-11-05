@@ -237,6 +237,10 @@ class KVContext:
                 self._llama_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
             )
 
+    def remove_from(self, pos: int) -> None:
+        """Remove every cached token from ``pos`` to the end of the sequence."""
+        self._backend.kv_seq_rm(self._llama_context, SEQ, pos, -1)
+
     # ----- generation ----------------------------------------------------
     def generate(
         self, start_pos: int, max_generated_tokens: int, stop: list[str],

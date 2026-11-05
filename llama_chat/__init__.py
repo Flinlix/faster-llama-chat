@@ -8,6 +8,8 @@ The core actions, each prefilling as little as possible:
   generate.
 * :meth:`ChatWrapper.reply_without_tools_stream`: the same, yielding text
   deltas.
+* :meth:`ChatWrapper.truncate_last_reply`: shorten the newest reply to what was
+  read or heard of it.
 
 Crossing either eviction limit removes the oldest non-system messages and shifts
 the survivors down, reusing their KV without re-prefilling.
