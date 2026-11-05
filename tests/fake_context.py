@@ -65,6 +65,7 @@ class FakeContext:
         self._gen_tokens = gen_tokens
         self._gen_text = gen_text
         self._next_gen = 1000
+        self.samplings = []  # the sampling each generation was handed
 
     # ----- tokenization --------------------------------------------------
     def tokenize(self, text: str, add_special: bool = False,
@@ -160,7 +161,7 @@ class FakeContext:
 
     def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
                  out: GenerationAccumulator | None = None, cancel=None,
-                 tool_tokens: tuple[int, int] | None = None):
+                 tool_tokens: tuple[int, int] | None = None, sampling=None):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,
@@ -170,6 +171,7 @@ class FakeContext:
         token) and a ``close()`` of the generator.
         """
         assert start_pos == len(self.cache)
+        self.samplings.append(sampling)
         generated = out if out is not None else GenerationAccumulator()
         if tool_tokens is not None and self.call_script:
             yield from self._generate_call(generated, tool_tokens)

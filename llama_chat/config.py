@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 
 # The quantizations a caller may name. Which type id each one is worth is
 # llama.cpp's own numbering, resolved where llama.cpp is named.
@@ -142,11 +142,7 @@ class Config:
             )
         if self.repetition_penalty <= 0:
             raise ValueError("repetition_penalty must be > 0 (1.0 disables)")
-        if self.seed is not None and not 0 <= self.seed <= 0xFFFFFFFE:
-            raise ValueError(
-                "seed must be None or an int in [0, 2**32 - 2] "
-                "(use None for a random seed)"
-            )
+        _check_seed(self.seed)
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")
         if self.log_level not in LOG_LEVELS:
@@ -168,3 +164,55 @@ class Config:
     def evict_above_tokens(self) -> int:
         """``evict_above_fraction`` as an absolute token count."""
         return int(self.evict_above_fraction * self.context_size)
+
+
+@dataclass(frozen=True)
+class Sampling:
+    """Sampling settings for one request, overriding the :class:`Config`'s.
+
+    Every field left ``None`` keeps the value the wrapper was built with, so an
+    empty ``Sampling`` changes nothing.
+
+    Attributes:
+        temperature: As :attr:`Config.temperature`.
+        top_p: As :attr:`Config.top_p`.
+        seed: As :attr:`Config.seed`. A request cannot ask for a fresh seed
+            where the config fixes one; leave it ``None`` to keep the config's.
+        presence_penalty: As :attr:`Config.presence_penalty`.
+        frequency_penalty: As :attr:`Config.frequency_penalty`.
+    """
+
+    temperature: float | None = None
+    top_p: float | None = None
+    seed: int | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.top_p is not None and not 0.0 < self.top_p <= 1.0:
+            raise ValueError("top_p must be in (0, 1]")
+        _check_seed(self.seed)
+
+    @property
+    def overrides(self) -> dict:
+        """The fields this request sets, by name."""
+        return {f.name: getattr(self, f.name) for f in fields(self)
+                if getattr(self, f.name) is not None}
+
+    def applied_to(self, config: Config) -> Config:
+        """``config`` with this request's settings in place of its own.
+
+        Raises:
+            ValueError: If a setting is one :class:`Config` refuses, such as a
+                seed outside its range.
+        """
+        return replace(config, **self.overrides)
+
+
+def _check_seed(seed: int | None) -> None:
+    """Refuse a seed the sampler cannot take; ``None`` asks for a fresh one."""
+    if seed is not None and not 0 <= seed <= 0xFFFFFFFE:
+        raise ValueError(
+            "seed must be None or an int in [0, 2**32 - 2] "
+            "(use None for a random seed)"
+        )

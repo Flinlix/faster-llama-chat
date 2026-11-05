@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 from .call_parsing import parse_calls
-from .config import Config
+from .config import Config, Sampling
 from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, n_newest_that_fit
 from .resolved_template import ResolvedTemplate, ensure_context_answers
@@ -345,6 +345,7 @@ class ChatWrapper:
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
+        sampling: Sampling | None = None,
     ) -> ReplyStream[str]:
         """Add a user request and stream the reply token by token.
 
@@ -371,6 +372,8 @@ class ChatWrapper:
             stop: Extra stop strings for this request, added to the config's.
             cancel: Setting it, from any thread, stops generation within one
                 token and closes the turn with ``stop_reason == "interrupted"``.
+            sampling: This request's own sampling settings, in place of the
+                config's for the fields it sets.
 
         Returns:
             A :class:`ReplyStream` of the text deltas, whose ``reply`` is the
@@ -385,19 +388,21 @@ class ChatWrapper:
         """
         return ReplyStream(self._generate_until_answered(
             text, registry=None, max_reply_tokens=max_reply_tokens,
-            stop=stop, cancel=cancel))
+            stop=stop, cancel=cancel, sampling=sampling))
 
     def reply_without_tools(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
         cancel: threading.Event | None = None,
+        sampling: Sampling | None = None,
     ) -> Reply:
         """Add a user request and generate a reply, no tool of any kind run.
 
         :meth:`reply_without_tools_stream`, drained.
         """
         stream = self.reply_without_tools_stream(
-            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)
+            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+            sampling=sampling)
         for _ in stream:
             pass
         return stream.reply     # set, the stream having ended of its own accord
@@ -407,7 +412,8 @@ class ChatWrapper:
         self, text: str, registry: ToolRegistry | None = None, *,
         max_calls: int | None = None, max_reply_tokens: int | None = None,
         stop: list[str] | None = None,
-        cancel: threading.Event | None = None) -> ReplyStream[str]:
+        cancel: threading.Event | None = None,
+        sampling: Sampling | None = None) -> ReplyStream[str]:
         """Reply to ``text``, running whatever tools the model calls on the way.
 
         Yields the reply's text deltas and nothing else; the stream's ``reply``
@@ -423,7 +429,7 @@ class ChatWrapper:
                 default, sets no ceiling: the exchange runs until the model
                 stops calling, bounded only by the context. A call past a
                 ceiling is answered with an error result rather than run.
-            max_reply_tokens, stop, cancel: As
+            max_reply_tokens, stop, cancel, sampling: As
                 :meth:`reply_without_tools_stream`, and applied to every
                 generation of the exchange, so ``max_reply_tokens`` bounds each
                 one rather than the whole.
@@ -440,13 +446,14 @@ class ChatWrapper:
             text,
             registry=registry if registry is not None else self._registry,
             max_calls=max_calls, max_reply_tokens=max_reply_tokens, stop=stop,
-            cancel=cancel))
+            cancel=cancel, sampling=sampling))
 
     def reply_with_tools(self, text: str, registry: ToolRegistry | None = None,
                          *, max_calls: int | None = None,
                          max_reply_tokens: int | None = None,
                          stop: list[str] | None = None,
-                         cancel: threading.Event | None = None) -> Reply:
+                         cancel: threading.Event | None = None,
+                         sampling: Sampling | None = None) -> Reply:
         """Reply to ``text``, running whatever tools the model calls.
 
         :meth:`reply_with_tools_stream`, drained. Arguments and failures are
@@ -457,7 +464,8 @@ class ChatWrapper:
         """
         stream = self.reply_with_tools_stream(
             text, registry, max_calls=max_calls,
-            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)
+            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+            sampling=sampling)
         for _ in stream:
             pass
         return stream.reply     # set, the stream having ended of its own accord
@@ -467,6 +475,7 @@ class ChatWrapper:
                          max_reply_tokens: int | None = None,
                          stop: list[str] | None = None,
                          cancel: threading.Event | None = None,
+                         sampling: Sampling | None = None,
                          ) -> ReplyStream[str | ToolCall]:
         """Stream the reply, handing you each tool call as the model makes it.
 
@@ -483,11 +492,13 @@ class ChatWrapper:
             ContextOverflowError: If too little room remains for the reply.
         """
         return ReplyStream(_deltas_then_calls(self._request_and_generate(
-            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel)))
+            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+            sampling=sampling)))
 
     def resume_until_tool(self, *, max_reply_tokens: int | None = None,
                           stop: list[str] | None = None,
                           cancel: threading.Event | None = None,
+                          sampling: Sampling | None = None,
                           ) -> ReplyStream[str | ToolCall]:
         """Resume the reply a tool call interrupted.
 
@@ -501,7 +512,7 @@ class ChatWrapper:
         """
         return self._resume_until_tool(
             allow_tools=True, max_reply_tokens=max_reply_tokens, stop=stop,
-            cancel=cancel)
+            cancel=cancel, sampling=sampling)
 
     def _resume_until_tool(self, *, allow_tools: bool,
                            **kwargs) -> ReplyStream[str | ToolCall]:
@@ -580,6 +591,7 @@ class ChatWrapper:
         self._context.prefill(tokens, start_pos=self._table.total, want_logits=True)
         self._table.extend_last(tokens)
 
+    # ----- shortening the newest reply -----------------------------------------
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
@@ -869,6 +881,7 @@ class ChatWrapper:
     def _request_and_generate(
         self, text: str, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None, cancel: threading.Event | None = None,
+        sampling: Sampling | None = None,
     ) -> Generator[str, None, Reply]:
         """Add the user request, then generate one reply from the cache's end.
 
@@ -911,12 +924,13 @@ class ChatWrapper:
             return (yield from self._generate_into_reply(
                 open_tokens=open_tokens, close_tokens=close_tokens,
                 n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
-                cancel=cancel, allow_tools=True))
+                cancel=cancel, allow_tools=True, sampling=sampling))
 
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
                 cancel: threading.Event | None = None,
-                allow_tools: bool = True):
+                allow_tools: bool = True,
+                sampling: Sampling | None = None):
         """Generate on into the open reply, adding no message of its own."""
         with self._lock:
             self._ensure_open()
@@ -937,7 +951,7 @@ class ChatWrapper:
             return (yield from self._generate_into_reply(
                 open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-                allow_tools=allow_tools))
+                allow_tools=allow_tools, sampling=sampling))
 
     def _system_tokens(self, system_prompt: str,
                        specs: list[ToolSpec] | None) -> list[int]:
@@ -960,7 +974,9 @@ class ChatWrapper:
                              max_reply_tokens: int | None,
                              stop: list[str] | None,
                              cancel: threading.Event | None,
-                             allow_tools: bool) -> Generator[str, None, Reply]:
+                             allow_tools: bool,
+                             sampling: Sampling | None = None,
+                             ) -> Generator[str, None, Reply]:
         """Generate from the cache's end and record what it left, as a Reply.
 
         Shared by a fresh turn, whose generation prompt is prefilled but not yet
@@ -970,7 +986,8 @@ class ChatWrapper:
             open_tokens: The generation prompt, empty when resuming.
             close_tokens: The turn terminator, decoded once the turn closes.
             n_prefilled_tokens: What the caller decoded to get here, for the Reply.
-            max_reply_tokens, stop, cancel: As :meth:`reply_without_tools_stream`.
+            max_reply_tokens, stop, cancel, sampling: As
+                :meth:`reply_without_tools_stream`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
         """
@@ -985,6 +1002,7 @@ class ChatWrapper:
                 gen_start, max(0, min(cap, budget)), stops, out=generated,
                 cancel=cancel,
                 tool_tokens=self._template.tool_tokens if allow_tools else None,
+                sampling=sampling,
             )
         finally:
             # Runs on normal completion and on early close alike.

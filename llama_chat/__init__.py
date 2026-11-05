@@ -25,7 +25,7 @@ argument spelling being recovered from that template:
   not been told about yet.
 """
 
-from .config import Config
+from .config import Config, Sampling
 from .context import KVContext
 from .messages import Eviction, Message, MessageTable, n_newest_that_fit
 from .persistent_wrapper import ConversationStore, InMemoryStore, PersistentChat
@@ -35,6 +35,7 @@ from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
 
 __all__ = [
     "Config",
+    "Sampling",
     "ChatWrapper",
     "ContextOverflowError",
     "Reply",

@@ -269,6 +269,12 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   `reply_without_tools_stream(text, cancel=event)`: setting the
   `threading.Event` stops generation within one token and the stream ends
   normally with `stop_reason == "interrupted"`.
+- **`sampling=Sampling(...)`**, on every `reply_*` and `resume_*` call:
+  sampling settings for that one request. `temperature`, `top_p`, `seed`,
+  `presence_penalty` and `frequency_penalty` each override the config's value
+  where set and leave it where `None`. A request that overrides anything samples
+  from a chain of its own, freed when its generation ends; one that overrides
+  nothing uses the chain built at load.
 
 `stop_reason` is one of:
 

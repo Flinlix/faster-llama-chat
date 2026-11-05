@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ._backend import Backend, set_log_level
-from .config import Config
+from .config import Config, Sampling
 from .messages import Eviction
 from .template import TemplateFragments
 
@@ -243,6 +243,7 @@ class KVContext:
         out: GenerationAccumulator | None = None,
         cancel: threading.Event | None = None,
         tool_tokens: tuple[int, int] | None = None,
+        sampling: Sampling | None = None,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -264,10 +265,30 @@ class KVContext:
                 it is yielded, and generation ends on the closing token with
                 ``stop_reason == "tool_call"``. A call the token cap cuts short
                 is dropped, and the reply ends with ``"token_limit"``.
+            sampling: This generation's own settings. One that overrides
+                anything gets a sampler chain of its own, freed when the
+                generation ends; without one the chain built at load is used.
 
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
         """
+        own_sampler = None
+        if sampling is not None and sampling.overrides:
+            own_sampler = self._build_sampler(sampling.applied_to(self._config))
+        try:
+            yield from self._sample_into(
+                own_sampler if own_sampler is not None else self._sampler,
+                start_pos, max_generated_tokens,
+                stop, out, cancel, tool_tokens)
+        finally:
+            if own_sampler is not None:
+                self._backend.free_sampler(own_sampler)
+
+    def _sample_into(self, sampler, start_pos: int, max_generated_tokens: int,
+                     stop: list[str], out: GenerationAccumulator | None,
+                     cancel: threading.Event | None,
+                     tool_tokens: tuple[int, int] | None):
+        """The generation loop of :meth:`generate`, drawing from ``sampler``."""
         generated = out if out is not None else GenerationAccumulator()
         pos = start_pos
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -280,7 +301,7 @@ class KVContext:
             if cancel is not None and cancel.is_set():
                 generated.stop_reason = "interrupted"
                 break
-            tok = self._backend.sample(self._sampler, self._llama_context)
+            tok = self._backend.sample(sampler, self._llama_context)
             if self._backend.is_eog(self._vocab, tok):
                 generated.stop_reason = "end_of_turn"
                 break
