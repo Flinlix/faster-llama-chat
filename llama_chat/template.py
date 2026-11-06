@@ -78,10 +78,10 @@ class TemplateFragments:
         trim_content: Strip surrounding whitespace from each message's content,
             matching templates that apply Jinja ``| trim``. ``False`` emits it
             verbatim.
-        reply_strip: Which whitespace the template strips from a reply's
-            content where that differs from the other roles: ``"both"``,
-            ``"end"``, ``"start"`` or ``"none"``. ``None`` follows
-            ``trim_content``.
+        reply_strip, system_strip: Which whitespace the template strips from
+            a reply's or a system prompt's content where that differs from a
+            user turn's: ``"both"``, ``"end"``, ``"start"`` or ``"none"``.
+            ``None`` follows ``trim_content``.
         generation_prompt: The whole generation prompt of a reply that does
             not reason, the assistant tag included, where it is more than the
             tag or differs from it, such as by an empty thought.
@@ -95,21 +95,24 @@ class TemplateFragments:
     assistant_suffix: str
     trim_content: bool = True
     reply_strip: str | None = None
+    system_strip: str | None = None
     generation_prompt: str = ""
 
     def __post_init__(self) -> None:
-        if self.reply_strip not in (None, *_STRIPS):
-            raise ValueError(f"reply_strip must be one of {sorted(_STRIPS)} or None, "
-                             f"not {self.reply_strip!r}")
+        for name in ("reply_strip", "system_strip"):
+            if getattr(self, name) not in (None, *_STRIPS):
+                raise ValueError(f"{name} must be one of {sorted(_STRIPS)} or None, "
+                                 f"not {getattr(self, name)!r}")
 
     def content(self, role: str, text: str) -> str:
         """``text`` as the template writes it as ``role``'s content."""
-        if role == "assistant" and self.reply_strip is not None:
-            return _STRIPS[self.reply_strip](text)
+        strip = {"assistant": self.reply_strip, "system": self.system_strip}.get(role)
+        if strip is not None:
+            return _STRIPS[strip](text)
         return text.strip() if self.trim_content else text
 
 
-# What each `reply_strip` does to a reply's text.
+# What each `reply_strip` and `system_strip` does to a content's text.
 _STRIPS = {"both": str.strip, "end": str.rstrip, "start": str.lstrip,
            "none": lambda text: text}
 

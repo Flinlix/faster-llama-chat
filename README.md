@@ -968,7 +968,8 @@ The template is expressed as per-role **fragments**: the literal text wrapped
 around each message, so one turn renders as `prefix + text + suffix`. Content is
 stripped first when `trim_content` is set, matching templates that apply Jinja
 `| trim`; it is `False` for templates that emit content verbatim. A template
-that strips a reply differently from the other roles says so in `reply_strip`.
+that strips a reply or a system prompt differently from a user turn says so in
+`reply_strip` or `system_strip`.
 The assistant tags are those of a past reply; what the generation prompt holds
 where it is more than that tag is `generation_prompt`.
 
@@ -978,7 +979,7 @@ wrapper reads the model's own chat template from the GGUF
 short probes through the model's template with sentinel content and splitting the
 render on the sentinels to recover each role's `prefix`/`suffix` (the inverse of
 the validation probe below), plus whitespace-padded probes to detect
-`trim_content` and `reply_strip`. The user and assistant tags are read from a
+`trim_content`, `reply_strip` and `system_strip`. The user and assistant tags are read from a
 conversation of two user turns, because a first turn may carry text the
 template writes once at the start, such as a default system block, and a newest
 reply may carry what only the newest one does. What a template writes once

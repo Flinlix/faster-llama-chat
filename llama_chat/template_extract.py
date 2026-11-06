@@ -121,6 +121,7 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
         assistant_prefix=assistant_prefix, assistant_suffix=assistant_suffix,
         trim_content=_trims_content(render),
         reply_strip=_reply_strip(render, user_suffix, assistant_prefix),
+        system_strip=_system_strip(render),
         generation_prompt=_whole_prompt(render, assistant_prefix),
         **_extract_system(render, user_prefix, user_suffix))
 
@@ -446,6 +447,21 @@ def _reply_strip(render: Render, user_suffix: str, assistant_prefix: str) -> str
     if rendered is None or opened not in rendered or _ASSISTANT not in rendered:
         return None
     before, _, after = rendered.split(opened, 1)[1].partition(_ASSISTANT)
+    return _strip_unlike_user(render, before, after)
+
+
+def _system_strip(render: Render) -> str | None:
+    """Which whitespace a system prompt loses, where it differs from a user turn's."""
+    rendered = render([{"role": "system", "content": " " + _SYS + " "},
+                       {"role": "user", "content": _USER}], reasoning=False)
+    if rendered is None or _SYS not in rendered:
+        return None
+    before, _, after = rendered.partition(_SYS)
+    return _strip_unlike_user(render, before, after)
+
+
+def _strip_unlike_user(render: Render, before: str, after: str) -> str | None:
+    """The strip a content padded with spaces shows, ``None`` where a user turn's matches."""
     keeps_start, keeps_end = before.endswith(" "), after.startswith(" ")
     strip = {(False, False): "both", (True, False): "end",
              (False, True): "start", (True, True): "none"}[keeps_start, keeps_end]
