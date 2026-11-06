@@ -388,10 +388,23 @@ def _past_exchange(render: Render, first_prefix: str,
             return None
         assistant_suffix = between[:start]
     user_prefix = between[len(assistant_suffix):]
+    if user_prefix and not first_prefix.endswith(user_prefix):
+        # A past reply closes with a tag a newest one lacks; the user tag is
+        # then the longest end of what follows that a first turn's opening shares.
+        user_prefix = _longest_shared_end(user_prefix, first_prefix)
+        assistant_suffix = between[:len(between) - len(user_prefix)]
     # What a first turn carries beyond the tag is written once, before it.
     if not user_prefix or not first_prefix.endswith(user_prefix):
         return None
     return user_prefix, assistant_prefix, assistant_suffix
+
+
+def _longest_shared_end(text: str, other: str) -> str:
+    """The longest end of ``text`` that ``other`` ends with, starting where a tag starts."""
+    for start in range(len(text)):
+        if text[start] in "<[" and other.endswith(text[start:]):
+            return text[start:]
+    return ""
 
 
 def _newest_exchange(render: Render, user_prefix: str,

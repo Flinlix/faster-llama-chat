@@ -152,6 +152,8 @@ _TOOLS_REFUSED = {
     "llama-3.2": "plain text",          # a call is bare JSON, without a tag
     "deepseek-v4.1": "plain text",      # its call tag is not one this stand-in pairs
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
+    "hunyuan-3": "call format",         # a call's body is not recovered
+    "hunyuan-memory": "call format",    # a call's body is not recovered
 }
 
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",
