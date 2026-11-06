@@ -155,6 +155,8 @@ _TOOLS_REFUSED = {
     "hunyuan-3": "call format",         # a call's body is not recovered
     "hunyuan-memory": "call format",    # a call's body is not recovered
     "kimi-k3": "call format",           # a call's body is not recovered
+    "minicpm-5": "plain text",          # a call is bare JSON, without a tag
+    "hunyuan-4": "plain text",          # no call tag resolves in this stand-in
 }
 
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",
