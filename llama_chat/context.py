@@ -114,8 +114,7 @@ class KVContext:
                 n_threads_batch=config.prefill_threads)
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
-            self._can_shift = self._backend.can_shift(self._llama_context)
-            self._verify_cache_edits()
+            self._settle_cache_edits()
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
         except BaseException:
@@ -132,6 +131,15 @@ class KVContext:
     def can_shift(self) -> bool:
         """Whether eviction can shift survivors in place, rather than rebuild."""
         return self._can_shift
+
+    @property
+    def can_cut_tail(self) -> bool:
+        """Whether the cache takes a removal from a position to its end.
+
+        A cache that shifts always does; one that cannot shift may still,
+        where only positions, not a running state, keep it from shifting.
+        """
+        return self._can_cut_tail
 
     # ----- tokenization --------------------------------------------------
     def tokenize(self, text: str, add_special: bool = False,
@@ -175,11 +183,18 @@ class KVContext:
         return self._backend.token_to_piece(self._vocab, token)
 
     def render_with_model_template(self, messages: list[dict],
-                                   tools: list[dict] | None = None) -> str | None:
+                                   tools: list[dict] | None = None, *,
+                                   generation_prompt: bool = False,
+                                   reasoning: bool | None = None) -> str | None:
         """Render ``messages`` with the model's own GGUF chat template.
 
-        BOS is suppressed and no generation prompt is added, so the render
-        aligns with a fragment prefill.
+        BOS is suppressed, so the render aligns with a fragment prefill.
+
+        Args:
+            generation_prompt: Append the prompt a reply is generated after.
+            reasoning: Set the template's reasoning switch, ``enable_thinking``,
+                the variable chat templates share for it. ``None`` leaves it
+                unset.
 
         Returns:
             The prompt string, or ``None`` where the model ships no template or
@@ -187,8 +202,10 @@ class KVContext:
         """
         if self._model_formatter is None:
             return None
+        switch = {} if reasoning is None else {"enable_thinking": reasoning}
         try:
-            return self._model_formatter(messages=messages, tools=tools).prompt
+            return self._model_formatter[generation_prompt](
+                messages=messages, tools=tools, **switch).prompt
         except Exception:
             return None
 
@@ -202,11 +219,13 @@ class KVContext:
         return extract_fragments(self.render_with_model_template)
 
     def _build_model_formatter(self):
+        """One renderer without the generation prompt and one with it, or ``None``."""
         template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
         if not template:
             return None
-        return self._backend.template_renderer(
-            template, self._backend.eos_text(self._vocab))
+        eos = self._backend.eos_text(self._vocab)
+        return {prompted: self._backend.template_renderer(template, eos, prompted)
+                for prompted in (False, True)}
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
@@ -242,6 +261,24 @@ class KVContext:
             self._backend.kv_seq_add(
                 self._llama_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
             )
+
+    def save_state(self):
+        """What a cache that cannot shift needs to be put back to where it rests now.
+
+        ``None`` where this build cannot save it, a rebuild then standing in.
+        """
+        if not self._backend.can_save_state:
+            return None
+        return self._backend.save_state(self._llama_context, SEQ)
+
+    def restore_state(self, state, pos: int) -> None:
+        """Put the cache back to ``state``, saved when it held ``pos`` tokens.
+
+        Raises:
+            RuntimeError: If the cache refuses the state or the cut after it.
+        """
+        self._backend.restore_state(self._llama_context, SEQ, state)
+        self.remove_from(pos)
 
     def remove_from(self, pos: int) -> None:
         """Remove every cached token from ``pos`` to the end of the sequence.
@@ -321,7 +358,9 @@ class KVContext:
                 generated.stop_reason = "interrupted"
                 break
             tok = self._backend.sample(sampler, self._llama_context)
-            if self._backend.is_eog(self._vocab, tok):
+            # A call may close with the token that otherwise ends a turn.
+            if self._backend.is_eog(self._vocab, tok) and not (
+                    call is not None and tok == call_close):
                 generated.stop_reason = "end_of_turn"
                 break
             # Cache, then record, then surface: this order is what keeps
@@ -398,14 +437,34 @@ class KVContext:
         Which function performs an edit is settled per build and per context,
         so an edit that works here works for the rest of the conversation.
         Left to the first eviction, a missing one would surface deep into a
-        conversation.
+        conversation. A cache that cannot shift is never shifted, and some
+        abort the process when asked to, so it is not asked here either.
 
         Raises:
             RuntimeError: If this build offers no function for one of them.
         """
         self._backend.kv_seq_rm(self._llama_context, SEQ, 0, 0)
-        self._backend.kv_seq_add(self._llama_context, SEQ, 0, 0, 0)
+        if self._can_shift:
+            self._backend.kv_seq_add(self._llama_context, SEQ, 0, 0, 0)
         self._backend.kv_clear(self._llama_context)
+
+    def _settle_cache_edits(self) -> None:
+        """Which edits this cache takes, each proven on it while it is empty."""
+        self._can_cut_tail = self._probe_tail_cut()
+        # A running state refuses the cut, and is not shifted whatever the cache reports.
+        self._can_shift = self._can_cut_tail and self._backend.can_shift(self._llama_context)
+        self._verify_cache_edits()
+
+    def _probe_tail_cut(self) -> bool:
+        """Whether three decoded tokens can be cut back to one, cleared either way."""
+        # A cut at a running state's last position may clear it whole and succeed.
+        token = max(self._backend.token_eos(self._vocab), 0)
+        try:
+            self._backend.decode(self._llama_context, [token] * 3, 0, SEQ, False,
+                                 self._max_batch_tokens)
+            return self._backend.kv_seq_rm(self._llama_context, SEQ, 1, -1)
+        finally:
+            self._backend.kv_clear(self._llama_context)
 
     def _build_sampler(self, config: Config):
         """Assemble the sampler chain ``config`` asks for, in sampling order."""

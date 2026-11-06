@@ -1,11 +1,12 @@
 """Recover a model's own chat template by rendering probes and comparing them.
 
 Probes carry sentinel content, and splitting a render on its sentinels recovers
-the template that produced it. Three things come out:
+the template that produced it. Four things come out:
 
 * :func:`extract_fragments`: the tags wrapped around each role's content.
 * :func:`extract_tool_fragments`: the tags a generated tool call sits between.
 * :func:`extract_call_body`: how a call spells its name and arguments.
+* :func:`extract_reasoning`: how a thought is marked and reasoning turned on.
 
 No model's format is written down here, and where a comparison proves nothing
 the answer is ``None`` rather than a guess. See the README, "Tool calling".
@@ -15,16 +16,23 @@ A pure function of the render callable, so it is testable without a model.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Callable
 
-from .template import CallBody, TemplateFragments, ToolCallFragments
+from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
+                       shared_tags_length)
 
 # Plain alphanumerics: they survive Jinja `| trim` and are never HTML-escaped.
 
-# Message content, one per role.
+# The fields chat templates read a reply's thought from.
+_THOUGHT_FIELDS = ("reasoning_content", "thinking")
+
+# Message content, one per role, a second user turn, and a thought.
 _SYS = "SYSMSG"
 _USER = "USERMSG"
+_USER2 = "USERTWO"
 _ASSISTANT = "ASSTMSG"
+_THOUGHT = "THOUGHTMSG"
 
 # `AKEYONE` sorts before `AKEYTWO`, so the two-argument probe reads the keys in
 # the order it wrote them even under a template that sorts them.
@@ -38,32 +46,104 @@ _STRING = "VALONE"
 _NUMBER = 1234
 _STRING2 = "VALTWO"
 
-Render = Callable[[list[dict]], "str | None"]
+# Renders messages through the model's template, or returns None where the
+# template rejects their shape, as a template that raises does too. Keywords:
+# ``generation_prompt`` appends the generation prompt, and ``reasoning`` sets
+# the template's reasoning switch.
+Render = Callable[..., "str | None"]
+
+
+def _refusing(render: Render) -> Render:
+    """``render``, answering ``None`` where it raises: a template refusing a shape."""
+    def rendered(*args, **kwargs):
+        try:
+            return render(*args, **kwargs)
+        except Exception:
+            return None
+    return rendered
 
 
 def extract_fragments(render: Render) -> TemplateFragments | None:
     """Recover template fragments by probing ``render`` with sentinel content.
 
+    The user and assistant tags are read from a conversation of two user turns,
+    where the first reply is a past one: a first turn alone may carry text the
+    template writes once at the start, and a newest reply may carry what only
+    the newest one does. Every probe is rendered with reasoning off, which is
+    what the fragments describe; what reasoning changes is
+    :func:`extract_reasoning`'s.
+
     Args:
-        render: Renders ``{"role", "content"}`` messages through the model's
-            chat template, or returns ``None`` where it rejects their shape.
+        render: As ``Render`` above.
 
     Returns:
         The fragments, or ``None`` where the model ships no usable template.
     """
-    user = render([{"role": "user", "content": _USER}])
+    render = _refusing(render)
+    user = render([{"role": "user", "content": _USER}], reasoning=False)
     if user is None or _USER not in user:
         return None
-    user_prefix, _, user_suffix = user.partition(_USER)
+    first_prefix, _, user_suffix = user.partition(_USER)
+    tags = (_past_exchange(render, first_prefix, user_suffix)
+            or _newest_exchange(render, first_prefix, user_suffix))
+    user_prefix, assistant_prefix, assistant_suffix = tags
+    return TemplateFragments(
+        user_prefix=user_prefix, user_suffix=user_suffix,
+        assistant_prefix=assistant_prefix, assistant_suffix=assistant_suffix,
+        trim_content=_trims_content(render),
+        reply_strip=_reply_strip(render, user_suffix, assistant_prefix),
+        generation_prompt=_whole_prompt(render, assistant_prefix),
+        **_extract_system(render, user_prefix, user_suffix))
 
-    fragments = {
-        "user_prefix": user_prefix,
-        "user_suffix": user_suffix,
-        "trim_content": _trims_content(render),
-    }
-    fragments.update(_extract_assistant(render, user_prefix, user_suffix))
-    fragments.update(_extract_system(render, user_prefix, user_suffix))
-    return TemplateFragments(**fragments)
+
+def extract_reasoning(render: Render, fragments: TemplateFragments,
+                      tool_calls: ToolCallFragments | None) -> Reasoning | None:
+    """Recover what turns this template's reasoning on, and how a thought is marked.
+
+    Args:
+        render: As ``Render`` above.
+        fragments: The recovered turn tags.
+        tool_calls: The recovered call tags, for a template that writes a
+            thought only in a turn that calls a tool.
+
+    Returns:
+        The reasoning, or ``None`` where the template marks no thought that can
+        be recovered. A template without a switch that marks one reasons, or
+        may, in every reply.
+    """
+    render = _refusing(render)
+    found = _thought_tags(render, fragments, tool_calls)
+    if found is None:
+        return None
+    tags, reply_with_thought = found
+    plain_prompt = fragments.generation_prompt or fragments.assistant_prefix
+    messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
+    on = render(messages, generation_prompt=True, reasoning=True)
+    off = render(messages, generation_prompt=True, reasoning=False)
+    system_prefix, prompt = fragments.system_prefix, plain_prompt
+    if on is not None and off is not None and on != off:
+        system_prefix, prompt = None, _prompt_added(render, True)
+        if _SYS in on and _SYS in off:
+            (on_head, on_rest), off_rest = on.split(_SYS, 1), off.split(_SYS, 1)[1]
+            # Only a switch in the system turn's opening is decoded where it belongs.
+            if on_rest.split(_USER, 1)[0] == off_rest.split(_USER, 1)[0]:
+                system_prefix = on_head
+        if prompt is None:
+            return None
+    return Reasoning(thought_open=tags[0], thought_close=tags[1],
+                     system_prefix=system_prefix, generation_prompt=prompt,
+                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought))
+
+
+def _past_keeps_thought(render: Render, reply: dict) -> bool:
+    """Whether ``reply``, a reply holding a thought, keeps it once a later turn follows."""
+    rendered = render([
+        {"role": "user", "content": _USER},
+        {key: value for key, value in reply.items() if key != "tool_calls"}
+        | ({"content": _ASSISTANT} if "tool_calls" in reply else {}),
+        {"role": "user", "content": _USER2},
+    ], reasoning=True)
+    return rendered is not None and _THOUGHT in rendered
 
 
 def extract_tool_fragments(render: Render,
@@ -75,18 +155,19 @@ def extract_tool_fragments(render: Render,
 
     Args:
         render: As :func:`extract_fragments`.
-        fragments: The recovered turn tags. The assistant tag is where the turn
-            holding a call begins, so a template whose assistant tag cannot be
-            told from its user tag cannot locate that turn at all: splitting on
-            the user tag lands mid-conversation, and what came back would open
-            a call with a turn tag.
+        fragments: The recovered turn tags. The turn holding a call begins
+            after the user turn and the assistant tag, so a template whose
+            assistant tag cannot be told from its user tag cannot locate that
+            turn at all, and what came back would open a call with a turn tag.
+            An assistant tag that is empty is no such case: the reply then
+            begins where the user turn ends.
 
     Returns:
         The tags, or ``None`` where nothing usable can be recovered, which is
         what a model that cannot call tools looks like from here.
     """
-    assistant_prefix = fragments.assistant_prefix
-    if not assistant_prefix or assistant_prefix == fragments.user_prefix:
+    render = _refusing(render)
+    if fragments.assistant_prefix == fragments.user_prefix:
         return None
     text = _render_call(render, {_KEY: _STRING})
     number = _render_call(render, {_KEY: _NUMBER})
@@ -97,15 +178,42 @@ def extract_tool_fragments(render: Render,
     head = text.split(_TOOL, 1)[0]
     # The turn holding the call has to be locatable, or there is no telling
     # where the conversation before it ends and the call's own opening begins.
-    if assistant_prefix not in head:
+    opened = _USER + fragments.user_suffix + fragments.assistant_prefix
+    if opened not in head:
         return None
-    call_open = head.rsplit(assistant_prefix, 1)[1]
+    call_open = head.split(opened, 1)[1]
+    # A newest reply may open with more than a past one, an empty thought for
+    # instance, which is not part of the call.
+    call_open = call_open.removeprefix(_newest_opening(render, fragments))
     call_close = _common_suffix(text, number)
     # A template that ignored the arguments renders the two probes identically,
     # and then the shared ending runs back past the call into the conversation.
     if not call_open or not call_close or _TOOL in call_close:
         return None
     return ToolCallFragments(call_open=call_open, call_close=call_close)
+
+
+def extract_call_separator(render: Render, call_open: str) -> str | None:
+    """What a template writes between one call's argument and the next call's opening.
+
+    Read from a turn that makes two calls, so it holds the first call's own
+    ending but not what the template writes after the last call.
+
+    Returns:
+        The text, or ``None`` where the template does not open each call with
+        ``call_open``.
+    """
+    rendered = _refusing(render)([
+        {"role": "user", "content": _USER},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{n}", "type": "function",
+             "function": {"name": _TOOL, "arguments": {_KEY: value}}}
+            for n, value in enumerate((_STRING, _STRING2))]},
+    ], reasoning=False)
+    if rendered is None or rendered.count(call_open) < 2:
+        return None
+    first_call = rendered.split(call_open)[1]
+    return first_call.split(_STRING, 1)[1] if _STRING in first_call else None
 
 
 def extract_call_body(render: Render, call_open: str,
@@ -127,6 +235,7 @@ def extract_call_body(render: Render, call_open: str,
         delimiter. Such a model's calls are still detected, because the tags are
         tokens, but what is inside one cannot be read.
     """
+    render = _refusing(render)
     def rendered_body(arguments) -> str | None:
         rendered = _render_call(render, arguments)
         if rendered is None or call_open not in rendered:
@@ -151,7 +260,10 @@ def extract_call_body(render: Render, call_open: str,
     opens_args = text.split(_TOOL, 1)[1].split(_KEY, 1)[0]
     no_arguments = empty.split(_TOOL, 1)[1]
     name_close = _common_prefix(opens_args, no_arguments)
-    if not name_close:
+    # Nothing between the name and the arguments is readable only where the
+    # first key's own tag marks where they begin, and nothing follows a name
+    # without them.
+    if not name_close and (not opens_args or no_arguments):
         return None
 
     before_value = text.split(_KEY, 1)[1].split(_STRING, 1)[0]
@@ -168,7 +280,7 @@ def extract_call_body(render: Render, call_open: str,
     if not between.startswith(quote_close):
         return None
 
-    return CallBody(
+    body = CallBody(
         name_close=name_close,
         key_open=opens_args[len(name_close):],
         key_close=bare_before,
@@ -178,6 +290,13 @@ def extract_call_body(render: Render, call_open: str,
         quote_open=before_value[len(bare_before):],
         quote_close=quote_close,
     )
+    # A delimiter holding a probe's own text, such as a key's name in its own
+    # closing tag, is no fixed delimiter at all.
+    sentinels = (_TOOL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
+    if any(sentinel in delimiter for sentinel in sentinels
+           for delimiter in dataclasses.astuple(body)):
+        return None
+    return body
 
 
 def _common_prefix(one: str, other: str) -> str:
@@ -204,25 +323,169 @@ def _render_call(render: Render, arguments: dict) -> str | None:
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "type": "function",
              "function": {"name": _TOOL, "arguments": arguments}}]},
-    ])
+    ], reasoning=False)
 
 
-def _extract_assistant(render: Render, user_prefix: str,
-                       user_suffix: str) -> dict:
-    """Split off the assistant fragment from a user and assistant render."""
+def _past_exchange(render: Render, first_prefix: str,
+                   user_suffix: str) -> tuple[str, str, str] | None:
+    """The user and assistant tags, read from a reply that a later turn follows."""
+    rendered = render([
+        {"role": "user", "content": _USER},
+        {"role": "assistant", "content": _ASSISTANT},
+        {"role": "user", "content": _USER2},
+    ], reasoning=False)
+    newest = render([
+        {"role": "user", "content": _USER},
+        {"role": "assistant", "content": _ASSISTANT},
+    ], reasoning=False)
+    opened = _USER + user_suffix
+    if rendered is None or newest is None or _ASSISTANT not in newest \
+            or opened not in rendered or _USER2 not in rendered:
+        return None
+    exchange = rendered.split(opened, 1)[1]
+    if _ASSISTANT not in exchange:
+        return None
+    assistant_prefix, _, between = exchange.partition(_ASSISTANT)
+    between = between.split(_USER2, 1)[0]
+    # Empty where turns have no closing tag, the next turn's tag ending them.
+    assistant_suffix = newest.split(_ASSISTANT, 1)[1]
+    if not between.startswith(assistant_suffix):
+        # A past reply closes with another tag than a newest one; the user
+        # tag then starts where the role tags' shared opening last occurs.
+        opener = assistant_prefix[:shared_tags_length(assistant_prefix, first_prefix)]
+        start = between.rfind(opener) if opener else -1
+        if start <= 0:
+            return None
+        assistant_suffix = between[:start]
+    user_prefix = between[len(assistant_suffix):]
+    # What a first turn carries beyond the tag is written once, before it.
+    if not user_prefix or not first_prefix.endswith(user_prefix):
+        return None
+    return user_prefix, assistant_prefix, assistant_suffix
+
+
+def _newest_exchange(render: Render, user_prefix: str,
+                     user_suffix: str) -> tuple[str, str, str]:
+    """The tags read from one user turn and its reply, or the user tags reused."""
     both = render([
         {"role": "user", "content": _USER},
         {"role": "assistant", "content": _ASSISTANT},
-    ])
-    fallback = {"assistant_prefix": user_prefix, "assistant_suffix": user_suffix}
+    ], reasoning=False)
     if both is None or _ASSISTANT not in both or _USER + user_suffix not in both:
-        # The two-message render does not contain the expected user turn (or no
-        # assistant sentinel at all); fall back to the user tags so generation
-        # still has an open/close pair.
-        return fallback
+        # No assistant turn to split off; the user tags still give generation
+        # an open and close pair.
+        return user_prefix, user_prefix, user_suffix
     tail = both.split(_USER + user_suffix, 1)[1]
-    asst_prefix, _, asst_suffix = tail.partition(_ASSISTANT)
-    return {"assistant_prefix": asst_prefix, "assistant_suffix": asst_suffix}
+    assistant_prefix, _, assistant_suffix = tail.partition(_ASSISTANT)
+    return user_prefix, assistant_prefix, assistant_suffix
+
+
+def _newest_opening(render: Render, fragments: TemplateFragments) -> str:
+    """What a newest reply opens with after the assistant tag, beyond a past one's."""
+    newest = render([{"role": "user", "content": _USER},
+                     {"role": "assistant", "content": _ASSISTANT}], reasoning=False)
+    opened = _USER + fragments.user_suffix + fragments.assistant_prefix
+    if newest is None or opened not in newest:
+        return ""
+    return newest.split(opened, 1)[1].split(_ASSISTANT, 1)[0]
+
+
+def _prompt_added(render: Render, reasoning: bool) -> str | None:
+    """The whole generation prompt after a user turn, or ``None``."""
+    messages = [{"role": "user", "content": _USER}]
+    plain = render(messages, reasoning=reasoning)
+    prompted = render(messages, generation_prompt=True, reasoning=reasoning)
+    if plain is None or prompted is None or not prompted.startswith(plain):
+        return None
+    return prompted[len(plain):]
+
+
+def _whole_prompt(render: Render, assistant_prefix: str) -> str:
+    """The generation prompt without reasoning, empty where it is the tag alone."""
+    prompt = _prompt_added(render, False)
+    return "" if prompt in (None, assistant_prefix) else prompt
+
+
+def _reply_strip(render: Render, user_suffix: str, assistant_prefix: str) -> str | None:
+    """Which whitespace a past reply loses, where it differs from a user turn's."""
+    rendered = render([
+        {"role": "user", "content": _USER},
+        {"role": "assistant", "content": " " + _ASSISTANT + " "},
+        {"role": "user", "content": _USER2},
+    ], reasoning=False)
+    opened = _USER + user_suffix + assistant_prefix
+    if rendered is None or opened not in rendered or _ASSISTANT not in rendered:
+        return None
+    before, _, after = rendered.split(opened, 1)[1].partition(_ASSISTANT)
+    keeps_start, keeps_end = before.endswith(" "), after.startswith(" ")
+    strip = {(False, False): "both", (True, False): "end",
+             (False, True): "start", (True, True): "none"}[keeps_start, keeps_end]
+    user_strip = "both" if _trims_content(render) else "none"
+    return None if strip == user_strip else strip
+
+
+def _thought_tags(render: Render, fragments: TemplateFragments,
+                  tool_calls: ToolCallFragments | None
+                  ) -> tuple[tuple[str, str], dict] | None:
+    """The tags around a reply's thought, read from a newest reply that holds one.
+
+    A template may write a thought only in a turn that calls a tool, so that
+    turn is the second probe, and templates read the thought from either of two
+    fields. The opening tag is what the model writes after the generation
+    prompt before the thought, or else what the turn holds before it beyond a
+    past reply's tag; where a past reply's tag already holds it, as an empty
+    thought, it is the last tag before the thought.
+    """
+    opened = _USER + fragments.user_suffix
+    prompt = fragments.generation_prompt or fragments.assistant_prefix
+    probes = []
+    replies = [{"role": "assistant", "content": _ASSISTANT, field: _THOUGHT}
+               for field in _THOUGHT_FIELDS]
+    # A template may read the thought from a content block of its own.
+    replies.append({"role": "assistant", "content": [
+        {"type": "thinking", "thinking": _THOUGHT},
+        {"type": "text", "text": _ASSISTANT}]})
+    for reply in replies:
+        probes.append(([{"role": "user", "content": _USER}, reply], _ASSISTANT))
+        if tool_calls is not None:
+            call = {"id": "c1", "type": "function",
+                    "function": {"name": _TOOL, "arguments": {}}}
+            probes.append(([{"role": "user", "content": _USER},
+                            {**reply, "content": "", "tool_calls": [call]}],
+                           tool_calls.call_open))
+    for messages, after in probes:
+        rendered = render(messages, reasoning=True)
+        if rendered is None or opened not in rendered:
+            continue
+        turn = rendered.split(opened, 1)[1]
+        if _THOUGHT not in turn:
+            continue
+        before, _, rest = turn.partition(_THOUGHT)
+        if before.startswith(prompt) and before[len(prompt):].strip():
+            # What the model writes itself after the generation prompt.
+            thought_open = before[len(prompt):]
+        else:
+            thought_open = before[shared_tags_length(before, fragments.assistant_prefix):]
+        if not thought_open.strip():
+            thought_open = _last_tag(before)
+        thought_close = rest.split(after, 1)[0] if after in rest else ""
+        if thought_open.strip() and thought_close.strip():
+            return (thought_open, thought_close), messages[-1]
+    return None
+
+
+def _last_tag(text: str) -> str:
+    """The last tag in ``text`` and what follows it.
+
+    A tag holds no whitespace, and of a run of tags written together the last
+    is the one that starts at the run's last ``<``.
+    """
+    stripped = text.rstrip()
+    if not stripped:
+        return ""
+    run = stripped.rsplit(None, 1)[-1]
+    start = len(stripped) - len(run) + max(run.rfind("<"), 0)
+    return text[start:]
 
 
 def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
@@ -234,7 +497,7 @@ def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
     rendered = render([
         {"role": "system", "content": _SYS},
         {"role": "user", "content": _USER},
-    ])
+    ], reasoning=False)
     if rendered is None or _SYS not in rendered or _USER not in rendered:
         return {"system_prefix": user_prefix, "system_suffix": user_suffix}
     # The system fragment is everything before the user turn begins. Templates
@@ -250,7 +513,7 @@ def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
 
 def _trims_content(render: Render) -> bool:
     """Whether the template strips surrounding whitespace from content."""
-    padded = render([{"role": "user", "content": " " + _USER + " "}])
+    padded = render([{"role": "user", "content": " " + _USER + " "}], reasoning=False)
     if padded is None or _USER not in padded:
         return True
     before, _, after = padded.partition(_USER)

@@ -79,7 +79,8 @@ class PersistentChat:
         self._chat = ChatWrapper(config, on_message=self._persist, **kwargs)
 
     def begin(self, conversation_id: str, system_prompt: str,
-              tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
+              tools: ToolRegistry | list[ToolSpec] | None = None, *,
+              reasoning: bool = False) -> None:
         """Select the conversation and prefill its recent history.
 
         A failed begin selects nothing new, so later turns cannot persist into
@@ -88,10 +89,11 @@ class PersistentChat:
         Args:
             conversation_id: Which conversation to load and persist into.
             system_prompt: Supplied fresh each time; never persisted.
-            tools: As :meth:`~llama_chat.wrapper.ChatWrapper.begin`, and not
-                persisted either.
+            tools, reasoning: As :meth:`~llama_chat.wrapper.ChatWrapper.begin`,
+                and not persisted either.
         """
-        self._chat.begin(system_prompt, self._store.load(conversation_id), tools)
+        self._chat.begin(system_prompt, self._store.load(conversation_id), tools,
+                         reasoning=reasoning)
         self._conversation_id = conversation_id
 
     # ----- adding context ------------------------------------------------------
@@ -182,6 +184,10 @@ class PersistentChat:
     @property
     def can_call_tools(self) -> bool:
         return self._chat.can_call_tools
+
+    @property
+    def can_reason(self) -> bool:
+        return self._chat.can_reason
 
     @property
     def awaiting_tool_result(self) -> bool:

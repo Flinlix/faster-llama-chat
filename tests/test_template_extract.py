@@ -5,7 +5,6 @@ name is what says which shape is covered. One built to exercise a code path
 carries no model's name, because it reproduces none.
 """
 
-import dataclasses
 import itertools
 
 from llama_chat.template import CallBody
@@ -20,7 +19,7 @@ def _tool_fragments(render):
     return extract_tool_fragments(render, extract_fragments(render))
 
 
-def _gemma_render(messages):
+def _gemma_render(messages, **_options):
     """Gemma-style template: trims content, rejects a system role, uses ``model``."""
     out = []
     for m in messages:
@@ -32,7 +31,7 @@ def _gemma_render(messages):
     return "".join(out)
 
 
-def _chatml_render(messages):
+def _chatml_render(messages, **_options):
     """ChatML-style template: verbatim content, explicit system role."""
     return "".join(
         f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in messages
@@ -70,10 +69,10 @@ def test_chatml_does_not_trim_content():
 
 
 def test_no_template_returns_none():
-    assert extract_fragments(lambda messages: None) is None
+    assert extract_fragments(lambda messages, **_options: None) is None
 
 
-def _folding_render(messages):
+def _folding_render(messages, **_options):
     """Llama-2-style template: folds the system message into the first user turn."""
     out = []
     sys_text = ""
@@ -97,7 +96,7 @@ def test_folded_system_falls_back_to_user_tags():
     assert f.system_suffix == f.user_suffix == "</u>"
 
 
-def _inconsistent_render(messages):
+def _inconsistent_render(messages, **_options):
     """Degenerate template whose user turn changes shape in a longer render.
 
     The single-message user fragment therefore never reappears.
@@ -117,7 +116,7 @@ def test_inconsistent_multi_message_render_falls_back_to_user_tags():
     assert f.assistant_suffix == f.user_suffix
 
 
-def _prefix_only_render(messages):
+def _prefix_only_render(messages, **_options):
     """Degenerate template whose tags only open a turn (empty suffixes)."""
     return "".join(f"<{m['role']}>{m['content']}" for m in messages)
 
@@ -137,7 +136,7 @@ def _quoted_value(value):
     return f'<|"|>{value}<|"|>' if isinstance(value, str) else str(value)
 
 
-def _tool_calling_render(messages):
+def _tool_calling_render(messages, **_options):
     """A template with a real system role that puts tool calls on a model turn."""
     out = []
     for m in messages:
@@ -180,7 +179,7 @@ def test_tool_extraction_does_not_disturb_the_role_fragments():
     assert f.system_prefix == "<|turn>system\n"
 
 
-def _untagged_call_render(messages):
+def _untagged_call_render(messages, **_options):
     """Degenerate template with no role tags at all, yet it renders tool calls."""
     out = []
     for m in messages:
@@ -196,7 +195,7 @@ def test_a_call_with_no_locatable_turn_yields_no_tool_fragments():
     assert _tool_fragments(_untagged_call_render) is None
 
 
-def _argless_call_render(messages):
+def _argless_call_render(messages, **_options):
     """Degenerate template that renders a call's name but drops its arguments."""
     out = []
     for m in messages:
@@ -214,7 +213,7 @@ def test_a_template_that_drops_arguments_yields_no_tool_fragments():
     assert _tool_fragments(_argless_call_render) is None
 
 
-def _element_render(messages):
+def _element_render(messages, **_options):
     """A model that wraps each argument in an element of its own.
 
     Deliberately unlike the delimited shape above: the name and every key sit
@@ -274,7 +273,7 @@ def _turn_tags(m, body):
     return f"<|turn>{role}\n{body}{m['content'].strip()}<turn|>\n"
 
 
-def _no_call_without_arguments_render(messages):
+def _no_call_without_arguments_render(messages, **_options):
     """Renders a call only when it has arguments, and nothing when it has none."""
     out = []
     for m in messages:
@@ -298,7 +297,7 @@ def test_a_call_shape_that_vanishes_without_arguments_has_no_body():
                              tools.call_open, "</call>") is None
 
 
-def _nothing_after_the_name_render(messages):
+def _nothing_after_the_name_render(messages, **_options):
     """Writes the arguments straight after the name, with no delimiter at all."""
     out = []
     for m in messages:
@@ -319,7 +318,7 @@ def test_a_name_that_runs_straight_into_its_arguments_has_no_body():
                              tools.call_open, "</call>") is None
 
 
-def _constant_body_render(messages):
+def _constant_body_render(messages, **_options):
     """Renders a fixed ``{}`` whatever the arguments, so no key ever appears.
 
     What a template does when it reads the arguments from a field the caller
@@ -348,7 +347,7 @@ def test_a_body_that_never_shows_a_key_has_no_body():
     assert extract_call_body(_constant_body_render, "<call>fn:", "</call>") is None
 
 
-def _typed_key_render(messages):
+def _typed_key_render(messages, **_options):
     """Spells the argument's type into its key, so no two probes agree on it."""
     out = []
     for m in messages:
@@ -370,7 +369,7 @@ def test_a_key_that_changes_with_the_value_type_has_no_body():
     assert extract_call_body(_typed_key_render, tools.call_open, "</call>") is None
 
 
-def _last_value_only_quoted_render(messages):
+def _last_value_only_quoted_render(messages, **_options):
     """Quotes only the final argument, so the quoting is not a fixed delimiter."""
     out = []
     for m in messages:
@@ -395,7 +394,7 @@ def test_quoting_that_depends_on_position_has_no_body():
                              tools.call_open, "</call>") is None
 
 
-def _no_tool_render(messages):
+def _no_tool_render(messages, **_options):
     """A template that refuses a message carrying a tool call outright."""
     if any(m.get("tool_calls") for m in messages):
         return None
@@ -406,7 +405,7 @@ def test_a_template_that_refuses_tool_calls_has_no_tool_fragments():
     assert _tool_fragments(_no_tool_render) is None
 
 
-def _no_padded_render(messages):
+def _no_padded_render(messages, **_options):
     """A template that refuses content with surrounding whitespace."""
     if any(m["content"] != m["content"].strip() for m in messages):
         return None
@@ -419,7 +418,7 @@ def test_a_template_that_refuses_the_trim_probe_is_assumed_to_trim():
     assert extract_fragments(_no_padded_render).trim_content is True
 
 
-def _dropped_assistant_render(messages):
+def _dropped_assistant_render(messages, **_options):
     """Drops an assistant turn's content, yet still renders its tool calls.
 
     The assistant fragment cannot be recovered from a render its sentinel never
@@ -448,14 +447,6 @@ def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
     assert fragments.assistant_prefix == fragments.user_prefix   # it fell back
     assert extract_tool_fragments(_dropped_assistant_render, fragments) is None
 
-    # What the guard prevents: splitting on the substitute reaches back past the
-    # turn boundary, so the recovered opening starts inside the turn before the
-    # call and its first tag is that turn's terminator.
-    unguarded = extract_tool_fragments(
-        _dropped_assistant_render,
-        dataclasses.replace(fragments, user_prefix="<never rendered>"))
-    assert unguarded is not None and "<turn|>" in unguarded.call_open
-
 
 # The sentinels a render can drop, and the text each appears as.
 _SENTINELS = {"name": _TOOL, "key": _KEY, "key2": _KEY2,
@@ -464,7 +455,7 @@ _SENTINELS = {"name": _TOOL, "key": _KEY, "key2": _KEY2,
 
 def _degenerate_render(dropped, constant_body):
     """A delimited render with ``dropped`` sentinels deleted from every call."""
-    def render(messages, tools=None):
+    def render(messages, tools=None, **_options):
         out = []
         for m in messages:
             body = ""

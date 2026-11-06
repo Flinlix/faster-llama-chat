@@ -128,8 +128,35 @@ def test_after_a_cut_the_next_request_appends_at_the_cache_end():
     _assert_consistent(w, fake)
 
 
+def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_as_its_text():
+    """Same text, other tokens: the template's past reply is the text, tokenized."""
+    w, fake = _wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
+    reply = w.reply_without_tools("hi")
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
+    assert reply.text == "ok!!"
+    _assert_consistent(w, fake)
+
+
+def test_a_reply_after_an_empty_assistant_tag_is_kept_as_its_text_too():
+    """A template may open a reply with nothing at all, as Mistral's does."""
+    from dataclasses import replace
+    from tests.fake_context import DEFAULT_FRAGMENTS
+
+    class _TagsOnly(FakeContext):
+        def render_with_model_template(self, *args, **kwargs):
+            return None             # no template: the tags are the ones supplied
+
+    fake = _TagsOnly(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
+                    fragments=replace(DEFAULT_FRAGMENTS, assistant_prefix=""))
+    w.begin("s")
+    w.reply_without_tools("hi")
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
+    _assert_consistent(w, fake)
+
+
 def test_the_tokens_that_stay_are_not_decoded_again():
-    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw", tokens_spell_text=True)
+    w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply_without_tools("hi")
     before = list(fake.prefill_calls)
     w.truncate_last_reply("Eins.")
@@ -186,32 +213,96 @@ def test_a_seed_out_of_range_is_refused_before_anything_is_prefilled():
         Sampling(seed=2**40)
 
 
-def test_a_cut_on_a_cache_that_cannot_shift_rebuilds_it_from_the_conversation():
+@pytest.mark.parametrize("saves_state", [True, False])
+def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw", can_shift=False)
+    if not saves_state:
+        fake.save_state = lambda: None
+        w.begin("s")
     w.reply_without_tools("hi")
     rebuilds = fake.rebuilds
     w.truncate_last_reply("Eins.")
-    assert fake.rebuilds == rebuilds + 1
+    # From the state saved before the reply where there is one, else rebuilt.
+    assert fake.rebuilds == rebuilds + (not saves_state)
     assert w.snapshot()[-1]["text"] == "Eins."
     _assert_consistent(w, fake)
 
 
-# ----- what the conversation keeps of a reply ----------------------------
-def _keeping(recorded_text, config=None, **fake_kw):
-    fake = FakeContext(**fake_kw)
+# ----- reasoning, as the template turns it on ------------------------------
+from llama_chat.template import Reasoning  # noqa: E402
+from tests.fake_context import EMPTY_THOUGHT, THINK_ON  # noqa: E402
+
+_THOUGHTFUL = "<thought>Denken</thought>Antwort."
+
+
+def _reasoning(reasoning=True, config=None, **fake_kw):
+    fake_kw = {"gen_tokens": len(_THOUGHTFUL), "gen_text": _THOUGHTFUL, **fake_kw}
+    fake = FakeContext(can_reason=True, calls_tools=True, **fake_kw)
     w = ChatWrapper(config or Config(context_size=500, evict_above_fraction=1.0),
-                    context=fake, recorded_text=recorded_text)
-    w.begin("s")
+                    context=fake)
+    w.begin("s", reasoning=reasoning)
     return w, fake
 
 
-def _answer(text):
-    return text.split("|")[-1]
+def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
+    w, _fake = _reasoning()
+    assert w.can_reason
+    assert w._template.reasoning == Reasoning(
+        thought_open="<thought>", thought_close="</thought>",
+        system_prefix="<|turn>system\n" + THINK_ON,
+        generation_prompt="<|turn>model\n")
+    assert w._template.fragments.generation_prompt == "<|turn>model\n" + EMPTY_THOUGHT
 
 
-def test_a_reply_the_option_changes_is_kept_as_a_past_reply_and_the_cache_agrees():
-    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.")
+def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                    context=FakeContext())
+    w.begin("s", [("user", "hi")])
+    assert not w.can_reason
+    with pytest.raises(ValueError, match="reasoning"):
+        w.begin("t", reasoning=True)
+    assert [m["text"] for m in w.snapshot()] == ["s", "hi"]
+
+
+def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
+    for reasoning in (True, False):
+        w, fake = _reasoning(reasoning)
+        prefix, content, suffix = w._formatter.parts("system", "s")
+        assert prefix.endswith(THINK_ON) == reasoning
+        assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+            prefix, content, suffix, add_special=True)
+
+
+def test_with_tools_declared_the_switch_is_rendered_with_them():
+    w, fake = _reasoning()
+    specs = [ToolSpec("uhr", "", {})]
+    w.begin("s", tools=specs, reasoning=True)
+    head, tail = w._template.system_turn_declaring(specs, reasoning=True)
+    assert THINK_ON in head
+    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+        head, "s", tail, add_special=True)
+
+
+def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
+    w, fake = _reasoning(False, gen_text="Antwort.", gen_tokens=8)
+    before = len(fake.cache)
     w.reply_without_tools("hi")
+    user = w._fragment_tokens("user", "hi")
+    opening = fake.tokenize(w._formatter.generation_prompt())
+    assert w._formatter.generation_prompt().endswith(EMPTY_THOUGHT)
+    # Generated after the empty thought, kept without it, as a past reply is.
+    assert (before, len(user) + len(opening)) in [(start, n) for start, n, _
+                                                  in fake.prefill_calls]
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
+    _assert_consistent(w, fake)
+
+
+def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
+    w, fake = _reasoning()
+    stream = w.reply_without_tools_stream("hi")
+    assert "".join(stream) == "Antwort."
+    assert stream.reply.text == "Antwort."
+    assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
     assert w.snapshot()[-1]["text"] == "Antwort."
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
     _assert_consistent(w, fake)
@@ -219,120 +310,117 @@ def test_a_reply_the_option_changes_is_kept_as_a_past_reply_and_the_cache_agrees
     _assert_consistent(w, fake)
 
 
-def test_only_what_differs_from_the_generated_reply_is_decoded_again():
-    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.",
-                       tokens_spell_text=True)
-    before = len(fake.prefill_calls)
-    w.reply_without_tools("hi")
-    *_, (start, n, _logits) = fake.prefill_calls[before:]
-    opening = fake.tokenize(w._formatter.assistant_open())
-    kept = w._fragment_tokens("assistant", "Antwort.")
-    assert (start, n) == (w.snapshot()[-1]["pos_start"] + len(opening),
-                          len(kept) - len(opening))
+def test_a_thought_the_model_has_without_being_asked_is_kept_out_too():
+    w, fake = _reasoning(False)
+    assert w.reply_without_tools("hi").text == "Antwort."
+    _assert_consistent(w, fake)
 
 
-def test_the_eviction_after_a_reply_is_sized_by_what_is_kept():
+def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
     config = Config(context_size=200, evict_above_fraction=0.8)
-
-    def history_left(recorded_text):
-        w, fake = _keeping(recorded_text, config, gen_tokens=60, gen_text="x" * 60)
-        w.inject("hist", "user")
-        w.inject("hist", "assistant")
-        w.reply_without_tools("hi")
-        _assert_consistent(w, fake)
-        return [m["text"] for m in w.snapshot()].count("hist")
-
-    assert history_left(None) < 2           # the whole reply would evict history
-    assert history_left(lambda text: "ok") == 2
-
-
-def test_a_reply_kept_as_nothing_is_removed():
-    w, fake = _keeping(lambda text: "", gen_tokens=8, gen_text="Denken")
+    thought = "<thought>" + "x" * 60 + "</thought>ok"
+    w, fake = _reasoning(config=config, gen_text=thought, gen_tokens=len(thought))
+    w.inject("hist", "user")
+    w.inject("hist", "assistant")
     w.reply_without_tools("hi")
-    assert [m["role"] for m in w.snapshot()] == ["system", "user"]
     _assert_consistent(w, fake)
-    w.reply_without_tools("weiter")
+    assert [m["text"] for m in w.snapshot()].count("hist") == 2
+
+
+def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_state():
+    w, fake = _reasoning(can_shift=False)
+    rebuilds = fake.rebuilds
+    prefilled = fake.total_prefilled()
+    w.reply_without_tools("hi")
+    # No rebuild: the request and the past reply are all that is decoded again.
+    assert fake.rebuilds == rebuilds
+    assert fake.total_prefilled() - prefilled < 2 * (
+        len(w._table.messages[-1].token_ids) + len(w._table.messages[-2].token_ids)) + 20
+    _assert_consistent(w, fake)
+    w.truncate_last_reply("Ant")
+    assert fake.rebuilds == rebuilds
     _assert_consistent(w, fake)
 
 
-def test_a_reply_kept_on_a_cache_that_cannot_shift_rebuilds_it():
-    w, fake = _keeping(_answer, gen_tokens=15, gen_text="Denken|Antwort.",
-                       can_shift=False)
+def test_a_cache_that_saves_no_state_is_rebuilt_instead():
+    w, fake = _reasoning(can_shift=False)
+    fake.save_state = lambda: None
+    w.begin("s", reasoning=True)
     rebuilds = fake.rebuilds
     w.reply_without_tools("hi")
     assert fake.rebuilds == rebuilds + 1
     _assert_consistent(w, fake)
 
 
-def test_an_option_that_raises_leaves_the_reply_as_generated():
-    def broken(text):
-        raise RuntimeError("kaputt")
-    w, fake = _keeping(broken, gen_tokens=15, gen_text="Denken|Antwort.")
-    w.reply_without_tools("hi")
-    assert w.snapshot()[-1]["text"] == "Denken|Antwort."
-    _assert_consistent(w, fake)
-
-
 def test_a_reply_that_called_a_tool_is_kept_as_generated():
-    w, fake = _keeping(lambda text: "", calls_tools=True)
+    w, fake = _reasoning()
     fake.call_script.append("uhr{}")
-    w.begin("s", tools=[ToolSpec("uhr", "", {})])
+    w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=True)
     for event in w.reply_until_tool("wie spät?"):
         call = event
     w.inject_tool_result(call, {"zeit": "12:00"})
+    generated = list(w._table.messages[-1].token_ids)
     for _event in w.resume_until_tool():
         pass
-    assert w.snapshot()[-1]["role"] == "assistant"
+    assert w._table.messages[-1].token_ids[:len(generated)] == generated
+    assert w.snapshot()[-1]["text"] == "Antwort."
     _assert_consistent(w, fake)
 
 
-def test_a_kept_reply_is_cut_as_the_past_reply_it_now_is():
-    w, fake = _keeping(lambda text: "Eins. Zwei.", gen_tokens=8, gen_text="Denken")
+def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
+    w, fake = _reasoning()
     w.reply_without_tools("hi")
-    w.truncate_last_reply("Eins. ")
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Eins. ")
+    w.truncate_last_reply("Ant")
+    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Ant")
     _assert_consistent(w, fake)
 
 
-# ----- what opens the system turn ----------------------------------------
-from llama_chat.template import TemplateFormatter  # noqa: E402
+def test_a_reply_that_is_all_thought_is_removed():
+    w, fake = _reasoning()
+    reply = w.reply_without_tools("hi", max_reply_tokens=12)   # cut inside the thought
+    assert reply.text == "" and reply.stop_reason == "token_limit"
+    assert [m["role"] for m in w.snapshot()] == ["system", "user"]
+    _assert_consistent(w, fake)
+    w.reply_without_tools("weiter")
+    _assert_consistent(w, fake)
 
 
-class _Opening(TemplateFormatter):
-    def system_open(self):
-        return "<mode>"
+def test_a_reply_cut_inside_a_thought_tag_keeps_none_of_it():
+    w, fake = _reasoning(False, gen_text="<thou", gen_tokens=5)
+    stream = w.reply_without_tools_stream("hi", max_reply_tokens=3)
+    assert "".join(stream) == ""
+    _assert_consistent(w, fake)
 
 
-def test_the_system_turn_opens_with_what_the_formatter_adds():
-    fake = FakeContext()
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
-                    formatter=_Opening)
-    w.begin("s")
-    prefix, content, suffix = w._formatter.parts("system", "s")
-    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
-        prefix + "<mode>", content, suffix, add_special=True)
+def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shift():
+    config = Config(context_size=300, evict_above_fraction=0.5)
+    thought = "<thought>" + "x" * 60 + "</thought>ok"
+    w, fake = _reasoning(config=config, gen_text=thought, gen_tokens=len(thought))
+    for _ in range(3):
+        w.inject("hist", "user")
+        w.inject("hist", "assistant")
+    evictions = len(fake.evictions)
+    w.reply_without_tools("hi")
+    assert len(fake.evictions) > evictions
+    # The last cache edit is the past reply's decode, after the eviction.
+    assert fake.prefill_calls[-1][0] == w.snapshot()[-1]["pos_start"] + len(
+        fake.tokenize("<|turn>model\n"))
+    _assert_consistent(w, fake)
 
 
-def test_with_tools_declared_it_follows_the_turns_own_head():
-    fake = FakeContext(calls_tools=True)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
-                    formatter=_Opening)
-    specs = [ToolSpec("uhr", "", {})]
-    w.begin("s", tools=specs)
-    head, tail = w._template.system_turn_declaring(specs)
-    own_head = w._template._plain_system_turn().partition("PROMPTMSG")[0]
-    assert head.startswith(own_head)
-    opened = own_head + "<mode>" + head[len(own_head):]
-    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
-        opened, "s", tail, add_special=True)
-
-
-def test_a_formatter_that_opens_the_system_turn_again_is_refused():
-    class Twice(TemplateFormatter):
-        def system_open(self):
-            return self._fragments.system_prefix
-    with pytest.raises(ValueError, match="system_open"):
-        ChatWrapper(Config(), context=FakeContext(), formatter=Twice)
+@pytest.mark.parametrize("reasoning, decoded", [(False, EMPTY_THOUGHT), (True, "")])
+def test_a_resumed_reply_opens_as_a_new_one_does(reasoning, decoded):
+    """The result here leaves the turn open, and nothing of the opening with it."""
+    w, fake = _reasoning(reasoning, gen_text="ok", gen_tokens=2)
+    fake.call_script.append("uhr{}")
+    w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
+    for event in w.reply_until_tool("wie spät?"):
+        call = event
+    w.inject_tool_result(call, "12:00")
+    before = len(fake.cache)
+    list(w.resume_until_tool())
+    assert fake.cache[before:before + len(decoded)] == fake.tokenize(decoded)
+    _assert_consistent(w, fake)
 
 
 # ----- a history that called tools --------------------------------------
@@ -340,8 +428,7 @@ from llama_chat.tools import ToolCall, ToolResult, ToolTurn  # noqa: E402
 
 
 def _tooling():
-    fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.",
-                       tokens_spell_text=True)
+    fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.")
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     return w, fake
 
@@ -417,3 +504,166 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
         pass
     assert past._table.messages[-1].token_ids == live._table.messages[-1].token_ids
     _assert_consistent(past, past_fake)
+
+
+# ----- what the review found ------------------------------------------------
+def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
+    thoughtful = "<thought>a\n\nb</thought>Antwort.\n\nRest"
+    w, fake = _reasoning(gen_text=thoughtful, gen_tokens=len(thoughtful))
+    reply = w.reply_without_tools("hi", stop=["\n\n"])
+    assert reply.text == "Antwort." and reply.stop_reason == "stop_string"
+    assert w.snapshot()[-1]["text"] == "Antwort."
+    _assert_consistent(w, fake)
+
+
+class _KeepsThought(FakeContext):
+    """A template that writes a past reply's thought into the conversation."""
+
+    def render_with_model_template(self, messages, tools=None, **options):
+        kept = [dict(m, content="<thought>" + m["reasoning_content"] + "</thought>"
+                     + m["content"]) if m.get("reasoning_content") and
+                not m.get("tool_calls") else m for m in messages]
+        return super().render_with_model_template(kept, tools, **options)
+
+
+def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
+    fake = _KeepsThought(can_reason=True, calls_tools=True,
+                         gen_text=_THOUGHTFUL, gen_tokens=len(_THOUGHTFUL))
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    assert w._template.reasoning.past_keeps_thought
+    w.begin("s", reasoning=True)
+    w.reply_without_tools("hi")
+    assert w.snapshot()[-1]["text"] == "Antwort."
+    assert fake.tokenize(_THOUGHTFUL) == w._table.messages[-1].token_ids[
+        len(fake.tokenize(w._formatter.generation_prompt())):][:len(_THOUGHTFUL)]
+    _assert_consistent(w, fake)
+
+
+def test_a_reply_decoded_again_counts_what_was_decoded():
+    w, fake = _reasoning()
+    before = fake.total_prefilled()
+    reply = w.reply_without_tools("hi")
+    assert reply.n_prefilled_tokens == fake.total_prefilled() - before
+
+
+def test_a_system_prompt_is_refused_where_the_template_has_no_system_turn():
+    from tests.fake_context import DEFAULT_FRAGMENTS
+    import dataclasses
+    folded = dataclasses.replace(DEFAULT_FRAGMENTS, system_prefix="<|turn>user\n")
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(fragments=folded))
+    with pytest.raises(ValueError, match="no system turn of its own"):
+        w.begin("persona")
+    w.begin("")                         # no system prompt is still fine
+
+
+def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                    context=FakeContext())
+    w.begin("s")
+    w.inject("hi", "user")
+    w.inject("Notiz", "system")
+    assert w._table.messages[-1].token_ids == w._context.tokenize(
+        "<|turn>system\nNotiz<turn|>\n")
+
+
+def test_the_thought_count_never_exceeds_the_pieces_fed():
+    import random
+    from llama_chat.reasoning import ThoughtFilter
+    tags = Reasoning("<thought>", "</thought>", "", "")
+    text = "a<thought>x</thought>b<thought>y</thought>c<tho"
+    rng = random.Random(7)
+    for _ in range(2000):
+        cuts = sorted(rng.sample(range(1, len(text)), rng.randint(1, 12)))
+        pieces = [text[i:j] for i, j in zip([0, *cuts], [*cuts, len(text)])]
+        f = ThoughtFilter(tags)
+        shown = "".join(f.feed(p) for p in pieces) + f.flush()
+        assert shown == "abc<tho"
+        assert 0 < f.thought_pieces <= len(pieces)
+
+
+# ----- the third review ------------------------------------------------------
+def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
+    w, fake = _reasoning(can_shift=False)
+    w.reply_without_tools("hi")
+
+    def refuse(state, pos):
+        raise RuntimeError("the cache refused the saved state")
+    fake.restore_state = refuse
+    rebuilds = fake.rebuilds
+    w.truncate_last_reply("Ant")
+    assert fake.rebuilds == rebuilds + 1
+    _assert_consistent(w, fake)
+
+
+def test_a_cache_that_takes_a_cut_needs_no_saved_state():
+    w, fake = _reasoning(can_shift=False)
+    fake.can_cut_tail = True
+    w.begin("s", reasoning=True)
+    saved, rebuilds = fake.saved_states, fake.rebuilds
+    w.reply_without_tools("hi")
+    w.truncate_last_reply("Ant")
+    assert fake.saved_states == saved and fake.rebuilds == rebuilds
+    _assert_consistent(w, fake)
+
+
+def test_a_cut_leaves_a_state_for_the_next_reply():
+    w, fake = _reasoning(can_shift=False)
+    w.reply_without_tools("hi")
+    w.truncate_last_reply("Ant")
+    assert w._rest_states[-1][0] == w._table.total
+
+
+def test_what_a_cache_that_cannot_shift_decodes_again_is_counted():
+    w, fake = _reasoning(can_shift=False)
+    before = fake.total_prefilled()
+    reply = w.reply_without_tools("hi")
+    assert reply.n_prefilled_tokens == fake.total_prefilled() - before
+
+
+def test_a_context_that_saves_states_must_restore_them():
+    with pytest.raises(TypeError, match="restore_state"):
+        ChatWrapper(Config(context_size=500),
+                    context=_without_restore(FakeContext(can_shift=False)))
+
+
+def _without_restore(fake):
+    class Wrapped:
+        def __getattr__(self, name):
+            if name == "restore_state":
+                raise AttributeError(name)
+            return getattr(fake, name)
+    return Wrapped()
+
+
+def test_a_result_answers_the_call_it_was_given_for():
+    from llama_chat.tools import ToolCall
+    w, fake = _tooling()
+    fake.call_script = ['[{"name":"wetter","arguments":{"city":"Berlin"}},'
+                        '{"name":"wetter","arguments":{"city":"Paris"}}]']
+    w.begin("s", tools=[ToolSpec("wetter", "", {})])
+    calls = [e for e in w.reply_until_tool("Wetter?") if isinstance(e, ToolCall)]
+    with pytest.raises(ValueError, match="waiting call"):
+        w.inject_tool_result(calls[1], "Paris: Regen")
+    w.inject_tool_result(calls[0], "Berlin: Sonne")
+    w.inject_tool_result(calls[1], "Paris: Regen")
+
+
+def test_a_channel_header_cut_short_is_not_answer():
+    from llama_chat.reasoning import AnswerOpening
+    opening = AnswerOpening("<|channel|>final<|message|>")
+    assert opening.feed("<|channel|>final") == "" and opening.flush(complete=False) == ""
+
+
+def test_whitespace_after_a_channel_header_is_not_answer():
+    from llama_chat.reasoning import AnswerOpening
+    opening = AnswerOpening("</mm:think>")
+    assert opening.feed("</mm:think>") + opening.feed("\n\n") + opening.feed("Antwort.") \
+        == "Antwort."
+
+
+def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
+    from llama_chat.reasoning import ThoughtFilter
+    f = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
+    assert f.feed(" ") + f.feed(" x") + f.flush() == "  x"
+    g = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
+    assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") + g.flush() == "b"

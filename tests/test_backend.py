@@ -72,22 +72,64 @@ def test_every_cache_edit_is_performed_while_loading():
     crosses the threshold, a whole conversation after the model was loaded.
     Each is performed empty, so proving it costs nothing and changes nothing.
     """
+    for can_shift in (True, False):
+        performed = []
+        context = object.__new__(KVContext)
+        context._llama_context = "the context"
+        context._can_shift = can_shift
+        context._backend = SimpleNamespace(
+            kv_seq_rm=lambda *args: performed.append(("seq_rm",) + args),
+            kv_seq_add=lambda *args: performed.append(("seq_add",) + args),
+            kv_clear=lambda *args: performed.append(("clear",) + args),
+        )
+
+        context._verify_cache_edits()
+
+        # A cache that cannot shift is never shifted, and is not asked to.
+        assert performed == [("seq_rm", "the context", SEQ, 0, 0)] \
+            + ([("seq_add", "the context", SEQ, 0, 0, 0)] if can_shift else []) \
+            + [("clear", "the context")]
+
+
+def _probed_context(reports_shift, cuts_tail):
+    """A context over a backend reporting a shift and taking or refusing a cut at its end."""
     performed = []
     context = object.__new__(KVContext)
-    context._llama_context = "the context"
+    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._backend = SimpleNamespace(
-        kv_seq_rm=lambda *args: performed.append(("seq_rm",) + args),
-        kv_seq_add=lambda *args: performed.append(("seq_add",) + args),
-        kv_clear=lambda *args: performed.append(("clear",) + args),
+        can_shift=lambda ctx: reports_shift,
+        token_eos=lambda vocab: 2,
+        decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", tokens, pos)),
+        # Every removal that stops before the end succeeds, as a running state's does.
+        kv_seq_rm=lambda ctx, seq, p0, p1: performed.append(("seq_rm", p0, p1)) or (
+            cuts_tail or p1 >= 0),
+        kv_seq_add=lambda ctx, seq, p0, p1, d: performed.append(("seq_add", p0, p1, d)),
+        kv_clear=lambda ctx: performed.append(("clear",)),
     )
+    context._settle_cache_edits()
+    return context, performed
 
-    context._verify_cache_edits()
 
-    assert performed == [
-        ("seq_rm", "the context", SEQ, 0, 0),
-        ("seq_add", "the context", SEQ, 0, 0, 0),
-        ("clear", "the context"),
-    ]
+def test_a_cache_that_refuses_a_cut_at_its_end_is_never_shifted_whatever_it_reports():
+    """A hybrid cache reports the shift its attention part can do; its running state cannot."""
+    context, performed = _probed_context(reports_shift=True, cuts_tail=False)
+    assert not context.can_shift and not context.can_cut_tail
+    assert not any(edit[0] == "seq_add" for edit in performed)    # not even at load
+    assert performed[-1] == ("clear",)
+
+
+@pytest.mark.parametrize("reports_shift", (True, False))
+def test_a_cache_that_takes_the_cut_shifts_as_it_reports(reports_shift):
+    context, _performed = _probed_context(reports_shift, cuts_tail=True)
+    assert context.can_shift == reports_shift and context.can_cut_tail
+
+
+def test_the_cut_is_tried_inside_a_running_state_not_at_its_end():
+    """At the last position a removal may clear a running state whole and succeed."""
+    _context, performed = _probed_context(reports_shift=False, cuts_tail=True)
+    probe = performed.index(("seq_rm", 1, -1))
+    assert len(performed[probe - 1][1]) > 2
+    assert performed[probe + 1] == ("clear",)
 
 
 def test_a_cache_edit_counts_from_either_api():

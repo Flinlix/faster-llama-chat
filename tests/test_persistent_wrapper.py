@@ -321,13 +321,13 @@ def test_a_refused_cut_leaves_the_stored_turn_alone():
     assert store.load("conv-1")[-1] == ("assistant", "Hallo")
 
 
-def test_a_reply_is_stored_as_the_conversation_keeps_it_and_comes_back_so():
+def test_a_reply_is_stored_without_its_thought_and_comes_back_so():
     store = InMemoryStore()
     config = _config(context_size=500, evict_above_fraction=1.0)
-    keep = lambda text: text.split("|")[-1]   # noqa: E731
-    chat = PersistentChat(store, config, recorded_text=keep,
-                          context=FakeContext(gen_tokens=15, gen_text="Denken|Antwort."))
-    chat.begin("conv-1", "s")
+    thoughtful = "<thought>Denken</thought>Antwort."
+    chat = PersistentChat(store, config, context=FakeContext(
+        can_reason=True, calls_tools=True, gen_tokens=len(thoughtful), gen_text=thoughtful))
+    chat.begin("conv-1", "s", reasoning=True)
     chat.reply_without_tools("hi")
     assert store.load("conv-1") == [("user", "hi"), ("assistant", "Antwort.")]
     again = PersistentChat(store, config, context=FakeContext())

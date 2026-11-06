@@ -77,9 +77,10 @@ llama.cpp's server has its own context-shift mechanism. Both use the same
 - *llama.cpp*: context shift is disabled or unreliable on iSWA models in
   default memory-saving mode. `--swa-full` restores it but forfeits the memory
   benefit.
-- *llama_chat*: probes `llama_memory_can_shift()` at startup and falls back
-  to the rebuild path (drop + re-prefill) on non-shiftable caches, which is
-  correct on the exact models where the built-in fails.
+- *llama_chat*: asks `llama_memory_can_shift()` at startup, proves a cut on
+  the empty cache, and falls back to the rebuild path (drop + re-prefill) on
+  caches that cannot shift, which is correct on the exact models where the
+  built-in fails.
 
 **Bookkeeping**
 - *llama.cpp*: no message-level record; client and cache can diverge silently.
@@ -119,7 +120,11 @@ while attending to the now-removed tokens), which is the standard StreamingLLM
 trade-off: fast, with slight quality drift. The system prompt is never evicted.
 
 The strategy is chosen automatically at construction from
-`llama_memory_can_shift()`:
+`llama_memory_can_shift()` and a cut tried on the empty cache. A cache that
+refuses the cut holds a running state and is never shifted, whatever it
+reports: a hybrid cache reports the shift of its attention part, and takes
+every removal that stops short of its end without its running state losing
+those tokens.
 
 - **shift** (default, the fast path): the in-place edit above, applied
   incrementally as messages are dropped. Used everywhere it can be, including
@@ -129,7 +134,18 @@ The strategy is chosen automatically at construction from
   needs):
   drop the oldest messages from the bookkeeping, then re-prefill the surviving
   conversation once. Correct, and it costs one prefill of the survivors; a
-  non-shiftable model degrades gracefully instead of corrupting the cache.
+  non-shiftable model degrades gracefully instead of corrupting the cache. Such
+  a cache may still take a cut at its end, which a load-time probe settles;
+  then the newest reply is shortened by a cut. One that cannot, a recurrent or
+  windowed one, has the part of its state a cut cannot reach saved whenever
+  the cache comes to rest, the last two kept in RAM, one from before the
+  newest reply and one from after it. That part's size is the model's, not
+  the conversation's. A reply
+  kept in another form than it was generated in, see [Reasoning](#reasoning),
+  a cut and a removed reply then restore the earlier state and decode only
+  what follows it. Where the build saves no state, or the newest reply lies
+  before both, the conversation is rebuilt instead. A cache that cannot shift
+  is never asked to shift, not even at load.
 
 `_backend.py` resolves the cache symbols defensively across llama.cpp API
 churn: the modern `llama_memory_*` handle API when present, falling back to the
@@ -251,7 +267,7 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   generation so the total never exceeds `context_size`. The reply is recorded so
   the next generation reuses it. Returns a `Reply` (`text`,
   `n_prefilled_tokens`, `n_generated_tokens`, `n_evicted_messages`,
-  `stop_reason`, `tool_calls`). If `min_reply_tokens` is set and the prompt
+  `stop_reason`, `tool_calls`, `tool_limit_reached`, `n_reasoning_tokens`). If `min_reply_tokens` is set and the prompt
   would leave less than that for the reply, it raises `ContextOverflowError`
   before touching the cache. `max_reply_tokens=` and `stop=` override the config
   for one call; the stop strings are added to the configured ones rather than
@@ -281,19 +297,11 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   cache's end: the tokens the shortened message shares with the old one are not
   decoded again, and the rest, the turn's closing tag at least, is. A cache that
   cannot shift is instead re-prefilled from the whole conversation on every cut,
-  as its eviction is; see "How eviction works". A generated
-  reply keeps its generation prompt and a prefilled one the template's opening.
-  Refused where a reply is open, the newest message is not the assistant's or
-  holds a tool call, or `keep_text` is not a prefix.
-- **`recorded_text=`**, given to the constructor: a function from a finished
-  reply's generated text to the text the conversation keeps of it, for a model
-  that writes more than its reader gets, such as reasoning before the answer.
-  A reply it changes is kept as the template writes a past reply, under the
-  same lock as the generation and before the post-reply eviction is sized, so a
-  long thought evicts nothing; the tokens the kept form shares with the
-  generated one are not decoded again. A reply it reduces to nothing is
-  removed, and one that holds a tool call is kept as generated. It must not
-  raise; one that does leaves the reply as generated.
+  as its eviction is; see "How eviction works". Refused where a reply is
+  open, the newest message is not the assistant's or holds a tool call, or
+  `keep_text` is not a prefix.
+- **`begin(..., reasoning=True)`**: the model reasons before each answer, as
+  its own template turns that on. See [Reasoning](#reasoning).
 
 `stop_reason` is one of:
 
@@ -357,7 +365,6 @@ into a conversation. None of it is re-derived per turn.
 | each KV-cache edit, performed once on the empty cache | a build that cannot shift fails at the first eviction, a whole conversation in |
 | the cache context answers everything the wrapper and its template resolution call on it | the same, for a context of your own |
 | the template fragments round-trip through the model's own template, and the turn-terminator is one of its tags | a reply the model never ends, and a cache encoded as it was never trained |
-| the formatter keeps those turn tags: it may add to the generation prompt, the terminator and a resumption, but not replace them | a reply generated outside its turn, or a second turn opened inside the first |
 | tool calling, all four steps, as `can_call_tools` | a tool declared, called, and only then found unanswerable |
 
 What is left is what only a conversation can know: whether a request still fits
@@ -377,7 +384,7 @@ None of these touch the cache, and all are safe to call from another thread.
 | `snapshot()` | the conversation and its cache layout: one `{"role", "text", "n_tokens", "pos_start", "pos_end"}` row per message |
 | `busy` | whether a generation is running. Advisory: it can be stale the moment it returns, and correctness rests on the lock every action takes anyway |
 | `wait_idle(timeout_s=None)` | block until no generation is running; `False` on timeout. Advisory in the same way |
-| `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but one long prefill the first time history crosses the threshold |
+| `can_shift` | whether eviction can shift surviving KV in place. `False` (compact SWA, recurrent caches) means eviction re-prefills the survivors instead: correct, but one long prefill the first time history crosses the threshold, and after every reply that is kept in another form than it was generated in |
 | `can_call_tools` | whether tools can be used with this model, every step of the way: its template describes a call, it renders the declarations that tell the model a tool exists, the argument spelling was recovered, and it renders a block to answer one in. Settled at construction, and exactly the condition `begin(tools=...)` checks |
 | `awaiting_tool_result` | whether a call is still owed a result |
 | `reply_open` | whether a reply is unfinished, so `reply_without_tools`, `inject` and `declare_unknown_tools` refuse. Outlasts `awaiting_tool_result`: the last result empties the calls while the turn stays open until `resume_until_tool()` |
@@ -464,7 +471,6 @@ second positional parameter:
 |------|------|
 | `fragments=` | the per-role template tags, for a model that ships none. See [Chat template](#chat-template) |
 | `tool_calls=` | the tags a call sits between, and optionally how it spells its arguments, for a model whose template describes neither. See [Tool calling](#tool-calling) |
-| `formatter=` | a `TemplateFormatter` subclass, where opening or closing a turn takes more than the tag. See [A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back) |
 | `on_message=` | called with `(role, text)` for every genuine new message. See [Persistence](#persistence) |
 | `on_load_progress=` | called with a fraction while the weights load. It must not raise: an exception there aborts the load |
 | `context=` | a cache context of your own, in place of the one built from `Config`. See [Layout](#layout) |
@@ -809,13 +815,22 @@ commonly adds the tags around a tool call as ordinary added tokens, for which
 `llama_vocab_is_control` returns false, so a check that accepts only control
 tokens turns tool calling off without saying so.
 
+A call's opening tag is the first tag before the name. Its closing tag is read
+from a turn that makes two calls: the last tag between the first call's
+argument and the second call's opening. The first tag after the arguments is
+not enough, because a template may close each argument with a tag of its own,
+`<arg_value>v</arg_value></tool_call>`. Where a template writes no tag between
+two calls, the closing tag is the first after the last argument, which may be
+the token that ends the turn.
+
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
 JSON is read directly instead, because it already carries the function name and
 the arguments. Together the two cover JSON objects and arrays,
-`name{key:value}` with quoted strings, `name(k="v")`, attribute-style XML, and
-`<function=name><parameter=k>v</parameter>`, including nested objects, lists,
-and separators inside quoted values.
+`name{key:value}` with quoted strings, `name(k="v")`, attribute-style XML,
+`<function=name><parameter=k>v</parameter>`, and keys and values in tags of
+their own right after the name, `name<arg_key>k</arg_key><arg_value>v</arg_value>`,
+including nested objects, lists, and separators inside quoted values.
 
 What the recovered delimiters look like on two real models, since the field
 names alone are hard to picture:
@@ -849,39 +864,55 @@ block names `unknown` and its message says what happened. Writing nothing would
 leave a call with no result in the history, which no template produces and the
 model would read back on every later turn.
 
-One limit: a model that writes a batch of calls as a JSON array has all of them
-read and each owes a result, but any other shape ends at its closing tag, so
-generation stops after one call either way.
+A model that writes a batch of calls as a JSON array has all of them read, and
+each owes a result. The results are written as the template writes the results
+of calls made together: one after another, with what closes the block, and the
+generation prompt, only after the last. Any other shape ends at its closing
+tag, so generation stops after one call either way.
 
-### A resumed turn needs its generation prompt back
+### A resumed turn opens as a new one does
 
-A model whose generation prompt carries more than the turn tag, an empty
-reasoning channel for instance, never has that part prefilled when the reply
-resumes after a tool result, because the turn tag must not repeat. Left alone
-the model writes it itself and it arrives as reply text. `TemplateFormatter`
-has `resume_open()` for exactly that part, empty by default; a formatter that
-adds something at turn start adds it here too:
+A reply resumed after a tool result opens the way a new reply opens after its
+tag, unless the result's wrapping already ends that way. A template whose
+generation prompt carries an empty thought, to keep the model from reasoning,
+may leave that out after a result; left alone, the model would then open a
+thought of its own.
+
+## Reasoning
+
+A template that turns reasoning on through the variable chat templates share
+for it, `enable_thinking`, and that marks a thought in a reply, is read for
+both: what the system turn and the generation prompt are with reasoning on and
+off, and the tags around a thought. `ChatWrapper.can_reason` says whether that
+succeeded.
+
+Reasoning belongs to the conversation, because a template may switch it in the
+system turn, so it is chosen per `begin`:
 
 ```python
-from llama_chat import ChatWrapper, TemplateFormatter
-
-EMPTY_CHANNEL = "<|channel>thought\n<channel|>"   # whatever this model wants
-
-class Channelled(TemplateFormatter):
-    def assistant_open(self) -> str:
-        return super().assistant_open() + EMPTY_CHANNEL
-
-    def resume_open(self) -> str:
-        return EMPTY_CHANNEL
-
-ChatWrapper(model_path="model.gguf", formatter=Channelled)
+chat.begin("You are a helpful assistant.", reasoning=True)
+reply = chat.reply_without_tools("Why is the sky blue?")
+reply.text                  # the answer alone
+reply.n_reasoning_tokens    # about how many tokens the thought took
 ```
 
-A template can also switch a mode at the top of the system turn, reasoning for
-instance. `system_open()` is decoded right after the system turn's tag, before
-its content and any declarations, and is empty by default. It is part of the
-system turn, so a formatter that changes it takes effect from the next
-`begin`.
+Every stream yields the answer alone, with or without reasoning, so a thought
+the model has without being asked is kept out too, as is the thought of a
+model whose template always opens one and has no switch. Stop strings are
+matched against the answer only. A template that routes replies through
+channels ends its generation prompt before the channel's header, which the
+model writes itself; that header is kept out of the answer as well, and a
+thought may be read from either field templates use for it, `reasoning_content`
+or `thinking`, or from a content block of type `thinking`. A finished reply is kept as the template
+writes a past reply: without its thought where the template leaves a past
+thought out, and without what a generation prompt adds, such as an empty
+thought, and in the tokens its text tokenizes into, where the model generated
+a word in other pieces. Where that differs from what
+was generated, the reply is decoded again in that form, from the first token
+that differs, before the next request, under the same lock. The post-reply eviction is sized by that form, so a long
+thought evicts nothing, and runs first, so the decode carries its shift. A
+reply left with no answer, all thought or cut before its first word, is
+removed. A turn that called tools keeps the tokens it was generated as.
 
 ## Persistence
 
@@ -933,15 +964,29 @@ generation.
 The template is expressed as per-role **fragments**: the literal text wrapped
 around each message, so one turn renders as `prefix + text + suffix`. Content is
 stripped first when `trim_content` is set, matching templates that apply Jinja
-`| trim`; it is `False` for templates that emit content verbatim.
+`| trim`; it is `False` for templates that emit content verbatim. A template
+that strips a reply differently from the other roles says so in `reply_strip`.
+The assistant tags are those of a past reply; what the generation prompt holds
+where it is more than that tag is `generation_prompt`.
 
 **The fragments are derived from the model automatically.** At construction the
 wrapper reads the model's own chat template from the GGUF
 (`tokenizer.chat_template`) and recovers the per-role fragments from it. It works by rendering
 short probes through the model's template with sentinel content and splitting the
 render on the sentinels to recover each role's `prefix`/`suffix` (the inverse of
-the validation probe below), plus a whitespace-padded probe to detect
-`trim_content`. The `system` role has no portable ground truth, because some models
+the validation probe below), plus whitespace-padded probes to detect
+`trim_content` and `reply_strip`. The user and assistant tags are read from a
+conversation of two user turns, because a first turn may carry text the
+template writes once at the start, such as a default system block, and a newest
+reply may carry what only the newest one does. Every probe renders with
+reasoning off. A conversation begun with an empty system prompt
+has no system message, and opens as the template opens one without, with any
+tools declared where the template declares them then. A system prompt is
+refused where the template has no system turn of its own and writes one into
+the first user turn, because a prompt kept for the whole conversation cannot
+be. A system message added later, by `inject(..., "system")` or
+`declare_unknown_tools`, takes the tags the template gives a later system turn,
+and is refused where it gives none. The `system` role has no portable ground truth, because some models
 have no distinct system role (some reject it, others fold it into the first user
 turn). So when the system probe does not survive, the system fragment falls back
 to the user tags, the same convention llama.cpp uses.
@@ -975,35 +1020,21 @@ ChatWrapper(fragments=..., tool_calls=ToolCallFragments(
 either may carry fixed text around the tag itself; the wrapper narrows it to the
 one token the tag is.
 
-The fragments say what wraps text that already exists. What is decoded *around
-sampling* is the formatter's, and `ChatWrapper(formatter=...)` takes a
-`TemplateFormatter` subclass for a model whose generation prompt carries more
-than the turn tag, an empty reasoning channel for instance. See
-[A resumed turn needs its generation prompt back](#a-resumed-turn-needs-its-generation-prompt-back).
 
 The load-time checks make a mismatch fail loudly instead of degrading silently:
 
 - **At construction** the turn-terminator (`assistant_suffix`) is validated
   against the model's vocabulary: if it does not tokenize to a single special
   token, which is the silent mismatch described above, construction raises.
-- **At construction** the `user`/`assistant` fragments are checked against the
-  model's own chat template read from the GGUF: a fixed probe (with surrounding
-  whitespace, so a wrong `trim_content` is caught too) is rendered both ways and
-  must tokenize identically, a self-consistency check that the recovered (or
-  explicitly supplied) fragments round-trip through the model's template before
-  they corrupt the cache. The fragment side is tokenized exactly as real prefill
-  is (tags special-on, content special-off), so this also confirms the two agree
-  across the tag/content boundaries. It is skipped automatically for models that
-  ship no chat template. The `system` fragment is not probed, because chat
-  templates handle a system role inconsistently (some reject it, others fold it into
-  the first user turn).
-- **At construction** the formatter is checked against those fragments: the
-  generation prompt has to open the assistant turn, the terminator has to close
-  it, a resumption must not open it a second time, and `system_open()` must not
-  open the system turn again. A `formatter=` may add to any of these, an empty
-  reasoning channel for instance, but replacing one
-  encodes the turn as the model never saw it, and nothing but a worse reply
-  would say so.
+- **At construction** the fragments are checked against the model's own chat
+  template read from the GGUF: a conversation of a system prompt, a past reply
+  and a newest user turn, followed by the generation prompt, is rendered both
+  ways, in each reasoning mode the model has, and must tokenize identically.
+  The content is padded with whitespace, so a wrong `trim_content` is caught
+  too, and the fragment side is tokenized exactly as real prefill is (tags
+  special-on, content special-off). The system turn is left out where the
+  template has none of its own. The check is skipped for models that ship no
+  chat template.
 
 ### Special tokens in message content
 
@@ -1027,6 +1058,10 @@ python examples/demo.py /path/to/model.gguf                  # CPU
 python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 ```
 
+`tests/test_real_templates.py` runs a real chat template of every family in
+`tests/templates/` through the check a model meets at load, with reasoning on
+and off. Each file there names the model file it was read from.
+
 The test suite uses a model-free fake cache context whose `prefill` asserts
 `start_pos == len(cache)`, so the wrapper can only ever *append*, never
 re-prefill a survivor. That assertion is the design guarantee, checked
@@ -1041,8 +1076,9 @@ never crosses `context_size`.
 |------|------|
 | `llama_chat/config.py` | `Config`: every runtime setting, field by field in [Configuration](#configuration) |
 | `llama_chat/messages.py` | `MessageTable`, `Message`, `Eviction`, `n_newest_that_fit`: position bookkeeping, evict + shift (pure Python) |
-| `llama_chat/template.py` | `TemplateFragments`, `TemplateFormatter`, `ToolCallFragments`, `CallBody`: what a turn and a tool call are wrapped in |
-| `llama_chat/template_extract.py` | `extract_fragments`, `extract_tool_fragments`, `extract_call_body`: recover all of that from the model's GGUF template |
+| `llama_chat/template.py` | `TemplateFragments`, `Reasoning`, `TemplateFormatter`, `ToolCallFragments`, `CallBody`: what a turn and a tool call are wrapped in, and how reasoning is turned on |
+| `llama_chat/template_extract.py` | `extract_fragments`, `extract_reasoning`, `extract_tool_fragments`, `extract_call_body`: recover all of that from the model's GGUF template |
+| `llama_chat/reasoning.py` | `ThoughtFilter`: telling a reply's thought from its answer as it streams |
 | `llama_chat/resolved_template.py` | `ResolvedTemplate`: one model's template, recovered or supplied, validated against it, with the four tool-calling steps settled |
 | `llama_chat/_backend.py` | `Backend`: version-stable adapter over `llama_cpp.*`, which renames its symbols across releases. The only file in the package that names it, pinned by a test |
 | `llama_chat/context.py` | `KVContext`: tokenize / prefill / streaming generate / evict |
@@ -1052,7 +1088,7 @@ never crosses `context_size`.
 | `llama_chat/persistent_wrapper.py` | `PersistentChat`, `ConversationStore`, `InMemoryStore`: the same API, with every message mirrored to a durable store |
 
 Everything in that table is importable from `llama_chat` itself, apart from the
-extraction functions and `ResolvedTemplate`: the wrapper runs those for you at
+extraction functions, `TemplateFormatter`, `ThoughtFilter` and `ResolvedTemplate`: the wrapper runs those for you at
 construction, and `llama_chat.template_extract` is where to reach the extraction
 functions to run against a template directly. `n_newest_that_fit` is the pure
 function `begin` uses to decide how much history fits, exposed so that decision

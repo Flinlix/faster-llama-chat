@@ -19,6 +19,8 @@ Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
 from llama_chat.template import TemplateFragments
@@ -34,11 +36,19 @@ CALL_LEAD_IN = "fn:"
 # The default fragments for tests. The tags are invented, not any real
 # model's, so nothing can pass by matching a format hard-coded somewhere.
 DEFAULT_FRAGMENTS = TemplateFragments(
-    system_prefix="<|turn>user\n", system_suffix="<turn|>\n",
+    system_prefix="<|turn>system\n", system_suffix="<turn|>\n",
     user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
     assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
     trim_content=True,
 )
+
+
+# This fake model's reasoning, when it has any: a switch at the top of the
+# system turn, an empty thought opening a reply that does not reason, and the
+# tags around a thought. Invented, as the tags above are.
+THINK_ON = "<think-on>\n"
+THOUGHT_OPEN, THOUGHT_CLOSE = "<thought>", "</thought>"
+EMPTY_THOUGHT = THOUGHT_OPEN + THOUGHT_CLOSE
 
 
 def _fake_value(value):
@@ -51,8 +61,9 @@ class FakeContext:
                  can_shift: bool = True,
                  fragments: TemplateFragments = DEFAULT_FRAGMENTS,
                  calls_tools: bool = False,
-                 tokens_spell_text: bool = False,
-                 closes_turn_before_next: bool = False) -> None:
+                 tokens_spell_text: bool = True,
+                 closes_turn_before_next: bool = False,
+                 can_reason: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -63,16 +74,23 @@ class FakeContext:
         # As llama.cpp's own renderer does: a turn left open after a result is
         # closed when another message follows it.
         self._closes_turn_before_next = closes_turn_before_next
+        # A third model, one with a reasoning switch.
+        self._can_reason = can_reason
+        if can_reason:
+            self._fragments = replace(
+                fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
         self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
         self.rebuilds = 0  # how many times the cache was rebuilt (no-shift path)
+        self.saved_states = 0
         self.warmups = 0  # how many times warmup() was called
         self._gen_tokens = gen_tokens
         self._gen_text = gen_text
         # Generated tokens are the characters' own, as the tokenizer would
-        # give them, rather than ids no tokenization reproduces.
+        # give them; otherwise ids no tokenization reproduces, as a model that
+        # generates a word in other pieces than its text tokenizes into.
         self._tokens_spell_text = tokens_spell_text
         self._next_gen = 1000
         self.samplings = []  # the sampling each generation was handed
@@ -114,6 +132,14 @@ class FakeContext:
         self.cache.extend(token_ids)
         self.prefill_calls.append((start_pos, len(token_ids), want_logits))
 
+    def save_state(self):
+        self.saved_states += 1
+        return list(self.cache)
+
+    def restore_state(self, state, pos: int) -> None:
+        assert len(state) == pos
+        self.cache = list(state)
+
     def remove_from(self, pos: int) -> None:
         assert 0 <= pos <= len(self.cache)
         del self.cache[pos:]
@@ -138,13 +164,19 @@ class FakeContext:
         return {TOOL_OPEN: "<call>", TOOL_CLOSE: "</call>"}.get(token, "")
 
     def render_with_model_template(self, messages: list[dict],
-                                   tools: list[dict] | None = None) -> str:
+                                   tools: list[dict] | None = None, *,
+                                   generation_prompt: bool = False,
+                                   reasoning: bool | None = None) -> str:
         """Render just enough for the wrapper to slice declarations and results.
 
         A call leaves its turn open, and the result and the prose after it stay
         inside that same turn. That is the property the whole exchange rests on,
-        so this fake has to have it too.
+        so this fake has to have it too. A newest reply's thought is written
+        only in a turn that calls a tool, as one real template does.
         """
+        if any(not isinstance(m.get("content", ""), str) for m in messages):
+            return None             # content blocks: a shape this template refuses
+        renders_reasoning = self._can_reason and reasoning is not False
         out, turn_open = [], False
         for m in messages:
             role = "model" if m["role"] == "assistant" else m["role"]
@@ -161,7 +193,11 @@ class FakeContext:
                 turn_open = False
                 continue
             out.append(f"<|turn>{role}\n")
+            if role == "system" and renders_reasoning:
+                out.append(THINK_ON)
             calls = m.get("tool_calls", ()) if self._calls_tools else ()
+            if calls and self._can_reason and m.get("reasoning_content"):
+                out.append(THOUGHT_OPEN + m["reasoning_content"] + THOUGHT_CLOSE)
             for call in calls:
                 fn = call["function"]
                 body = ",".join(
@@ -175,6 +211,10 @@ class FakeContext:
                 turn_open = True               # the result belongs in this turn
             else:
                 out.append("<turn|>\n")
+        if generation_prompt and not turn_open:
+            out.append("<|turn>model\n")
+            if self._can_reason and not renders_reasoning:
+                out.append(EMPTY_THOUGHT)
         return "".join(out)
 
     def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],

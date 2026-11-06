@@ -249,8 +249,8 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     reply = w.reply_without_tools("hi", cancel=cancel)
     assert reply.stop_reason == "interrupted"
     assert reply.n_generated_tokens == 0
-    # The empty assistant turn is still closed cleanly and recorded.
-    assert w.snapshot()[-1]["role"] == "assistant"
+    # A reply with nothing in it is no reply: only the request stays.
+    assert w.snapshot()[-1]["role"] == "user"
     _assert_consistent(w, fake)
 
 
@@ -602,7 +602,7 @@ def test_context_manager_closes_on_exit():
 def test_template_formatter_renders_gemma_tags():
     fmt = TemplateFormatter(_fragments())
     assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
-    assert fmt.assistant_open() == "<|turn>model\n"
+    assert fmt.generation_prompt() == "<|turn>model\n"
     assert fmt.assistant_close() == "<turn|>\n"
 
 
@@ -613,7 +613,7 @@ def test_template_formatter_combines_fragments():
     )
     assert fmt.fragment("user", "hi") == "<u>hi</u>"
     assert fmt.fragment("assistant", "yo") == "<a>yo</a>"
-    assert fmt.assistant_open() == "<a>"
+    assert fmt.generation_prompt() == "<a>"
     assert fmt.assistant_close() == "</a>"
     with pytest.raises(ValueError):
         fmt.fragment("unknown-role", "x")
@@ -702,7 +702,7 @@ class _TemplatingFake(FakeContext):
         super().__init__(fragments=fragments)
         self._render = render
 
-    def render_with_model_template(self, messages):
+    def render_with_model_template(self, messages, tools=None, **_options):
         return self._render(messages)
 
 
@@ -951,51 +951,6 @@ def test_wait_idle_blocks_until_a_generation_releases_the_lock():
     assert w.busy is False
 
 
-# ----- template customisation -------------------------------------------
-def test_a_formatter_factory_customises_how_generation_opens():
-    class NoThink(TemplateFormatter):
-        def assistant_open(self) -> str:
-            return super().assistant_open() + "<empty/>"
-
-    fake = FakeContext()
-    w = ChatWrapper(_config(context_size=200), context=fake, formatter=NoThink)
-    w.begin("sys")
-    w.reply_without_tools("hi")
-    # The suffix is tokenized into the generation prompt ...
-    assert any("<empty/>" in text for text, _special in fake.tokenize_calls)
-    # ... and only there: the history-wrapping fragments are untouched, so the
-    # cache layout and the template validation see exactly what they did before.
-    plain = ChatWrapper(_config(context_size=200), context=FakeContext())
-    assert "<empty/>" not in plain._formatter.fragment("assistant", "yo")
-
-
-def test_a_formatter_that_loses_the_models_turn_tags_is_refused():
-    """A generation prompt is an addition to the turn tag, never a replacement.
-
-    Left unchecked, the first encodes every reply outside the turn it belongs
-    to, the second leaves that turn unterminated, and the last opens a second
-    turn inside the first. All three are shapes no template produces, and all
-    three surface as a worse reply rather than as an error.
-    """
-    class Replaces(TemplateFormatter):
-        def assistant_open(self) -> str:
-            return "<oops>"
-
-    class Drops(TemplateFormatter):
-        def assistant_close(self) -> str:
-            return "\n"
-
-    class Reopens(TemplateFormatter):
-        def resume_open(self) -> str:
-            return DEFAULT_FRAGMENTS.assistant_prefix + "<empty/>"
-
-    for broken, complaint in ((Replaces, "assistant_open"),
-                              (Drops, "assistant_close"),
-                              (Reopens, "resume_open")):
-        with pytest.raises(ValueError, match=complaint):
-            ChatWrapper(_config(), context=FakeContext(), formatter=broken)
-
-
 def test_a_cache_context_missing_an_edit_is_refused_where_it_is_adopted():
     """Eviction is the last thing a conversation reaches, and the first to fail.
 
@@ -1096,3 +1051,28 @@ def test_a_stream_closed_early_ends_the_turn_and_reports_no_reply():
     assert not w.reply_open
     _assert_consistent(w, fake)
     assert w.reply_without_tools("weiter").stop_reason == "end_of_turn"
+
+
+def test_a_call_may_close_with_the_token_that_ends_a_turn():
+    """A template may end a call with its end-of-turn token, as some do with EOS."""
+    from types import SimpleNamespace
+    from llama_chat.context import GenerationAccumulator, KVContext
+
+    OPEN, BODY, END = 0, 1, 2
+    pieces = {OPEN: b"[CALL]", BODY: b"f{}", END: b"</s>"}
+    toks = iter([OPEN, BODY, END, END])
+    ctx = object.__new__(KVContext)
+    ctx._backend = SimpleNamespace(
+        sample=lambda sampler, ctx: next(toks),
+        is_eog=lambda vocab, tok: tok == END,
+        decode=lambda ctx_, ids, pos, seq, logits, batch: None,
+        token_to_piece_bytes=lambda vocab, tok: pieces[tok],
+        sampler_reset=lambda sampler: None,
+    )
+    ctx._sampler = ctx._vocab = ctx._llama_context = None
+    ctx._max_batch_tokens = 8
+
+    acc = GenerationAccumulator()
+    list(ctx.generate(0, 10, [], out=acc, tool_tokens=(OPEN, END)))
+    assert acc.stop_reason == "tool_call" and acc.tool_call == "f{}"
+    assert acc.token_ids == [OPEN, BODY, END]

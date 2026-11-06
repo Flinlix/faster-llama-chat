@@ -1,8 +1,8 @@
 """What one model's own chat template supports, resolved once and validated.
 
 Everything here is settled while a wrapper is being built: the per-role
-fragments, the formatter that opens and closes a turn, and the four steps tool
-calling needs. An instance is therefore a template known to work, and the
+fragments, what turns reasoning on, and the four steps tool calling needs. An
+instance is therefore a template known to work, and the
 questions a caller would otherwise ask per turn are already answered.
 
 Nothing here touches a conversation. It reads a cache context and renders
@@ -14,28 +14,32 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from .template import (CallBody, TemplateFormatter, TemplateFragments,
-                       ToolCallFragments)
-from .template_extract import extract_call_body, extract_tool_fragments
+from .template import (CallBody, Reasoning, TemplateFormatter,
+                       TemplateFragments, ToolCallFragments)
+from .template_extract import (extract_call_body, extract_call_separator,
+                               extract_reasoning, extract_tool_fragments)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
-# What builds the formatter once the fragments are known.
-_FormatterFactory = Callable[[TemplateFragments], TemplateFormatter]
-
-# Where the prompt, a tool result and the reply after it go in a render. No one
-# of them contains another, so a split on any lands where it means to.
+# Where the prompt and a tool result go in a render. Neither contains the
+# other, so a split on either lands where it means to.
 _PROMPT = "PROMPTMSG"
 _RESULT = "RESULTMSG"
-_TAIL = "TAILMSG"
+# The results of a batch, numbered; none contains another.
+_RESULT_N = "RESULT{}NTH"
 
 # Where a past turn's own text goes in a render, numbered; the user turns around
 # it are found by the two markers above and below.
 _FIELD = "FIELD{}MSG"
 _FIELD_PATTERN = re.compile(r"FIELD(\d+)MSG")
 _NEXT = "NEXTMSG"
+
+# The conversation the fragments are checked on: a system prompt and two user
+# turns, so a past reply and a newest turn are both in it. Padded, so a wrong
+# `trim_content` shows too.
+_CHECK_CONVERSATION = ((("system", " sys "),), (("user", " ping "), ("assistant", " pong "),
+                                     ("user", " again ")))
 
 # The stand-in a probe declares and answers a call for. What a template renders
 # around a declaration or around a result does not depend on which function it
@@ -95,26 +99,19 @@ class ResolvedTemplate:
         tool_calls: Explicit call tags, and optionally the argument spelling
             inside them, for a model whose template describes neither. Whatever
             it leaves out is recovered from the model.
-        formatter: Factory building the :class:`~llama_chat.template.TemplateFormatter`
-            from the resolved fragments.
 
     Raises:
         TypeError: If ``context`` does not answer what resolving needs of it.
-        ValueError: If the template cannot be recovered, if it fails validation
-            against the model, or if ``formatter`` builds one that does not keep
-            the model's own turn tags.
+        ValueError: If the template cannot be recovered, or if it fails
+            validation against the model.
     """
 
     def __init__(self, context, *, fragments: TemplateFragments | None = None,
-                 tool_calls: ToolCallFragments | None = None,
-                 formatter: _FormatterFactory | None = None) -> None:
+                 tool_calls: ToolCallFragments | None = None) -> None:
         self._context = context
         self._fragments = (fragments if fragments is not None
                            else self._resolve_fragments())
-        self._formatter = (formatter or TemplateFormatter)(self._fragments)
         self._validate_template()
-        self._validate_formatter()
-        self._check_fragments_match_model()
         # None where this model cannot call tools at all.
         self._tool_calls = (tool_calls if tool_calls is not None
                             else self._resolve_tool_calls())
@@ -122,6 +119,11 @@ class ResolvedTemplate:
         self._call_body = self._resolve_call_body()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
+        self._reasoning = self._resolve_reasoning()
+        self._check_fragments_match_model()
+        self._preambles = {reasoning: self._resolve_preamble(reasoning)
+                           for reasoning in (False, True)}
+        self._later_system = self._resolve_later_system()
 
     # ----- what the wrapper reads ----------------------------------------------
     @property
@@ -130,9 +132,62 @@ class ResolvedTemplate:
         return self._fragments
 
     @property
-    def formatter(self) -> TemplateFormatter:
-        """What renders one message, and what is decoded around sampling."""
-        return self._formatter
+    def reasoning(self) -> Reasoning | None:
+        """How this model marks a thought and reasons, or ``None`` where it marks none."""
+        return self._reasoning
+
+    @property
+    def can_reason(self) -> bool:
+        """Whether a conversation can be asked to reason, as the template does it."""
+        return self._reasoning is not None and self._reasoning.system_prefix is not None
+
+    @property
+    def has_system_turn(self) -> bool:
+        """Whether a system prompt has a turn of its own, rather than the user tags'."""
+        frags = self._fragments
+        return (frags.system_prefix, frags.system_suffix) != \
+            (frags.user_prefix, frags.user_suffix)
+
+    @property
+    def later_system_tags(self) -> tuple[str, str] | None:
+        """The tags of a system turn after the first exchange, or ``None``."""
+        return self._later_system
+
+    def preamble(self, reasoning: bool = False) -> str | None:
+        """What the template writes ahead of the first turn when there is no system prompt.
+
+        ``None`` where the model ships no template, the fragments' system turn
+        then standing in.
+        """
+        return self._preambles[reasoning]
+
+    def preamble_declaring(self, specs: list[ToolSpec], reasoning: bool = False) -> str:
+        """What the template writes ahead of the first turn for ``specs`` and no system prompt.
+
+        Raises:
+            ValueError: If the template does not write it where it can be located.
+        """
+        rendered = self._context.render_with_model_template(
+            [{"role": "user", "content": _PROMPT}],
+            tools=[spec.as_declaration() for spec in specs], reasoning=reasoning)
+        opened = self._fragments.user_prefix + _PROMPT
+        if rendered is None or opened not in rendered:
+            raise ValueError("this model's template declares tools without a system "
+                             "prompt in a way that cannot be located")
+        return rendered.split(opened, 1)[0]
+
+    def formatter(self, reasoning: bool = False) -> TemplateFormatter:
+        """What renders one message, and what is decoded around sampling.
+
+        Raises:
+            ValueError: If ``reasoning`` is asked of a model that cannot reason.
+        """
+        if reasoning and not self.can_reason:
+            raise ValueError("this model's template has no reasoning switch that "
+                             "can be turned on as it does, or marks no thought "
+                             "that could be told from the answer")
+        return TemplateFormatter(self._fragments,
+                                 self._reasoning if reasoning else None)
 
     @property
     def tool_tokens(self) -> tuple[int, int] | None:
@@ -161,57 +216,71 @@ class ResolvedTemplate:
                 and self._call_body is not None and self._can_write_results)
 
     def system_turn_declaring(self, specs: list[ToolSpec],
-                              opening: str = "") -> tuple[str, str]:
+                              reasoning: bool = False) -> tuple[str, str]:
         """What this model wraps a system prompt in when ``specs`` are declared.
 
         Args:
-            opening: The formatter's ``system_open()``, placed where the turn's
-                own head without declarations ends.
+            reasoning: Whether the conversation reasons, which the template may
+                switch in this turn.
 
         Returns:
             The text before and after the prompt. Which side the declarations
             land on is the template's business.
 
         Raises:
-            ValueError: If the template renders no declarations, or renders
-                them before its own head, where no opening can follow it.
+            ValueError: If the template renders no declarations.
         """
-        split = self._declaration_turn(specs)
-        head = split.declared_head
-        if opening:
-            if not head.startswith(split.plain_head):
-                raise ValueError("this template declares tools ahead of its system "
-                                 "turn's head, so system_open() has no place")
-            head = split.plain_head + opening + head[len(split.plain_head):]
-        return head, split.declared_tail
+        split = self._declaration_turn(specs, reasoning)
+        return split.declared_head, split.declared_tail
 
-    def result_wrapping(self, name: str) -> tuple[str, str]:
+    def result_wrapping(self, name: str, reasoning: bool = False, *,
+                        batch: list[str] | None = None,
+                        index: int = 0) -> tuple[str, str]:
         """What this model's template wraps ``name``'s result in.
 
-        Recovered per result, because the wrapping names the function. Only
-        meaningful where :attr:`tool_tokens` is set, a call's closing tag being
-        what the result block is found against.
+        Recovered per result, because the wrapping names the function, and per
+        place in a batch: the template writes the results of calls made
+        together one after another, with what ends the block after the last.
+        That ending is where the reply goes on, so it includes whatever the
+        generation prompt adds after a result, which may depend on
+        ``reasoning``. Only meaningful where :attr:`tool_tokens` is set, a
+        call's closing tag being what the first result is found against.
+
+        Args:
+            batch: The names of the calls made together, in order; ``name``
+                alone where omitted.
+            index: Which of them this result answers.
+
+        Returns:
+            What goes before the result, and what goes after it: nothing but
+            for the last of a batch.
 
         Raises:
             ValueError: If the template renders no result block.
         """
+        names = batch or [name]
+        markers = [_RESULT_N.format(i) for i in range(len(names))]
         rendered = self._context.render_with_model_template([
             {"role": "user", "content": _PROMPT},
             {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c", "type": "function",
-                 "function": {"name": name, "arguments": {}}}]},
-            {"role": "tool", "name": name, "content": _RESULT},
-            {"role": "assistant", "content": _TAIL},
-        ])
+                {"id": f"c{i}", "type": "function",
+                 "function": {"name": called, "arguments": {}}}
+                for i, called in enumerate(names)]},
+            *({"role": "tool", "name": called, "tool_call_id": f"c{i}",
+               "content": markers[i]} for i, called in enumerate(names)),
+        ], generation_prompt=True, reasoning=reasoning)
         closer = self._context.token_text(self._tool_tokens[1])
-        if rendered is None or _RESULT not in rendered \
-                or _TAIL not in rendered or closer not in rendered:
+        if rendered is None or any(m not in rendered for m in markers) \
+                or closer not in rendered:
             raise ValueError("this model's template renders no tool result")
-        head, _, tail = rendered.partition(_RESULT)
-        return head.rsplit(closer, 1)[1], tail.partition(_TAIL)[0]
+        before = rendered.split(markers[index], 1)[0]
+        prefix = (before.rsplit(closer, 1)[1] if index == 0
+                  else before.split(markers[index - 1], 1)[1])
+        suffix = rendered.split(markers[-1], 1)[1] if index == len(names) - 1 else ""
+        return prefix, suffix
 
-    def past_tool_turn(self, turn: ToolTurn,
-                       open_turn: bool = False) -> list[tuple[str, bool]]:
+    def past_tool_turn(self, turn: ToolTurn, open_turn: bool = False,
+                       reasoning: bool = False) -> list[tuple[str, bool]]:
         """A turn of the history that called tools, as this model's template writes it.
 
         Rendered by the template, with a marker for every piece of the turn's
@@ -222,8 +291,11 @@ class ResolvedTemplate:
         Args:
             turn: The turn.
             open_turn: Leave the turn open after its last result, for the reply
-                to go on with: rendered with nothing after it, and without the
-                closing tag a template may add there.
+                to go on with: rendered as the generation prompt ends it, with
+                nothing after it, and without the closing tag a template may
+                add there.
+            reasoning: Whether the conversation reasons, which the generation
+                prompt of an open turn may depend on.
 
         Returns:
             The turn from its opening tag to its closing one, or to its last
@@ -246,7 +318,8 @@ class ResolvedTemplate:
         after = [] if open_turn else [{"role": "user", "content": _NEXT}]
         rendered = self._context.render_with_model_template(
             [{"role": "user", "content": _PROMPT}]
-            + _turn_messages(turn, field, frags.trim_content) + after)
+            + _turn_messages(turn, field, frags) + after,
+            generation_prompt=open_turn, reasoning=reasoning)
         head = frags.user_prefix + _PROMPT + frags.user_suffix
         if rendered is None or head not in rendered \
                 or not (open_turn or _NEXT in rendered):
@@ -307,6 +380,10 @@ class ResolvedTemplate:
             ValueError: If the call tags, the declarations, the argument
                 spelling or the result block cannot be had from this model.
         """
+        if self._tool_tokens is None and self._tool_calls is not None:
+            raise ValueError(
+                "this model writes a tool call as plain text, without a tag "
+                "token of its own, so a call could not be told from a reply")
         if self._tool_tokens is None:
             raise ValueError(
                 "this model's template describes no tool call, so a tool "
@@ -355,76 +432,57 @@ class ResolvedTemplate:
                 "is malformed; supply correct tags with ChatWrapper(fragments=...)."
             )
 
-    def _validate_formatter(self) -> None:
-        """Ensure the formatter still opens and closes the model's own turn.
-
-        A formatter may add to what is decoded around sampling, an empty
-        reasoning channel for instance, but the turn tags stay the model's own
-        or the conversation is encoded as the model never saw it. Read here
-        rather than trusted at the first generation, and at the first resumed
-        turn, which is later still.
-
-        Raises:
-            ValueError: If the generation prompt does not open the assistant
-                turn, if the terminator does not close it, or if a resumption
-                would open the turn a second time.
-        """
-        prefix = self._fragments.assistant_prefix
-        suffix = self._fragments.assistant_suffix
-        if not self._formatter.assistant_open().startswith(prefix):
-            raise ValueError(
-                f"the formatter's assistant_open() must begin with the "
-                f"assistant tag {prefix!r}: it opens the turn the reply is "
-                f"generated into")
-        if not self._formatter.assistant_close().endswith(suffix):
-            raise ValueError(
-                f"the formatter's assistant_close() must end with the turn "
-                f"terminator {suffix!r}: it is what closes the generated turn")
-        if prefix and prefix in self._formatter.resume_open():
-            raise ValueError(
-                f"the formatter's resume_open() must not repeat the assistant "
-                f"tag {prefix!r}: the turn it would open is already open")
-        system_prefix = self._fragments.system_prefix
-        if system_prefix and system_prefix in self._formatter.system_open():
-            raise ValueError(
-                f"the formatter's system_open() must not repeat the system tag "
-                f"{system_prefix!r}: it is decoded inside that turn")
-
     def _check_fragments_match_model(self) -> None:
-        """Assert the user and assistant fragments match the model's own template.
+        """Assert the fragments encode a conversation as the model's own template does.
 
-        Tags that do not reproduce what the model saw in training make
-        incremental prefill write tokens it never learned. The system fragment
-        is not probed, there being no portable ground truth for it.
+        A system prompt, a past reply and a newest turn, followed by the
+        generation prompt, in each reasoning mode the model has. Tags that do
+        not reproduce what the model saw in training make incremental prefill
+        write tokens it never learned. A system turn is left out where the
+        template has none of its own and the user tags stand in for it.
         """
         if not hasattr(self._context, "render_with_model_template"):
             return
-        # The surrounding whitespace catches a wrong `trim_content` too.
-        probe = [
-            {"role": "user", "content": " ping "},
-            {"role": "assistant", "content": " pong "},
-        ]
-        rendered = self._context.render_with_model_template(probe)
-        if rendered is None:
-            return
-        model_tokens = self._context.tokenize(rendered, add_special=False)
-        # Built exactly as real prefill builds it, tags special-on and content
-        # special-off, so any mismatch is a tag or trim divergence.
-        fragment_tokens: list[int] = []
-        for m in probe:
-            prefix, content, suffix = self._formatter.parts(m["role"], m["content"])
-            fragment_tokens.extend(
-                self._context.tokenize_fragment(prefix, content, suffix))
-        if model_tokens != fragment_tokens:
-            fragment_text = "".join(self._formatter.fragment(m["role"], m["content"]) for m in probe)
-            raise ValueError(
-                "chat template fragments do not match the model's trained "
-                "template:\n"
-                f"  model renders:    {rendered!r}\n"
-                f"  fragments render: {fragment_text!r}\n"
-                "The recovered fragments do not round-trip through the model's "
-                "template; supply correct tags with ChatWrapper(fragments=...)."
-            )
+        system, exchange = _CHECK_CONVERSATION
+        probe = list(system if self.has_system_turn else ()) + list(exchange)
+        for reasoning in (False, True) if self.can_reason else (False,):
+            messages = [{"role": role, "content": text} for role, text in probe]
+            rendered = self._context.render_with_model_template(
+                messages, reasoning=reasoning)
+            prompted = self._context.render_with_model_template(
+                messages, generation_prompt=True, reasoning=reasoning)
+            if rendered is None:
+                if self._context.render_with_model_template(
+                        [{"role": "user", "content": _PROMPT}]) is None:
+                    return          # the model ships no template to check against
+                raise ValueError(
+                    "this model's template refuses a plain conversation of a "
+                    "system prompt and two user turns, so it cannot be checked, "
+                    "and a conversation could not be encoded as it renders one")
+            formatter = self.formatter(reasoning)
+            # Built exactly as real prefill builds it, tags special-on and
+            # content special-off, so any mismatch is a tag or trim divergence.
+            fragment_tokens: list[int] = []
+            fragment_text = ""
+            for role, text in probe:
+                prefix, content, suffix = formatter.parts(role, text)
+                fragment_tokens += self._context.tokenize_fragment(prefix, content, suffix)
+                fragment_text += prefix + content + suffix
+            # The generation prompt is compared where the renderer adds one.
+            if prompted is not None and prompted != rendered:
+                rendered = prompted
+                opening = formatter.generation_prompt()
+                fragment_tokens += self._context.tokenize(opening, add_special=False)
+                fragment_text += opening
+            if self._context.tokenize(rendered, add_special=False) != fragment_tokens:
+                raise ValueError(
+                    "chat template fragments do not match the model's trained "
+                    "template:\n"
+                    f"  model renders:    {rendered!r}\n"
+                    f"  fragments render: {fragment_text!r}\n"
+                    "The recovered fragments do not round-trip through the "
+                    "model's template; supply correct tags with "
+                    "ChatWrapper(fragments=...).")
 
     def _resolve_tool_calls(self) -> ToolCallFragments | None:
         """What this model's template wraps a generated call in, if anything."""
@@ -433,6 +491,47 @@ class ResolvedTemplate:
         return extract_tool_fragments(self._context.render_with_model_template,
                                       self._fragments)
 
+    def _resolve_preamble(self, reasoning: bool) -> str | None:
+        """What a conversation without a system message opens with, before its first turn."""
+        if not hasattr(self._context, "render_with_model_template"):
+            return None
+        rendered = self._context.render_with_model_template(
+            [{"role": "user", "content": _PROMPT}], reasoning=reasoning)
+        opened = self._fragments.user_prefix + _PROMPT
+        if rendered is None:
+            return None             # no template, so the fragments' system turn
+        if opened not in rendered:
+            raise ValueError("this model's template opens a conversation without a "
+                             "system prompt in a way that cannot be located")
+        return rendered.split(opened, 1)[0]
+
+    def _resolve_later_system(self) -> tuple[str, str] | None:
+        """The tags of a system turn that follows an exchange, read from a render."""
+        if not hasattr(self._context, "render_with_model_template"):
+            return None
+        frags = self._fragments
+        rendered = self._context.render_with_model_template([
+            {"role": "user", "content": _PROMPT},
+            {"role": "assistant", "content": _RESULT},
+            {"role": "system", "content": _NEXT},
+            {"role": "user", "content": _PROMPT},
+        ])
+        after = _RESULT + frags.assistant_suffix
+        before = frags.user_prefix + _PROMPT
+        if rendered is None or after not in rendered or _NEXT not in rendered:
+            return None
+        head, _, tail = rendered.split(after, 1)[1].partition(_NEXT)
+        if before not in tail or _PROMPT in head:
+            return None
+        return head, tail.split(before, 1)[0]
+
+    def _resolve_reasoning(self) -> Reasoning | None:
+        """What turns this model's reasoning on, recovered from its template."""
+        if not hasattr(self._context, "render_with_model_template"):
+            return None
+        return extract_reasoning(self._context.render_with_model_template,
+                                 self._fragments, self._tool_calls)
+
     def _resolve_tool_tokens(self) -> tuple[tuple[int, int] | None, str]:
         """This model's call tags as tokens, and the text it writes before a name."""
         fragments = self._tool_calls
@@ -440,13 +539,36 @@ class ResolvedTemplate:
             return None, ""
         ensure_context_answers(self._context, _TOOL_SURFACE)
         opener = self._context.first_special_token(fragments.call_open)
-        closer = self._context.first_special_token(fragments.call_close)
+        closer = self._call_closer(fragments)
         if opener is None or closer is None:
             return None, ""
         tag = self._context.token_text(opener)
         lead_in = fragments.call_open[len(tag):] \
             if fragments.call_open.startswith(tag) else ""
         return (opener, closer), lead_in
+
+    def _call_closer(self, fragments: ToolCallFragments) -> int | None:
+        """The tag that ends a call.
+
+        The last tag between two calls of one turn, where the template writes
+        one there that ``call_close`` also holds: a call's ending may close its
+        last argument with a tag of its own first. Otherwise the first tag of
+        ``call_close``.
+        """
+        separator = extract_call_separator(self._context.render_with_model_template,
+                                           fragments.call_open)
+        tags = self._tags_in(separator or "")
+        if tags and self._context.token_text(tags[-1]) in fragments.call_close:
+            return tags[-1]
+        return self._context.first_special_token(fragments.call_close)
+
+    def _tags_in(self, text: str) -> list[int]:
+        """The model's own tags in ``text``, in order."""
+        tags = []
+        while (tag := self._context.first_special_token(text)) is not None:
+            tags.append(tag)
+            text = text.partition(self._context.token_text(tag))[2]
+        return tags
 
     def _resolve_call_body(self) -> CallBody | None:
         """This model's argument spelling, or ``None`` if it cannot be read.
@@ -495,12 +617,26 @@ class ResolvedTemplate:
         except Exception:
             return False
 
-    def _plain_system_turn(self) -> str | None:
+    def _plain_system_turn(self, reasoning: bool = False) -> str | None:
         """The system turn this model renders with no tools, prompt sentinelled."""
-        return self._context.render_with_model_template(
-            [{"role": "system", "content": _PROMPT}])
+        return self._system_turn(None, reasoning)
 
-    def _declaration_turn(self, specs: list[ToolSpec]) -> _SystemTurnSplit:
+    def _system_turn(self, tools: list[dict] | None, reasoning: bool) -> str | None:
+        """The system turn rendered ahead of a user turn, which some templates require.
+
+        Cut where the user turn begins, so whatever the template writes between
+        the two belongs to the system turn.
+        """
+        rendered = self._context.render_with_model_template(
+            [{"role": "system", "content": _PROMPT},
+             {"role": "user", "content": _NEXT}], tools=tools, reasoning=reasoning)
+        opened = self._fragments.user_prefix + _NEXT
+        if rendered is None or opened not in rendered:
+            return None
+        return rendered.split(opened, 1)[0]
+
+    def _declaration_turn(self, specs: list[ToolSpec],
+                          reasoning: bool = False) -> _SystemTurnSplit:
         """The system turn this model renders for ``tools``, and without them.
 
         Rendered by the template, so no declaration shape is written down here.
@@ -508,10 +644,9 @@ class ResolvedTemplate:
         Raises:
             ValueError: If the template renders no declarations.
         """
-        rendered = self._context.render_with_model_template(
-            [{"role": "system", "content": _PROMPT}],
-            tools=[spec.as_declaration() for spec in specs])
-        plain = self._plain_system_turn()
+        rendered = self._system_turn([spec.as_declaration() for spec in specs],
+                                     reasoning)
+        plain = self._plain_system_turn(reasoning)
         if rendered is None or plain is None or _PROMPT not in rendered \
                 or _PROMPT not in plain or rendered == plain:
             raise ValueError("this model's template declares no tools")
@@ -521,7 +656,7 @@ class ResolvedTemplate:
                                 plain_head, plain_tail)
 
 
-def _turn_messages(turn: ToolTurn, field, trim: bool) -> list[dict]:
+def _turn_messages(turn: ToolTurn, field, fragments: TemplateFragments) -> list[dict]:
     """``turn`` as the chat messages a template renders, its own text as markers.
 
     The model's text and the calls it makes belong to one assistant message
@@ -548,8 +683,8 @@ def _turn_messages(turn: ToolTurn, field, trim: bool) -> list[dict]:
                 "function": {"name": step.name,
                              "arguments": _marked(step.arguments, field)}})
             calls += 1
-        elif step.strip() if trim else step:
-            assistant["content"] = field(step.strip() if trim else step)
+        elif text := fragments.content("assistant", step):
+            assistant["content"] = field(text)
     for m in messages:
         if m["role"] == "assistant" and not m["tool_calls"]:
             del m["tool_calls"]

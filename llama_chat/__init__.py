@@ -2,7 +2,8 @@
 
 The core actions, each prefilling as little as possible:
 
-* :meth:`ChatWrapper.begin`: reset and prefill the system prompt and history.
+* :meth:`ChatWrapper.begin`: reset and prefill the system prompt and history,
+  with or without reasoning.
 * :meth:`ChatWrapper.inject`: prefill one message as context, no generation.
 * :meth:`ChatWrapper.reply_without_tools`: prefill the request text, then
   generate.
@@ -31,7 +32,7 @@ from .config import Config, Sampling
 from .context import KVContext
 from .messages import Eviction, Message, MessageTable, n_newest_that_fit
 from .persistent_wrapper import ConversationStore, InMemoryStore, PersistentChat
-from .template import CallBody, TemplateFragments, TemplateFormatter, ToolCallFragments
+from .template import CallBody, Reasoning, TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, tool
 from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
 
@@ -48,7 +49,7 @@ __all__ = [
     "Eviction",
     "n_newest_that_fit",
     "TemplateFragments",
-    "TemplateFormatter",
+    "Reasoning",
     "ToolCallFragments",
     "CallBody",
     "ToolCall",

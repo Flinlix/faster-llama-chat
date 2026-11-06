@@ -83,7 +83,12 @@ def _one_json_call(decoded) -> ToolCall | None:
 
 def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     """Read a call written with this model's own delimiters."""
-    name, found, rest = text.partition(call_body.name_close)
+    if call_body.name_close:
+        name, found, rest = text.partition(call_body.name_close)
+    else:
+        # The name runs up to the first key's tag, or to the end.
+        name, found, rest = text.partition(call_body.key_open)
+        rest, found = found + rest, True
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
@@ -91,8 +96,10 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     # the last one with the very same text.
     if rest == call_body.empty_close:
         return ToolCall(name=name, arguments={})
-    if call_body.body_close and rest.endswith(call_body.body_close):
-        rest = rest[:len(rest) - len(call_body.body_close)]
+    # A model may write whitespace after the last argument's closing tag.
+    closing = call_body.body_close.rstrip()
+    if closing and rest.rstrip().endswith(closing):
+        rest = rest.rstrip()[:len(rest.rstrip()) - len(closing)]
     if call_body.key_open and rest.startswith(call_body.key_open):
         rest = rest[len(call_body.key_open):]
     return ToolCall(name=name, arguments=_parse_pairs(rest, call_body))
@@ -127,10 +134,13 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
             return json.loads(text)
         except ValueError:
             pass
-        if text[0] == "{":
-            return _parse_pairs(text[1:-1], call_body)
-        return [_parse_value(item, call_body)
-                for item in _split_on(text[1:-1], call_body.pair_sep, call_body)]
+        try:
+            if text[0] == "{":
+                return _parse_pairs(text[1:-1], call_body)
+            return [_parse_value(item, call_body)
+                    for item in _split_on(text[1:-1], call_body.pair_sep, call_body)]
+        except ValueError:
+            return text             # a string a template wrote as it stands
     # Both spellings: JSON literals, and a template interpolating Python ones.
     if text in ("true", "false", "True", "False"):
         return text.lower() == "true"

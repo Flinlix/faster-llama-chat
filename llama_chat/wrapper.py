@@ -3,8 +3,9 @@
 ``begin`` resets and prefills the system prompt plus what recent history fits;
 ``inject`` prefills one message without generating; ``reply_without_tools``
 and ``reply_without_tools_stream`` prefill only the new request and then
-generate. Crossing either eviction limit removes the oldest non-system messages
-and shifts the survivors down, reusing their KV.
+generate, decoding the reply again only where the template writes a past reply
+otherwise. Crossing either eviction limit removes the oldest non-system
+messages and shifts the survivors down, reusing their KV.
 
 Two invariants hold after every action, and the tests enforce both: the physical
 cache equals the concatenation of the message table, and every prefill appends
@@ -25,10 +26,11 @@ from typing import Generic, TypeVar
 
 from .call_parsing import parse_calls
 from .config import Config, Sampling
-from .context import GenerationAccumulator, KVContext
+from .context import GenerationAccumulator, KVContext, _stop_hit
 from .messages import Message, MessageTable, n_newest_that_fit
+from .reasoning import AnswerOpening, ThoughtFilter, begins_in_thought
 from .resolved_template import ResolvedTemplate, ensure_context_answers
-from .template import TemplateFragments, TemplateFormatter, ToolCallFragments
+from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
 
 
@@ -57,8 +59,10 @@ class Reply:
     are then sums and ``stop_reason`` is the last one's.
 
     Attributes:
-        text: The assistant's reply, trimmed at any stop string.
-        n_prefilled_tokens: Tokens decoded for the request and each resumption.
+        text: The assistant's reply, trimmed at any stop string, its thought
+            left out.
+        n_prefilled_tokens: Tokens decoded for the request, the opening of
+            each resumption, and a reply decoded again as a past reply.
         n_generated_tokens: Tokens sampled.
         n_evicted_messages: Messages evicted to bring the cache back inside both
             eviction limits.
@@ -71,6 +75,8 @@ class Reply:
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran with the call tokens withheld. Always ``False``
             where no call was asked for.
+        n_reasoning_tokens: Of the tokens sampled, about how many were thought:
+            the streamed pieces that held any.
     """
 
     text: str
@@ -80,6 +86,7 @@ class Reply:
     stop_reason: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_limit_reached: bool = False
+    n_reasoning_tokens: int = 0
 
 
 _Delta = TypeVar("_Delta")
@@ -139,9 +146,7 @@ class ChatWrapper:
         *,
         fragments: TemplateFragments | None = None,
         tool_calls: ToolCallFragments | None = None,
-        formatter: Callable[[TemplateFragments], TemplateFormatter] | None = None,
         on_message: Callable[[str, str], None] | None = None,
-        recorded_text: Callable[[str], str] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
         **kwargs,
     ) -> None:
@@ -158,19 +163,9 @@ class ChatWrapper:
                 spelling inside them, for a model whose template describes
                 neither. Without the spelling, such a model still detects its
                 calls and reports them unreadable.
-            formatter: Factory building the :class:`TemplateFormatter` from the
-                resolved fragments, for a generation prompt that carries more
-                than the turn tag.
             on_message: Invoked with ``(role, text)`` for every genuine new
                 message, so not for the system prompt or a ``begin`` replay.
                 Runs under the lock, so it must not call back into the wrapper.
-            recorded_text: Given a finished reply's generated text, the text the
-                conversation keeps of it, for a model that writes more than its
-                reader gets, such as reasoning before the answer. A reply it
-                changes is kept as the template writes a past reply, before the
-                post-reply eviction is sized; one it reduces to nothing is
-                removed. A reply that holds a tool call is kept as generated.
-                Runs under the lock and must not raise.
             on_load_progress: Invoked during model loading with a fraction in
                 ``[0.0, 1.0]``. Must not raise. Ignored when ``context`` is
                 supplied.
@@ -181,9 +176,8 @@ class ChatWrapper:
             TypeError: If both ``config`` and config ``**kwargs`` are passed,
                 or if ``context`` does not answer everything the wrapper calls
                 on it.
-            ValueError: If the chat template cannot be recovered, if it fails
-                validation against the model, or if ``formatter`` builds one
-                that does not keep the model's own turn tags.
+            ValueError: If the chat template cannot be recovered, or if it
+                fails validation against the model.
         """
         if config is None:
             config = Config(**kwargs)
@@ -193,7 +187,6 @@ class ChatWrapper:
                 f"(got config and {sorted(kwargs)})"
             )
         self._on_message = on_message
-        self._recorded_text = recorded_text
         owns_context = context is None
         self._context = (
             KVContext(config, on_load_progress=on_load_progress)
@@ -204,11 +197,12 @@ class ChatWrapper:
         # that what fails, fails while the wrapper is being built.
         try:
             ensure_context_answers(self._context, _CACHE_CONTEXT_SURFACE)
+            if hasattr(self._context, "save_state"):
+                ensure_context_answers(self._context, ("restore_state",))
             self._template = ResolvedTemplate(
-                self._context, fragments=fragments, tool_calls=tool_calls,
-                formatter=formatter)
-            # Named here as well, being read on every turn.
-            self._formatter = self._template.formatter
+                self._context, fragments=fragments, tool_calls=tool_calls)
+            # The conversation's own, set again by every begin.
+            self._formatter = self._template.formatter()
         except BaseException:
             if owns_context:
                 self._context.close()
@@ -219,6 +213,15 @@ class ChatWrapper:
         # last result empties the list while the turn is still open.
         self._reply_open = False
         self._pending_calls = []
+        self._batch = []                # the names of the calls made together
+        self._reasoning = False
+        # The template text an open turn ends with, which a resumption opens on.
+        self._turn_ends_with = ""
+        # For a cache that cannot shift: the last two states it rested in, each
+        # with how many tokens it held then, oldest first, so the newest reply
+        # can be changed without rebuilding the conversation: one from before
+        # it and one from after. See the README, "How eviction works".
+        self._rest_states = []
         # Not read off the table: `declare_unknown_tools` appends a system-role message,
         # so one stray call would make an unbegun table look begun.
         self._begun = False
@@ -230,7 +233,8 @@ class ChatWrapper:
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
-              tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
+              tools: ToolRegistry | list[ToolSpec] | None = None, *,
+              reasoning: bool = False) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
         The first call also warms the generation graph, so the first request
@@ -239,7 +243,9 @@ class ChatWrapper:
         prompt.
 
         Args:
-            system_prompt: Always kept, never evicted.
+            system_prompt: Always kept, never evicted. Empty, and with no
+                tools, it is no system message at all, and the conversation
+                opens as the template opens one without.
             messages: Optional history, oldest first: ``(role, text)`` pairs,
                 and a :class:`~llama_chat.tools.ToolTurn` for an assistant turn
                 that called tools, written as this model's template writes one.
@@ -257,13 +263,18 @@ class ChatWrapper:
                 :meth:`reply_with_tools` needs none of its own; a list of specs
                 is declared and not kept. Refused up front where this model
                 could not use them, rather than at the first call.
+            reasoning: Whether the model reasons before each answer, as its
+                template turns that on. It belongs to the conversation, so it
+                changes only here. Every reply's thought is kept out of what
+                it yields, either way.
 
         Raises:
             ValueError: If the system prompt alone exceeds
                 ``evict_above_tokens``, or if ``tools`` names anything or the
                 history holds a tool turn and this model cannot call tools: no
                 call in its template, no declarations, no recoverable argument
-                spelling, or no result block. The previous conversation is left
+                spelling, or no result block, or if ``reasoning`` is asked of a
+                model that cannot reason. The previous conversation is left
                 intact either way.
         """
         messages = messages or []
@@ -275,7 +286,8 @@ class ChatWrapper:
             specs = _specs_for_system_prompt(tools)
             if specs:
                 self._template.ensure_tools_usable()
-            sys_tokens = self._system_tokens(system_prompt, specs)
+            formatter = self._template.formatter(reasoning)
+            sys_tokens = self._system_tokens(formatter, system_prompt, specs, reasoning)
             if len(sys_tokens) > self._config.evict_above_tokens:
                 raise ValueError(
                     f"system prompt needs {len(sys_tokens)} tokens but the "
@@ -286,8 +298,10 @@ class ChatWrapper:
                          and bool(messages[-1].steps)
                          and isinstance(messages[-1].steps[-1], ToolResult))
             last = len(messages) - 1
-            hist_tokens = [self._history_tokens(item, open_turn=ends_open and i == last)
-                           for i, item in enumerate(messages)]
+            hist = [self._history_tokens(formatter, item, ends_open and i == last,
+                                         reasoning)
+                    for i, item in enumerate(messages)]
+            hist_tokens = [tokens for tokens, _ in hist]
 
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
@@ -304,6 +318,7 @@ class ChatWrapper:
             self._reply_open = False
             self._pending_calls = []
             self._registry = registry
+            self._formatter, self._reasoning = formatter, reasoning
             if not self._warmed:
                 self._context.warmup()
                 self._warmed = True
@@ -324,7 +339,11 @@ class ChatWrapper:
                               else item)
                 self._table.append(Message(role, text, toks))
             self._reply_open = ends_open
+            self._turn_ends_with = hist[-1][1] if ends_open else ""
             self._begun = True
+            self._rest_states = []
+            if not ends_open:
+                self._save_rest()
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
@@ -346,7 +365,12 @@ class ChatWrapper:
             self._ensure_open()
             self._ensure_begun("inject into")
             self._ensure_no_open_reply("inject")
-            tokens = self._fragment_tokens(role, text)
+            if role == "system":
+                prefix, suffix = self._later_system_tags()
+                tokens = self._context.tokenize_fragment(
+                    prefix, self._template.fragments.content(role, text), suffix)
+            else:
+                tokens = self._fragment_tokens(role, text)
             # Checked against the best case before anything is evicted, so a
             # rejected message cannot destroy history it would never fit beside.
             floor = self._table.messages[0].n_tokens if self._table.has_system else 0
@@ -361,6 +385,7 @@ class ChatWrapper:
             self._table.append(Message(role, text, tokens))
             if self._on_message:
                 self._on_message(role, text)
+            self._save_rest()
             return evicted
 
     # ----- asking: without tools -----------------------------------------------
@@ -374,7 +399,7 @@ class ChatWrapper:
 
         Lazy: nothing happens, the headroom check included, until the first
         iteration. Closing the stream early still terminates the turn and
-        records exactly the tokens that reached the cache, so the next
+        records what was generated, as any reply is recorded, so the next
         generation stays valid.
 
         Runs no tool, ever, not even one :meth:`begin` was given. A call the
@@ -576,7 +601,7 @@ class ChatWrapper:
             if not self._pending_calls:
                 raise ValueError("no tool call is waiting for a result")
             owed = self._pending_calls[0]
-            if name != owed.name:
+            if name != owed.name or (isinstance(call, ToolCall) and call != owed):
                 raise ValueError(
                     f"the waiting call is {owed.name!r}, not {name!r}; results "
                     "are owed in the order the model asked for them")
@@ -595,7 +620,12 @@ class ChatWrapper:
                 of the context.
         """
         # Everything that can fail happens before the first mutation.
-        prefix, suffix = self._template.result_wrapping(name)
+        # A result answers the oldest call owed, so its place in the batch is
+        # how many of the batch are no longer owed.
+        batch = self._batch if name in self._batch else [name]
+        index = len(batch) - len(self._pending_calls) if batch is self._batch else 0
+        prefix, suffix = self._template.result_wrapping(
+            name, self._reasoning, batch=batch, index=index)
         tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
         closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
         body = self._context.tokenize(result_text(result), add_special=False,
@@ -613,6 +643,7 @@ class ChatWrapper:
         tokens = tags + body[:max(0, room)] + closing
         self._context.prefill(tokens, start_pos=self._table.total, want_logits=True)
         self._table.extend_last(tokens)
+        self._turn_ends_with = suffix
 
     # ----- shortening the newest reply -----------------------------------------
     def truncate_last_reply(self, keep_text: str) -> None:
@@ -623,8 +654,7 @@ class ChatWrapper:
         cache's end, so the tokens the shortened message shares with the old
         one are not decoded again; the rest of it, its closing tag at least, is.
         A cache that cannot shift is rebuilt from the whole conversation
-        instead, as its eviction is. The message keeps the opening it had: a
-        generated reply its generation prompt, a prefilled one the template's.
+        instead, as its eviction is.
 
         Args:
             keep_text: What stays, a prefix of the message's text. The whole
@@ -641,18 +671,9 @@ class ChatWrapper:
                 raise ValueError("keep_text is not a prefix of the newest reply")
             if keep_text == msg.text:
                 return
-            open_tokens = self._context.tokenize(self._formatter.assistant_open(),
-                                                 add_special=False)
-            prefilled = msg.token_ids == self._fragment_tokens("assistant", msg.text)
-            if not prefilled and msg.token_ids[:len(open_tokens)] == open_tokens:
-                close_tokens = self._context.tokenize(
-                    self._formatter.assistant_close(), add_special=False)
-                kept = self._context.tokenize(keep_text, add_special=False,
-                                              parse_special=False)
-                tokens = open_tokens + kept + close_tokens
-            else:
-                tokens = self._fragment_tokens("assistant", keep_text)
-            self._rewrite_newest(msg, tokens, keep_text)
+            self._rewrite_newest(msg, self._fragment_tokens("assistant", keep_text),
+                                 keep_text)
+            self._save_rest()
 
     def _newest_reply(self, action: str):
         """The newest message, refused unless it is an assistant reply that may change."""
@@ -671,27 +692,59 @@ class ChatWrapper:
         tool_tokens = self._template.tool_tokens
         return tool_tokens is not None and tool_tokens[0] in msg.token_ids
 
+    def _later_system_tags(self) -> tuple[str, str]:
+        """The tags of a system message written after the conversation has begun.
+
+        Raises:
+            ValueError: If the model's template writes no such turn.
+        """
+        tags = self._template.later_system_tags
+        if tags is not None:
+            return tags
+        if self._template.preamble() is None:       # no template: the fragments'
+            return self._template.fragments.system_prefix, \
+                self._template.fragments.system_suffix
+        raise ValueError("this model's template writes no system message after "
+                         "the conversation has begun")
+
     def _remove_newest(self, msg) -> None:
         """Drop the newest message from the table and the cache."""
         self._table.remove_last()
-        if not self._context.can_shift:
-            self._rebuild_cache()
-            return
-        self._context.remove_from(msg.pos_start)
+        self._cut_back_to(msg.pos_start)
 
-    def _rewrite_newest(self, msg, tokens: list[int], text: str) -> None:
-        """Give the newest message ``tokens``, decoding only where they differ."""
-        if not self._context.can_shift:
-            # Such a cache may not take a partial removal, or may have
-            # reused the cells before it; see the README, "How eviction works".
-            self._table.replace_last(tokens, text)
-            self._rebuild_cache()
-            return
+    def _rewrite_newest(self, msg, tokens: list[int], text: str) -> int:
+        """Give the newest message ``tokens``, decoding only where they differ.
+
+        Returns:
+            How many tokens were decoded.
+        """
         shared = _shared_prefix_length(msg.token_ids, tokens)
-        self._context.remove_from(msg.pos_start + shared)
+        self._table.replace_last(tokens, text)
+        decoded = self._cut_back_to(msg.pos_start + shared)
+        if decoded is None:             # rebuilt, the new tokens with the rest
+            return self._table.total
         self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,
                               want_logits=False)
-        self._table.replace_last(tokens, text)
+        return decoded + len(tokens) - shared
+
+    def _cut_back_to(self, pos: int) -> int | None:
+        """Make the cache hold the table's first ``pos`` tokens and nothing after.
+
+        A cut where the cache takes one; else from a state it rested in, where
+        one at or before ``pos`` is saved; else a rebuild of the whole table.
+        See the README, "How eviction works".
+
+        Returns:
+            How many tokens were decoded to get there, or ``None`` where the
+            whole table was rebuilt.
+        """
+        if self._context.can_shift or getattr(self._context, "can_cut_tail", False):
+            self._context.remove_from(pos)
+            return 0
+        decoded = self._back_to(pos)
+        if decoded is None:
+            self._rebuild_cache()
+        return decoded
 
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
@@ -732,7 +785,7 @@ class ChatWrapper:
             self._ensure_no_open_reply("declare tools")
             self._template.ensure_tools_usable()
             block = self._template.declaration_block(specs)
-            prefix, _, suffix = self._formatter.parts("system", "")
+            prefix, suffix = self._later_system_tags()
             # The model's own tags, so it joins the suffix and tokenizes
             # special-on. There is no caller text in this message.
             tokens = self._context.tokenize_fragment(prefix, "", block + suffix)
@@ -750,6 +803,7 @@ class ChatWrapper:
             self._context.prefill(tokens, start_pos=self._table.total, want_logits=False)
             self._table.append(Message("system", "", tokens,
                                        declares=tuple(spec.name for spec in specs)))
+            self._save_rest()
             return evicted
 
     # ----- introspection -------------------------------------------------------
@@ -831,6 +885,11 @@ class ChatWrapper:
     def awaiting_tool_result(self) -> bool:
         """Whether any call is still holding the current turn open."""
         return bool(self._pending_calls)
+
+    @property
+    def can_reason(self) -> bool:
+        """Whether :meth:`begin` may be asked to have the model reason."""
+        return self._template.reasoning is not None
 
     @property
     def reply_open(self) -> bool:
@@ -994,7 +1053,7 @@ class ChatWrapper:
             self._ensure_begun("generate into")
             self._ensure_no_open_reply("start a request")
             user_tokens = self._fragment_tokens("user", text)
-            open_tokens = self._context.tokenize(self._formatter.assistant_open(), add_special=False)
+            open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
             close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
 
             # The prompt plus its turn closer must fit in the context.
@@ -1025,7 +1084,8 @@ class ChatWrapper:
             return (yield from self._generate_into_reply(
                 open_tokens=open_tokens, close_tokens=close_tokens,
                 n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
-                cancel=cancel, allow_tools=True, sampling=sampling))
+                cancel=cancel, allow_tools=True, sampling=sampling,
+                decoded=self._formatter.generation_prompt()))
 
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
@@ -1042,25 +1102,35 @@ class ChatWrapper:
                 raise ValueError("no reply is open; start one with reply_until_tool()")
             close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
-            # See the README, "A resumed turn needs its generation prompt back".
-            open_tokens = self._context.tokenize(self._formatter.resume_open(),
-                                             add_special=False)
-            if open_tokens:
+            # See the README, "A resumed turn opens as a new one does".
+            opening = self._formatter.prompt_beyond_tag()
+            n_opened = 0
+            if not self._turn_ends_with.endswith(opening):
+                open_tokens = self._context.tokenize(opening, add_special=False)
                 self._context.prefill(open_tokens, start_pos=self._table.total,
-                                  want_logits=True)
+                                      want_logits=True)
                 self._table.extend_last(open_tokens)
+                self._turn_ends_with += opening
+                n_opened = len(open_tokens)
             return (yield from self._generate_into_reply(
-                open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
+                open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=n_opened,
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-                allow_tools=allow_tools, sampling=sampling))
+                allow_tools=allow_tools, sampling=sampling,
+                decoded=self._turn_ends_with))
 
-    def _history_tokens(self, item: tuple[str, str] | ToolTurn,
-                        open_turn: bool = False) -> list[int]:
-        """One message of a ``begin`` history, as it is prefilled."""
+    def _history_tokens(self, formatter, item: tuple[str, str] | ToolTurn,
+                        open_turn: bool, reasoning: bool) -> tuple[list[int], str]:
+        """One message of a ``begin`` history, as it is prefilled.
+
+        Returns:
+            The tokens, and the template text an open turn ends with, empty for
+            any other.
+        """
         if not isinstance(item, ToolTurn):
-            return self._fragment_tokens(*item)
+            prefix, content, suffix = formatter.parts(*item)
+            return self._context.tokenize_fragment(prefix, content, suffix), ""
         # Refuses a model that cannot call tools.
-        pieces = self._template.past_tool_turn(item, open_turn)
+        pieces = self._template.past_tool_turn(item, open_turn, reasoning)
         open_id, close_id = self._template.tool_tokens
         tags = {text: token for token in (open_id, close_id)
                 if (text := self._context.token_text(token))}
@@ -1078,22 +1148,34 @@ class ChatWrapper:
                 elif part:
                     tokens += self._context.tokenize(part, add_special=False,
                                                      parse_special=True)
-        return tokens
+        ending = pieces[-1][0] if open_turn and pieces and not pieces[-1][1] else ""
+        return tokens, ending
 
-    def _system_tokens(self, system_prompt: str,
-                       specs: list[ToolSpec] | None) -> list[int]:
+    def _system_tokens(self, formatter, system_prompt: str,
+                       specs: list[ToolSpec] | None, reasoning: bool) -> list[int]:
         """The system turn, with any declarations where the template puts them.
 
         The declarations join the suffix rather than the content: they are the
-        model's own tags and tokenize special-on, the prompt must not.
+        model's own tags and tokenize special-on, the prompt must not. An empty
+        prompt with nothing declared is no system message, and opens the
+        conversation as the template opens one without.
         """
-        prefix, content, suffix = self._formatter.parts("system", system_prompt)
-        opening = self._formatter.system_open()
+        preamble = self._template.preamble(reasoning)
+        if not system_prompt and preamble is not None:
+            if specs:
+                preamble = self._template.preamble_declaring(specs, reasoning)
+            return self._context.tokenize_fragment(preamble, "", "", add_special=True)
+        if preamble is not None and not self._template.has_system_turn:
+            raise ValueError(
+                "this model's template has no system turn of its own: it writes a "
+                "system prompt into the first user turn, which a system prompt "
+                "kept for the whole conversation cannot be")
+        prefix, content, suffix = formatter.parts("system", system_prompt)
         if not specs:
-            return self._context.tokenize_fragment(prefix + opening, content, suffix,
+            return self._context.tokenize_fragment(prefix, content, suffix,
                                                    add_special=True)
         # Rendered whole: where declarations go is the template's business.
-        head, tail = self._template.system_turn_declaring(specs, opening)
+        head, tail = self._template.system_turn_declaring(specs, reasoning)
         return self._context.tokenize_fragment(head, content, tail,
                                                add_special=True)
 
@@ -1104,6 +1186,7 @@ class ChatWrapper:
                              cancel: threading.Event | None,
                              allow_tools: bool,
                              sampling: Sampling | None = None,
+                             decoded: str = "",
                              ) -> Generator[str, None, Reply]:
         """Generate from the cache's end and record what it left, as a Reply.
 
@@ -1118,6 +1201,8 @@ class ChatWrapper:
                 :meth:`reply_without_tools_stream`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
+            decoded: The template text generation follows, which says whether
+                it starts inside a thought.
         """
         gen_start = self._table.total + len(open_tokens)
         budget = self._config.context_size - gen_start - len(close_tokens)
@@ -1125,46 +1210,80 @@ class ChatWrapper:
         stops = list(self._config.stop_strings) + list(stop or [])
 
         generated = GenerationAccumulator()
+        tags = self._template.reasoning
+        thought = ThoughtFilter(tags, begins_in_thought(tags, decoded)) if tags else None
+        # Where a thought is filtered out, stop strings are matched against the
+        # answer here rather than against the whole text by the context.
+        opening = AnswerOpening(self._formatter.answer_opening())
+        answer_stops = stops if thought else []
+        answer = _AnswerStops(answer_stops)
+        pieces = self._context.generate(
+            gen_start, max(0, min(cap, budget)), [] if thought else stops,
+            out=generated, cancel=cancel,
+            tool_tokens=self._template.tool_tokens if allow_tools else None,
+            sampling=sampling)
         try:
-            yield from self._context.generate(
-                gen_start, max(0, min(cap, budget)), stops, out=generated,
-                cancel=cancel,
-                tool_tokens=self._template.tool_tokens if allow_tools else None,
-                sampling=sampling,
-            )
+            for piece in pieces:
+                shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
+                if shown:
+                    yield shown
+                if answer.stopped:
+                    pieces.close()
+                    generated.stop_reason = "stop_string"
+                    break
+            else:
+                # A cut reply may end on the start of a thought's tag.
+                complete = generated.stop_reason not in ("interrupted", "token_limit")
+                last = opening.feed(thought.flush(complete) if thought else "")
+                if shown := answer.flush(last + opening.flush(complete)):
+                    yield shown
         finally:
+            pieces.close()
             # Runs on normal completion and on early close alike.
-            n_evicted_messages = self._record_reply(generated, open_tokens,
-                                                    close_tokens)
+            had_thought = bool(thought and thought.thought_pieces)
+            kept_as_generated = had_thought and tags.past_keeps_thought
+            n_evicted_messages, n_decoded = self._record_reply(
+                generated, answer.text, open_tokens, close_tokens,
+                as_past=not kept_as_generated)
+            if not self._reply_open:
+                self._save_rest()
 
         return Reply(
-            text=generated.text,
-            n_prefilled_tokens=n_prefilled_tokens,
+            text=answer.text,
+            n_prefilled_tokens=n_prefilled_tokens + n_decoded,
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
             tool_calls=list(self._pending_calls),
+            n_reasoning_tokens=thought.thought_pieces if thought else 0,
         )
 
-    def _record_reply(self, generated: GenerationAccumulator,
-                      open_tokens: list[int], close_tokens: list[int]) -> int:
+    def _record_reply(self, generated: GenerationAccumulator, answer: str,
+                      open_tokens: list[int], close_tokens: list[int],
+                      as_past: bool) -> tuple[int, int]:
         """Record what one generation left.
 
-        The turn is closed unless a call is waiting for its result. The
-        closing tag joins the message only in :meth:`_close_turn`, after the
-        post-reply eviction, so the table always describes what the cache
-        holds.
+        The turn is closed unless a call is waiting for its result. Where
+        ``as_past`` is set and a closed reply's tokens differ from the
+        template's past reply of its answer, the reply is decoded again in that
+        form, from the first token that differs, after an eviction sized by
+        that form, so the decode carries the eviction's shift; a turn that
+        called tools keeps the tokens it was generated as. The message's text
+        is the answer either way, and a closed reply without one, all thought
+        or cut before its answer, is removed.
 
         Returns:
-            How many messages were evicted.
+            How many messages were evicted, and how many tokens were decoded
+            after the generation.
         """
         tokens = open_tokens + generated.token_ids
         if self._reply_open:
-            self._table.extend_last(tokens, generated.text)
+            self._table.extend_last(tokens, answer)
         else:
-            self._table.append(Message("assistant", generated.text, tokens))
+            self._table.append(Message("assistant", answer, tokens))
         msg = self._table.messages[-1]
         self._pending_calls = self._read_calls(generated)
+        self._batch = [call.name for call in self._pending_calls]
         unreadable = (generated.stop_reason == "tool_call"
                       and not self._pending_calls)
         if unreadable:
@@ -1179,42 +1298,46 @@ class ChatWrapper:
             })
         self._reply_open = bool(self._pending_calls) or unreadable
         if self._reply_open:
-            return 0
-        kept = self._kept_text(msg)
-        if kept is not None:
-            return self._record_kept(msg, kept)
+            return 0, 0
+        holds_call = self._holds_call(msg)
+        if not msg.text and not holds_call:
+            self._remove_newest(msg)
+            return self._evict_until(lambda: self._fits(0)), 0
         if self._on_message:
             self._on_message("assistant", msg.text)
+        past = self._fragment_tokens("assistant", msg.text)
+        fits = self._table.total - msg.n_tokens + len(past) <= self._config.context_size
+        # A thought, what a generation prompt adds after the tag, the whitespace
+        # a template strips, and a word generated in other pieces than its
+        # text tokenizes into all make the two differ.
+        if as_past and fits and not holds_call and past != msg.token_ids + close_tokens:
+            return self._record_as_past(msg, past)
         # Trim back after the reply, so the cache rests inside both eviction
         # limits for the next generation, an early close included. The closer
         # counts against the threshold even though it is decoded after the trim.
         n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
-        return n_evicted_messages
+        return n_evicted_messages, 0
 
-    def _kept_text(self, msg) -> str | None:
-        """What ``recorded_text`` keeps of the reply, or ``None`` to keep it as generated."""
-        if self._recorded_text is None or self._holds_call(msg):
-            return None
-        try:
-            kept = self._recorded_text(msg.text)
-        except Exception:
-            return None                 # recording must not raise; see _try_write_tool_result
-        return None if kept == msg.text else kept
-
-    def _record_kept(self, msg, kept: str) -> int:
-        """Keep the newest reply as ``kept``, a past reply's form, or drop it if empty.
+    def _record_as_past(self, msg, past: list[int]) -> tuple[int, int]:
+        """Evict as ``past`` needs, then give the newest reply ``past``.
 
         Returns:
-            How many messages were evicted.
+            How many messages were evicted, and how many tokens were decoded.
         """
-        if kept:
-            self._rewrite_newest(msg, self._fragment_tokens("assistant", kept), kept)
-            if self._on_message:
-                self._on_message("assistant", kept)
-        else:
-            self._remove_newest(msg)
-        return self._evict_until(lambda: self._fits(0))
+        fits = lambda: self._fits(len(past) - msg.n_tokens)    # noqa: E731
+        if not self._context.can_shift and not fits():
+            # Evicting rebuilds such a cache anyway, so the rewrite joins it.
+            # One rebuild for the eviction and the rewrite together.
+            _, evicted = self._table.evict_oldest_until(fits)
+            if self._table.messages and self._table.messages[-1] is msg:
+                self._table.replace_last(past, msg.text)
+            self._rebuild_cache()
+            return evicted, self._table.total
+        evicted = self._evict_until(fits)
+        if not (self._table.messages and self._table.messages[-1] is msg):
+            return evicted, 0
+        return evicted, self._rewrite_newest(msg, past, msg.text)
 
     def _try_write_tool_result(self, name: str, result) -> bool:
         """Write a result block if this model and this context have room for one.
@@ -1337,6 +1460,48 @@ class ChatWrapper:
         for m in self._table.messages:
             all_tokens.extend(m.token_ids)
         self._context.prefill(all_tokens, start_pos=0, want_logits=False)
+        self._rest_states = []
+
+    def _save_rest(self) -> None:
+        """Save the state a cache that cannot shift rests in now, where it can be saved."""
+        if self._context.can_shift or not hasattr(self._context, "save_state"):
+            return
+        if getattr(self._context, "can_cut_tail", False):
+            return                      # a cut needs no saved state
+        try:
+            state = self._context.save_state()
+        except RuntimeError:
+            state = None                # a rebuild stands in where none is saved
+        if state is None:
+            self._rest_states = []
+            return
+        self._rest_states = [s for s in self._rest_states
+                             if s[0] < self._table.total][-1:] + [(self._table.total, state)]
+
+    def _back_to(self, pos: int) -> int | None:
+        """Put a cache that cannot shift back to holding the table's first ``pos`` tokens.
+
+        From the latest state it rested in at or before ``pos``, decoding what
+        the table holds after it.
+
+        Returns:
+            How many tokens were decoded, or ``None`` where no state could be
+            restored, the cache then left for the caller to rebuild.
+        """
+        usable = [s for s in self._rest_states if s[0] <= pos]
+        self._rest_states = usable
+        if not usable:
+            return None
+        rested, state = usable[-1]
+        try:
+            self._context.restore_state(state, rested)
+        except RuntimeError:
+            self._rest_states = []
+            return None
+        between = [t for m in self._table.messages for t in m.token_ids][rested:pos]
+        if between:
+            self._context.prefill(between, start_pos=rested, want_logits=False)
+        return len(between)
 
     def _fit_or_raise(self, tokens: list[int], budget: int, description: str,
                       role: str) -> list[int]:
@@ -1360,6 +1525,48 @@ class ChatWrapper:
         """Tokenize one message: tags special-on, content special-off."""
         prefix, content, suffix = self._formatter.parts(role, text)
         return self._context.tokenize_fragment(prefix, content, suffix, add_special=add_special)
+
+
+class _AnswerStops:
+    """Collects an answer as it streams, ending it at the earliest stop string.
+
+    Text that could still begin a stop string is held back until it is known
+    not to. Without stop strings everything passes at once.
+    """
+
+    def __init__(self, stops: list[str]) -> None:
+        self._stops = [s for s in stops if s]
+        self._hold = max((len(s) for s in self._stops), default=1) - 1
+        self._held = ""
+        self.text = ""
+        self.stopped = False
+
+    def feed(self, piece: str) -> str:
+        """The part of ``piece`` that is certainly answer, possibly empty."""
+        if not self._stops:
+            self.text += piece
+            return piece
+        self._held += piece
+        hit = _stop_hit(self._held, self._stops)
+        if hit is not None:
+            self.stopped = True
+            return self._pass(self._held[:hit], "")
+        cut = max(0, len(self._held) - self._hold)
+        return self._pass(self._held[:cut], self._held[cut:])
+
+    def flush(self, last: str = "") -> str:
+        """Everything still held, with ``last`` appended, once the answer has ended."""
+        if not self._stops:
+            return self.feed(last)
+        shown = self.feed(last)
+        if self.stopped:
+            return shown
+        return shown + self._pass(self._held, "")
+
+    def _pass(self, shown: str, held: str) -> str:
+        self._held = held
+        self.text += shown
+        return shown
 
 
 def _shared_prefix_length(a: list[int], b: list[int]) -> int:
@@ -1418,6 +1625,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         stop_reason=generations[-1].stop_reason,
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
+        n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
     )
 
 

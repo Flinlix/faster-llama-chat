@@ -11,3 +11,7 @@ Academic and other publications building on this work are asked to cite:
     Felix Lindenmeier, "faster-llama-chat",
     LMU Munich, 2026.
     https://github.com/Flinlix/faster-llama-chat
+
+The chat templates in tests/templates/ were read from the published model
+files each one names, and belong to their authors under those models'
+licenses. They are kept as test data only.

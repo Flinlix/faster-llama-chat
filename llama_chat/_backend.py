@@ -93,6 +93,12 @@ class Backend:
         self._mem_rm = _optional_symbol("llama_memory_seq_rm")
         self._mem_add = _optional_symbol("llama_memory_seq_add")
         self._mem_can_shift = _optional_symbol("llama_memory_can_shift")
+        self._state_size = _optional_symbol("llama_state_seq_get_size_ext")
+        self._state_get = _optional_symbol("llama_state_seq_get_data_ext")
+        self._state_set = _optional_symbol("llama_state_seq_set_data_ext")
+        # Only the part of a sequence's state that cannot be cut back; the
+        # rest is cut with a removal after the restore.
+        self._state_flags = getattr(llama_cpp, "LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY", 1)
         self._kv_clear = _optional_symbol("llama_kv_self_clear", "llama_kv_cache_clear")
         self._kv_rm = _optional_symbol("llama_kv_self_seq_rm", "llama_kv_cache_seq_rm")
         self._kv_add = _optional_symbol("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
@@ -209,15 +215,17 @@ class Backend:
         """
         return int(_required_symbol(f"GGML_TYPE_{name.upper()}"))
 
-    def template_renderer(self, template: str, eos_token: str):
+    def template_renderer(self, template: str, eos_token: str,
+                          generation_prompt: bool = False):
         """A renderer for one GGUF chat template, called with messages and tools.
 
-        BOS is suppressed and no generation prompt is added, so what it returns
-        aligns with a fragment prefill.
+        BOS is suppressed, so what it returns aligns with a fragment prefill.
+        Template variables pass through as keywords.
         """
         from llama_cpp.llama_chat_format import Jinja2ChatFormatter
         return Jinja2ChatFormatter(template=template, eos_token=eos_token,
-                                   bos_token="", add_generation_prompt=False)
+                                   bos_token="",
+                                   add_generation_prompt=generation_prompt)
 
     def metadata_value(self, model, key: str) -> str | None:
         """Return the GGUF metadata string for ``key``, or ``None`` if absent."""
@@ -409,6 +417,32 @@ class Backend:
             for memory_op, legacy_op in ((self._mem_clear, self._kv_clear),
                                          (self._mem_rm, self._kv_rm),
                                          (self._mem_add, self._kv_add)))
+
+    @property
+    def can_save_state(self) -> bool:
+        """Whether this build saves and restores the part of a sequence a cut cannot reach."""
+        return None not in (self._state_size, self._state_get, self._state_set)
+
+    def save_state(self, ctx, seq: int):
+        """The part of ``seq``'s state a cut cannot reach, as a host buffer.
+
+        Raises:
+            RuntimeError: If the build saves nothing.
+        """
+        size = self._state_size(ctx, seq, self._state_flags)
+        buffer = (ctypes.c_uint8 * size)()
+        if self._state_get(ctx, buffer, size, seq, self._state_flags) != size:
+            raise RuntimeError("the cache did not save its state")
+        return buffer
+
+    def restore_state(self, ctx, seq: int, buffer) -> None:
+        """Put ``seq`` back into the state ``buffer`` was saved from.
+
+        Raises:
+            RuntimeError: If the cache refuses it.
+        """
+        if self._state_set(ctx, buffer, len(buffer), seq, self._state_flags) == 0:
+            raise RuntimeError("the cache refused the saved state")
 
     def can_shift(self, ctx) -> bool:
         """Whether the cache supports in-place position shifting after removal.

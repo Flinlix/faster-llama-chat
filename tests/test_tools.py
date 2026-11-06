@@ -11,7 +11,7 @@ import re
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.template import CallBody, TemplateFormatter, ToolCallFragments
+from llama_chat.template import CallBody, ToolCallFragments
 from llama_chat.template_extract import (extract_call_body, extract_fragments,
                                          extract_tool_fragments)
 from llama_chat.call_parsing import parse_calls
@@ -415,8 +415,10 @@ def test_a_model_with_tool_tags_can():
 class _ConstantBodyContext(FakeContext):
     """Tags a caller supplied, over a template that never renders an argument."""
 
-    def render_with_model_template(self, messages, tools=None):
-        rendered = super().render_with_model_template(messages, tools)
+    def render_with_model_template(self, messages, tools=None, **_options):
+        rendered = super().render_with_model_template(messages, tools, **_options)
+        if rendered is None:
+            return None
         return re.sub(r"(<call>fn:\w+)\{[^}]*\}", r"\1{}", rendered)
 
 
@@ -1015,7 +1017,15 @@ def _attribute_xml(name, arguments):
     return f'<invoke name="{name}">\n{body}</invoke>'
 
 
+def _key_value_tags(name, arguments):
+    return name + "".join(
+        f"<arg_key>{k}</arg_key><arg_value>"
+        + (v if isinstance(v, str) else json.dumps(v)) + "</arg_value>"
+        for k, v in arguments.items())
+
+
 SHAPES = {
+    "key value tags": _key_value_tags,
     "json object": _json_object,
     "json array": _json_array,
     "python call": _python_call,
@@ -1040,7 +1050,7 @@ def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
     """
     emit = SHAPES[shape]
 
-    def render(messages, tools=None):
+    def render(messages, tools=None, **_options):
         out = []
         for m in messages:
             calls = m.get("tool_calls", ())
@@ -1125,35 +1135,36 @@ def test_reply_with_tools_stream_answers_every_call_of_a_batch():
     assert fake.cache == _flatten(wrapper)
 
 
-def test_a_resumed_turn_gets_back_what_the_generation_prompt_carries():
-    """A generation prompt holding more than the turn tag is restored on resume.
+class _ResultBlock(FakeContext):
+    """A template that writes results one per line, and closes their block once."""
 
-    The tag must not repeat, but the rest was never prefilled, so without this
-    the model writes it and it reaches the caller as reply text.
-    """
-    class Channelled(TemplateFormatter):
-        def resume_open(self) -> str:
-            return "<chan>"
+    def render_with_model_template(self, messages, tools=None, **_options):
+        rendered = super().render_with_model_template(messages, tools, **_options)
+        if rendered is None:
+            return None
+        rendered = rendered.replace("</result><result>", "</result>\n<result>")
+        return re.sub(r"</result>(?!\n<result>)", "</result><done>", rendered)
 
-    fake = FakeContext(calls_tools=True)
+
+def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
+    fake = _ResultBlock(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9),
-                          context=fake, formatter=Channelled)
+                          context=fake)
     wrapper.begin("persona")
-    fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply_until_tool("wie spät?"))
-    wrapper.inject_tool_result("clock", "ok")
-
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
+                        '{"name":"other","arguments":{}}]']
+    list(wrapper.reply_until_tool("los"))
     before = len(fake.cache)
-    fake.call_script = []
+    wrapper.inject_tool_result("clock", "a")
+    wrapper.inject_tool_result("other", "b")
+    written = "".join(chr(t) for t in fake.cache[before:])
+    assert written == "<result>clock(a)</result>\n<result>other(b)</result><done>"
     list(wrapper.resume_until_tool())
-
-    written = "".join(chr(c) for c in fake.cache[before:] if c >= 0)
-    assert written.startswith("<chan>")
     assert fake.cache == _flatten(wrapper)
 
 
 def test_a_model_needing_nothing_extra_gets_nothing():
-    """The default ``resume_open`` is empty, so a resumed reply prefills nothing."""
+    """A model whose replies open with the turn tag alone resumes with nothing."""
     wrapper, fake = _wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
@@ -1558,8 +1569,8 @@ def test_tags_that_resolve_to_no_token_leave_tool_calling_off():
 class _NoDeclarations(FakeContext):
     """A template that renders the same system turn whether tools are given."""
 
-    def render_with_model_template(self, messages, tools=None):
-        return super().render_with_model_template(messages, tools=None)
+    def render_with_model_template(self, messages, tools=None, **_options):
+        return super().render_with_model_template(messages, tools=None, **_options)
 
 
 def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
@@ -1579,9 +1590,9 @@ def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
 class _NoResultBlock(FakeContext):
     """A template that renders a call but has nowhere to put its result."""
 
-    def render_with_model_template(self, messages, tools=None):
+    def render_with_model_template(self, messages, tools=None, **_options):
         kept = [m for m in messages if m["role"] != "tool"]
-        return super().render_with_model_template(kept, tools=tools)
+        return super().render_with_model_template(kept, tools=tools, **_options)
 
 
 def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
@@ -1670,10 +1681,10 @@ def test_a_context_that_throws_while_probing_still_loads():
     Letting that escape would deny a conversation that never wanted tools.
     """
     class Throws(FakeContext):
-        def render_with_model_template(self, messages, tools=None):
+        def render_with_model_template(self, messages, tools=None, **_options):
             if any(m["role"] == "tool" for m in messages):
                 raise RuntimeError("template blew a gasket")
-            return super().render_with_model_template(messages, tools)
+            return super().render_with_model_template(messages, tools, **_options)
 
     wrapper = ChatWrapper(Config(context_size=1024),
                           context=Throws(calls_tools=True))
@@ -1687,9 +1698,9 @@ def test_the_result_block_is_probed_once_not_per_result():
     """A property read must not render a template, so the answer is kept."""
     class Counting(FakeContext):
         renders = 0
-        def render_with_model_template(self, messages, tools=None):
+        def render_with_model_template(self, messages, tools=None, **_options):
             Counting.renders += 1
-            return super().render_with_model_template(messages, tools)
+            return super().render_with_model_template(messages, tools, **_options)
 
     fake = Counting(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=1024), context=fake)
@@ -1818,11 +1829,13 @@ class _UnsliceableDeclarations(FakeContext):
     the turn without, so what the two differ by cannot be cut out of it.
     """
 
-    def render_with_model_template(self, messages, tools=None):
-        plain = super().render_with_model_template(messages, tools=None)
-        if not tools:
+    def render_with_model_template(self, messages, tools=None, **_options):
+        plain = super().render_with_model_template(messages, tools=None, **_options)
+        if not tools or plain is None:
             return plain
-        return plain.replace("<|turn>", "<|TURN>")
+        system, user, rest = plain.partition("<|turn>user")
+        return system.replace("<|turn>", "<|TURN>").replace("<turn|>", "<TURN|>") \
+            + user + rest
 
 
 def test_declarations_that_cannot_be_cut_out_are_refused():
@@ -1846,10 +1859,14 @@ def test_no_render_sentinel_contains_another():
     ``PROBE`` used to sit inside ``RESULTPROBE`` and ``TAILPROBE``, so a render
     carrying all three could be cut six characters into the wrong sentinel.
     """
-    from llama_chat import resolved_template
+    from llama_chat import resolved_template, template_extract
 
-    sentinels = {name: getattr(resolved_template, name)
-                 for name in ("_PROMPT", "_RESULT", "_TAIL")}
+    sentinels = {name: getattr(module, name)
+                 for module, names in (
+                     (resolved_template, ("_PROMPT", "_RESULT", "_NEXT")),
+                     (template_extract, ("_SYS", "_USER", "_USER2", "_ASSISTANT",
+                                         "_THOUGHT", "_TOOL")))
+                 for name in names}
     assert len(set(sentinels.values())) == len(sentinels)
     for name, value in sentinels.items():
         others = [v for n, v in sentinels.items() if n != name]
@@ -2148,3 +2165,25 @@ def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
     wrapper.reply_with_tools("wetter?")
     assert ran == []                    # the tool the old conversation had is gone
     assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)
+
+
+# ----- the third review ------------------------------------------------------
+_KEY_VALUE = CallBody(name_close="", key_open="<arg_key>", key_close="</arg_key><arg_value>",
+                      pair_sep="</arg_value><arg_key>", body_close="</arg_value>",
+                      empty_close="")
+
+
+def test_a_bare_string_that_looks_nested_stays_a_string():
+    call, = parse_calls("f<arg_key>x</arg_key><arg_value>{x}</arg_value>", _KEY_VALUE)
+    assert call == ToolCall("f", {"x": "{x}"})
+
+
+def test_whitespace_after_the_last_value_is_not_part_of_it():
+    call, = parse_calls("f<arg_key>city</arg_key><arg_value>Berlin</arg_value>\n", _KEY_VALUE)
+    assert call == ToolCall("f", {"city": "Berlin"})
+
+
+def test_a_call_body_that_cannot_end_a_name_is_refused():
+    with pytest.raises(ValueError, match="name_close or a key_open"):
+        CallBody(name_close="", key_open="", key_close=":", pair_sep=",",
+                 body_close="", empty_close="")
