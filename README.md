@@ -666,7 +666,8 @@ state of the conversation.
   loop, and `max_reply_tokens=`, `stop=` and `cancel=` besides, which bound
   every generation of the exchange rather than the exchange itself. Generate, run whatever the model called, feed the results back, and
   resume until it answers. Yields text deltas, and its `reply` sums every
-  generation. The registry defaults to the one `begin` was handed. By default
+  generation. Where the text before a call and the text after it would join
+  without whitespace, a blank line goes between them. The registry defaults to the one `begin` was handed. By default
   the turn may call as often as the model asks, so the only bound is the
   context: each call and its result stay inside the open turn, and a model that
   never stops calling fills it, ending on a `ContextOverflowError` with the turn

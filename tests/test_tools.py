@@ -565,6 +565,43 @@ def test_reply_with_tools_stream_runs_the_tool_and_yields_only_prose():
     assert fake.cache == _flatten(wrapper)
 
 
+class _SaysBeforeCalling(FakeContext):
+    """The fake model, writing a sentence before each call it makes."""
+
+    def __init__(self, before_call: str, **kw) -> None:
+        super().__init__(calls_tools=True, **kw)
+        self._before_call = before_call
+
+    def _generate_call(self, generated, tool_tokens):
+        for ch in self._before_call:
+            self.cache.append(ord(ch))
+            generated.token_ids.append(ord(ch))
+            generated.text += ch
+            yield ch
+        return (yield from super()._generate_call(generated, tool_tokens))
+
+
+@pytest.mark.parametrize("before_call, after_call, joined", [
+    ("Ich sehe nach.", "Es ist neun.", "Ich sehe nach.\n\nEs ist neun."),
+    ("Ich sehe nach. ", "Es ist neun.", "Ich sehe nach. Es ist neun."),
+    ("Ich sehe nach.", " Es ist neun.", "Ich sehe nach. Es ist neun."),
+    ("", "Es ist neun.", "Es ist neun."),
+])
+def test_the_texts_around_a_call_are_parted_by_a_blank_line_where_they_would_join(
+        before_call, after_call, joined):
+    fake = _SaysBeforeCalling(before_call, gen_text=after_call, gen_tokens=len(after_call))
+    wrapper = ChatWrapper(Config(context_size=512, evict_above_fraction=0.9), context=fake)
+    wrapper.begin("persona")
+    registry = ToolRegistry()
+    registry.register(lambda: {"time": "09:00"}, "Sagt die Zeit.", name="clock")
+    fake.call_script = ["fn:clock{}"]
+
+    stream = wrapper.reply_with_tools_stream("wie spät?", registry)
+    shown = "".join(stream)
+
+    assert shown == stream.reply.text == joined
+
+
 def test_reply_with_tools_stops_calling_at_the_ceiling_and_closes_the_turn():
     wrapper, fake = _wrapper()
     wrapper.begin("persona")

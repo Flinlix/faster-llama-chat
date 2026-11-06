@@ -21,7 +21,7 @@ import math
 import re
 import threading
 from collections.abc import Callable, Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Generic, TypeVar
 
 from .call_parsing import parse_calls
@@ -465,8 +465,10 @@ class ChatWrapper:
         """Reply to ``text``, running whatever tools the model calls on the way.
 
         Yields the reply's text deltas and nothing else; the stream's ``reply``
-        sums every generation. The last permitted round withholds the call
-        tokens, so the turn always closes.
+        sums every generation. Where the text before a call and the text after
+        it would join without whitespace, a blank line goes between them. The
+        last permitted round withholds the call tokens, so the turn always
+        closes.
 
         Args:
             text: The request.
@@ -957,7 +959,8 @@ class ChatWrapper:
         generations: list[Reply] = []
         try:
             while True:
-                asked, generation = yield from self._read_generation(stream)
+                asked, generation = yield from self._read_generation(
+                    stream, after="".join(g.text for g in generations))
                 generations.append(generation)
                 if not asked:
                     if self.reply_open:
@@ -989,26 +992,32 @@ class ChatWrapper:
         finally:
             stream.close()   # the current generation holds the wrapper's lock
 
-    def _read_generation(self, stream):
+    def _read_generation(self, stream, after: str):
         """Yield one generation's text, and return what it left behind.
 
         Driven by hand rather than with ``for``, which would discard the
-        :class:`Reply` the generation returns.
+        :class:`Reply` the generation returns. Where ``after``, the text shown
+        before it, and this text would join without whitespace, a blank line
+        goes between them.
 
         Returns:
             The calls the model asked for, in the order it asked, and the
-            :class:`Reply` describing the generation.
+            :class:`Reply` describing the generation, its text starting with
+            the blank line where one was put.
         """
-        asked = []
+        asked, separator = [], None if after and not after[-1].isspace() else ""
         while True:
             try:
                 event = next(stream)
             except StopIteration as ended:
-                return asked, ended.value
+                return asked, replace(ended.value, text=(separator or "") + ended.value.text)
             if isinstance(event, ToolCall):
                 asked.append(event)
-            else:
-                yield event
+                continue
+            if separator is None and event:
+                separator = "" if event[0].isspace() else "\n\n"
+                event = separator + event
+            yield event
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):
