@@ -90,7 +90,9 @@ class TemplateFormatter:
     whole conversation at once.
 
     Only the methods decoded around sampling may be overridden:
-    :meth:`assistant_open`, :meth:`assistant_close` and :meth:`resume_open`.
+    :meth:`assistant_open`, :meth:`assistant_close` and :meth:`resume_open`,
+    and :meth:`system_open`, for a mode the template switches in the system
+    turn.
     :meth:`parts` and :meth:`fragment` must reproduce what the model saw in
     training, and the wrapper checks them against the model's own template at
     construction. See the README, "A resumed turn needs its generation prompt
@@ -135,6 +137,14 @@ class TemplateFormatter:
     def suffix(self, role: str) -> str:
         """Return the turn-terminator tag for ``role`` (kept when truncating)."""
         return self._parts(role)[1]
+
+    def system_open(self) -> str:
+        """Decoded right after the system turn's tag, before its content.
+
+        For a template that switches a mode there, such as reasoning. Empty by
+        default, and tokenized special-on, as the tags are.
+        """
+        return ""
 
     def assistant_open(self) -> str:
         """Generation prompt decoded immediately before sampling begins."""

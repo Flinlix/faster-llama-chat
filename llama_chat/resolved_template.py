@@ -152,18 +152,30 @@ class ResolvedTemplate:
         return (self._tool_tokens is not None and self._can_declare_tools
                 and self._call_body is not None and self._can_write_results)
 
-    def system_turn_declaring(self, specs: list[ToolSpec]) -> tuple[str, str]:
+    def system_turn_declaring(self, specs: list[ToolSpec],
+                              opening: str = "") -> tuple[str, str]:
         """What this model wraps a system prompt in when ``specs`` are declared.
+
+        Args:
+            opening: The formatter's ``system_open()``, placed where the turn's
+                own head without declarations ends.
 
         Returns:
             The text before and after the prompt. Which side the declarations
             land on is the template's business.
 
         Raises:
-            ValueError: If the template renders no declarations.
+            ValueError: If the template renders no declarations, or renders
+                them before its own head, where no opening can follow it.
         """
         split = self._declaration_turn(specs)
-        return split.declared_head, split.declared_tail
+        head = split.declared_head
+        if opening:
+            if not head.startswith(split.plain_head):
+                raise ValueError("this template declares tools ahead of its system "
+                                 "turn's head, so system_open() has no place")
+            head = split.plain_head + opening + head[len(split.plain_head):]
+        return head, split.declared_tail
 
     def result_wrapping(self, name: str) -> tuple[str, str]:
         """What this model's template wraps ``name``'s result in.
@@ -306,6 +318,11 @@ class ResolvedTemplate:
             raise ValueError(
                 f"the formatter's resume_open() must not repeat the assistant "
                 f"tag {prefix!r}: the turn it would open is already open")
+        system_prefix = self._fragments.system_prefix
+        if system_prefix and system_prefix in self._formatter.system_open():
+            raise ValueError(
+                f"the formatter's system_open() must not repeat the system tag "
+                f"{system_prefix!r}: it is decoded inside that turn")
 
     def _check_fragments_match_model(self) -> None:
         """Assert the user and assistant fragments match the model's own template.

@@ -292,3 +292,44 @@ def test_a_kept_reply_is_cut_as_the_past_reply_it_now_is():
     w.truncate_last_reply("Eins. ")
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Eins. ")
     _assert_consistent(w, fake)
+
+
+# ----- what opens the system turn ----------------------------------------
+from llama_chat.template import TemplateFormatter  # noqa: E402
+
+
+class _Opening(TemplateFormatter):
+    def system_open(self):
+        return "<mode>"
+
+
+def test_the_system_turn_opens_with_what_the_formatter_adds():
+    fake = FakeContext()
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
+                    formatter=_Opening)
+    w.begin("s")
+    prefix, content, suffix = w._formatter.parts("system", "s")
+    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+        prefix + "<mode>", content, suffix, add_special=True)
+
+
+def test_with_tools_declared_it_follows_the_turns_own_head():
+    fake = FakeContext(calls_tools=True)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
+                    formatter=_Opening)
+    specs = [ToolSpec("uhr", "", {})]
+    w.begin("s", tools=specs)
+    head, tail = w._template.system_turn_declaring(specs)
+    own_head = w._template._plain_system_turn().partition("PROMPTMSG")[0]
+    assert head.startswith(own_head)
+    opened = own_head + "<mode>" + head[len(own_head):]
+    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+        opened, "s", tail, add_special=True)
+
+
+def test_a_formatter_that_opens_the_system_turn_again_is_refused():
+    class Twice(TemplateFormatter):
+        def system_open(self):
+            return self._fragments.system_prefix
+    with pytest.raises(ValueError, match="system_open"):
+        ChatWrapper(Config(), context=FakeContext(), formatter=Twice)

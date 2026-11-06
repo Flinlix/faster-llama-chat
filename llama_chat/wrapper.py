@@ -1048,11 +1048,12 @@ class ChatWrapper:
         model's own tags and tokenize special-on, the prompt must not.
         """
         prefix, content, suffix = self._formatter.parts("system", system_prompt)
+        opening = self._formatter.system_open()
         if not specs:
-            return self._context.tokenize_fragment(prefix, content, suffix,
-                                               add_special=True)
+            return self._context.tokenize_fragment(prefix + opening, content, suffix,
+                                                   add_special=True)
         # Rendered whole: where declarations go is the template's business.
-        head, tail = self._template.system_turn_declaring(specs)
+        head, tail = self._template.system_turn_declaring(specs, opening)
         return self._context.tokenize_fragment(head, content, tail,
                                                add_special=True)
 

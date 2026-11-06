@@ -854,6 +854,12 @@ class Channelled(TemplateFormatter):
 ChatWrapper(model_path="model.gguf", formatter=Channelled)
 ```
 
+A template can also switch a mode at the top of the system turn, reasoning for
+instance. `system_open()` is decoded right after the system turn's tag, before
+its content and any declarations, and is empty by default. It is part of the
+system turn, so a formatter that changes it takes effect from the next
+`begin`.
+
 ## Persistence
 
 The KV cache only holds the recent window that fits `context_size`; eviction drops older
@@ -970,8 +976,9 @@ The load-time checks make a mismatch fail loudly instead of degrading silently:
   the first user turn).
 - **At construction** the formatter is checked against those fragments: the
   generation prompt has to open the assistant turn, the terminator has to close
-  it, and a resumption must not open it a second time. A `formatter=` may add to
-  any of the three, an empty reasoning channel for instance, but replacing one
+  it, a resumption must not open it a second time, and `system_open()` must not
+  open the system turn again. A `formatter=` may add to any of these, an empty
+  reasoning channel for instance, but replacing one
   encodes the turn as the model never saw it, and nothing but a worse reply
   would say so.
 
