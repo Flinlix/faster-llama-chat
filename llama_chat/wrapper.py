@@ -405,9 +405,10 @@ class ChatWrapper:
         Runs no tool, ever, not even one :meth:`begin` was given. A call the
         model makes anyway is kept out of the reply text, told that the call
         failed and that no tool can be run, and the reply goes on from there, so
-        the model can say in words that it could not do the thing. That costs
-        one further generation and is the only case where this is not a single
-        one.
+        the model can say in words that it could not do the thing, a blank line
+        parting the text before the call from the text after it where the two
+        would join without whitespace. That costs one further generation and is
+        the only case where this is not a single one.
 
         The stream must be driven from one thread at a time. To interrupt from
         another, pass ``cancel``. An abandoned stream holds the wrapper's lock

@@ -319,7 +319,9 @@ on a model whose template describes calls this can happen from a hallucinated
 tag alone. The call is kept out of the reply text and reported on
 `Reply.tool_calls`. Neither leaves a turn open, so a caller that never mentioned
 tools needs no special handling: `reply_without_tools` tells the model the call
-failed and that no tool can be run, and it finishes its reply in words. Only
+failed and that no tool can be run, and it finishes its reply in words, a
+blank line parting the text before the call from the text after it where the
+two would join without whitespace. Only
 `reply_until_tool` holds a turn open, because only it hands you the call to
 answer. [Tool calling](#tool-calling) describes the whole mechanism.
 
