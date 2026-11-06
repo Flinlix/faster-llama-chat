@@ -818,7 +818,9 @@ commonly adds the tags around a tool call as ordinary added tokens, for which
 `llama_vocab_is_control` returns false, so a check that accepts only control
 tokens turns tool calling off without saying so.
 
-A call's opening tag is the first tag before the name. Its closing tag is read
+A call's opening tag is the first tag before the name, and what the template
+writes between that tag and the name is fixed text the model writes too; what
+it writes before the tag belongs to the reply. Its closing tag is read
 from a turn that makes two calls: the last tag between the first call's
 argument and the second call's opening. The first tag after the arguments is
 not enough, because a template may close each argument with a tag of its own,

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from llama_chat._backend import Backend
+from llama_chat.call_parsing import parse_calls
 from llama_chat.reasoning import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
@@ -200,6 +201,27 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
         messages, tools=[_TOOL.as_declaration()], generation_prompt=True,
         reasoning=False)
     assert ours == rendered
+
+
+@pytest.mark.parametrize("path", [p for p in _tool_templates()
+                                  if p.stem not in _TOOLS_REFUSED],
+                         ids=lambda p: p.stem)
+def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
+    fixture = json.loads(path.read_text())
+    context = _TaggedContext(fixture)
+    template = ResolvedTemplate(context)
+    template.ensure_tools_usable()
+    rendered = context.render_with_model_template(
+        [{"role": "user", "content": "Weather?"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": "call00000", "type": "function", "function": {
+                 "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
+        tools=[_TOOL.as_declaration()], reasoning=False)
+    opener, closer = (context.token_text(t) for t in template.tool_tokens)
+    # The last call: a declaration may show an example call first.
+    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
+    assert parse_calls(body, template.call_body, template.call_lead_in) == [
+        ToolCall("get_weather", {"city": "Berlin"})]
 
 
 @pytest.mark.parametrize("path", [p for p in _tool_templates()

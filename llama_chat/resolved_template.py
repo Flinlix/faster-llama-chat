@@ -543,8 +543,8 @@ class ResolvedTemplate:
         if opener is None or closer is None:
             return None, ""
         tag = self._context.token_text(opener)
-        lead_in = fragments.call_open[len(tag):] \
-            if fragments.call_open.startswith(tag) else ""
+        # Text the template writes before the tag belongs to the reply, not to the call.
+        lead_in = fragments.call_open.partition(tag)[2]
         return (opener, closer), lead_in
 
     def _call_closer(self, fragments: ToolCallFragments) -> int | None:
