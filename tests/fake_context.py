@@ -28,6 +28,8 @@ BOS = -1
 # Synthetic control tokens, outside the 1:1 char tokenizer's range so they can
 # never be produced by ordinary text.
 TOOL_OPEN, TOOL_CLOSE = -10, -11
+# What this fake model writes between its call tag and the function's name.
+CALL_LEAD_IN = "fn:"
 
 # The default fragments for tests. The tags are invented, not any real
 # model's, so nothing can pass by matching a format hard-coded somewhere.
@@ -49,7 +51,8 @@ class FakeContext:
                  can_shift: bool = True,
                  fragments: TemplateFragments = DEFAULT_FRAGMENTS,
                  calls_tools: bool = False,
-                 tokens_spell_text: bool = False) -> None:
+                 tokens_spell_text: bool = False,
+                 closes_turn_before_next: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -57,6 +60,9 @@ class FakeContext:
         # A second model, one that writes tool calls. Its tags are recovered
         # from the renders below, the way a real model's are.
         self._calls_tools = calls_tools
+        # As llama.cpp's own renderer does: a turn left open after a result is
+        # closed when another message follows it.
+        self._closes_turn_before_next = closes_turn_before_next
         self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
@@ -142,6 +148,10 @@ class FakeContext:
         out, turn_open = [], False
         for m in messages:
             role = "model" if m["role"] == "assistant" else m["role"]
+            if turn_open and role != "tool" and role != "model" \
+                    and self._closes_turn_before_next:
+                out.append("<turn|>\n")
+                turn_open = False
             if role == "tool":
                 out.append(f"<result>{m['name']}({m['content']})</result>")
                 continue
@@ -156,7 +166,7 @@ class FakeContext:
                 fn = call["function"]
                 body = ",".join(
                     f"{k}:{_fake_value(v)}" for k, v in fn["arguments"].items())
-                out.append(f"<call>fn:{fn['name']}{{{body}}}</call>")
+                out.append(f"<call>{CALL_LEAD_IN}{fn['name']}{{{body}}}</call>")
             out.append(m["content"].strip())   # these fragments trim
             if role == "system":
                 for declared in tools or ():
@@ -215,7 +225,9 @@ class FakeContext:
         """
         body = self.call_script.pop(0)
         opener, closer = tool_tokens
-        for token in (opener, *range(len(body)), closer):
+        spelled = ([ord(c) for c in CALL_LEAD_IN + body] if self._tokens_spell_text
+                   else range(len(body)))
+        for token in (opener, *spelled, closer):
             self.cache.append(token)
             generated.token_ids.append(token)
         generated.tool_call = body

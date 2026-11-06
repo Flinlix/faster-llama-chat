@@ -16,8 +16,8 @@ it. See the README, "How eviction works".
 
 from __future__ import annotations
 
-import json
 import math
+import re
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
@@ -29,7 +29,7 @@ from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, n_newest_that_fit
 from .resolved_template import ResolvedTemplate, ensure_context_answers
 from .template import TemplateFragments, TemplateFormatter, ToolCallFragments
-from .tools import ToolCall, ToolRegistry, ToolSpec
+from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
 
 
 # The name a result block carries where no real one is to be had: answering a
@@ -228,7 +228,8 @@ class ChatWrapper:
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
 
-    def begin(self, system_prompt: str, messages: list[tuple[str, str]] | None = None,
+    def begin(self, system_prompt: str,
+              messages: list[tuple[str, str] | ToolTurn] | None = None,
               tools: ToolRegistry | list[ToolSpec] | None = None) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
@@ -239,9 +240,14 @@ class ChatWrapper:
 
         Args:
             system_prompt: Always kept, never evicted.
-            messages: Optional ``(role, text)`` history, oldest first. Only the
-                most recent that fit alongside the system prompt are prefilled,
-                under both eviction limits; older excess is dropped.
+            messages: Optional history, oldest first: ``(role, text)`` pairs,
+                and a :class:`~llama_chat.tools.ToolTurn` for an assistant turn
+                that called tools, written as this model's template writes one.
+                A history that ends on a tool turn's result leaves that turn
+                open, as a result written into a live turn does, for
+                :meth:`resume_until_tool` to go on with. Only the most recent
+                that fit alongside the system prompt are prefilled, under both
+                eviction limits; older excess is dropped.
             tools: Tools to declare, rendered into the system turn where this
                 model's template puts them, which is the one placement that
                 costs no extra prefill and that no eviction can take back. From
@@ -254,10 +260,11 @@ class ChatWrapper:
 
         Raises:
             ValueError: If the system prompt alone exceeds
-                ``evict_above_tokens``, or if ``tools`` names anything and this
-                model cannot call tools: no call in its template, no
-                declarations, no recoverable argument spelling, or no result
-                block. The previous conversation is left intact either way.
+                ``evict_above_tokens``, or if ``tools`` names anything or the
+                history holds a tool turn and this model cannot call tools: no
+                call in its template, no declarations, no recoverable argument
+                spelling, or no result block. The previous conversation is left
+                intact either way.
         """
         messages = messages or []
         with self._lock:
@@ -275,10 +282,12 @@ class ChatWrapper:
                     f"eviction threshold is {self._config.evict_above_tokens}; "
                     "shorten the prompt or raise context_size/evict_above_fraction"
                 )
-            hist_tokens = [
-                self._fragment_tokens(role, text)
-                for role, text in messages
-            ]
+            ends_open = (bool(messages) and isinstance(messages[-1], ToolTurn)
+                         and bool(messages[-1].steps)
+                         and isinstance(messages[-1].steps[-1], ToolResult))
+            last = len(messages) - 1
+            hist_tokens = [self._history_tokens(item, open_turn=ends_open and i == last)
+                           for i, item in enumerate(messages)]
 
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
@@ -299,17 +308,22 @@ class ChatWrapper:
                 self._context.warmup()
                 self._warmed = True
 
-            # One decode for the whole conversation.
+            # One decode for the whole conversation. A turn left open is
+            # generated into next, so its last token's logits are kept.
+            ends_open = ends_open and bool(kept_messages)
             all_tokens = list(sys_tokens)
             for toks in kept_tokens:
                 all_tokens.extend(toks)
-            self._context.prefill(all_tokens, start_pos=0, want_logits=False)
+            self._context.prefill(all_tokens, start_pos=0, want_logits=ends_open)
 
             self._table.append(Message(
                 "system", system_prompt, sys_tokens,
                 declares=tuple(spec.name for spec in specs or [])))
-            for (role, text), toks in zip(kept_messages, kept_tokens):
+            for item, toks in zip(kept_messages, kept_tokens):
+                role, text = (("assistant", item.text) if isinstance(item, ToolTurn)
+                              else item)
                 self._table.append(Message(role, text, toks))
+            self._reply_open = ends_open
             self._begun = True
 
     # ----- adding context ------------------------------------------------------
@@ -584,7 +598,7 @@ class ChatWrapper:
         prefix, suffix = self._template.result_wrapping(name)
         tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
         closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
-        body = self._context.tokenize(_result_text(result), add_special=False,
+        body = self._context.tokenize(result_text(result), add_special=False,
                                       parse_special=False)
         # The body is clipped to fit; the tags never are. See the README,
         # "Tool calling".
@@ -1040,6 +1054,32 @@ class ChatWrapper:
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                 allow_tools=allow_tools, sampling=sampling))
 
+    def _history_tokens(self, item: tuple[str, str] | ToolTurn,
+                        open_turn: bool = False) -> list[int]:
+        """One message of a ``begin`` history, as it is prefilled."""
+        if not isinstance(item, ToolTurn):
+            return self._fragment_tokens(*item)
+        # Refuses a model that cannot call tools.
+        pieces = self._template.past_tool_turn(item, open_turn)
+        open_id, close_id = self._template.tool_tokens
+        tags = {text: token for token in (open_id, close_id)
+                if (text := self._context.token_text(token))}
+        between_tags = re.compile("(" + "|".join(map(re.escape, tags)) + ")")
+        tokens: list[int] = []
+        for text, own in pieces:
+            if own:
+                tokens += self._context.tokenize(text, add_special=False,
+                                                 parse_special=False)
+                continue
+            # The call tags as the single tokens a generated call holds.
+            for part in between_tags.split(text):
+                if part in tags:
+                    tokens.append(tags[part])
+                elif part:
+                    tokens += self._context.tokenize(part, add_special=False,
+                                                     parse_special=True)
+        return tokens
+
     def _system_tokens(self, system_prompt: str,
                        specs: list[ToolSpec] | None) -> list[int]:
         """The system turn, with any declarations where the template puts them.
@@ -1398,6 +1438,3 @@ def _explain_failure(result, may_call_again: bool):
                        + ("try again" if may_call_again else "do not call again")}
 
 
-def _result_text(result) -> str:
-    """One tool's return value as the text the model is handed."""
-    return result if isinstance(result, str) else json.dumps(result)

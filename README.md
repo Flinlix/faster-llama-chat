@@ -697,6 +697,29 @@ then, so answering one inside the loop is safe. `registry.call(event)` is one
 way to run it; anything that returns a value will do, and a call the model
 invented is yours to refuse with an error result of your own.
 
+A history that called tools goes into `begin` as well, for a conversation that
+is read in again: each assistant turn that made calls is one `ToolTurn`, its
+steps in the order they were written, the model's text as `str`, each call as a
+`ToolCall` and each result as a `ToolResult(name, result)`:
+
+```python
+chat.begin(system, [
+    ("user", "What is the weather in Munich?"),
+    ToolTurn(("Let me look.", ToolCall("weather", {"city": "Munich"}),
+              ToolResult("weather", {"celsius": 21}), "It is 21 degrees.")),
+    ("user", "And tomorrow?"),
+], tools=registry)
+```
+
+The turn is written as the model's own template writes a past turn, so the
+order and the spelling are the template's: rendered with a marker for each
+piece of the turn's own text, its text, its string arguments and its results,
+which are then tokenized with special-token parsing off, while the template's
+tags are tokenized with it on and the call tags become the single tokens a
+generated call holds. A history that ends on a result leaves that turn open, as
+a result written into a live turn does, and `resume_until_tool()` goes on with
+it.
+
 `reply_with_tools` returns one `Reply` for the whole exchange, and
 `reply_with_tools_stream` carries the same one on its `reply`: the counts are
 sums over every generation, `stop_reason` is the

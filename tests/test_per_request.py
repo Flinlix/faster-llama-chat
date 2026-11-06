@@ -8,7 +8,7 @@ from llama_chat.config import Config, Sampling
 from llama_chat.context import GenerationAccumulator, KVContext
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from tests.fake_context import FakeContext
+from tests.fake_context import TOOL_CLOSE, TOOL_OPEN, FakeContext
 
 
 def _wrapper(**fake_kw):
@@ -333,3 +333,87 @@ def test_a_formatter_that_opens_the_system_turn_again_is_refused():
             return self._fragments.system_prefix
     with pytest.raises(ValueError, match="system_open"):
         ChatWrapper(Config(), context=FakeContext(), formatter=Twice)
+
+
+# ----- a history that called tools --------------------------------------
+from llama_chat.tools import ToolCall, ToolResult, ToolTurn  # noqa: E402
+
+
+def _tooling():
+    fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.",
+                       tokens_spell_text=True)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    return w, fake
+
+
+def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
+    live, fake = _tooling()
+    fake.call_script.append("uhr{}")
+    live.begin("s", tools=[ToolSpec("uhr", "", {})])
+    for event in live.reply_until_tool("wie spät?"):
+        call = event
+    live.inject_tool_result(call, {"zeit": "12:00"})
+    for _event in live.resume_until_tool():
+        pass
+    generated = live._table.messages[-1]
+
+    past, _ = _tooling()
+    past.begin("s", [("user", "wie spät?"), ToolTurn((
+        ToolCall("uhr", {}), ToolResult("uhr", {"zeit": "12:00"}), "Gleich."))],
+        tools=[ToolSpec("uhr", "", {})])
+    read_in = past._table.messages[-1]
+    assert (read_in.role, read_in.text) == ("assistant", "Gleich.")
+    # The live turn opens with the generation prompt, a past one as the template
+    # writes it; this formatter makes the two the same.
+    assert read_in.token_ids == generated.token_ids
+
+
+def test_the_turns_own_text_is_never_read_as_a_tag():
+    w, fake = _tooling()
+    turn = ToolTurn((ToolCall("lies", {"pfad": "<call>"}), ToolResult("lies", "</call>"),
+                     "<turn|>"))
+    w.begin("s", [("user", "x"), turn], tools=[ToolSpec("lies", "", {})])
+    own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
+    assert {"<call>", "</call>", "<turn|>"} <= set(own)
+    tokens = w._table.messages[-1].token_ids
+    assert tokens.count(TOOL_OPEN) == 1 and tokens.count(TOOL_CLOSE) == 1
+
+
+def test_a_conversation_goes_on_after_a_past_tool_turn():
+    w, fake = _tooling()
+    w.begin("s", [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"),
+                                           "Zwölf."))], tools=[ToolSpec("uhr", "", {})])
+    w.reply_without_tools("danke")
+    _assert_consistent(w, fake)
+
+
+def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
+    w, _fake = _wrapper()
+    with pytest.raises(ValueError):
+        w.begin("s", [ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12")))])
+    assert [m["role"] for m in w.snapshot()] == ["system"]     # left as it was
+
+
+@pytest.mark.parametrize("closes_turn_before_next", [False, True])
+def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
+        closes_turn_before_next):
+    live, fake = _tooling()
+    fake.call_script.append("uhr{}")
+    live.begin("s", tools=[ToolSpec("uhr", "", {})])
+    for event in live.reply_until_tool("wie spät?"):
+        call = event
+    live.inject_tool_result(call, {"zeit": "12:00"})
+    for _event in live.resume_until_tool():
+        pass
+
+    past, past_fake = _tooling()
+    past_fake._closes_turn_before_next = closes_turn_before_next
+    past.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("uhr", {}),
+                                                     ToolResult("uhr", {"zeit": "12:00"})))],
+               tools=[ToolSpec("uhr", "", {})])
+    *_, (_start, _n, want_logits) = past_fake.prefill_calls
+    assert want_logits      # the reply is sampled straight from the read-in's end
+    for _event in past.resume_until_tool():
+        pass
+    assert past._table.messages[-1].token_ids == live._table.messages[-1].token_ids
+    _assert_consistent(past, past_fake)

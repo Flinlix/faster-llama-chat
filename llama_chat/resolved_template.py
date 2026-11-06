@@ -12,13 +12,15 @@ through the model's own template; what is done with the result belongs to
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from .template import (CallBody, TemplateFormatter, TemplateFragments,
                        ToolCallFragments)
 from .template_extract import extract_call_body, extract_tool_fragments
-from .tools import ToolSpec
+from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
 # What builds the formatter once the fragments are known.
 _FormatterFactory = Callable[[TemplateFragments], TemplateFormatter]
@@ -28,6 +30,12 @@ _FormatterFactory = Callable[[TemplateFragments], TemplateFormatter]
 _PROMPT = "PROMPTMSG"
 _RESULT = "RESULTMSG"
 _TAIL = "TAILMSG"
+
+# Where a past turn's own text goes in a render, numbered; the user turns around
+# it are found by the two markers above and below.
+_FIELD = "FIELD{}MSG"
+_FIELD_PATTERN = re.compile(r"FIELD(\d+)MSG")
+_NEXT = "NEXTMSG"
 
 # The stand-in a probe declares and answers a call for. What a template renders
 # around a declaration or around a result does not depend on which function it
@@ -201,6 +209,64 @@ class ResolvedTemplate:
             raise ValueError("this model's template renders no tool result")
         head, _, tail = rendered.partition(_RESULT)
         return head.rsplit(closer, 1)[1], tail.partition(_TAIL)[0]
+
+    def past_tool_turn(self, turn: ToolTurn,
+                       open_turn: bool = False) -> list[tuple[str, bool]]:
+        """A turn of the history that called tools, as this model's template writes it.
+
+        Rendered by the template, with a marker for every piece of the turn's
+        own text: what the model wrote, each string argument, each result. So
+        the order and the spelling are the template's, and nothing of the
+        turn's text is read as a tag.
+
+        Args:
+            turn: The turn.
+            open_turn: Leave the turn open after its last result, for the reply
+                to go on with: rendered with nothing after it, and without the
+                closing tag a template may add there.
+
+        Returns:
+            The turn from its opening tag to its closing one, or to its last
+            result where it is left open, in pieces: the text, and whether it is
+            the turn's own text, to be tokenized with special-token parsing
+            off, rather than the template's.
+
+        Raises:
+            ValueError: If this model cannot call tools, or the template does not
+                render the turn where a turn goes.
+        """
+        self.ensure_tools_usable()
+        fields: list[str] = []
+
+        def field(text: str) -> str:
+            fields.append(text)
+            return _FIELD.format(len(fields) - 1)
+
+        frags = self._fragments
+        after = [] if open_turn else [{"role": "user", "content": _NEXT}]
+        rendered = self._context.render_with_model_template(
+            [{"role": "user", "content": _PROMPT}]
+            + _turn_messages(turn, field, frags.trim_content) + after)
+        head = frags.user_prefix + _PROMPT + frags.user_suffix
+        if rendered is None or head not in rendered \
+                or not (open_turn or _NEXT in rendered):
+            raise ValueError("this model's template renders no past tool turn")
+        body = rendered.partition(head)[2]
+        if open_turn:
+            body = body.removesuffix(frags.assistant_suffix)
+        else:
+            body = body.rpartition(frags.user_prefix + _NEXT)[0]
+        pieces, at = [], 0
+        for found in _FIELD_PATTERN.finditer(body):
+            text = fields[int(found.group(1))]
+            quoted = (body[found.start() - 1:found.start()] == '"'
+                      and body[found.end():found.end() + 1] == '"')
+            pieces.append((body[at:found.start()], False))
+            pieces.append((json.dumps(text, ensure_ascii=False)[1:-1] if quoted else text,
+                           True))
+            at = found.end()
+        pieces.append((body[at:], False))
+        return [(text, own) for text, own in pieces if text]
 
     def declaration_block(self, specs: list[ToolSpec]) -> str:
         """Only the declarations, for adding to a conversation already begun.
@@ -453,3 +519,49 @@ class ResolvedTemplate:
         plain_head, _, plain_tail = plain.partition(_PROMPT)
         return _SystemTurnSplit(declared_head, declared_tail,
                                 plain_head, plain_tail)
+
+
+def _turn_messages(turn: ToolTurn, field, trim: bool) -> list[dict]:
+    """``turn`` as the chat messages a template renders, its own text as markers.
+
+    The model's text and the calls it makes belong to one assistant message
+    until a result follows; each result is a tool message, answering the calls
+    in the order they were made.
+    """
+    messages: list[dict] = []
+    calls = results = 0
+    assistant = None
+    for step in turn.steps:
+        if isinstance(step, ToolResult):
+            messages.append({"role": "tool", "name": step.name,
+                             "tool_call_id": f"call_{results}",
+                             "content": field(result_text(step.result))})
+            results += 1
+            assistant = None
+            continue
+        if assistant is None:
+            assistant = {"role": "assistant", "content": "", "tool_calls": []}
+            messages.append(assistant)
+        if isinstance(step, ToolCall):
+            assistant["tool_calls"].append({
+                "id": f"call_{calls}", "type": "function",
+                "function": {"name": step.name,
+                             "arguments": _marked(step.arguments, field)}})
+            calls += 1
+        elif step.strip() if trim else step:
+            assistant["content"] = field(step.strip() if trim else step)
+    for m in messages:
+        if m["role"] == "assistant" and not m["tool_calls"]:
+            del m["tool_calls"]
+    return messages
+
+
+def _marked(value, field):
+    """``value`` with every string in it replaced by a marker."""
+    if isinstance(value, str):
+        return field(value)
+    if isinstance(value, dict):
+        return {k: _marked(v, field) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_marked(v, field) for v in value]
+    return value

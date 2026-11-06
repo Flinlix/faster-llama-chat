@@ -8,10 +8,12 @@ cannot run, so the two are separate. See the README, "Tool calling".
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-__all__ = ["ToolCall", "ToolRegistry", "ToolSpec", "tool"]
+__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn", "result_text",
+           "tool"]
 
 # Anything not here has to be spelled out by passing `parameters` explicitly.
 _JSON_TYPES = {str: "string", int: "integer", float: "number",
@@ -51,6 +53,42 @@ class ToolCall:
 
     name: str
     arguments: dict
+
+
+def result_text(result) -> str:
+    """One tool's return value as the text the model is handed."""
+    return result if isinstance(result, str) else json.dumps(result)
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """What one call returned, as the conversation already holds it.
+
+    Attributes:
+        name: The function that was called.
+        result: What it returned: text as it is, anything else as JSON.
+    """
+
+    name: str
+    result: object
+
+
+@dataclass(frozen=True)
+class ToolTurn:
+    """One assistant turn of a history that called tools, for ``begin``.
+
+    Attributes:
+        steps: The turn in the order it was written: the model's text as a
+            ``str``, each call as a :class:`ToolCall`, and each result as a
+            :class:`ToolResult`.
+    """
+
+    steps: tuple
+
+    @property
+    def text(self) -> str:
+        """What the model wrote in this turn, its calls and results left out."""
+        return "".join(step for step in self.steps if isinstance(step, str))
 
 
 @dataclass

@@ -32,7 +32,7 @@ from .context import KVContext
 from .messages import Eviction, Message, MessageTable, n_newest_that_fit
 from .persistent_wrapper import ConversationStore, InMemoryStore, PersistentChat
 from .template import CallBody, TemplateFragments, TemplateFormatter, ToolCallFragments
-from .tools import ToolCall, ToolRegistry, ToolSpec, tool
+from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, tool
 from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
 
 __all__ = [
@@ -52,6 +52,8 @@ __all__ = [
     "ToolCallFragments",
     "CallBody",
     "ToolCall",
+    "ToolResult",
+    "ToolTurn",
     "ToolSpec",
     "ToolRegistry",
     "tool",
