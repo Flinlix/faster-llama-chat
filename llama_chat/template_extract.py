@@ -17,6 +17,7 @@ A pure function of the render callable, so it is testable without a model.
 from __future__ import annotations
 
 import dataclasses
+import json
 from typing import Callable
 
 from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
@@ -534,7 +535,7 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
         if rendered is None or opened not in rendered:
             continue
         turn = rendered.split(opened, 1)[1]
-        if _THOUGHT not in turn:
+        if _THOUGHT not in turn or _prints_blocks(turn, messages[-1]["content"]):
             continue
         before, _, rest = turn.partition(_THOUGHT)
         if before.startswith(prompt) and before[len(prompt):].strip():
@@ -548,6 +549,12 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
         if thought_open.strip() and thought_close.strip():
             return (thought_open, thought_close), messages[-1]
     return None
+
+
+def _prints_blocks(turn: str, content) -> bool:
+    """Whether ``turn`` holds ``content``, a list of content blocks, printed rather than read."""
+    return not isinstance(content, str) and any(
+        printed in turn for printed in (str(content), json.dumps(content)))
 
 
 def _last_tag(text: str) -> str:
