@@ -981,7 +981,10 @@ the validation probe below), plus whitespace-padded probes to detect
 `trim_content` and `reply_strip`. The user and assistant tags are read from a
 conversation of two user turns, because a first turn may carry text the
 template writes once at the start, such as a default system block, and a newest
-reply may carry what only the newest one does. Every probe renders with
+reply may carry what only the newest one does. What a template writes once
+after the last message of a conversation without a generation prompt, such
+as an end-of-text token, belongs to no turn and is left out of every probe.
+Every probe renders with
 reasoning off. A conversation begun with an empty system prompt
 has no system message, and opens as the template opens one without, with any
 tools declared where the template declares them then. A system prompt is

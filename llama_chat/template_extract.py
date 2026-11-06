@@ -54,13 +54,42 @@ Render = Callable[..., "str | None"]
 
 
 def _refusing(render: Render) -> Render:
-    """``render``, answering ``None`` where it raises: a template refusing a shape."""
-    def rendered(*args, **kwargs):
+    """``render`` as probes read it.
+
+    It answers ``None`` where it raises, a template refusing a shape. A render
+    without a generation prompt comes back without what the template writes
+    once after a conversation's last message, which belongs to no turn.
+    """
+    def refusing(*args, **kwargs):
         try:
             return render(*args, **kwargs)
         except Exception:
             return None
+    end = _conversation_end(refusing)
+
+    def rendered(*args, **kwargs):
+        text = refusing(*args, **kwargs)
+        if end and text is not None and not kwargs.get("generation_prompt") \
+                and text.endswith(end):
+            return text[:-len(end)]
+        return text
     return rendered
+
+
+def _conversation_end(render: Render) -> str:
+    """What a render without a generation prompt writes after its last turn.
+
+    Read as what follows a lone user turn but not the same turn followed by a
+    reply, and also ends the render with the reply.
+    """
+    alone = render([{"role": "user", "content": _USER}], reasoning=False)
+    followed = render([{"role": "user", "content": _USER},
+                       {"role": "assistant", "content": _ASSISTANT}], reasoning=False)
+    if alone is None or followed is None or _USER not in alone or _USER not in followed:
+        return ""
+    after_alone, after_followed = alone.split(_USER, 1)[1], followed.split(_USER, 1)[1]
+    end = after_alone[shared_tags_length(after_alone, after_followed):]
+    return end if followed.endswith(end) else ""
 
 
 def extract_fragments(render: Render) -> TemplateFragments | None:
