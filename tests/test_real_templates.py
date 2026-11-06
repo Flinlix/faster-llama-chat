@@ -154,6 +154,7 @@ _TOOLS_REFUSED = {
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
     "hunyuan-3": "call format",         # a call's body is not recovered
     "hunyuan-memory": "call format",    # a call's body is not recovered
+    "kimi-k3": "call format",           # a call's body is not recovered
 }
 
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",

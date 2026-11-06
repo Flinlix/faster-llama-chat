@@ -162,7 +162,25 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
             return None
     return Reasoning(thought_open=tags[0], thought_close=tags[1],
                      system_prefix=system_prefix, generation_prompt=prompt,
-                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought))
+                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought),
+                     assistant_prefix=_past_reply_opening(render, fragments))
+
+
+def _past_reply_opening(render: Render, fragments: TemplateFragments) -> str | None:
+    """How a past reply opens in a conversation that reasons, where unlike the fragments' tag."""
+    rendered = render([
+        {"role": "user", "content": _USER},
+        {"role": "assistant", "content": _ASSISTANT},
+        {"role": "user", "content": _USER2},
+    ], reasoning=True)
+    opened = _USER + fragments.user_suffix
+    if rendered is None or opened not in rendered:
+        return None
+    exchange = rendered.split(opened, 1)[1]
+    if _ASSISTANT not in exchange:
+        return None
+    prefix = exchange.partition(_ASSISTANT)[0]
+    return None if prefix == fragments.assistant_prefix else prefix
 
 
 def _past_keeps_thought(render: Render, reply: dict) -> bool:

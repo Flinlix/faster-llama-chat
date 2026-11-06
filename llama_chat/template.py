@@ -134,6 +134,9 @@ class Reasoning:
             reasons, the assistant tag included.
         past_keeps_thought: Whether the template writes a past reply's thought
             into the conversation, rather than leaving it out.
+        assistant_prefix: Opens a past reply of a conversation that reasons,
+            in place of the fragments' own, where the template writes it
+            otherwise, such as with an empty thought. ``None`` where it does not.
     """
 
     thought_open: str
@@ -141,6 +144,7 @@ class Reasoning:
     system_prefix: str | None
     generation_prompt: str
     past_keeps_thought: bool = False
+    assistant_prefix: str | None = None
 
 
 class TemplateFormatter:
@@ -182,6 +186,8 @@ class TemplateFormatter:
         prefix, suffix = self._parts(role)
         if role == "system" and self._reasoning:
             prefix = self._reasoning.system_prefix
+        if role == "assistant" and self._reasoning and self._reasoning.assistant_prefix is not None:
+            prefix = self._reasoning.assistant_prefix
         return prefix, self._fragments.content(role, text), suffix
 
     def fragment(self, role: str, text: str) -> str:

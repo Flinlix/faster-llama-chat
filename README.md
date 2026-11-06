@@ -906,7 +906,10 @@ matched against the answer only. A template that routes replies through
 channels ends its generation prompt before the channel's header, which the
 model writes itself; that header is kept out of the answer as well, and a
 thought may be read from either field templates use for it, `reasoning_content`
-or `thinking`, or from a content block of type `thinking`. A finished reply is kept as the template
+or `thinking`, or from a content block of type `thinking`. A past reply of a
+conversation that reasons opens as the template writes it then, which may
+differ from its opening without reasoning, such as by an empty thought. A
+finished reply is kept as the template
 writes a past reply: without its thought where the template leaves a past
 thought out, and without what a generation prompt adds, such as an empty
 thought, and in the tokens its text tokenizes into, where the model generated
