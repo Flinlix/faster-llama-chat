@@ -892,7 +892,7 @@ class ChatWrapper:
     @property
     def can_reason(self) -> bool:
         """Whether :meth:`begin` may be asked to have the model reason."""
-        return self._template.reasoning is not None
+        return self._template.can_reason
 
     @property
     def reply_open(self) -> bool:

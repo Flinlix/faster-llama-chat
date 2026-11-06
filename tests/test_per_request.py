@@ -1,5 +1,6 @@
 """Settings one request brings with it, and cutting the newest reply short."""
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -252,6 +253,14 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
         system_prefix="<|turn>system\n" + THINK_ON,
         generation_prompt="<|turn>model\n")
     assert w._template.fragments.generation_prompt == "<|turn>model\n" + EMPTY_THOUGHT
+
+
+def test_a_model_whose_thought_is_marked_but_cannot_be_switched_on_does_not_offer_reasoning():
+    w, _fake = _reasoning(reasoning=False)
+    w._template._reasoning = dataclasses.replace(w._template.reasoning, system_prefix=None)
+    assert not w.can_reason
+    with pytest.raises(ValueError, match="reasoning"):
+        w.begin("t", reasoning=True)
 
 
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
