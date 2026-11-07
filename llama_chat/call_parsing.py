@@ -68,7 +68,7 @@ def _one_json_call(decoded) -> ToolCall | None:
     """Read one entry of a batch, or ``None`` if it is not a call."""
     if not isinstance(decoded, dict):
         return None
-    name = decoded.get("name")
+    name = decoded.get("name", decoded.get("tool_name"))      # both are in the wild
     if not isinstance(name, str) or not name:
         return None
     arguments = decoded.get("arguments", decoded.get("parameters", {}))  # both are in the wild

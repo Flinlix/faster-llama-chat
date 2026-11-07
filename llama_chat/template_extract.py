@@ -337,11 +337,13 @@ def extract_call_separator(render: Render, call_open: str) -> str | None:
     """What a template writes between one call's argument and the next call's opening.
 
     Read from a turn that makes two calls, so it holds the first call's own
-    ending but not what the template writes after the last call.
+    ending but not what the template writes after the last call. Where the
+    opening begins with a tag written once for all the calls of a turn, each
+    call is found by the shortest end of the opening that starts with a tag.
 
     Returns:
         The text, or ``None`` where the template does not open each call with
-        ``call_open``.
+        ``call_open`` or such an end of it.
     """
     rendered = _refusing(render)([
         {"role": "user", "content": _USER},
@@ -350,9 +352,14 @@ def extract_call_separator(render: Render, call_open: str) -> str | None:
              "function": {"name": _TOOL, "arguments": {_KEY: value}}}
             for n, value in enumerate((_STRING, _STRING2))]},
     ], reasoning=False)
-    if rendered is None or rendered.count(call_open) < 2:
+    if rendered is None:
         return None
-    first_call = rendered.split(call_open)[1]
+    openings = [call_open] + [call_open[i:] for i in range(len(call_open) - 1, 0, -1)
+                              if call_open[i] == "<"]
+    each_call = next((opening for opening in openings if rendered.count(opening) >= 2), None)
+    if each_call is None:
+        return None
+    first_call = rendered.split(each_call)[1]
     return first_call.split(_STRING, 1)[1] if _STRING in first_call else None
 
 

@@ -829,16 +829,18 @@ it writes before the tag belongs to the reply. Its closing tag is read
 from a turn that makes two calls: the last tag between the first call's
 argument and the second call's opening. The first tag after the arguments is
 not enough, because a template may close each argument with a tag of its own,
-`<arg_value>v</arg_value></tool_call>`. Where a template writes no tag between
-two calls, the closing tag is the first after the last argument, which may be
-the token that ends the turn. A turn that calls may open without the content
-tag a reply in words opens with; the call then begins after the tags the two
-share.
+`<arg_value>v</arg_value></tool_call>`. Where the opening begins with a tag
+written once for all the calls of a turn, `<tool_calls><tool_call>`, the second
+call is found by the shortest end of the opening that starts with a tag. Where a
+template writes no tag between two calls, the closing tag is the first after
+the last argument, which may be the token that ends the turn. A turn that calls
+may open without the content tag a reply in words opens with; the call then
+begins after the tags the two share.
 
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
 JSON is read directly instead, because it already carries the function name and
-the arguments. Together the two cover JSON objects and arrays,
+the arguments, under `name` or `tool_name` and `arguments` or `parameters`. Together the two cover JSON objects and arrays,
 `name{key:value}` with quoted strings, `name(k="v")`, attribute-style XML,
 `<function=name><parameter=k>v</parameter>`, and keys and values in tags of
 their own right after the name, `name<arg_key>k</arg_key><arg_value>v</arg_value>`,

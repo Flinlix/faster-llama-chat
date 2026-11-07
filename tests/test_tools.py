@@ -2224,3 +2224,8 @@ def test_a_call_body_that_cannot_end_a_name_is_refused():
     with pytest.raises(ValueError, match="name_close or a key_open"):
         CallBody(name_close="", key_open="", key_close=":", pair_sep=",",
                  body_close="", empty_close="")
+
+
+def test_a_json_call_may_name_its_function_as_tool_name():
+    body = '[{"tool_call_id": "0", "tool_name": "clock", "parameters": {"zone": "CET"}}]'
+    assert parse_calls(body, None) == [ToolCall("clock", {"zone": "CET"})]
