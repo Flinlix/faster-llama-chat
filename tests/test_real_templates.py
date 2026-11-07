@@ -309,3 +309,36 @@ def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_re
                                   "closing": "<|never|>"}
     with pytest.raises(ValueError, match="add-on file closes a call"):
         ResolvedTemplate(context)
+
+
+_ARGUMENTS = [{}, {"title": "Zahnarzt"}, {"title": "Zahnarzt", "minutes": 30},
+              {"where": {"city": "Bern"}}, {"days": [1, 2]},
+              {"title": "a,b:c"}, {"flag": True}, {"nothing": None}]
+# Arguments that do not come back as made, and why.
+_LOST = {
+    ("minimax-m3.1", "nothing"): "the template leaves a null out of the call",
+    ("minimax-m3.1", "where"): "nested values in its own elements are not read yet",
+    ("minimax-m3.1", "days"): "nested values in its own elements are not read yet",
+}
+
+
+@pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
+@pytest.mark.parametrize("path", [p for p in _tool_templates()
+                                  if not TaggedContext(json.loads(p.read_text())).addon_call()],
+                         ids=lambda p: p.stem)
+def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, arguments):
+    context = TaggedContext(json.loads(path.read_text()))
+    template = ResolvedTemplate(context)
+    rendered = context.render_with_model_template(
+        [{"role": "user", "content": "x"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": "call00000", "type": "function",
+              "function": {"name": "fn", "arguments": arguments}}]}], reasoning=False)
+    opener, closer = (template.call_texts if template.call_texts is not None
+                      else (context.token_text(t) for t in template.tool_tokens))
+    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
+    read = parse_calls(body, template.call_body, template.call_lead_in)
+    if any((path.stem, key) in _LOST for key in arguments):
+        assert read != [ToolCall("fn", arguments)], "now read back: drop it from _LOST"
+    else:
+        assert read == [ToolCall("fn", arguments)]

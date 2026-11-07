@@ -7,6 +7,7 @@ here runs anything; see :mod:`llama_chat.tools` for that half.
 
 from __future__ import annotations
 
+import ast
 import json
 from typing import Any
 
@@ -174,11 +175,18 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
     if unquoted is not text:
         return unquoted             # the model marked it as a string
     if text[:1] in ("{", "[") and text[-1:] in ("}", "]"):
-        # Nested values are JSON in some models and these delimiters in others.
+        # Nested values are JSON in some models, the Python literal a template
+        # interpolates in others, and these delimiters in the rest.
         try:
             return json.loads(text)
         except ValueError:
             pass
+        try:
+            found = ast.literal_eval(text)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            found = None
+        if isinstance(found, (dict, list)):
+            return found
         try:
             if text[0] == "{":
                 return _parse_pairs(text[1:-1], call_body)
