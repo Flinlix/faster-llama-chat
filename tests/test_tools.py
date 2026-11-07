@@ -2245,3 +2245,12 @@ def test_a_value_closed_by_a_tag_naming_its_key_is_read_to_that_tag():
                     body_close="</{key}>", empty_close="", key_in_close=True)
     text = 'clock"><zone>CET</zone><n>3</n>'
     assert parse_calls(text, body) == [ToolCall("clock", {"zone": "CET", "n": 3})]
+
+
+def test_a_function_whose_annotations_are_postponed_registers_as_its_types():
+    from .postponed_tool import weather
+    registry = ToolRegistry()
+    registry.register(weather, "Weather for a city")
+    assert registry.specs()[0].parameters == {
+        "type": "object", "properties": {"city": {"type": "string"}, "days": {"type": "integer"}},
+        "required": ["city"]}

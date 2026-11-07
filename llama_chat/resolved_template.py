@@ -144,6 +144,23 @@ class ResolvedTemplate:
         self._preambles = {reasoning: self._resolve_preamble(reasoning)
                            for reasoning in (False, True)}
         self._later_system = self._resolve_later_system()
+        self._resolved_from = self._opening_renders()
+
+    def _opening_renders(self) -> tuple:
+        """How the template opens a conversation, with a system prompt and without, in each mode."""
+        return tuple(self._render(messages, generation_prompt=True, reasoning=reasoning)
+                     for messages in ([{"role": "system", "content": _PROMPT},
+                                       {"role": "user", "content": _NEXT}],
+                                      [{"role": "user", "content": _NEXT}])
+                     for reasoning in (False, True))
+
+    def is_current(self) -> bool:
+        """Whether the template still renders as it did when this was resolved.
+
+        A template that writes the date, or anything else read at render time,
+        renders differently once that changes, and is then resolved again.
+        """
+        return self._opening_renders() == self._resolved_from
 
     def _render(self, messages, tools=None, *, generation_prompt=False, reasoning=None,
                 **variables):

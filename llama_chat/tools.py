@@ -286,8 +286,10 @@ def _parameters_of(fn) -> dict:
         TypeError: If the signature cannot be read or cannot be described.
     """
     try:
-        signature = inspect.signature(fn)
-    except ValueError as e:
+        # Annotations written as strings, as under postponed evaluation, are
+        # read as the types they name.
+        signature = inspect.signature(fn, eval_str=True)
+    except (ValueError, NameError) as e:
         raise TypeError(f"{fn!r} has no signature this can read ({e}); "
                         f"pass parameters=") from e
     properties, required = {}, []

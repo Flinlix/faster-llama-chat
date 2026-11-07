@@ -83,3 +83,27 @@ def test_a_restart_keeps_only_history_the_template_renders(path):
     rendered = _rendered(context, rows)
     assert rendered is not None, [row["role"] for row in rows]
     assert cached == rendered
+
+
+def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(monkeypatch):
+    import datetime as real_datetime
+
+    import llama_cpp.llama_chat_format as chat_format
+
+    today = [real_datetime.datetime(2026, 11, 7, 23, 59)]
+
+    class _Clock:
+        @staticmethod
+        def now():
+            return today[0]
+
+    monkeypatch.setattr(chat_format, "datetime", _Clock)
+    path = Path(__file__).parent / "templates" / "llama-3.2.json"
+    context, chat, seen = _conversation(path, context_size=4096)
+    chat.begin("Be brief.")
+    assert "07 Nov 2026" in context.text_of(context.cache)
+    today[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
+    chat.begin("Be brief.")
+    chat.reply_without_tools("How are you?")
+    cached, rows = seen[-1]
+    assert "08 Nov 2026" in cached and cached == _rendered(context, rows)

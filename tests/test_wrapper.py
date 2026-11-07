@@ -1110,3 +1110,21 @@ def test_a_failing_message_callback_leaves_the_cache_and_the_table_agreeing():
     assert [r["text"] for r in w.snapshot()][1:] == ["first", "re"]   # "second" was refused
     w.reply_without_tools("third")                     # the conversation goes on
     _assert_consistent(w, fake)
+
+
+def test_a_restart_whose_newest_item_cannot_fit_is_refused_before_anything_is_reset():
+    fake = FakeContext(gen_tokens=2)
+    w = ChatWrapper(_config(context_size=200, evict_above_fraction=0.5), context=fake)
+    w.begin("s", [("user", "kept")])
+    before = w.snapshot()
+    with pytest.raises(ValueError, match="newest history item"):
+        w.begin("s", [("user", "old"), ("assistant", "x" * 150)])
+    assert w.snapshot() == before
+    _assert_consistent(w, fake)
+
+
+def test_a_restart_says_how_much_history_it_kept():
+    fake = FakeContext(gen_tokens=2)
+    w = ChatWrapper(_config(context_size=4000), context=fake)
+    assert w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")]) == 3
+    assert w.begin("s") == 0

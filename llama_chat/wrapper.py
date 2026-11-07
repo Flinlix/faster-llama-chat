@@ -200,8 +200,8 @@ class ChatWrapper:
             ensure_context_answers(self._context, _CACHE_CONTEXT_SURFACE)
             if hasattr(self._context, "save_state"):
                 ensure_context_answers(self._context, ("restore_state",))
-            self._template = ResolvedTemplate(
-                self._context, fragments=fragments, tool_calls=tool_calls)
+            self._template_given = {"fragments": fragments, "tool_calls": tool_calls}
+            self._template = ResolvedTemplate(self._context, **self._template_given)
             # The conversation's own, set again by every begin.
             self._formatter = self._template.formatter()
         except BaseException:
@@ -236,7 +236,7 @@ class ChatWrapper:
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
               tools: ToolRegistry | list[ToolSpec] | None = None, *,
-              reasoning: bool = False) -> None:
+              reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
         The first call also warms the model for every size of batch it will
@@ -255,7 +255,7 @@ class ChatWrapper:
                 open, as a result written into a live turn does, for
                 :meth:`resume_until_tool` to go on with. Only the most recent
                 that fit alongside the system prompt are prefilled, under both
-                eviction limits; older excess is dropped.
+                eviction limits, from a user turn on; older excess is dropped.
             tools: Tools to declare, rendered into the system turn where this
                 model's template puts them, which is the one placement that
                 costs no extra prefill and that no eviction can take back. From
@@ -270,9 +270,13 @@ class ChatWrapper:
                 changes only here. Every reply's thought is kept out of what
                 it yields, either way.
 
+        Returns:
+            How many items of ``messages`` were kept.
+
         Raises:
             ValueError: If the system prompt alone exceeds
-                ``evict_above_tokens``, or if ``tools`` names anything or the
+                ``evict_above_tokens``, or the newest item of ``messages``
+                cannot fit beside it, or if ``tools`` names anything or the
                 history holds a tool turn and this model cannot call tools: no
                 call in its template, no declarations, no recoverable argument
                 spelling, or no result block, or if ``reasoning`` is asked of a
@@ -284,6 +288,8 @@ class ChatWrapper:
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
+            if not self._template.is_current():     # it writes the date, say, and that moved on
+                self._template = ResolvedTemplate(self._context, **self._template_given)
             registry = tools if isinstance(tools, ToolRegistry) else None
             specs = _specs_for_system_prompt(tools)
             if specs:
@@ -315,6 +321,11 @@ class ChatWrapper:
                 held, _ = self._moving_declaration(specs, reasoning)
                 hist_tokens[carrier] = held + hist_tokens[carrier]
 
+            if hist_tokens and len(sys_tokens) + len(hist_tokens[-1]) > self._config.evict_above_tokens:
+                raise ValueError(
+                    f"the newest history item needs {len(hist_tokens[-1])} tokens but only "
+                    f"{self._config.evict_above_tokens - len(sys_tokens)} fit beside the "
+                    "system prompt; shorten it or raise context_size/evict_above_fraction")
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
                 self._config.evict_above_tokens, self._config.max_history_messages,
@@ -361,6 +372,7 @@ class ChatWrapper:
             self._rest_states = []
             if not ends_open:
                 self._save_rest()
+            return len(kept_messages)
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
