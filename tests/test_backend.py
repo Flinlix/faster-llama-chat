@@ -378,7 +378,9 @@ def test_a_reply_ends_where_its_closing_parts_from_a_call():
                                      turn_end_text="<close>resp<sep><close>"))
     assert shown == out.text == "Paris"
     assert out.stop_reason == "end_of_turn" and out.token_ids == ["Pa", "ris"]
-    assert removed == [2]           # the closing's first tokens leave the cache again
+    # The closing's first tokens leave the reply; the caller cuts them from the
+    # cache, in the way that cache allows.
+    assert out.cached_beyond == 4 and removed == []
 
 
 def _plain_context(sampled):

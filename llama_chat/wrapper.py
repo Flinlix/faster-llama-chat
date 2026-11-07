@@ -365,7 +365,8 @@ class ChatWrapper:
                 role, text = (("assistant", item.text) if isinstance(item, ToolTurn)
                               else item)
                 declares = (tuple(spec.name for spec in specs) if i == carrier else ())
-                self._table.append(Message(role, text, toks, declares=declares))
+                self._table.append(Message(role, text, toks, declares=declares,
+                                           holds_call=isinstance(item, ToolTurn)))
             self._reply_open = ends_open
             self._turn_ends_with = hist[-1][1] if ends_open else ""
             self._begun = True
@@ -729,16 +730,10 @@ class ChatWrapper:
         msg = self._table.messages[-1]
         if msg.role != "assistant":
             raise ValueError("the newest message is not an assistant reply")
-        if self._holds_call(msg):
+        if msg.holds_call:
             raise ValueError("the newest reply holds a tool call, which would "
                              "be separated from its result")
         return msg
-
-    def _holds_call(self, msg) -> bool:
-        tool_tokens, call_texts = self._template.tool_tokens, self._template.call_texts
-        if call_texts is not None:
-            return call_texts[0] in "".join(map(self._context.token_text, msg.token_ids))
-        return tool_tokens is not None and tool_tokens[0] in msg.token_ids
 
     def _later_system_tags(self) -> tuple[str, str]:
         """The tags of a system message written after the conversation has begun.
@@ -1402,8 +1397,12 @@ class ChatWrapper:
         else:
             self._table.append(Message("assistant", answer, tokens))
         msg = self._table.messages[-1]
+        if generated.cached_beyond:
+            self._cut_back_to(self._table.total)
         self._pending_calls = self._read_calls(generated)
         self._batch = [call.name for call in self._pending_calls]
+        if generated.stop_reason == "tool_call":
+            msg.holds_call = True
         unreadable = (generated.stop_reason == "tool_call"
                       and not self._pending_calls)
         if unreadable:
@@ -1419,7 +1418,7 @@ class ChatWrapper:
         self._reply_open = bool(self._pending_calls) or unreadable
         if self._reply_open:
             return 0, 0, None
-        holds_call = self._holds_call(msg)
+        holds_call = msg.holds_call
         if not msg.text and not holds_call and self._template.user_turn_join is not None:
             self._remove_newest(msg)
             return self._evict_until(lambda: self._fits(0)), 0, None

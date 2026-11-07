@@ -819,3 +819,29 @@ def test_a_header_naming_another_reader_is_never_shown():
     assert opening.feed(" to=user<|message|>Hallo") == "Hallo"
     opening = AnswerOpening(" to=user<|message|>", header)
     assert opening.feed(" to=notes<|message|>Text") == "Text"
+
+
+def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
+    """A cache that cannot cut at its end goes back to a saved state instead."""
+    from .fake_context import FakeContext
+
+    class _ClosingText(FakeContext):
+        def generate(self, start_pos, max_generated_tokens, stop, out=None, **kw):
+            generated = yield from super().generate(start_pos, max_generated_tokens, stop,
+                                                    out=out, **kw)
+            # Two tokens of the closing were decoded and leave the reply again.
+            self.cache += [ord("<"), ord("|")]
+            generated.cached_beyond = 2
+            return generated
+
+        def remove_from(self, pos):
+            assert self.can_shift, "a cache that cannot cut was cut"
+            super().remove_from(pos)
+
+    for can_shift in (True, False):
+        fake = _ClosingText(gen_tokens=3, can_shift=can_shift)
+        w = ChatWrapper(Config(context_size=2000), context=fake)
+        w.begin("s")
+        w.reply_without_tools("hi")
+        w.reply_without_tools("again")
+        assert fake.cache == [t for m in w._table.messages for t in m.token_ids]

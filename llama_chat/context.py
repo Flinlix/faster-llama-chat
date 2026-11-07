@@ -67,12 +67,16 @@ class GenerationAccumulator:
         tool_call: What the model generated between its call tags, tags
             excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
             ``text``.
+        cached_beyond: Tokens decoded into the cache after ``token_ids`` that
+            belong to no reply, such as the first tokens of a closing written
+            whole later; the caller cuts them away again.
     """
 
     token_ids: list[int] = field(default_factory=list)
     text: str = ""
     stop_reason: str = "token_limit"
     tool_call: str = ""
+    cached_beyond: int = 0
 
 
 class KVContext:
@@ -548,10 +552,11 @@ class KVContext:
                     else:
                         generated.stop_reason = "end_of_turn"
                         ended_at_text = True
-                        # Its tokens leave the cache: the closing is written whole.
+                        # Its tokens leave the reply, and the caller cuts them
+                        # from the cache: the closing is written whole.
                         if mark_at in starts:
                             kept = starts.index(mark_at)
-                            self.remove_from(start_pos + kept)
+                            generated.cached_beyond = len(generated.token_ids) - kept
                             del generated.token_ids[kept:]
                             pos = start_pos + kept
                 elif hit is not None:

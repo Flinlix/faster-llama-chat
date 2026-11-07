@@ -107,3 +107,14 @@ def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(monkeypat
     chat.reply_without_tools("How are you?")
     cached, rows = seen[-1]
     assert "08 Nov 2026" in cached and cached == _rendered(context, rows)
+
+
+def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call():
+    # Llama 3.2 opens a call with plain text; a reply quoting it is still prose.
+    fixture = json.loads((Path(__file__).parent / "templates" / "llama-3.2.json").read_text())
+    context = ConversationContext(fixture, ['Write {"name": "x"} in the file.'])
+    chat = ChatWrapper(Config(context_size=4096), context=context)
+    chat.begin("Be brief.")
+    chat.reply_without_tools("How do I name it?")
+    chat.truncate_last_reply("Write")
+    assert chat.snapshot()[-1]["text"] == "Write"

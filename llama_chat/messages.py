@@ -27,6 +27,8 @@ class Message:
         pos_end: One past the last cache position (exclusive).
         declares: The tools this message tells the model about, if any. Held
             here so that evicting the message takes the declaration with it.
+        holds_call: Whether this assistant turn called a tool, as recorded
+            when the call was generated or handed over in a history.
     """
 
     role: str
@@ -35,6 +37,7 @@ class Message:
     pos_start: int = 0
     pos_end: int = 0
     declares: tuple[str, ...] = ()
+    holds_call: bool = False
 
     @property
     def n_tokens(self) -> int:
