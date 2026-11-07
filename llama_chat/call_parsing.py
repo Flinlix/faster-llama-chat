@@ -120,9 +120,15 @@ def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
             break
         key, at = text[at:key_end], key_end + len(call_body.key_close)
         separator = call_body.pair_sep.replace("{key}", key)
-        closing = call_body.body_close.replace("{key}", key).rstrip()
-        following = text.find(separator, at)
-        end = following if following >= 0 else text.find(closing, at)
+        if call_body.member_open:
+            # A nested member may carry this key too, so its closing is matched by depth.
+            end = _matching_close(text, at, call_body.member_open.replace("{key}", key),
+                                  call_body.member_close.replace("{key}", key))
+            following = end if end >= 0 and text.startswith(separator, end) else -1
+        else:
+            closing = call_body.body_close.replace("{key}", key).rstrip()
+            following = text.find(separator, at)
+            end = following if following >= 0 else text.find(closing, at)
         if end < 0:
             raise ValueError(f"an argument that never closes: {text[at:]!r}")
         parsed[_unquote(key.strip(), call_body)] = _parse_typed_value(text[at:end], call_body)
@@ -164,6 +170,11 @@ def _parse_typed_value(text: str, call_body: CallBody) -> Any:
 
 def _parse_value(text: str, call_body: CallBody) -> Any:
     """Read one argument value, keeping its type where the model marked one."""
+    if call_body.member_open and text.startswith(call_body.member_open.split("{key}")[0]):
+        try:
+            return _parse_elements(text, call_body)
+        except ValueError:
+            pass                    # a string that opens like a member
     text = text.strip()
     if text[:1] == '"' and text[-1:] == '"':
         # Read as JSON so the escapes come back as the characters they stand for.
@@ -205,6 +216,66 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
         except ValueError:
             pass
     return text
+
+
+def _parse_elements(text: str, call_body: CallBody) -> Any:
+    """Read a nested value written in this model's own member and item delimiters.
+
+    A run of items is a list, and anything else an object; an object whose
+    only key is the items' own name is written the same way and reads as a list.
+    """
+    if text.startswith(call_body.item_open):
+        try:
+            return [_parse_value(value, call_body) for value in
+                    _elements(text, lambda _: call_body.item_open, lambda _: call_body.item_close)]
+        except ValueError:
+            pass
+    head, tail = call_body.member_open.split("{key}")
+    keys: list[str] = []
+
+    def opening(at: int) -> str:
+        key_end = text.find(tail, at + len(head)) if text.startswith(head, at) else -1
+        if key_end < 0:
+            raise ValueError(f"not a member: {text[at:]!r}")
+        keys.append(text[at + len(head):key_end])
+        return head + keys[-1] + tail
+
+    values = _elements(text, opening, lambda _: call_body.member_close.replace("{key}", keys[-1]))
+    return {key: _parse_value(value, call_body) for key, value in zip(keys, values)}
+
+
+def _elements(text: str, opening, closing) -> list[str]:
+    """The values of the elements ``text`` consists of, each between ``opening(at)`` and its closing."""
+    values, at = [], 0
+    while at < len(text):
+        opened = opening(at)
+        if not text.startswith(opened, at):
+            raise ValueError(f"not an element: {text[at:]!r}")
+        closed = closing(at)
+        start = at + len(opened)
+        end = _matching_close(text, start, opened, closed)
+        if end < 0:
+            raise ValueError(f"an element that never closes: {text[at:]!r}")
+        values.append(text[start:end])
+        at = end + len(closed)
+    if not values:
+        raise ValueError("no elements")
+    return values
+
+
+def _matching_close(text: str, at: int, opening: str, closing: str) -> int:
+    """Where the ``closing`` that matches an ``opening`` just before ``at`` starts, or -1."""
+    depth = 0
+    while True:
+        next_open, next_close = text.find(opening, at), text.find(closing, at)
+        if next_close < 0:
+            return -1
+        if 0 <= next_open < next_close:
+            depth, at = depth + 1, next_open + len(opening)
+        elif depth:
+            depth, at = depth - 1, next_close + len(closing)
+        else:
+            return next_close
 
 
 def _unquote(text: str, call_body: CallBody) -> str:

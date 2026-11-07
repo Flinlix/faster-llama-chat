@@ -378,7 +378,8 @@ def extract_call_body(render: Render, call_open: str,
     """Recover how this model spells a name and its arguments between the tags.
 
     Four renders: no arguments, one string, one number, and two strings. Every
-    delimiter falls out of comparing them. See the README, "Tool calling".
+    delimiter falls out of comparing them, and three more recover how nested
+    values are written. See the README, "Tool calling".
 
     Args:
         render: As :func:`extract_fragments`.
@@ -463,6 +464,7 @@ def extract_call_body(render: Render, call_open: str,
         type_close=type_close,
         string_type=string_type,
         key_in_close=key_in_close,
+        **_nested_forms(rendered_body, text, before_value[len(bare_before):], quote_close),
     )
     # A delimiter still holding a probe's own text is no fixed delimiter at all.
     sentinels = (_TOOL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
@@ -470,6 +472,44 @@ def extract_call_body(render: Render, call_open: str,
            for delimiter in dataclasses.astuple(body) if isinstance(delimiter, str)):
         return None
     return body
+
+
+def _nested_forms(rendered_body, text: str, quote_open: str, quote_close: str) -> dict:
+    """How a template writes an object's members and a list's items in their own delimiters.
+
+    Read from a call whose one argument is an object with one member, one with
+    two, and a list of two strings, each compared with the call whose argument
+    is a string. Empty where the template writes nested values as JSON or a
+    literal, which the values are read as anyway, or in no fixed form.
+    """
+    value_at = text.index(_STRING)
+    before, after = text[:value_at - len(quote_open)], text[value_at + len(_STRING) + len(quote_close):]
+
+    def nested_value(argument) -> str | None:
+        body = rendered_body({_KEY: argument})
+        if body is None or not body.startswith(before) or not body.endswith(after) \
+                or len(body) < len(before) + len(after):
+            return None
+        return body[len(before):len(body) - len(after)]
+
+    member, items = nested_value({_KEY2: _STRING}), nested_value([_STRING, _STRING2])
+    if not member or not items or member[0] in "{[" or member.count(_STRING) != 1:
+        return {}
+    opening, closing = member.split(_STRING)
+    if opening.count(_KEY2) != 1 or closing.count(_KEY2) != 1:
+        return {}
+    member_open, member_close = opening.replace(_KEY2, "{key}"), closing.replace(_KEY2, "{key}")
+    # Two members follow each other with nothing between them.
+    pair = nested_value({_KEY2: _STRING, _KEY: _STRING2})
+    expected = (opening + _STRING + closing
+                + member_open.replace("{key}", _KEY) + _STRING2 + member_close.replace("{key}", _KEY))
+    item_open, found, rest = items.partition(_STRING)
+    between, found_second, item_close = rest.partition(_STRING2)
+    if pair != expected or not (found and found_second and item_open and item_close) \
+            or between != item_close + item_open:
+        return {}
+    return {"member_open": member_open, "member_close": member_close,
+            "item_open": item_open, "item_close": item_close}
 
 
 def extract_call_close_text(render: Render, call_open: str) -> str | None:

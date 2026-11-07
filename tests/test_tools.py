@@ -2161,6 +2161,33 @@ def test_a_value_closed_by_a_tag_naming_its_key_is_read_to_that_tag():
     assert parse_calls(text, body) == [ToolCall("clock", {"zone": "CET", "n": 3})]
 
 
+_ELEMENTS = CallBody(name_close='">|', key_open="<", key_close=">", pair_sep="|</{key}>|<",
+                     body_close="|</{key}>|", empty_close="", key_in_close=True,
+                     member_open="|<{key}>", member_close="|</{key}>",
+                     item_open="|<item>", item_close="|</item>")
+
+
+def test_nested_values_in_the_model_s_own_elements_are_read_by_depth():
+    text = ('f">|<a>|<a>|<a>1|</a>|</a>|</a>|<rows>|<item>|<x>1|</x>|<y>b|</y>|</item>'
+            '|<item>|<item>2|</item>|</item>|</rows>|')
+    assert parse_calls(text, _ELEMENTS) == [ToolCall("f", {"a": {"a": {"a": 1}},
+                                                          "rows": [{"x": 1, "y": "b"}, [2]]})]
+
+
+def test_a_string_that_opens_like_a_member_stays_a_string():
+    assert parse_calls('f">|<a>|<b oops|</a>|', _ELEMENTS) == [ToolCall("f", {"a": "|<b oops"})]
+
+
+def test_an_object_whose_only_key_is_the_items_name_reads_as_the_list_it_is_written_as():
+    assert parse_calls('f">|<a>|<item>1|</item>|</a>|', _ELEMENTS) == [ToolCall("f", {"a": [1]})]
+
+
+def test_nested_delimiters_come_whole_or_not_at_all():
+    with pytest.raises(ValueError, match="nested delimiters"):
+        CallBody(name_close="(", key_open="", key_close="=", pair_sep=",", body_close=")",
+                 empty_close=")", member_open="<{key}>", member_close="</{key}>")
+
+
 def test_a_function_whose_annotations_are_postponed_registers_as_its_types():
     from .postponed_tool import weather
     registry = ToolRegistry()

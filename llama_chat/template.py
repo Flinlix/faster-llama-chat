@@ -49,6 +49,11 @@ class CallBody:
             text it stands as rather than as JSON.
         key_in_close: Whether ``pair_sep`` and ``body_close`` hold the key of
             the value they close, written there as ``{key}``.
+        member_open, member_close: Around each member of a nested object,
+            with its key written as ``{key}``; empty where the model writes
+            nested values as JSON or a literal instead.
+        item_open, item_close: Around each item of a nested list, empty where
+            the model writes nested values as JSON or a literal instead.
     """
 
     name_close: str
@@ -62,11 +67,20 @@ class CallBody:
     type_close: str = ""
     string_type: str = ""
     key_in_close: bool = False
+    member_open: str = ""
+    member_close: str = ""
+    item_open: str = ""
+    item_close: str = ""
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:
             raise ValueError("a call body needs a name_close or a key_open: one of "
                              "them is where the name ends")
+        nested = (self.member_open, self.member_close, self.item_open, self.item_close)
+        if any(nested) and not (all(nested) and self.member_open.count("{key}") == 1
+                                and self.member_close.count("{key}") == 1):
+            raise ValueError("nested delimiters come as all four, member_open and "
+                             "member_close each holding {key} once, or not at all")
 
 
 @dataclass(frozen=True)

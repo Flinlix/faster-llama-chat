@@ -225,6 +225,12 @@ from where the render of a string argument and that of a number differ. A value
 of the string type stands as its text, and any other is read as JSON. A value
 closed by a tag that names its own key, `<city>Berlin</city>`, is read up to that
 tag, and arguments written after the name as one JSON object are read as JSON.
+Where such a template writes a nested object as elements named by their keys,
+and a list as elements of one fixed name, `<where><city>Bern</city></where>` and
+`<days><item>1</item><item>2</item></days>`, three more probes recover both
+forms: an object with one member, one with two, and a list of two strings,
+each compared with the string argument. These values are read by depth, so a
+member may carry the key of the value around it.
 
 What the recovered delimiters look like on two real models, since the field
 names alone are hard to picture:
@@ -379,3 +385,13 @@ the render adds 6 to 65 %. Comparing the text first and tokenizing only its
 changed end would remove the tokenizing share. The render itself is what the
 approach consists of. The estimate assumes E2B ships the 26B model's template
 and tokenizer, which was not checked.
+
+## 2026-11-07: Nested values in a model's own elements
+
+- **Nested values written as elements are read back.** A template may write an
+  object argument as elements named by its keys and a list as elements of one
+  fixed name. Three more probes at load recover both forms, and the values are
+  read by depth, so a member may carry the key of the value around it. Two
+  shapes stay lost because the template writes them alike: an object whose only
+  key is the items' own name reads as a list, and an empty object or list reads
+  as an empty string. A null is still left out by the template itself.

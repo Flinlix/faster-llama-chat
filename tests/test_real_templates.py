@@ -313,12 +313,11 @@ def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_re
 
 _ARGUMENTS = [{}, {"title": "Zahnarzt"}, {"title": "Zahnarzt", "minutes": 30},
               {"where": {"city": "Bern"}}, {"days": [1, 2]},
-              {"title": "a,b:c"}, {"flag": True}, {"nothing": None}]
+              {"title": "a,b:c"}, {"flag": True}, {"nothing": None},
+              {"inner": {"inner": {"n": 1}}}, {"rows": [{"x": 1, "y": "b"}, [2, "c"]]}]
 # Arguments that do not come back as made, and why.
 _LOST = {
     ("minimax-m3.1", "nothing"): "the template leaves a null out of the call",
-    ("minimax-m3.1", "where"): "nested values in its own elements are not read yet",
-    ("minimax-m3.1", "days"): "nested values in its own elements are not read yet",
 }
 
 
