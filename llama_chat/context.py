@@ -370,6 +370,7 @@ class KVContext:
         ends_turn: Callable[[int], bool] | None = None,
         call_texts: tuple[str, str] | None = None,
         turn_end_text: str | None = None,
+        call_opens_as_text: bool = False,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -401,6 +402,9 @@ class KVContext:
                 whose call has no tag of its own; read as ``tool_tokens`` are.
             turn_end_text: Text that ends the reply where generated, removed
                 from the cache again and never yielded.
+            call_opens_as_text: Whether the opening of ``call_texts`` is plain
+                text, which opens a call only at the reply's start or right
+                after a tag.
 
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
@@ -416,7 +420,8 @@ class KVContext:
             yield from self._sample_into(
                 own_sampler if own_sampler is not None else self._sampler,
                 start_pos, max_generated_tokens,
-                stop, out, cancel, tool_tokens, ends_turn, call_texts, turn_end_text)
+                stop, out, cancel, tool_tokens, ends_turn, call_texts, turn_end_text,
+                call_opens_as_text)
         finally:
             if own_sampler is not None:
                 self._backend.free_sampler(own_sampler)
@@ -427,7 +432,8 @@ class KVContext:
                      tool_tokens: tuple[int, int] | None,
                      ends_turn: Callable[[int], bool] | None = None,
                      call_texts: tuple[str, str] | None = None,
-                     turn_end_text: str | None = None):
+                     turn_end_text: str | None = None,
+                     call_opens_as_text: bool = False):
         """The generation loop of :meth:`generate`, drawing from ``sampler``."""
         generated = out if out is not None else GenerationAccumulator()
         pos = start_pos
@@ -441,6 +447,7 @@ class KVContext:
         held_chars = max([longest_stop_chars] + [len(mark) for mark in marks])
         starts = []            # where each token's text begins in ``visible``
         ended_at_text = False
+        marks_from = 0         # where the next search for a mark begins
 
         for _ in range(max(0, max_generated_tokens)):
             if cancel is not None and cancel.is_set():
@@ -450,7 +457,11 @@ class KVContext:
             # A call may close with the token that otherwise ends a turn.
             ends = self._backend.is_eog(self._vocab, tok) or (
                 ends_turn is not None and ends_turn(tok))
-            if ends and not (call is not None and tok == call_close):
+            # A call may close with the token that otherwise ends a turn.
+            closes_call = call is not None and (tok == call_close or (
+                close_text is not None and close_text in "".join(call) + self._backend
+                .token_to_piece_bytes(self._vocab, tok).decode("utf-8", errors="replace")))
+            if ends and not closes_call:
                 generated.stop_reason = "end_of_turn"
                 break
             # Cache, then record, then surface: this order is what keeps
@@ -479,7 +490,13 @@ class KVContext:
                 starts.append(len(visible))
                 visible.append(piece)
                 hit = _stop_hit(visible.text, stop, search_from=visible.emitted)
-                mark_at = _stop_hit(visible.text, marks, search_from=visible.emitted)
+                mark_at = _stop_hit(visible.text, marks,
+                                    search_from=max(visible.emitted, marks_from))
+                while (mark_at is not None and call_opens_as_text
+                       and visible.text.startswith(open_text, mark_at)
+                       and not self._after_tag(visible.text, starts, generated.token_ids, mark_at)):
+                    marks_from = mark_at + 1        # a mention, not a call
+                    mark_at = _stop_hit(visible.text, marks, search_from=marks_from)
                 if mark_at is not None and (hit is None or mark_at < hit):
                     upto = mark_at
                     if open_text is not None and visible.text.startswith(open_text, mark_at):
@@ -535,6 +552,14 @@ class KVContext:
             if delta:
                 generated.text += delta
                 yield delta
+
+    def _after_tag(self, text: str, starts: list[int], tokens: list[int], at: int) -> bool:
+        """Whether ``at`` is the reply's start or follows a tag, whitespace between."""
+        before = len(text[:at].rstrip())
+        if not before:
+            return True
+        last = max(i for i, start in enumerate(starts) if start < before)
+        return self._backend.is_special(self._vocab, tokens[last])
 
     # ----- lifecycle -----------------------------------------------------
     def close(self) -> None:

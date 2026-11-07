@@ -247,7 +247,8 @@ class FakeContext:
     def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
                  out: GenerationAccumulator | None = None, cancel=None,
                  tool_tokens: tuple[int, int] | None = None, sampling=None,
-                 ends_turn=None, call_texts=None, turn_end_text=None):
+                 ends_turn=None, call_texts=None, turn_end_text=None,
+                 call_opens_as_text=False):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,

@@ -379,3 +379,33 @@ def test_a_reply_ends_where_its_closing_parts_from_a_call():
     assert shown == out.text == "Paris"
     assert out.stop_reason == "end_of_turn" and out.token_ids == ["Pa", "ris"]
     assert removed == [2]           # the closing's first tokens leave the cache again
+
+
+def _plain_context(sampled):
+    context, decoded, removed = _sampling_context(sampled)
+    context._backend.is_special = lambda vocab, token: token.startswith("<|")
+    context._backend.is_eog = lambda vocab, token: token in ("<end>", "<|call|>")
+    return context, decoded
+
+
+_PLAIN = ("assistant to=functions.", "<|call|>")
+
+
+@pytest.mark.parametrize("sampled", [
+    ["assistant", " to=", "functions.", "clock", "{}", "<|call|>"],                   # the start
+    ["Denken.", "<|start|>", "assistant", " to=", "functions.", "clock", "{}", "<|call|>"],  # a tag
+])
+def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
+    context, decoded = _plain_context(sampled)
+    out = GenerationAccumulator()
+    "".join(context.generate(0, 20, [], out=out, call_texts=_PLAIN, call_opens_as_text=True))
+    assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
+    assert decoded[-1] == "<|call|>"        # the end-of-generation token that closes it is kept
+
+
+def test_a_plain_text_opening_inside_a_sentence_is_text():
+    context, _ = _plain_context(["Say", " assistant", " to=", "functions.", "x", "<end>"])
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_PLAIN,
+                                     call_opens_as_text=True))
+    assert out.stop_reason == "end_of_turn" and shown == "Say assistant to=functions.x"

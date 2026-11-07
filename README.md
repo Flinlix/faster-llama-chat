@@ -868,6 +868,16 @@ without both go on with. Such a reply then ends where its closing parts from a
 call, once that much of the closing is generated; those tokens leave the cache
 again and the closing is written whole.
 
+A call may also open with plain text and no tag at all, such as
+`<function name="` in a template whose vocabulary holds no tag for it. Such an
+opening counts only at the start of a reply or right after a tag, so a reply
+that mentions it in a sentence goes on as text. Where a template writes no two
+calls in one turn, the text that ends a call is what a call with an argument and
+one without both end with. A plain-text opening that begins with the words of a
+reply's own opening, such as a role name in its header, is refused: a model may
+write its header in another order than its template does, so the template
+cannot tell how a call it generates begins.
+
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
 JSON is read directly instead, because it already carries the function name and

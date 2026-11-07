@@ -124,6 +124,10 @@ class ResolvedTemplate:
                             else self._resolve_tool_calls())
         self._tool_tokens, self._call_lead_in = self._resolve_tool_tokens()
         self._call_texts = self._resolve_call_texts()
+        self._call_opens_as_text = (self._call_texts is not None and
+                                    self._context.first_special_token(self._call_texts[0]) is None)
+        if self._call_texts is not None:
+            self._call_lead_in = self._text_after_last_tag(self._call_texts[0])
         self._turn_end_text = self._resolve_turn_end_text()
         if self._turn_end_text is not None:
             self._turn_end_token = None
@@ -690,10 +694,35 @@ class ResolvedTemplate:
                 or not hasattr(self._context, "first_special_token"):
             return None
         call_open = self._tool_calls.call_open
-        if self._context.first_special_token(call_open) is None:
-            return None             # no tag at all: a call is plain text
+        if self._context.first_special_token(call_open) is None \
+                and self._opens_in_reply_header(call_open):
+            return None
         close = extract_call_close_text(self._context.render_with_model_template, call_open)
         return (call_open, close) if close else None
+
+    def _text_after_last_tag(self, text: str) -> str:
+        """Where a call's own text begins in its opening: after the opening's last tag."""
+        tags = self._tags_in(text)
+        last = self._context.token_text(tags[-1]) if tags else ""
+        return text.rpartition(last)[2] if last else text
+
+    @property
+    def call_opens_as_text(self) -> bool:
+        """Whether a call opens with plain text, which counts only after a tag or at the start."""
+        return self._call_opens_as_text
+
+    def _opens_in_reply_header(self, call_open: str) -> bool:
+        """Whether a plain-text opening begins with text of a reply's own opening.
+
+        A model may write such a header in another order than its template
+        does, so the template cannot tell how a generated call begins.
+        """
+        header, text = self._fragments.assistant_prefix, ""
+        for tag in self._tags_in(header):
+            text_before, _, header = header.partition(self._context.token_text(tag))
+            text += " " + text_before
+        words = (text + " " + header).split()
+        return any(call_open.lstrip().startswith(word) for word in words)
 
     def _resolve_turn_end_text(self) -> str | None:
         """Where a reply ends, where a call opens with the start of a reply's closing."""

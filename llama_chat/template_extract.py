@@ -460,20 +460,25 @@ def extract_call_body(render: Render, call_open: str,
 def extract_call_close_text(render: Render, call_open: str) -> str | None:
     """The text that ends one call, for a template whose call has no closing tag of its own.
 
-    The longest end of what follows the first of two calls that a call with
-    an argument and one without both go on with, starting where a tag starts.
+    The longest text, from where a tag starts to where one ends, found both in
+    what follows the first of two calls and in what a call with an argument
+    and one without both end with. Where a template writes no two calls in one
+    turn, the longest such end of the latter.
     """
     render = _refusing(render)
-    separator = extract_call_separator(render, call_open)
     empty, text = _render_call(render, {}), _render_call(render, {_KEY: _STRING})
-    if separator is None or empty is None or text is None \
-            or call_open not in empty or call_open not in text:
+    if empty is None or text is None or call_open not in empty or call_open not in text:
         return None
     rest = _common_suffix(empty.split(call_open, 1)[1], text.split(call_open, 1)[1])
-    for start in range(len(separator)):
-        if separator[start] in "<[" and rest.startswith(separator[start:]):
-            return separator[start:]
-    return None
+    separator = extract_call_separator(render, call_open)
+    if separator is None:
+        found = [rest[start:] for start in range(len(rest)) if rest[start] in "<["]
+    else:
+        found = [separator[start:end] for start in range(len(separator))
+                 if separator[start] in "<["
+                 for end in range(len(separator), start, -1) if separator[start:end] in rest]
+    found = [candidate for candidate in found if candidate[-1] in ">]"]
+    return max(found, key=len) if found else None
 
 
 def _common_prefix(one: str, other: str) -> str:

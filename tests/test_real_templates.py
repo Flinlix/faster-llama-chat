@@ -226,13 +226,10 @@ def _closers(tag: str) -> list[str]:
 
 # Families whose calls cannot be read, so tools are refused, and why.
 _TOOLS_REFUSED = {
-    "llama-3.2": "plain text",          # a call is bare JSON, without a tag
-    "deepseek-v4.1": "plain text",      # its call tag is not one this stand-in pairs
+    "llama-3.2": "declares no tools",   # declared in the first user turn
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
-    "gpt-oss": "plain text",            # the call is named in the turn's header, before any tag
-    "muse-glimmer": "plain text",       # the call is named in the turn's header, before any tag
-    "minicpm-5": "plain text",          # a call is bare JSON, without a tag
-    "hunyuan-4": "plain text",          # no call tag resolves in this stand-in
+    "gpt-oss": "plain text",            # the model names a call in its header in another order
+    "muse-glimmer": "call format",      # the call is named where a reply names its reader
 }
 
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",
@@ -306,14 +303,16 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
 
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
-def test_a_call_is_read_by_its_texts_only_where_its_tag_marks_every_reply(path):
+def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path):
     context = _TaggedContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
     if template.call_texts is None:
         return
+    assert template.tool_tokens is None
+    if template.call_opens_as_text:
+        return                          # no tag at all
     tag = context.token_text(context.first_special_token(template.call_texts[0]))
     reply = template.fragments
-    assert template.tool_tokens is None
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
 
 

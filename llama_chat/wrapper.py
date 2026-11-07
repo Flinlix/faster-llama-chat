@@ -1269,7 +1269,8 @@ class ChatWrapper:
             tool_tokens=self._template.tool_tokens if allow_tools else None,
             sampling=sampling, ends_turn=self._turn_end_test(thought),
             call_texts=self._template.call_texts if allow_tools else None,
-            turn_end_text=self._template.turn_end_text)
+            turn_end_text=self._template.turn_end_text,
+            call_opens_as_text=self._template.call_opens_as_text)
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
@@ -1432,9 +1433,11 @@ class ChatWrapper:
         """
         if generated.stop_reason != "tool_call":
             return []
+        body = generated.tool_call
+        if self._template.call_texts is not None:
+            body = self._template.call_lead_in + body   # the opening holds its start
         try:
-            return parse_calls(generated.tool_call, self._template.call_body,
-                               self._template.call_lead_in)
+            return parse_calls(body, self._template.call_body, self._template.call_lead_in)
         except Exception:
             return []
 
