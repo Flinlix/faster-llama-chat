@@ -123,10 +123,9 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     assert shown + opening.feed(thought.flush()) + opening.flush() == "Antwort."
 
 
-# Families whose calls cannot be read, so tools are refused, and why.
-_TOOLS_REFUSED = {
-    "gpt-oss": "plain text",            # the model names a call in its header in another order
-}
+# Families whose calls cannot be read, so tools are refused, and why. A family
+# whose shipped add-on file says how it writes a call is not among them.
+_TOOLS_REFUSED: dict[str, str] = {}
 
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",
                  parameters={"type": "object", "properties": {"city": {"type": "string"}}})
@@ -137,6 +136,10 @@ def _tool_templates():
         fixture = json.loads(path.read_text())
         if fixture["calls_tools"]:
             yield path
+
+
+def _reasoning_modes(template):
+    return (False, True) if template.can_reason else (False,)
 
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
@@ -151,29 +154,32 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
     template.ensure_tools_usable()
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", "sunny"), "It is sunny."))
-    formatter = template.formatter()
     prompt = "Be brief." if template.has_system_turn else ""
-    if template.declares_in_newest_turn:
-        head, _, tail = formatter.parts("system", "") if prompt else (template.preamble(), "", "")
-        moving = template.newest_turn_declaration([_TOOL])
-    else:
-        (head, tail), moving = template.system_turn_declaring([_TOOL]), ""
-    ours = (head + prompt + tail + formatter.fragment("user", "Weather?")
-            + "".join(text for text, _ in template.past_tool_turn(turn))
-            + moving + formatter.fragment("user", "Thanks.") + formatter.generation_prompt())
-    messages = [*([{"role": "system", "content": prompt}] if prompt else []),
-                {"role": "user", "content": "Weather?"},
-                {"role": "assistant", "content": "", "tool_calls": [
-                    {"id": "call00000", "type": "function", "function": {
-                        "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
-                {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
-                 "content": "sunny"},
-                {"role": "assistant", "content": "It is sunny."},
-                {"role": "user", "content": "Thanks."}]
-    rendered = context.render_with_model_template(
-        messages, tools=[_TOOL.as_declaration()], generation_prompt=True,
-        reasoning=False, **template.template_variables)
-    assert ours == rendered
+    for reasoning in _reasoning_modes(template):
+        formatter = template.formatter(reasoning)
+        if template.declares_in_newest_turn:
+            head, _, tail = (formatter.parts("system", "") if prompt
+                             else (template.preamble(reasoning), "", ""))
+            moving = template.newest_turn_declaration([_TOOL], reasoning)
+        else:
+            (head, tail), moving = template.system_turn_declaring([_TOOL], reasoning), ""
+        past = template.past_tool_turn(turn, reasoning=reasoning, specs=[_TOOL])
+        ours = (head + prompt + tail + formatter.fragment("user", "Weather?")
+                + "".join(text for text, _ in past)
+                + moving + formatter.fragment("user", "Thanks.") + formatter.generation_prompt())
+        messages = [*([{"role": "system", "content": prompt}] if prompt else []),
+                    {"role": "user", "content": "Weather?"},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "call00000", "type": "function", "function": {
+                            "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
+                    {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
+                     "content": "sunny"},
+                    {"role": "assistant", "content": "It is sunny."},
+                    {"role": "user", "content": "Thanks."}]
+        rendered = context.render_with_model_template(
+            messages, tools=[_TOOL.as_declaration()], generation_prompt=True,
+            reasoning=reasoning, **template.template_variables)
+        assert ours == rendered, reasoning
 
 
 @pytest.mark.parametrize("path", [p for p in _tool_templates()
@@ -184,16 +190,22 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
     context = TaggedContext(fixture)
     template = ResolvedTemplate(context)
     template.ensure_tools_usable()
-    rendered = context.render_with_model_template(
-        [{"role": "user", "content": "Weather?"},
-         {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function", "function": {
-                 "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
-        tools=[_TOOL.as_declaration()], reasoning=False)
-    opener, closer = (template.call_texts if template.call_texts is not None
-                      else (context.token_text(t) for t in template.tool_tokens))
-    # The last call: a declaration may show an example call first.
-    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
+    call = context.addon_call()
+    if call:
+        # The add-on file says how the model writes a call, where the template
+        # writes it in another order; a call in that form reads back.
+        body = "get_weather" + call["name_close"] + '{"city": "Berlin"}'
+    else:
+        rendered = context.render_with_model_template(
+            [{"role": "user", "content": "Weather?"},
+             {"role": "assistant", "content": "", "tool_calls": [
+                 {"id": "call00000", "type": "function", "function": {
+                     "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
+            tools=[_TOOL.as_declaration()], reasoning=False)
+        opener, closer = (template.call_texts if template.call_texts is not None
+                          else (context.token_text(t) for t in template.tool_tokens))
+        # The last call: a declaration may show an example call first.
+        body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     assert parse_calls(body, template.call_body, template.call_lead_in) == [
         ToolCall("get_weather", {"city": "Berlin"})]
 
@@ -278,3 +290,22 @@ def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
     assert past in rendered
     prefix, suffix = template.result_wrapping("get_weather")
     assert prefix + written_between(_QUOTED_RESULT, prefix, suffix) in rendered
+
+
+def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
+    # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
+    fixture = json.loads((Path(__file__).parent / "templates" / "qwen-3.6.json").read_text())
+    context = TaggedContext(fixture)
+    context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
+    template = ResolvedTemplate(context)
+    assert template.tool_tokens is not None and template.call_texts is None
+
+
+def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
+    fixture = json.loads((Path(__file__).parent / "templates" / "gpt-oss.json").read_text())
+    context = TaggedContext(fixture)
+    context.addon_call = lambda: {"opening": "<|channel|>commentary to=functions.",
+                                  "name_close": " <|constrain|>json<|message|>",
+                                  "closing": "<|never|>"}
+    with pytest.raises(ValueError, match="add-on file closes a call"):
+        ResolvedTemplate(context)

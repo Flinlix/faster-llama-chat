@@ -418,7 +418,8 @@ class ResolvedTemplate:
         return prefix, suffix
 
     def past_tool_turn(self, turn: ToolTurn, open_turn: bool = False,
-                       reasoning: bool = False) -> list[tuple[str, bool]]:
+                       reasoning: bool = False,
+                       specs: list[ToolSpec] | None = None) -> list[tuple[str, bool]]:
         """A turn of the history that called tools, as this model's template writes it.
 
         Rendered by the template, with a marker for every piece of the turn's
@@ -434,6 +435,8 @@ class ResolvedTemplate:
                 add there.
             reasoning: Whether the conversation reasons, which the generation
                 prompt of an open turn may depend on.
+            specs: The tools the conversation declares, which a template may
+                write the turn differently for.
 
         Returns:
             The turn from its opening tag to its closing one, or to its last
@@ -457,6 +460,7 @@ class ResolvedTemplate:
         rendered = self._render(
             [{"role": "user", "content": _PROMPT}]
             + _turn_messages(turn, field, frags) + after,
+            [spec.as_declaration() for spec in specs] if specs else None,
             generation_prompt=open_turn, reasoning=reasoning)
         head = frags.user_prefix + _PROMPT + frags.user_suffix
         if rendered is None or head not in rendered \
@@ -466,7 +470,10 @@ class ResolvedTemplate:
         if open_turn:
             body = body.removesuffix(frags.assistant_suffix)
         else:
-            body = body.rpartition(frags.user_prefix + _NEXT)[0]
+            # Declarations that move with the newest user turn stand before it.
+            moving = (self.newest_turn_declaration(specs, reasoning)
+                      if specs and self._declares_in_newest_turn else "")
+            body = body.rpartition(moving + frags.user_prefix + _NEXT)[0]
         pieces, at = [], 0
         for found in _FIELD_PATTERN.finditer(body):
             pieces.append((body[at:found.start()], False))

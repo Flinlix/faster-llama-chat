@@ -309,7 +309,7 @@ class ChatWrapper:
                          and isinstance(messages[-1].steps[-1], ToolResult))
             last = len(messages) - 1
             hist = [self._history_tokens(formatter, item, ends_open and i == last,
-                                         reasoning)
+                                         reasoning, specs)
                     for i, item in enumerate(messages)]
             hist_tokens = [tokens for tokens, _ in hist]
             for i in range(len(messages) - 1):
@@ -1190,7 +1190,8 @@ class ChatWrapper:
                 decoded=self._turn_ends_with))
 
     def _history_tokens(self, formatter, item: tuple[str, str] | ToolTurn,
-                        open_turn: bool, reasoning: bool) -> tuple[list[int], str]:
+                        open_turn: bool, reasoning: bool,
+                        specs: list[ToolSpec] | None) -> tuple[list[int], str]:
         """One message of a ``begin`` history, as it is prefilled.
 
         Returns:
@@ -1201,7 +1202,7 @@ class ChatWrapper:
             prefix, content, suffix = formatter.parts(*item)
             return self._context.tokenize_fragment(prefix, content, suffix), ""
         # Refuses a model that cannot call tools.
-        pieces = self._template.past_tool_turn(item, open_turn, reasoning)
+        pieces = self._template.past_tool_turn(item, open_turn, reasoning, specs)
         tags = {text: token for token in (self._template.tool_tokens or ())
                 if (text := self._context.token_text(token))}
         between_tags = re.compile("(" + "|".join(map(re.escape, tags)) + ")")

@@ -37,6 +37,10 @@ class TemplateContext:
     def chat_template_text(self):
         return self._template
 
+    def addon_call(self):
+        # The shipped add-on file that names this template, as a model's load finds it.
+        return addon_file(None, self._template)["call"]
+
     def tokenize(self, text, add_special=False, parse_special=True):
         return [ord(c) for c in text]
 
@@ -152,9 +156,6 @@ class ConversationContext(TagTokenizingContext):
 
     def retokenized(self, tokens):
         return list(tokens)
-
-    def addon_call(self):
-        return addon_file(None, self._template)["call"]
 
     # ----- the cache ------------------------------------------------------
     def reset(self):
