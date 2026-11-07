@@ -19,6 +19,11 @@ LOG_LEVELS = ("debug", "info", "warn", "error", "none")
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`.
 
+    The five model sampling fields, ``temperature`` to
+    ``repetition_penalty``, left ``None`` take the model's own when it loads:
+    what its GGUF states, else its add-on file's, else llama.cpp's default. See
+    the README, "Configuration".
+
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.
         temperature: Sampling temperature; ``<= 0`` selects greedy decoding,
@@ -78,11 +83,11 @@ class Config:
     # Model
 
     model_path: str | None = None
-    temperature: float = 1.0
-    top_k: int = 64
-    top_p: float = 0.95
-    min_p: float = 0.0
-    repetition_penalty: float = 1.0
+    temperature: float | None = None
+    top_k: int | None = None
+    top_p: float | None = None
+    min_p: float | None = None
+    repetition_penalty: float | None = None
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
     penalty_window_tokens: int = 64
@@ -143,8 +148,12 @@ class Config:
                 "max_history_messages must be None or >= 1 "
                 "(use None for no message limit)"
             )
-        if self.repetition_penalty <= 0:
+        if self.repetition_penalty is not None and self.repetition_penalty <= 0:
             raise ValueError("repetition_penalty must be > 0 (1.0 disables)")
+        if self.top_p is not None and not 0.0 < self.top_p <= 1.0:
+            raise ValueError("top_p must be in (0, 1]")
+        if self.min_p is not None and not 0.0 <= self.min_p <= 1.0:
+            raise ValueError("min_p must be in [0, 1]")
         _check_seed(self.seed)
         if self.oversize_policy not in ("reject", "truncate"):
             raise ValueError("oversize_policy must be 'reject' or 'truncate'")

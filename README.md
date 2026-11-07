@@ -408,15 +408,32 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 | field | default | meaning |
 |------|------|------|
 | `model_path` | `None` | Path to the GGUF file. Loading refuses without one, and refuses a path that names no file |
-| `temperature` | `1.0` | `<= 0` selects greedy decoding: `top_k`, `top_p`, `min_p` and `seed` then have no effect, while the three penalties still apply |
-| `top_k` | `64` | Top-k cutoff; `<= 0` disables |
-| `top_p` | `0.95` | Nucleus cutoff |
-| `min_p` | `0.0` | Drop tokens below `min_p` times the top token's probability; `0` disables |
-| `repetition_penalty` | `1.0` | Applied over `penalty_window_tokens`; `1.0` disables |
+| `temperature` | the model's | `<= 0` selects greedy decoding: `top_k`, `top_p`, `min_p` and `seed` then have no effect, while the three penalties still apply |
+| `top_k` | the model's | Top-k cutoff; `<= 0` disables |
+| `top_p` | the model's | Nucleus cutoff |
+| `min_p` | the model's | Drop tokens below `min_p` times the top token's probability; `0` disables |
+| `repetition_penalty` | the model's | Applied over `penalty_window_tokens`; `1.0` disables |
 | `presence_penalty` | `0.0` | Flat penalty on any token already in the window; `0` disables |
 | `frequency_penalty` | `0.0` | Penalty scaled by how often a token occurs in the window; `0` disables |
 | `penalty_window_tokens` | `64` | How far back the three penalties look, within the generation being sampled: each starts with an empty window, and a turn resumed after a tool result is a generation of its own |
 | `seed` | `None` | Sampling RNG seed in `[0, 2**32 - 2]`, which every generation starts from, for reproducible generation. `None` draws a fresh one per generation |
+
+The five fields marked "the model's" are left `None` and take the model's own
+recommendation when it loads, unless you set them. That comes from one source,
+taken whole: what the GGUF states under `general.sampling`, else the model's
+add-on file, a field it leaves out being switched off; with neither,
+llama.cpp's defaults (temperature `0.8`, `top_k` `40`, `top_p` `0.95`, `min_p`
+`0.05`). An add-on file is JSON: the one next to the GGUF, with its name and
+`.json`, or one shipped in `llama_chat/families/` that names the model's chat
+template by its SHA-256. It holds `sampling`, with any of the five fields,
+`templates` and `source`, and is checked when the model loads; anything else in
+it is refused.
+
+```json
+{"templates": ["<sha256 of the chat template>"],
+ "source": "Qwen/Qwen3-8B, generation_config.json",
+ "sampling": {"temperature": 0.6, "top_k": 20, "top_p": 0.95}}
+```
 
 **Context management**
 

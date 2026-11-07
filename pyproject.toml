@@ -29,3 +29,6 @@ test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
 include = ["llama_chat*"]
+
+[tool.setuptools.package-data]
+llama_chat = ["families/*.json"]

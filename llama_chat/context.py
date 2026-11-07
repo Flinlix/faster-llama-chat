@@ -16,6 +16,7 @@ from ._backend import Backend, set_log_level
 from .config import Config, Sampling
 from .messages import Eviction
 from .template import TemplateFragments
+from .model_sampling import with_model_sampling
 from .template_extract import reasoning_switch
 
 SEQ = 0  # single active conversation -> single sequence id
@@ -106,6 +107,8 @@ class KVContext:
         self._llama_context = None
         self._sampler = None
         try:
+            self._config = config = with_model_sampling(
+                config, lambda key: self._backend.metadata_value(self._model, key))
             kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
                        if config.kv_cache_type else None)
             self._llama_context = self._backend.new_context(

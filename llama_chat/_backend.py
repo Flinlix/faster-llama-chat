@@ -169,7 +169,10 @@ class Backend:
             cparams.type_v = type_v
         ctx = self._new_ctx(model, cparams)
         if not ctx:
-            raise RuntimeError("failed to create llama context")
+            raise RuntimeError(
+                "failed to create llama context, most often for want of memory on "
+                "the device: lower context_size or max_batch_tokens, or use a "
+                "quantized kv_cache_type")
         return ctx
 
     def _set_kv_cache_on_gpu(self, cparams, enable: bool) -> None:

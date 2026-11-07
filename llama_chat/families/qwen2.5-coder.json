@@ -1,0 +1,12 @@
+{
+ "templates": [
+  "d5495a1e5db0611132a97e46a65dbb64a642a499421228b9c8b93229097fa9a4"
+ ],
+ "source": "Qwen/Qwen2.5-Coder-7B-Instruct, generation_config.json",
+ "sampling": {
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.8,
+  "repetition_penalty": 1.1
+ }
+}
