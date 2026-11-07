@@ -54,6 +54,11 @@ _STRING2 = "VALTWO"
 Render = Callable[..., "str | None"]
 
 
+def call_id(n: int) -> str:
+    """The id of the ``n``-th call this library writes, nine letters and digits."""
+    return f"call{n:05d}"
+
+
 def _refusing(render: Render) -> Render:
     """``render`` as probes read it.
 
@@ -255,7 +260,7 @@ def extract_call_separator(render: Render, call_open: str) -> str | None:
     rendered = _refusing(render)([
         {"role": "user", "content": _USER},
         {"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{n}", "type": "function",
+            {"id": call_id(n), "type": "function",
              "function": {"name": _TOOL, "arguments": {_KEY: value}}}
             for n, value in enumerate((_STRING, _STRING2))]},
     ], reasoning=False)
@@ -370,7 +375,7 @@ def _render_call(render: Render, arguments: dict) -> str | None:
     return render([
         {"role": "user", "content": _USER},
         {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "type": "function",
+            {"id": call_id(0), "type": "function",
              "function": {"name": _TOOL, "arguments": arguments}}]},
     ], reasoning=False)
 
@@ -525,7 +530,7 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
     for reply in replies:
         probes.append(([{"role": "user", "content": _USER}, reply], _ASSISTANT))
         if tool_calls is not None:
-            call = {"id": "c1", "type": "function",
+            call = {"id": call_id(0), "type": "function",
                     "function": {"name": _TOOL, "arguments": {}}}
             probes.append(([{"role": "user", "content": _USER},
                             {**reply, "content": "", "tool_calls": [call]}],

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments)
-from .template_extract import (extract_call_body, extract_call_separator,
+from .template_extract import (call_id, extract_call_body, extract_call_separator,
                                extract_reasoning, extract_tool_fragments)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
@@ -34,6 +34,10 @@ _RESULT_N = "RESULT{}NTH"
 _FIELD = "FIELD{}MSG"
 _FIELD_PATTERN = re.compile(r"FIELD(\d+)MSG")
 _NEXT = "NEXTMSG"
+# A reply and a user turn after the first, so a template that declares tools
+# before the newest user turn shows it after the first turn, not ahead of it.
+_EXCHANGE = ({"role": "assistant", "content": "REPLYMSG"},
+             {"role": "user", "content": "LATERMSG"})
 
 # The conversation the fragments are checked on: a system prompt and two user
 # turns, so a past reply and a newest turn are both in it. Padded, so a wrong
@@ -167,11 +171,14 @@ class ResolvedTemplate:
         Raises:
             ValueError: If the template does not write it where it can be located.
         """
+        messages = [{"role": "user", "content": _PROMPT}, *_EXCHANGE]
         rendered = self._context.render_with_model_template(
-            [{"role": "user", "content": _PROMPT}],
-            tools=[spec.as_declaration() for spec in specs], reasoning=reasoning)
+            messages, tools=[spec.as_declaration() for spec in specs], reasoning=reasoning)
+        plain = self._context.render_with_model_template(messages, reasoning=reasoning)
         opened = self._fragments.user_prefix + _PROMPT
-        if rendered is None or opened not in rendered:
+        if rendered is None or plain is None or opened not in rendered or opened not in plain \
+                or (rendered != plain
+                    and rendered.split(opened, 1)[0] == plain.split(opened, 1)[0]):
             raise ValueError("this model's template declares tools without a system "
                              "prompt in a way that cannot be located")
         return rendered.split(opened, 1)[0]
@@ -263,10 +270,10 @@ class ResolvedTemplate:
         rendered = self._context.render_with_model_template([
             {"role": "user", "content": _PROMPT},
             {"role": "assistant", "content": "", "tool_calls": [
-                {"id": f"c{i}", "type": "function",
+                {"id": call_id(i), "type": "function",
                  "function": {"name": called, "arguments": {}}}
                 for i, called in enumerate(names)]},
-            *({"role": "tool", "name": called, "tool_call_id": f"c{i}",
+            *({"role": "tool", "name": called, "tool_call_id": call_id(i),
                "content": markers[i]} for i, called in enumerate(names)),
         ], generation_prompt=True, reasoning=reasoning)
         closer = self._context.token_text(self._tool_tokens[1])
@@ -629,7 +636,7 @@ class ResolvedTemplate:
         """
         rendered = self._context.render_with_model_template(
             [{"role": "system", "content": _PROMPT},
-             {"role": "user", "content": _NEXT}], tools=tools, reasoning=reasoning)
+             {"role": "user", "content": _NEXT}, *_EXCHANGE], tools=tools, reasoning=reasoning)
         opened = self._fragments.user_prefix + _NEXT
         if rendered is None or opened not in rendered:
             return None
@@ -669,7 +676,7 @@ def _turn_messages(turn: ToolTurn, field, fragments: TemplateFragments) -> list[
     for step in turn.steps:
         if isinstance(step, ToolResult):
             messages.append({"role": "tool", "name": step.name,
-                             "tool_call_id": f"call_{results}",
+                             "tool_call_id": call_id(results),
                              "content": field(result_text(step.result))})
             results += 1
             assistant = None
@@ -679,7 +686,7 @@ def _turn_messages(turn: ToolTurn, field, fragments: TemplateFragments) -> list[
             messages.append(assistant)
         if isinstance(step, ToolCall):
             assistant["tool_calls"].append({
-                "id": f"call_{calls}", "type": "function",
+                "id": call_id(calls), "type": "function",
                 "function": {"name": step.name,
                              "arguments": _marked(step.arguments, field)}})
             calls += 1

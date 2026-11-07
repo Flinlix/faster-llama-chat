@@ -155,6 +155,8 @@ _TOOLS_REFUSED = {
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
     "hunyuan-3": "call format",         # a call's body is not recovered
     "hunyuan-memory": "call format",    # a call's body is not recovered
+    "ministral-2410": "declares no tools",  # declared before the newest user turn only
+    "mistral-small-3.2": "declares no tools",  # declared before the newest user turn only
     "kimi-k3": "call format",           # a call's body is not recovered
     "minicpm-5": "plain text",          # a call is bare JSON, without a tag
     "hunyuan-4": "plain text",          # no call tag resolves in this stand-in
@@ -191,9 +193,9 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
     messages = [{"role": "system", "content": "Be brief."},
                 {"role": "user", "content": "Weather?"},
                 {"role": "assistant", "content": "", "tool_calls": [
-                    {"id": "call_0", "type": "function", "function": {
+                    {"id": "call00000", "type": "function", "function": {
                         "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
-                {"role": "tool", "name": "get_weather", "tool_call_id": "call_0",
+                {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
                  "content": "sunny"},
                 {"role": "assistant", "content": "It is sunny."},
                 {"role": "user", "content": "Thanks."}]

@@ -515,7 +515,12 @@ for delta in chat.reply_with_tools_stream("What is the weather in Munich?"):
 `chat.can_call_tools` says whether the model can do this at all, and answers
 for the whole chain: the template has to describe a call, it has to render the
 declarations that tell the model a tool exists, the argument spelling has to
-have been recovered, and there has to be a block to answer a call in. All four
+have been recovered, and there has to be a block to answer a call in. A template
+that declares tools just before the newest user turn moves them with every
+turn, which a conversation kept as it grows cannot follow, so it counts as
+rendering none. A call the library writes itself, in a probe or in a past turn
+rebuilt from its text, carries an id of nine letters and digits, a shape the
+templates that check an id's shape accept. All four
 are settled at construction, so the answer costs nothing to ask and is available
 before the first turn, and it is exactly the condition `begin(tools=...)`
 checks.
