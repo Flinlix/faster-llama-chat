@@ -803,3 +803,19 @@ def test_a_later_declaration_joins_the_newest_user_turn():
     _as_rendered_with(w, fake, both)
     w.reply_without_tools("zwei")
     _as_rendered_with(w, fake, both)
+
+
+def test_a_header_naming_another_reader_is_never_shown():
+    from llama_chat.reasoning import AnswerOpening, reply_header
+    from llama_chat.template import Reasoning
+    tags = Reasoning(thought_open=" to=self<|message|>", thought_close="<|eom|>",
+                     system_prefix="", generation_prompt="")
+    header = reply_header(" to=user<|message|>", tags)
+    assert header == ("to=", "<|message|>")
+    opening = AnswerOpening(" to=user<|message|>", header)
+    assert opening.feed(" to=get_wea") + opening.feed("ther") == ""
+    assert opening.flush(False) == ""                     # cut at a call: never shown
+    opening = AnswerOpening(" to=user<|message|>", header)
+    assert opening.feed(" to=user<|message|>Hallo") == "Hallo"
+    opening = AnswerOpening(" to=user<|message|>", header)
+    assert opening.feed(" to=notes<|message|>Text") == "Text"

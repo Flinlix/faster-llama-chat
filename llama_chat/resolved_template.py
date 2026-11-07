@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
 from .template_extract import (call_id, extract_call_body, extract_call_close_text,
-                               extract_call_separator, extract_reasoning,
-                               extract_removed_thought, extract_tool_fragments, names_read)
+                               extract_call_separator, extract_named_twice_opening,
+                               extract_reasoning, extract_removed_thought,
+                               extract_tool_fragments, names_read)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
 # Where the prompt and a tool result go in a render. Neither contains the
@@ -726,9 +727,14 @@ class ResolvedTemplate:
         if self._tool_calls is None or not hasattr(self._context, "first_special_token"):
             return None
         call_open = self._tool_calls.call_open
-        if self._context.first_special_token(call_open) is None \
-                and self._opens_in_reply_header(call_open):
-            return None
+        if self._context.first_special_token(call_open) is None:
+            # Named in the header first: the call opens where the name is written again.
+            opening = extract_named_twice_opening(self._render, call_open)
+            if opening:
+                close = extract_call_close_text(self._render, opening)
+                return (opening, close) if close else None
+            if self._opens_in_reply_header(call_open):
+                return None
         close = extract_call_close_text(self._render, call_open)
         return (call_open, close) if close else None
 
@@ -807,8 +813,8 @@ class ResolvedTemplate:
             # The name ends where the file says; the arguments are read as written.
             return CallBody(name_close=self._context.addon_call()["name_close"], key_open="",
                             key_close="", pair_sep="", body_close="", empty_close="")
-        return extract_call_body(self._render,
-                                 self._tool_calls.call_open, self._call_close_text())
+        call_open = self._call_texts[0] if self._call_texts else self._tool_calls.call_open
+        return extract_call_body(self._render, call_open, self._call_close_text())
 
     def _resolve_can_declare_tools(self) -> bool:
         """Whether this model's template renders tool declarations at all.

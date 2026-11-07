@@ -28,7 +28,8 @@ from .call_parsing import parse_calls
 from .config import Config, Sampling
 from .context import GenerationAccumulator, KVContext, _stop_hit
 from .messages import Message, MessageTable, n_newest_that_fit
-from .reasoning import AnswerOpening, ThoughtFilter, begins_in_thought, turn_end_test
+from .reasoning import (AnswerOpening, ThoughtFilter, begins_in_thought, reply_header,
+                        turn_end_test)
 from .resolved_template import ResolvedTemplate, written_between, ensure_context_answers
 from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
@@ -1263,7 +1264,8 @@ class ChatWrapper:
         thought = ThoughtFilter(tags, begins_in_thought(tags, decoded)) if tags else None
         # Where a thought is filtered out, stop strings are matched against the
         # answer here rather than against the whole text by the context.
-        opening = AnswerOpening(self._formatter.answer_opening())
+        opening = AnswerOpening(self._formatter.answer_opening(),
+                                reply_header(self._formatter.answer_opening(), tags))
         answer_stops = stops if thought else []
         answer = _AnswerStops(answer_stops)
         pieces = self._context.generate(
@@ -1287,7 +1289,9 @@ class ChatWrapper:
                 # A cut reply may end on the start of a thought's tag.
                 complete = generated.stop_reason not in ("interrupted", "token_limit")
                 last = opening.feed(thought.flush(complete) if thought else "")
-                if shown := answer.flush(last + opening.flush(complete)):
+                # A header held back at a call is the call's, not the answer's.
+                header_done = complete and generated.stop_reason != "tool_call"
+                if shown := answer.flush(last + opening.flush(header_done)):
                     yield shown
         finally:
             pieces.close()

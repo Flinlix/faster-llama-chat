@@ -112,11 +112,13 @@ class AnswerOpening:
 
     Only the answer's start is read: until the text is known to begin with the
     header, or not to, it is held back. The answer after a header starts
-    unpadded.
+    unpadded. Given ``header``, the start and end every reply's header shares,
+    a header naming another reader is held until it ends and never shown.
     """
 
-    def __init__(self, opening: str) -> None:
+    def __init__(self, opening: str, header: tuple[str, str] | None = None) -> None:
         self._opening = opening.strip()
+        self._header = header
         self._held = ""
         self._done = not self._opening
         self._strips = False        # set once a header was removed
@@ -132,6 +134,11 @@ class AnswerOpening:
             return self._unpadded(start[len(self._opening):])
         if self._opening.startswith(start):
             return ""
+        if self._header and start.startswith(self._header[0]):
+            if self._header[1] not in start:
+                return ""           # a header for another reader, not yet ended
+            self._done, self._strips = True, True
+            return self._unpadded(start.split(self._header[1], 1)[1])
         self._done = True
         return self._held
 
@@ -146,6 +153,23 @@ class AnswerOpening:
             text = text.lstrip()
             self._strips = not text
         return text
+
+
+def reply_header(answer_opening: str, reasoning: Reasoning | None) -> tuple[str, str] | None:
+    """The start and end a reply's header shares, where the answer and a thought each have one.
+
+    ``None`` where a template routes no reply through a header naming its reader.
+    """
+    if reasoning is None or not answer_opening.strip():
+        return None
+    answer, thought = answer_opening.strip(), reasoning.thought_open.strip()
+    start = answer[:next((i for i, (a, b) in enumerate(zip(answer, thought)) if a != b),
+                         min(len(answer), len(thought)))]
+    end = answer[len(answer) - next((i for i, (a, b) in enumerate(zip(answer[::-1], thought[::-1]))
+                                     if a != b), 0):]
+    if not start or not end or len(start) + len(end) >= len(answer):
+        return None
+    return start, end
 
 
 def turn_end_test(turn_end: int, turn_end_text: str, reasoning: Reasoning | None,

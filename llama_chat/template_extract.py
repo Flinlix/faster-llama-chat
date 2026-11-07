@@ -491,6 +491,22 @@ def extract_call_close_text(render: Render, call_open: str) -> str | None:
     return max(found, key=len) if found else None
 
 
+def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
+    """Where a call names its function twice, the text between the two names.
+
+    Such a template writes the name in the turn's header, right after
+    ``call_open``, and again in the call's body, which is what opens the call
+    there. ``None`` where the name does not follow ``call_open`` and recur.
+    """
+    rendered = _render_call(_refusing(render), {_KEY: _STRING})
+    if rendered is None or call_open not in rendered:
+        return None
+    after = rendered.split(call_open, 1)[1]
+    if not after.startswith(_TOOL) or _TOOL not in after[len(_TOOL):]:
+        return None
+    return after[len(_TOOL):after.index(_TOOL, len(_TOOL))]
+
+
 def _common_prefix(one: str, other: str) -> str:
     """The longest beginning the two share."""
     kept = 0
