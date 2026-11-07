@@ -9,8 +9,8 @@ import pytest
 from llama_chat import addon_files
 from llama_chat.addon_files import SHIPPED_ADDONS, read_addon_file, template_fingerprint
 from llama_chat.config import Config
-from llama_chat.model_sampling import (DEFAULT_SAMPLING, UNSTATED_SAMPLING, addon_sampling,
-                                       with_model_sampling)
+from llama_chat.addon_files import addon_file
+from llama_chat.model_sampling import DEFAULT_SAMPLING, UNSTATED_SAMPLING, with_model_sampling
 
 _TEMPLATE = "{{ messages }}"
 
@@ -51,8 +51,8 @@ def test_a_shipped_file_applies_to_the_template_it_names(tmp_path, monkeypatch):
     monkeypatch.setattr(addon_files, "SHIPPED_ADDONS", tmp_path)
     (tmp_path / "family.json").write_text(json.dumps(
         {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
-    assert addon_sampling(None, _TEMPLATE) == {"top_p": 0.8}
-    assert addon_sampling(None, "another template") == {}
+    assert addon_file(None, _TEMPLATE)["sampling"] == {"top_p": 0.8}
+    assert addon_file(None, "another template")["sampling"] == {}
 
 
 @pytest.mark.parametrize("contents", ["not json", json.dumps({"sampler": {}}),

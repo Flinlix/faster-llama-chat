@@ -20,7 +20,8 @@ UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
                      "repetition_penalty": 1.0}
 
 
-def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -> Config:
+def with_model_sampling(config: Config, metadata: Callable[[str], str | None],
+                        addon: dict | None = None) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
     One source is taken whole: the GGUF's recommendation, else the add-on
@@ -30,6 +31,8 @@ def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -
     Args:
         config: What the caller set; a field it sets is kept.
         metadata: Reads one of the model's GGUF metadata values, ``None`` where absent.
+        addon: The model's add-on file, as :func:`~llama_chat.addon_files.addon_file`
+            reads it; read here where it is not given.
 
     Raises:
         ValueError: If an add-on file for this model is malformed.
@@ -37,19 +40,11 @@ def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -
     unset = [name for name in SAMPLING_FIELDS if getattr(config, name) is None]
     if not unset:
         return config
-    stated = (_stated_in_gguf(metadata)
-              or addon_sampling(config.model_path, metadata("tokenizer.chat_template")))
+    if addon is None:
+        addon = addon_file(config.model_path, metadata("tokenizer.chat_template"))
+    stated = _stated_in_gguf(metadata) or addon["sampling"]
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
-
-
-def addon_sampling(model_path: str | None, template: str | None) -> dict:
-    """The sampling a model's add-on file recommends, empty where it has none.
-
-    Raises:
-        ValueError: If the add-on file found is malformed.
-    """
-    return addon_file(model_path, template)["sampling"]
 
 
 def _stated_in_gguf(metadata: Callable[[str], str | None]) -> dict:

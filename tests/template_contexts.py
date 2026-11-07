@@ -7,35 +7,40 @@ text.
 
 import re
 
-from llama_chat._backend import Backend
 from llama_chat.addon_files import addon_file
 from llama_chat.context import GenerationAccumulator
-from llama_chat.template_extract import reasoning_switch
+from llama_chat.model_template import ModelTemplate
 
 
 class TemplateContext:
     """A cache context reduced to rendering through one real template."""
 
     def __init__(self, fixture: dict) -> None:
-        backend = Backend()
+        self._model = ModelTemplate(fixture["chat_template"], fixture["eos_token"])
         self._template = fixture["chat_template"]
-        self._renderers = {prompted: backend.template_renderer(
-            fixture["chat_template"], fixture["eos_token"], prompted)
-            for prompted in (False, True)}
-        self._switch = reasoning_switch(lambda messages, generation_prompt=False, **variables:
-                                        self._renderers[generation_prompt](
-                                            messages=messages, **variables).prompt)
 
     def render_with_model_template(self, messages, tools=None, *,
                                    generation_prompt=False, reasoning=None, **variables):
-        try:
-            return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **self._switch(reasoning), **variables).prompt
-        except Exception:
-            return None
+        return self._model.render(messages, tools, generation_prompt=generation_prompt,
+                                  reasoning=reasoning, **variables)
 
     def chat_template_text(self):
         return self._template
+
+    def addon_call(self):
+        # The shipped add-on file that names this template, as a model's load finds it.
+        return addon_file(None, self._template)["call"]
+
+    def tokenize(self, text, add_special=False, parse_special=True):
+        return [ord(c) for c in text]
+
+    def tags(self):
+        # As a vocabulary holds them: every tag-shaped text, and what each closer closes.
+        found = set(TAG.findall(self._template))
+        return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
+
+    def extract_fragments(self):
+        return self._model.extract_fragments()
 
     def retokenized(self, tokens):
         return list(tokens)
@@ -52,22 +57,6 @@ class TemplateContext:
     def tokenizes_to_tags(self, text):
         pieces = self.split_at_tags(text.strip())
         return bool(pieces) and all(is_tag for _, is_tag in pieces)
-
-    def addon_call(self):
-        # The shipped add-on file that names this template, as a model's load finds it.
-        return addon_file(None, self._template)["call"]
-
-    def tokenize(self, text, add_special=False, parse_special=True):
-        return [ord(c) for c in text]
-
-    def tags(self):
-        # As a vocabulary holds them: every tag-shaped text, and what each closer closes.
-        found = set(TAG.findall(self._template))
-        return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
-
-    def extract_fragments(self):
-        from llama_chat.template_extract import extract_fragments
-        return extract_fragments(self.render_with_model_template)
 
     def first_special_token(self, text):
         return None             # no vocabulary, so no call tag resolves

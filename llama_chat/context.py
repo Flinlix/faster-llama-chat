@@ -19,7 +19,7 @@ from .reply_text import earliest
 from .template import CallBoundary, TemplateFragments
 from .addon_files import addon_file
 from .model_sampling import with_model_sampling
-from .template_extract import reasoning_switch
+from .model_template import ModelTemplate
 
 SEQ = 0  # single active conversation -> single sequence id
 
@@ -113,9 +113,11 @@ class KVContext:
         self._llama_context = None
         self._sampler = None
         try:
+            template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
+            addon = addon_file(config.model_path, template)      # read once, for both uses
             self._config = config = with_model_sampling(
-                config, lambda key: self._backend.metadata_value(self._model, key))
-            self._addon_call = addon_file(config.model_path, self.chat_template_text())["call"]
+                config, lambda key: self._backend.metadata_value(self._model, key), addon)
+            self._addon_call = addon["call"]
             kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
                        if config.kv_cache_type else None)
             self._llama_context = self._backend.new_context(
@@ -127,8 +129,8 @@ class KVContext:
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
             self._sampler = self._build_sampler(config)
-            self._model_formatter = self._build_model_formatter()
-            self._reasoning_switch = self._build_reasoning_switch()
+            self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
+                                    if template else None)
             self._tags = None
         except BaseException:
             # Free whatever was created before the failure.
@@ -240,38 +242,20 @@ class KVContext:
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None,
                                    **variables) -> str | None:
-        """Render ``messages`` with the model's own GGUF chat template.
+        """Render ``messages`` with the model's own chat template; see :meth:`ModelTemplate.render`.
 
-        BOS is suppressed, so the render aligns with a fragment prefill.
-
-        Args:
-            generation_prompt: Append the prompt a reply is generated after.
-            reasoning: Turn the template's reasoning switch on or off, as
-                :func:`~llama_chat.template_extract.reasoning_switch` reads it.
-                ``None`` leaves it unset.
-            variables: Further template variables, by name.
-
-        Returns:
-            The prompt string, or ``None`` where the model ships no template or
-            the template rejects this message shape.
+        ``None`` where the model ships no template or the template rejects
+        this message shape. BOS is suppressed, so the render aligns with a
+        fragment prefill.
         """
-        if self._model_formatter is None:
+        if self._model_template is None:
             return None
-        try:
-            return self._model_formatter[generation_prompt](
-                messages=messages, tools=tools, **self._reasoning_switch(reasoning),
-                **variables).prompt
-        except Exception:
-            return None
+        return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
+                                           reasoning=reasoning, **variables)
 
     def extract_fragments(self) -> TemplateFragments | None:
-        """Recover the per-role template fragments from the model's own template.
-
-        Returns:
-            The fragments, or ``None`` where the model ships no template.
-        """
-        from .template_extract import extract_fragments
-        return extract_fragments(self.render_with_model_template)
+        """The per-role fragments of the model's own template, ``None`` where it ships none."""
+        return None if self._model_template is None else self._model_template.extract_fragments()
 
     def addon_call(self) -> dict:
         """How the model's add-on file says a generated call is written, if it says."""
@@ -279,26 +263,8 @@ class KVContext:
 
     def chat_template_text(self) -> str | None:
         """The source of the model's own chat template, or ``None`` where it ships none."""
-        return self._backend.metadata_value(self._model, "tokenizer.chat_template")
+        return None if self._model_template is None else self._model_template.text
 
-    def _build_model_formatter(self):
-        """One renderer without the generation prompt and one with it, or ``None``."""
-        template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
-        if not template:
-            return None
-        eos = self._backend.eos_text(self._vocab)
-        return {prompted: self._backend.template_renderer(template, eos, prompted)
-                for prompted in (False, True)}
-
-    def _build_reasoning_switch(self) -> Callable[[bool | None], dict]:
-        """What turns this model's reasoning on and off, read from its template."""
-        if self._model_formatter is None:
-            return lambda reasoning: {}
-        return reasoning_switch(lambda messages, generation_prompt=False, **variables:
-                                self._model_formatter[generation_prompt](
-                                    messages=messages, **variables).prompt)
-
-    # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
         self._backend.kv_clear(self._llama_context)
 
