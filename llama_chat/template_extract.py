@@ -446,23 +446,28 @@ def extract_call_body(render: Render, call_open: str,
     if not between.startswith(quote_close):
         return None
 
+    pair_sep, body_close = between[len(quote_close):], bare_after
+    # A value closed by a tag naming its own key: the key is the closing's, not a delimiter.
+    key_in_close = _KEY in pair_sep and _KEY in body_close
+    if key_in_close:
+        pair_sep, body_close = pair_sep.replace(_KEY, "{key}"), body_close.replace(_KEY, "{key}")
     body = CallBody(
         name_close=name_close,
         key_open=opens_args[len(name_close):],
         key_close=bare_before,
-        pair_sep=between[len(quote_close):],
-        body_close=bare_after,
+        pair_sep=pair_sep,
+        body_close=body_close,
         empty_close=no_arguments[len(name_close):],
         quote_open=before_value[len(bare_before):],
         quote_close=quote_close,
         type_close=type_close,
         string_type=string_type,
+        key_in_close=key_in_close,
     )
-    # A delimiter holding a probe's own text, such as a key's name in its own
-    # closing tag, is no fixed delimiter at all.
+    # A delimiter still holding a probe's own text is no fixed delimiter at all.
     sentinels = (_TOOL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
     if any(sentinel in delimiter for sentinel in sentinels
-           for delimiter in dataclasses.astuple(body)):
+           for delimiter in dataclasses.astuple(body) if isinstance(delimiter, str)):
         return None
     return body
 

@@ -2238,3 +2238,10 @@ def test_a_value_after_its_written_type_is_read_by_that_type():
     text = ('clock"<a zone type="string">12</a><a n type="number">3</a>'
             '<a o type="object">{"x": [1]}</a>')
     assert parse_calls(text, body) == [ToolCall("clock", {"zone": "12", "n": 3, "o": {"x": [1]}})]
+
+
+def test_a_value_closed_by_a_tag_naming_its_key_is_read_to_that_tag():
+    body = CallBody(name_close='">', key_open="<", key_close=">", pair_sep="</{key}><",
+                    body_close="</{key}>", empty_close="", key_in_close=True)
+    text = 'clock"><zone>CET</zone><n>3</n>'
+    assert parse_calls(text, body) == [ToolCall("clock", {"zone": "CET", "n": 3})]

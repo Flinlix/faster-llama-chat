@@ -229,7 +229,6 @@ def _closers(tag: str) -> list[str]:
 
 # Families whose calls cannot be read, so tools are refused, and why.
 _TOOLS_REFUSED = {
-    "minimax-m3.1": "call format",      # each key's name is in its own closing tag
     "gpt-oss": "plain text",            # the model names a call in its header in another order
 }
 

@@ -27,6 +27,8 @@ class CallBody:
             the value, empty where it writes no type.
         string_type: The type a string value is written with, read as the
             text it stands as rather than as JSON.
+        key_in_close: Whether ``pair_sep`` and ``body_close`` hold the key of
+            the value they close, written there as ``{key}``.
     """
 
     name_close: str
@@ -39,6 +41,7 @@ class CallBody:
     quote_close: str = ""
     type_close: str = ""
     string_type: str = ""
+    key_in_close: bool = False
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:

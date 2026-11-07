@@ -95,6 +95,8 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     whole = _as_json_object(rest)
     if whole is not None:
         return ToolCall(name=name, arguments=whole)
+    if call_body.key_in_close:
+        return ToolCall(name=name, arguments=_parse_keyed_pairs(rest, call_body))
     # Compared whole, not by its ending: a model that wraps each argument closes
     # the last one with the very same text.
     if rest == call_body.empty_close:
@@ -106,6 +108,27 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     if call_body.key_open and rest.startswith(call_body.key_open):
         rest = rest[len(call_body.key_open):]
     return ToolCall(name=name, arguments=_parse_pairs(rest, call_body))
+
+
+def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
+    """Read pairs whose values each close with a tag naming their own key."""
+    parsed, at = {}, len(call_body.key_open) if text.startswith(call_body.key_open) else 0
+    while at < len(text):
+        key_end = text.find(call_body.key_close, at)
+        if key_end < 0:
+            break
+        key, at = text[at:key_end], key_end + len(call_body.key_close)
+        separator = call_body.pair_sep.replace("{key}", key)
+        closing = call_body.body_close.replace("{key}", key).rstrip()
+        following = text.find(separator, at)
+        end = following if following >= 0 else text.find(closing, at)
+        if end < 0:
+            raise ValueError(f"an argument that never closes: {text[at:]!r}")
+        parsed[_unquote(key.strip(), call_body)] = _parse_typed_value(text[at:end], call_body)
+        if following < 0:
+            break
+        at = following + len(separator)
+    return parsed
 
 
 def _as_json_object(text: str) -> dict | None:

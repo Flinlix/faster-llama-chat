@@ -907,7 +907,9 @@ their own right after the name, `name<arg_key>k</arg_key><arg_value>v</arg_value
 including nested objects, lists, and separators inside quoted values. A type
 written between a key and its value, `key="k" type="string">v`, is recovered
 from where the render of a string argument and that of a number differ. A value
-of the string type stands as its text, and any other is read as JSON.
+of the string type stands as its text, and any other is read as JSON. A value
+closed by a tag that names its own key, `<city>Berlin</city>`, is read up to that
+tag, and arguments written after the name as one JSON object are read as JSON.
 
 What the recovered delimiters look like on two real models, since the field
 names alone are hard to picture:
