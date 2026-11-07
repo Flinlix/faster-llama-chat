@@ -386,7 +386,7 @@ changed end would remove the tokenizing share. The render itself is what the
 approach consists of. The estimate assumes E2B ships the 26B model's template
 and tokenizer, which was not checked.
 
-## 2026-11-07: Nested values in a model's own elements
+## 2026-11-07: Nested values in a model's own elements, and tests by module
 
 - **Nested values written as elements are read back.** A template may write an
   object argument as elements named by its keys and a list as elements of one
@@ -395,3 +395,7 @@ and tokenizer, which was not checked.
   shapes stay lost because the template writes them alike: an object whose only
   key is the items' own name reads as a list, and an empty object or list reads
   as an empty string. A null is still left out by the template itself.
+- **The tests are sorted by the module they test** instead of by the review
+  round that added them. The helpers that several files build on are in
+  `tests/wrappers.py`. The move kept every test: the collected test names
+  before and after are the same list.

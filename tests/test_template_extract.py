@@ -512,3 +512,25 @@ def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, swi
     switch = reasoning_switch(_rendering(ending))
     assert switch(True) == switch_on
     assert switch(None) == {}
+
+
+# ----- probe sentinels -----------------------------------------------------
+def test_no_render_sentinel_contains_another():
+    """A split on one has to land on that one, whatever else the render holds.
+
+    ``PROBE`` used to sit inside ``RESULTPROBE`` and ``TAILPROBE``, so a render
+    carrying all three could be cut six characters into the wrong sentinel.
+    """
+    from llama_chat import resolved_template, template_extract
+
+    sentinels = {name: getattr(module, name)
+                 for module, names in (
+                     (resolved_template, ("_PROMPT", "_RESULT", "_NEXT")),
+                     (template_extract, ("_SYS", "_USER", "_USER2", "_ASSISTANT",
+                                         "_THOUGHT", "_TOOL")))
+                 for name in names}
+    assert len(set(sentinels.values())) == len(sentinels)
+    for name, value in sentinels.items():
+        others = [v for n, v in sentinels.items() if n != name]
+        assert not any(value in other for other in others), \
+            f"{name}={value!r} occurs inside another sentinel"

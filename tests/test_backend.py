@@ -24,6 +24,7 @@ from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import tokenize_message
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.context import SEQ, GenerationAccumulator, KVContext
+from llama_chat.config import Config, Sampling
 
 
 def _backend(attr):
@@ -467,3 +468,132 @@ def test_every_method_takes_the_arguments_the_written_boundary_lists():
     for context in (KVContext, FakeContext, ConversationContext):
         for name in CACHE_CONTEXT:
             assert parameters(context, name) == parameters(CacheContext, name), (context, name)
+
+
+def _set_flash_attn(cparams, enable, llama_cpp=None):
+    """Drive Backend._set_flash_attn with fakes, bypassing llama_cpp import."""
+    from types import SimpleNamespace
+    from llama_chat._backend import Backend
+
+    Backend._set_flash_attn(SimpleNamespace(_llama_cpp=llama_cpp), cparams, enable)
+
+
+def _set_offload(cparams, enable):
+    """Drive Backend._set_kv_cache_on_gpu with fakes, bypassing llama_cpp import."""
+    from types import SimpleNamespace
+    from llama_chat._backend import Backend
+
+    Backend._set_kv_cache_on_gpu(SimpleNamespace(_llama_cpp=None), cparams, enable)
+
+
+def _stub_context(chains):
+    """A real KVContext over a backend that records which chain it samples from."""
+    ctx = object.__new__(KVContext)
+    tokens = iter([0, 1, 2])
+    ctx._backend = SimpleNamespace(
+        sample=lambda sampler, llama_ctx: (chains["sampled"].append(sampler),
+                                           next(tokens))[1],
+        is_eog=lambda vocab, tok: False,
+        decode=lambda *args: None,
+        token_to_piece_bytes=lambda vocab, tok: b"x",
+        free_sampler=lambda sampler: chains["freed"].append(sampler),
+        sampler_reset=lambda sampler: chains.setdefault("reset", []).append(sampler),
+    )
+    ctx._sampler, ctx._vocab, ctx._llama_context = "loaded", None, None
+    ctx._max_batch_tokens = 8
+    ctx._config = Config()
+    ctx._build_sampler = lambda config: ("own", config.temperature)
+    return ctx
+
+
+# ----- flash attention and offload on each build ---------------------------
+@pytest.mark.parametrize("enable", [True, False])
+def test_set_flash_attn_bool_build(enable):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn=None)
+    _set_flash_attn(cparams, enable)
+    assert cparams.flash_attn is enable
+
+
+@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
+def test_set_flash_attn_enum_build(enable, expected):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn_type=None)  # no bool field
+    llama_cpp = SimpleNamespace(LLAMA_FLASH_ATTN_TYPE_ENABLED=1,
+                         LLAMA_FLASH_ATTN_TYPE_DISABLED=0)
+    _set_flash_attn(cparams, enable, llama_cpp=llama_cpp)
+    assert cparams.flash_attn_type == expected
+
+
+@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
+def test_set_flash_attn_enum_build_without_constants(enable, expected):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(flash_attn_type=None)
+    _set_flash_attn(cparams, enable, llama_cpp=SimpleNamespace())  # constants absent
+    assert cparams.flash_attn_type == expected
+
+
+def test_set_flash_attn_disable_on_unsupported_build_is_noop():
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace()  # neither field present
+    _set_flash_attn(cparams, False)  # must not raise
+
+
+def test_set_flash_attn_enable_on_unsupported_build_raises():
+    from types import SimpleNamespace
+
+    with pytest.raises(RuntimeError, match="flash-attention"):
+        _set_flash_attn(SimpleNamespace(), True)
+
+
+@pytest.mark.parametrize("enable", [True, False])
+def test_set_offload_kqv_bool_build(enable):
+    from types import SimpleNamespace
+
+    cparams = SimpleNamespace(offload_kqv=None)
+    _set_offload(cparams, enable)
+    assert cparams.offload_kqv is enable
+
+
+def test_set_offload_kqv_enable_on_unsupported_build_is_noop():
+    from types import SimpleNamespace
+
+    # GPU placement is llama.cpp's own default, so a missing param is harmless.
+    _set_offload(SimpleNamespace(), True)  # must not raise
+
+
+def test_set_offload_kqv_disable_on_unsupported_build_raises():
+    from types import SimpleNamespace
+
+    with pytest.raises(RuntimeError, match="KV-offload"):
+        _set_offload(SimpleNamespace(), False)
+
+
+# ----- the sampler chain per request ---------------------------------------
+def test_a_generation_without_overrides_keeps_the_chain_built_at_load():
+    chains = {"sampled": [], "freed": []}
+    ctx = _stub_context(chains)
+    list(ctx.generate(0, 2, out=GenerationAccumulator(), sampling=Sampling()))
+    assert set(chains["sampled"]) == {"loaded"} and chains["freed"] == []
+
+
+def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
+    chains = {"sampled": [], "freed": []}
+    ctx = _stub_context(chains)
+    stream = ctx.generate(0, 3, out=GenerationAccumulator(), sampling=Sampling(temperature=0.3))
+    next(stream)
+    stream.close()
+    assert chains["sampled"] == [("own", 0.3)]
+    assert chains["freed"] == [("own", 0.3)]
+
+
+def test_every_generation_starts_its_penalties_and_its_seed_afresh():
+    chains = {"sampled": [], "freed": []}
+    ctx = _stub_context(chains)
+    list(ctx.generate(0, 1, out=GenerationAccumulator()))
+    list(ctx.generate(1, 1, out=GenerationAccumulator(), sampling=Sampling()))
+    assert chains["reset"] == ["loaded", "loaded"]
