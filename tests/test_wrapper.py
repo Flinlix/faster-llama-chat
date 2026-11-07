@@ -1024,3 +1024,24 @@ def test_a_config_larger_than_the_cache_context_is_refused_at_the_start():
     small.context_size = 256
     with pytest.raises(ValueError, match="holds 256 tokens"):
         ChatWrapper(Config(context_size=512), context=small)
+
+
+def test_a_decode_that_fails_halfway_is_repaired_by_the_next_action():
+    # It used to leave the cache and the table apart until the next begin.
+    fake = FakeContext(gen_tokens=4)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.9), context=fake)
+    w.begin("persona")
+    w.reply("hi").finish()
+    prefill = fake.prefill
+
+    def fails_halfway(token_ids, start_pos, want_logits):
+        prefill(token_ids[:len(token_ids) // 2], start_pos, want_logits)
+        fake.prefill = prefill
+        raise RuntimeError("the engine refused the batch")
+
+    fake.prefill = fails_halfway
+    with pytest.raises(RuntimeError, match="refused the batch"):
+        w.inject("lost on the way")
+    w.reply("again").finish()
+    assert_consistent(w, fake)
+    assert [m["role"] for m in w.snapshot()][-2:] == ["user", "assistant"]

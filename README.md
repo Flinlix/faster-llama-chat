@@ -405,7 +405,7 @@ the add-on files that ship.
 | `llama_chat/cache_context.py` | the two protocols a cache context answers |
 | `llama_chat/context.py` | `KVContext`: the model loaded, its tokenizer, prefill, generation and cache edits |
 | `llama_chat/_backend.py` | the adapter over llama-cpp-python; the only module that names it |
-| `llama_chat/cache_sync.py` | eviction and cuts, done the way the cache allows |
+| `llama_chat/cache_sync.py` | the one place that decodes into the cache: evictions, cuts, saved states, and repair after a failed decode |
 | `llama_chat/messages.py` | the message table: positions, eviction by exchange |
 | `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it |
 | `llama_chat/model_template.py` | a model's chat template, rendered with its reasoning switch |
