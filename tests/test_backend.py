@@ -92,9 +92,7 @@ def test_every_cache_edit_is_performed_while_loading():
         context._verify_cache_edits()
 
         # A cache that cannot shift is never shifted, and is not asked to.
-        assert performed == [("seq_rm", "the context", SEQ, 0, 0)] \
-            + ([("seq_add", "the context", SEQ, 0, 0, 0)] if can_shift else []) \
-            + [("clear", "the context")]
+        assert performed == ([("seq_add", "the context", SEQ, 0, 0, 0)] if can_shift else [])
 
 
 def _probed_context(reports_shift, cuts_tail):

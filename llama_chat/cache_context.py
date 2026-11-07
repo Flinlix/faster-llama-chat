@@ -82,7 +82,7 @@ class CacheContext(ModelReader, Protocol):
 
 def _members(protocol) -> tuple[str, ...]:
     return tuple(name for name in vars(protocol)
-                 if not name.startswith("_") and name not in ("register",))
+                 if not name.startswith("_"))
 
 
 MODEL_READER = _members(ModelReader)

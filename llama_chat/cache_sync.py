@@ -73,11 +73,6 @@ class CacheSync:
         """Drop every saved state, as a reset of the conversation does."""
         self._rest_states = []
 
-    @property
-    def rested_at(self) -> int | None:
-        """How many tokens the newest saved state holds, or ``None`` without one."""
-        return self._rest_states[-1][0] if self._rest_states else None
-
     def _restore_to(self, pos: int) -> int | None:
         """From the newest state saved at or before ``pos``, decoding the table's tokens after it."""
         usable = [s for s in self._rest_states if s[0] <= pos]

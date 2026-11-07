@@ -6,7 +6,7 @@ import pytest
 
 from llama_chat.config import Config
 from llama_chat.template import ToolCallFragments
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, tool
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
 from tests.fake_context import FakeContext
 from tests.wrappers import (FAKE_CALL_BODY, assert_consistent, cache_tokens, tool_wrapper,
@@ -104,11 +104,9 @@ def _as_rendered_with(w, fake, specs):
 def test_the_declaration_reaches_the_system_turn():
     wrapper, fake = tool_wrapper()
 
-    @tool("Sagt die Zeit.")
-    def clock() -> dict:
-        ...
-
-    wrapper.begin("persona", tools=[clock.spec])
+    clock = ToolSpec(name="clock", description="Sagt die Zeit.",
+                     parameters={"type": "object", "properties": {}, "required": []})
+    wrapper.begin("persona", tools=[clock])
 
     # The fake template renders a declaration as <decl>NAME</decl>, and the
     # 1:1 char tokenizer lets the system turn be read straight back.
@@ -122,11 +120,9 @@ def test_the_declaration_reaches_the_system_turn():
 def test_a_declaration_is_tokenized_as_tags_and_the_prompt_is_not():
     wrapper, fake = tool_wrapper()
 
-    @tool("Sagt die Zeit.")
-    def clock() -> dict:
-        ...
-
-    wrapper.begin("persona", tools=[clock.spec])
+    clock = ToolSpec(name="clock", description="Sagt die Zeit.",
+                     parameters={"type": "object", "properties": {}, "required": []})
+    wrapper.begin("persona", tools=[clock])
 
     # The prompt is a caller's text and must not be able to forge a tag; the
     # declarations are the model's own and have to parse as tags.
@@ -517,7 +513,7 @@ def test_a_declaration_added_later_reaches_the_model():
     registry = ToolRegistry()
     registry.register(lambda: {}, "Sagt die Zeit.", name="clock")
 
-    wrapper.declare_unknown_tools([registry.spec("clock")])
+    wrapper.declare_unknown_tools(registry.specs())
 
     written = "".join(chr(t) for t in fake.cache if t >= 0)
     assert "<decl>clock</decl>" in written
@@ -552,11 +548,9 @@ def test_declarations_too_large_to_fit_are_refused_rather_than_truncated():
 
 def test_an_empty_parameter_schema_is_a_caller_saying_no_parameters():
     # Not a caller saying nothing: the annotations must not be read instead.
-    @tool("…", parameters={})
     def anything(title: str):
         ...
 
-    assert anything.spec.parameters == {}
     registry = ToolRegistry()
     registry.register(anything, "…", parameters={})
     assert registry.specs()[0].parameters == {}
@@ -980,7 +974,7 @@ def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction
     wrapper = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5),
                           context=fake)
     wrapper.begin("persona")
-    wrapper.declare_unknown_tools([registry.spec("clock")])
+    wrapper.declare_unknown_tools(registry.specs())
     assert [m["role"] for m in wrapper.snapshot()] == ["system"]
 
     for i in range(6):

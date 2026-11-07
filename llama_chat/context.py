@@ -520,22 +520,20 @@ class KVContext:
 
     # ----- internals -----------------------------------------------------
     def _verify_cache_edits(self) -> None:
-        """Perform each cache edit once, empty, so a build missing one fails here.
+        """Shift the empty cache by nothing, so a build missing the shift fails here.
 
-        Removing an empty range and shifting it by nothing changes nothing.
-        Which function performs an edit is settled per build and per context,
-        so an edit that works here works for the rest of the conversation.
-        Left to the first eviction, a missing one would surface deep into a
-        conversation. A cache that cannot shift is never shifted, and some
-        abort the process when asked to, so it is not asked here either.
+        The cut probe has already removed and cleared. Which function performs
+        an edit is settled per build and per context, so an edit that works
+        here works for the rest of the conversation; left to the first
+        eviction, a missing one would surface deep into a conversation. A
+        cache that cannot shift is never shifted, and some abort the process
+        when asked to, so it is not asked here either.
 
         Raises:
-            RuntimeError: If this build offers no function for one of them.
+            RuntimeError: If this build offers no function for the shift.
         """
-        self._backend.kv_seq_rm(self._llama_context, SEQ, 0, 0)
         if self._can_shift:
             self._backend.kv_seq_add(self._llama_context, SEQ, 0, 0, 0)
-        self._backend.kv_clear(self._llama_context)
 
     def _settle_cache_edits(self) -> None:
         """Which edits this cache takes, each proven on it while it is empty."""

@@ -201,8 +201,7 @@ answers the same question up front.
 runnable; the parameters come from its annotations, postponed ones included,
 and `parameters=` takes an explicit JSON Schema where they cannot be described.
 `registry.register(fn, description)` is the same for a function written
-elsewhere. `@tool(description)` attaches a spec to a function without
-registering it, for `begin(tools=[fn.spec])`.
+elsewhere. A `ToolSpec` declares a tool that this process does not run.
 
 **Where the declarations go.** `in_system_prompt=True`, the default, puts a
 tool's declaration where `begin` writes the system turn, so no eviction takes

@@ -2,16 +2,18 @@
 
 import pytest
 
-from llama_chat.tools import ToolCall, ToolRegistry, tool
+from llama_chat.tools import ToolCall, ToolRegistry
 
 
 # ----- what a function declares --------------------------------------------
 def test_a_decorated_function_declares_its_own_parameters():
-    @tool("Trägt einen Termin ein.")
+    registry = ToolRegistry()
+
+    @registry.tool("Trägt einen Termin ein.")
     def calendar_add(title: str, minutes: int, whole_day: bool = False) -> dict:
         ...
 
-    spec = calendar_add.spec
+    spec, = registry.specs()
     assert spec.name == "calendar_add"
     assert spec.parameters["properties"] == {
         "title": {"type": "string"},
@@ -24,7 +26,7 @@ def test_a_decorated_function_declares_its_own_parameters():
 
 def test_a_parameter_the_schema_cannot_describe_is_refused():
     with pytest.raises(TypeError, match="not a type this can describe"):
-        @tool("...")
+        @ToolRegistry().tool("...")
         def broken(when: complex):
             ...
 
@@ -58,7 +60,7 @@ def test_the_flag_says_where_a_declaration_lands_not_whether():
 
     assert [s.name for s in registry.specs_for_system_prompt()] == ["early"]
     assert sorted(s.name for s in registry.specs()) == ["early", "late"]
-    assert registry.spec("late").description == "später"
+    assert [s.description for s in registry.specs() if s.name == "late"] == ["später"]
     # Runnable from the moment it is registered, wherever it is declared.
     assert registry.call(ToolCall("late", {})) == {}
 
@@ -129,26 +131,17 @@ def test_a_builtin_registered_without_a_schema_says_what_to_do():
 
 
 # ----- registering ---------------------------------------------------------
-def test_register_takes_what_the_tool_declaration_already_said():
-    @tool("Sagt die Zeit.")
+def test_register_takes_the_parameters_from_the_signature():
     def clock(city: str) -> str:
         return "09:00"
 
     registry = ToolRegistry()
-    registry.register(clock)
+    registry.register(clock, "Sagt die Zeit.")
     spec = registry.specs()[0]
     assert spec.description == "Sagt die Zeit."
     assert spec.parameters["properties"] == {"city": {"type": "string"}}
     assert len(registry) == 1 and "clock" in registry
     assert registry.call(ToolCall("clock", {"city": "Bonn"})) == "09:00"
-
-
-def test_register_without_a_description_or_a_declaration_is_refused():
-    def bare(x: int):
-        pass
-
-    with pytest.raises(TypeError, match="needs a description"):
-        ToolRegistry().register(bare)
 
 
 def test_registering_a_name_again_replaces_it_and_where_it_is_declared():
@@ -166,12 +159,15 @@ def test_registering_a_name_again_replaces_it_and_where_it_is_declared():
 
 
 def test_variadic_parameters_are_left_out_of_the_schema():
-    @tool("Nimmt beliebige Argumente.")
+    registry = ToolRegistry()
+
+    @registry.tool("Nimmt beliebige Argumente.")
     def spread(city: str, *rest, **extra):
         return city
 
-    assert spread.spec.parameters["properties"] == {"city": {"type": "string"}}
-    assert spread.spec.parameters["required"] == ["city"]
+    spec, = registry.specs()
+    assert spec.parameters["properties"] == {"city": {"type": "string"}}
+    assert spec.parameters["required"] == ["city"]
 
 
 # ----- postponed annotations -----------------------------------------------

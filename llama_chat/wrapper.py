@@ -511,7 +511,7 @@ class ChatWrapper:
                 self._resume(allow_tools=allow_tools, **options)))
         return ReplyStream(_deltas_then_calls(self._request_and_generate(text, **options)))
 
-    def inject_tool_result(self, call: ToolCall | str, result) -> int:
+    def inject_tool_result(self, call: ToolCall | str, result) -> None:
         """Hand the model what the tool it called returned.
 
         Prefilled inside the turn the call left open, wrapped the way this
@@ -523,11 +523,6 @@ class ChatWrapper:
             call: The call being answered, as it was handed to you, or its name
                 alone. Either way it must be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
-
-        Returns:
-            How many messages were evicted to make room, reported as
-            :meth:`inject` reports it. Nothing is evicted while a turn is open,
-            the result going inside it, so this is ``0``.
 
         Raises:
             ValueError: If no call is waiting, or this is not the one owed.
@@ -549,7 +544,6 @@ class ChatWrapper:
             self._write_tool_result(name, result)
             self._pending_calls.pop(0)      # results are owed in call order
             self._table.messages[-1].steps.append(ToolResult(name, result))
-            return 0
 
     def _write_tool_result(self, name: str, result) -> None:
         """Prefill one result block into the open turn. The lock must be held.
@@ -741,7 +735,7 @@ class ChatWrapper:
         return self._context.can_shift
 
     def wait_idle(self, timeout_s: float | None = None) -> bool:
-        """Block until no generation holds the wrapper. Advisory, as :attr:`busy` is.
+        """Block until no generation holds the wrapper; advisory, since one may start right after.
 
         Args:
             timeout_s: Seconds to wait; ``None`` waits indefinitely.

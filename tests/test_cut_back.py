@@ -184,8 +184,9 @@ def test_a_cache_that_takes_a_cut_needs_no_saved_state():
 def test_a_cut_leaves_a_state_for_the_next_reply():
     w, fake = reasoning_wrapper(can_shift=False)
     w.reply("hi").finish()
+    saved = fake.saved_states
     w.truncate_last_reply("Ant")
-    assert w._cache.rested_at == w._table.total
+    assert fake.saved_states == saved + 1
 
 
 def test_what_a_cache_that_cannot_shift_decodes_again_is_counted():

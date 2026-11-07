@@ -12,8 +12,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn", "result_text",
-           "tool"]
+__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn", "result_text"]
 
 # Anything not here has to be spelled out by passing `parameters` explicitly.
 _JSON_TYPES = {str: "string", int: "integer", float: "number",
@@ -116,7 +115,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._entries: dict[str, _RegisteredTool] = {}
 
-    def register(self, function: Callable, description: str | None = None, *,
+    def register(self, function: Callable, description: str, *,
                  name: str | None = None, parameters: dict | None = None,
                  in_system_prompt: bool = True) -> str:
         """Make ``function`` callable by the model, and return the name it uses.
@@ -125,11 +124,10 @@ class ToolRegistry:
 
         Args:
             function: What runs. Called by keyword with the model's arguments.
-            description: What it does, for the model to read. Taken from a
-                :func:`tool` declaration on ``function`` when omitted.
+            description: What it does, for the model to read.
             name: The name the model calls, where that is not the function's own.
-            parameters: An explicit JSON Schema object, for a signature
-                :func:`tool` cannot describe.
+            parameters: An explicit JSON Schema object, for a signature whose
+                annotations cannot be described. Derived from them when omitted.
             in_system_prompt: Where the model is told about it. ``True`` puts
                 the declaration in the system turn, which
                 :meth:`~llama_chat.wrapper.ChatWrapper.begin` writes at no extra
@@ -139,27 +137,17 @@ class ToolRegistry:
                 runnable either way, from the moment it is registered.
 
         Returns:
-            The name the model calls it by, which is also how :meth:`spec`
-            and :meth:`call` refer to it.
+            The name the model calls it by, which is also how :meth:`call`
+            refers to it.
 
         Raises:
-            TypeError: If neither a description nor a :func:`tool` declaration
-                is given, if the signature cannot be described and no
+            TypeError: If the signature cannot be described and no
                 ``parameters`` were given, or if ``name`` is omitted and the
                 function has none a model could call it by.
         """
-        declaration = getattr(function, "spec", None)
-        if description is None and declaration is None:
-            raise TypeError(
-                f"{getattr(function, '__name__', function)!r} carries no tool() "
-                f"declaration, so register() needs a description")
-        spec = ToolSpec(
-            name=name or _callable_name(function),
-            description=(description if description is not None
-                         else declaration.description),
-            parameters=(parameters if parameters is not None
-                        else declaration.parameters if declaration is not None
-                        else _parameters_of(function)))
+        spec = ToolSpec(name=name or _callable_name(function), description=description,
+                        parameters=(parameters if parameters is not None
+                                    else _parameters_of(function)))
         self._entries[spec.name] = _RegisteredTool(spec, function, in_system_prompt)
         return spec.name
 
@@ -183,16 +171,6 @@ class ToolRegistry:
                           in_system_prompt=in_system_prompt)
             return function
         return attach
-
-    def spec(self, name: str) -> ToolSpec:
-        """What the model would be told about ``name``.
-
-        For declaring one tool by hand rather than the whole registry.
-
-        Raises:
-            KeyError: If nothing is registered under that name.
-        """
-        return self._entries[name].spec
 
     def specs_for_system_prompt(self) -> list[ToolSpec]:
         """The declarations that belong in the system turn.
@@ -241,27 +219,6 @@ class ToolRegistry:
     def __len__(self) -> int:
         return len(self._entries)
 
-
-def tool(description: str, parameters: dict | None = None) -> Callable:
-    """Declare a function as a tool, deriving its parameters from its signature.
-
-    Attached as ``fn.spec``; the function is returned unchanged.
-
-    Args:
-        description: What the tool does, for the model to read.
-        parameters: An explicit JSON Schema object, for a signature this cannot
-            describe. Derived from the annotations when omitted.
-
-    Raises:
-        TypeError: If a parameter has no annotation this can turn into a schema
-            and none was supplied.
-    """
-    def attach(fn):
-        fn.spec = ToolSpec(name=fn.__name__, description=description,
-                           parameters=parameters if parameters is not None
-                           else _parameters_of(fn))
-        return fn
-    return attach
 
 
 def _callable_name(function) -> str:

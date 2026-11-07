@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from .addon_files import SAMPLING_FIELDS, addon_file
+from .addon_files import SAMPLING_FIELDS
 from .config import Config
 
 # The GGUF keys that state the sampling fields a model may recommend.
@@ -21,7 +21,7 @@ UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
 
 
 def with_model_sampling(config: Config, metadata: Callable[[str], str | None],
-                        addon: dict | None = None) -> Config:
+                        addon: dict) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
     One source is taken whole: the GGUF's recommendation, else the add-on
@@ -32,16 +32,11 @@ def with_model_sampling(config: Config, metadata: Callable[[str], str | None],
         config: What the caller set; a field it sets is kept.
         metadata: Reads one of the model's GGUF metadata values, ``None`` where absent.
         addon: The model's add-on file, as :func:`~llama_chat.addon_files.addon_file`
-            reads it; read here where it is not given.
-
-    Raises:
-        ValueError: If an add-on file for this model is malformed.
+            reads it.
     """
     unset = [name for name in SAMPLING_FIELDS if getattr(config, name) is None]
     if not unset:
         return config
-    if addon is None:
-        addon = addon_file(config.model_path, metadata("tokenizer.chat_template"))
     stated = _stated_in_gguf(metadata) or addon["sampling"]
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})

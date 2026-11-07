@@ -21,7 +21,7 @@ being recovered from that template.
 from .config import Config, Sampling
 from .messages import Eviction
 from .template import CallBody, TemplateFragments, ToolCallFragments
-from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, tool
+from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
 
 __all__ = [
@@ -36,7 +36,6 @@ __all__ = [
     "ToolTurn",
     "ToolSpec",
     "ToolRegistry",
-    "tool",
     # For a cache context of one's own, ``ChatWrapper(context=...)``, and a
     # model whose template describes too little, ``fragments=`` and ``tool_calls=``.
     "Eviction",
