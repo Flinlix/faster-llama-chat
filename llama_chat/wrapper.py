@@ -28,7 +28,7 @@ from .call_parsing import parse_calls
 from .config import Config, Sampling
 from .context import GenerationAccumulator, KVContext, _stop_hit
 from .messages import Message, MessageTable, n_newest_that_fit
-from .reasoning import AnswerOpening, ThoughtFilter, begins_in_thought
+from .reasoning import AnswerOpening, ThoughtFilter, begins_in_thought, turn_end_test
 from .resolved_template import ResolvedTemplate, ensure_context_answers
 from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
@@ -1231,7 +1231,7 @@ class ChatWrapper:
             gen_start, max(0, min(cap, budget)), [] if thought else stops,
             out=generated, cancel=cancel,
             tool_tokens=self._template.tool_tokens if allow_tools else None,
-            sampling=sampling, turn_end=self._template.turn_end_token)
+            sampling=sampling, ends_turn=self._turn_end_test(thought))
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
@@ -1267,6 +1267,15 @@ class ChatWrapper:
             tool_calls=list(self._pending_calls),
             n_reasoning_tokens=thought.thought_pieces if thought else 0,
         )
+
+    def _turn_end_test(self, thought: ThoughtFilter | None) -> Callable[[int], bool] | None:
+        """Whether a sampled token ends the reply, besides the end-of-generation tokens."""
+        turn_end = self._template.turn_end_token
+        if turn_end is None:
+            return None
+        # Read at each sample: the filter has been fed every piece yielded before it.
+        return turn_end_test(turn_end, self._context.token_text(turn_end),
+                             self._template.reasoning, thought)
 
     def _record_reply(self, generated: GenerationAccumulator, answer: str,
                       open_tokens: list[int], close_tokens: list[int],

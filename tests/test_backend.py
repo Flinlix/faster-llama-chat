@@ -274,7 +274,8 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
         token_to_piece_bytes=lambda vocab, token: token.encode())
     out = GenerationAccumulator()
-    shown = "".join(context.generate(0, 10, [], out=out, turn_end="<response_end>"))
+    shown = "".join(context.generate(
+        0, 10, [], out=out, ends_turn=lambda token: token == "<response_end>"))
     assert shown == out.text == "Paris"
     assert decoded == out.token_ids == ["Pa", "ris"]
     assert out.stop_reason == "end_of_turn"

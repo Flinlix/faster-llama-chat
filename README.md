@@ -1059,7 +1059,8 @@ The load-time checks make a mismatch fail loudly instead of degrading silently:
   against the model's vocabulary: if it does not tokenize into the model's own
   tags, which is the silent mismatch described above, construction raises. A
   reply ends at the first of those tags, so a model whose closing takes several
-  writes none of them into its answer.
+  writes none of them into its answer. Inside a thought whose closing begins
+  with that tag, the tag is the closing's and the reply goes on.
 - **At construction** the fragments are checked against the model's own chat
   template read from the GGUF: a conversation of a system prompt, a past reply
   and a newest user turn, followed by the generation prompt, is rendered both

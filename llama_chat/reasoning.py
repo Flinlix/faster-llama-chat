@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .template import Reasoning
 
 
@@ -65,6 +67,11 @@ class ThoughtFilter:
         elif not self._held:
             self._uncounted_held = 0
         return "".join(shown)
+
+    @property
+    def in_thought(self) -> bool:
+        """Whether the text fed so far ends inside a thought, its closing included."""
+        return self._in_thought
 
     def flush(self, complete: bool = True) -> str:
         """Text held back as a possible start of a thought that never came.
@@ -139,6 +146,18 @@ class AnswerOpening:
             text = text.lstrip()
             self._strips = not text
         return text
+
+
+def turn_end_test(turn_end: int, turn_end_text: str, reasoning: Reasoning | None,
+                  thought: ThoughtFilter | None) -> Callable[[int], bool]:
+    """Whether a sampled token ends the reply, besides the end-of-generation tokens.
+
+    Where a thought's closing begins with the turn's end, that token is the
+    closing's while the reply is inside a thought.
+    """
+    if thought is not None and reasoning.thought_close.strip().startswith(turn_end_text):
+        return lambda token: token == turn_end and not thought.in_thought
+    return lambda token: token == turn_end
 
 
 def begins_in_thought(reasoning: Reasoning, decoded: str) -> bool:

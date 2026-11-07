@@ -171,6 +171,29 @@ def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
     assert context.token_text(template.turn_end_token) == first_tag
 
 
+@pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer", "qwen-3.6"])
+def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
+    """gpt-oss closes a thought with the tag that also closes its turn."""
+    from llama_chat.reasoning import AnswerOpening, turn_end_test
+    fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
+    context = _TagTokenizingContext(fixture)
+    template = ResolvedTemplate(context)
+    tags, turn_end = template.reasoning, template.turn_end_token
+    formatter = template.formatter(True)
+    inside = begins_in_thought(tags, formatter.generation_prompt())
+    thought = ThoughtFilter(tags, inside)
+    opening = AnswerOpening(formatter.answer_opening())
+    ends = turn_end_test(turn_end, context.token_text(turn_end), tags, thought)
+    reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close
+             + "Antwort." + template._fragments.assistant_suffix)
+    shown = ""
+    for token in context.tokenize(reply):
+        if ends(token):
+            break
+        shown += opening.feed(thought.feed(context.token_text(token)))
+    assert shown + opening.feed(thought.flush()) + opening.flush() == "Antwort."
+
+
 def _closers(tag: str) -> list[str]:
     """The tags that would close ``tag``."""
     inner = tag.strip("<>[]")
