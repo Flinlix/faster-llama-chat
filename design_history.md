@@ -348,3 +348,34 @@ The user chose to build all of it except two items.
   few milliseconds per turn; decoding would stay incremental. The user ruled
   out rendering the whole conversation each turn (123C) and asked for more
   information before deciding.
+
+## 2026-11-07: Rendering the whole conversation each turn, measured
+
+The structure review's estimate of a few milliseconds per turn does not hold
+for Gemma 4, so the user kept today's approach. Rendering the conversation in
+memory through the template before each answer was timed at a full 8k-token
+context on an Intel i9-9900K. The setup was Gemma 4's own template (as the
+26B-A4B GGUF ships it), four tools declared and the Gemma 4 tokenizer, taking
+the median of 15 runs:
+
+| Conversation | Messages | Render | Tokenize |
+|---|---|---|---|
+| about 12 words per message | 394 | 234 ms | 25 ms |
+| about 30 words per message | 178 | 51 ms | 25 ms |
+| about 90 words per message | 64 | 9 ms | 26 ms |
+
+The render grows faster than the number of messages: twice the messages take
+four to five times as long. So short voice exchanges are the worst case.
+Comparing the two token lists took under half a millisecond.
+
+On a Raspberry Pi 5 with Gemma 4 E2B, estimated by scaling these times by 2 to
+3, every turn would wait 0.5 to 0.8 s longer for short exchanges, 0.15 to
+0.23 s for medium ones and 0.07 to 0.10 s for long ones. The Geekbench 6
+single-core scores, about 770 to 960 for the Pi 5 against about 1650 for the
+i9-9900K, give a factor of 1.7 to 2.2, and plain Python widens the gap. Today
+the first word comes about 1.2 s after a turn, assuming 30 new tokens at the
+24 tokens/s one report gives for llama.cpp Q4_0 on four threads. Against that,
+the render adds 6 to 65 %. Comparing the text first and tokenizing only its
+changed end would remove the tokenizing share. The render itself is what the
+approach consists of. The estimate assumes E2B ships the 26B model's template
+and tokenizer, which was not checked.
