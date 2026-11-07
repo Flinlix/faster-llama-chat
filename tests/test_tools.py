@@ -1094,8 +1094,8 @@ def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
             inner = "".join("<tc>" + emit(c["function"]["name"],
                                           c["function"]["arguments"]) + "</tc>"
                             for c in calls)
-            out.append(f"<|turn>{m['role']}\n{inner}{m['content'].strip()}"
-                       + ("" if calls else "<turn|>\n"))
+            out.append(f"<[turn>{m['role']}\n{inner}{m['content'].strip()}"
+                       + ("" if calls else "<turn]>\n"))
         return "".join(out)
 
     tools = extract_tool_fragments(render, extract_fragments(render))
@@ -1215,7 +1215,7 @@ def test_a_model_needing_nothing_extra_gets_nothing():
     # What the generation holds is the sampled tokens and the turn's closing
     # tag, and nothing in front of them.
     generated = fake._gen_tokens
-    closing = len("<turn|>\n")
+    closing = len("<turn]>\n")
     assert len(fake.cache) - before == generated + closing
 
 
@@ -1644,7 +1644,7 @@ def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
     assert not wrapper.reply_open
     turn = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
                    if 0 < t < 0x11000)
-    assert turn.endswith("<turn|>\n")             # the terminator still landed
+    assert turn.endswith("<turn]>\n")             # the terminator still landed
     assert fake.cache == _flatten(wrapper)
     assert wrapper.reply_without_tools("weiter").stop_reason == "end_of_turn"
 

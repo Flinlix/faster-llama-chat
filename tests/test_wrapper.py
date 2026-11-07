@@ -56,7 +56,7 @@ def test_begin_prefills_system_and_history_once():
 
 def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
-    # system fragment "<|turn>user\ns<turn|>\n" + BOS is well under budget;
+    # system fragment "<[turn>user\ns<turn]>\n" + BOS is well under budget;
     # pick a tiny threshold so only the newest exchange fits.
     w = ChatWrapper(_config(context_size=1000, evict_above_fraction=0.08), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x"), ("user", "y")])
@@ -600,11 +600,11 @@ def test_context_manager_closes_on_exit():
 
 
 # ----- template formatting -----------------------------------------------
-def test_template_formatter_renders_gemma_tags():
+def test_template_formatter_wraps_each_role_in_its_tags():
     fmt = TemplateFormatter(_fragments())
-    assert fmt.fragment("user", "hi") == "<|turn>user\nhi<turn|>\n"
-    assert fmt.generation_prompt() == "<|turn>model\n"
-    assert fmt.assistant_close() == "<turn|>\n"
+    assert fmt.fragment("user", "hi") == "<[turn>user\nhi<turn]>\n"
+    assert fmt.generation_prompt() == "<[turn>model\n"
+    assert fmt.assistant_close() == "<turn]>\n"
 
 
 def test_template_formatter_combines_fragments():
@@ -622,12 +622,12 @@ def test_template_formatter_combines_fragments():
 
 def test_trim_content_strips_by_default():
     fmt = TemplateFormatter(_fragments())
-    assert fmt.fragment("user", "  hi\n") == "<|turn>user\nhi<turn|>\n"
+    assert fmt.fragment("user", "  hi\n") == "<[turn>user\nhi<turn]>\n"
 
 
 def test_trim_content_disabled_keeps_whitespace():
     fmt = TemplateFormatter(_fragments(trim_content=False))
-    assert fmt.fragment("user", "  hi\n") == "<|turn>user\n  hi\n<turn|>\n"
+    assert fmt.fragment("user", "  hi\n") == "<[turn>user\n  hi\n<turn]>\n"
 
 
 # ----- content tokenized special-off (turn-boundary safety) --------------
@@ -635,7 +635,7 @@ def test_fragment_keeps_literal_tag_in_content():
     # Content is no longer stripped: the literal tag is preserved verbatim and
     # rendered safe instead by tokenizing content with special parsing off.
     fmt = TemplateFormatter(_fragments())
-    assert fmt.fragment("user", "hi <turn|> there") == "<|turn>user\nhi <turn|> there<turn|>\n"
+    assert fmt.fragment("user", "hi <turn]> there") == "<[turn>user\nhi <turn]> there<turn]>\n"
 
 
 def test_injected_tag_survives_in_content_as_text():
@@ -643,12 +643,12 @@ def test_injected_tag_survives_in_content_as_text():
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0),
                     context=fake, fragments=DEFAULT_FRAGMENTS)
     w.begin("sys")
-    w.inject("hello <turn|> world", role="user")
+    w.inject("hello <turn]> world", role="user")
 
     # The literal tag stays in content as ordinary text (FakeContext is 1:1 chars);
     # only the legitimate prefix/suffix tags wrap it.
     rendered = "".join(chr(t) for t in w._table.messages[-1].token_ids)
-    assert rendered == "<|turn>user\nhello <turn|> world<turn|>\n"
+    assert rendered == "<[turn>user\nhello <turn]> world<turn]>\n"
     _assert_consistent(w, fake)
 
 
@@ -658,14 +658,14 @@ def test_content_is_tokenized_with_special_parsing_off():
                     context=fake, fragments=DEFAULT_FRAGMENTS)
     w.begin("sys")
     fake.tokenize_calls.clear()
-    w.inject("hello <turn|> world", role="user")
+    w.inject("hello <turn]> world", role="user")
 
     # The fragment's three parts: prefix (special-on), content (special-off),
     # suffix (special-on).
     assert fake.tokenize_calls == [
-        ("<|turn>user\n", True),
-        ("hello <turn|> world", False),
-        ("<turn|>\n", True),
+        ("<[turn>user\n", True),
+        ("hello <turn]> world", False),
+        ("<turn]>\n", True),
     ]
 
 

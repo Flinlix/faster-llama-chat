@@ -16,6 +16,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from .cache_context import MODEL_READER, ensure_answers
 from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
 from .template_extract import (call_id, extract_call_body, extract_call_close_text,
@@ -54,28 +55,6 @@ _PROBE_FUNCTION = "probe"
 _PROBE_TOOL = ToolSpec(name=_PROBE_FUNCTION, description="probe",
                        parameters={"type": "object", "properties": {}})
 
-# What resolving a model with tool tags calls on its cache context.
-_TOOL_SURFACE = ("first_special_token", "token_text", "render_with_model_template")
-
-
-def ensure_context_answers(context, surface: tuple[str, ...]) -> None:
-    """Refuse a cache context missing something its caller will call on it.
-
-    Checked where a context is adopted, and where resolving reaches for the
-    tool half, rather than at the first call that finds what is missing, which
-    for an eviction is a whole conversation later.
-
-    Raises:
-        TypeError: If any name in ``surface`` is missing.
-    """
-    missing = [name for name in surface
-               if not hasattr(context, name)]
-    if missing:
-        raise TypeError(
-            f"this cache context is missing {missing}; see the README, "
-            f"\"Layout\", for what a cache context has to answer")
-
-
 @dataclass(frozen=True)
 class _SystemTurnSplit:
     """The system turn this model renders, with tools declared and without.
@@ -107,13 +86,14 @@ class ResolvedTemplate:
             it leaves out is recovered from the model.
 
     Raises:
-        TypeError: If ``context`` does not answer what resolving needs of it.
+        TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
         ValueError: If the template cannot be recovered, or if it fails
             validation against the model.
     """
 
     def __init__(self, context, *, fragments: TemplateFragments | None = None,
                  tool_calls: ToolCallFragments | None = None) -> None:
+        ensure_answers(context, MODEL_READER)
         self._context = context
         self._variables: dict = {}      # template variables every render passes
         self._fragments = (fragments if fragments is not None
@@ -522,8 +502,6 @@ class ResolvedTemplate:
 
     def _resolve_fragments(self) -> TemplateFragments:
         """Recover the template fragments from the model's own chat template."""
-        if not hasattr(self._context, "extract_fragments"):
-            raise ValueError("context cannot supply template fragments")
         fragments = self._context.extract_fragments()
         if fragments is None:
             raise ValueError(
@@ -539,12 +517,9 @@ class ResolvedTemplate:
         with plain text never lets it stop, so it would run to the token cap
         every generation.
         """
-        if not hasattr(self._context, "tokenizes_to_tags"):
-            return
         terminator = self._fragments.assistant_suffix.strip()
-        first = self._context.tokenize(terminator, add_special=False)[:1]
-        if terminator and not (
-                first and self._context.tokenizes_to_tags(self._context.token_text(first[0]))):
+        pieces = self._context.split_at_tags(terminator) if terminator else None
+        if terminator and not (pieces and pieces[0][1]):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
                 f"{terminator!r} does not open with one of the model's own tags, so "
@@ -554,8 +529,6 @@ class ResolvedTemplate:
 
     def _resolve_user_turn_join(self) -> str | None:
         """Read what the template writes between two user turns in a row."""
-        if not hasattr(self._context, "render_with_model_template"):
-            return ""
         rendered = self._render(
             [{"role": "user", "content": _PROMPT}, {"role": "user", "content": _NEXT}])
         if rendered is None or _PROMPT not in rendered or _NEXT not in rendered:
@@ -567,15 +540,14 @@ class ResolvedTemplate:
             return None
         join = between[len(closing):len(between) - len(opening)]
         # Plain text would tokenize together with the end of the turn before it.
-        if join and hasattr(self._context, "tokenizes_to_tags") \
-                and not self._context.tokenizes_to_tags(join):
+        if join and not self._context.tokenizes_to_tags(join):
             return None
         return join
 
     def _resolve_turn_end_token(self) -> int | None:
         """The first token of the turn-terminator, where it is one of the model's tags."""
         terminator = self._fragments.assistant_suffix.strip()
-        if not terminator or not hasattr(self._context, "first_special_token"):
+        if not terminator:
             return None
         first = self._context.first_special_token(terminator)
         tokens = self._context.tokenize(terminator, add_special=False)
@@ -590,8 +562,6 @@ class ResolvedTemplate:
         write tokens it never learned. A system turn is left out where the
         template has none of its own and the user tags stand in for it.
         """
-        if not hasattr(self._context, "render_with_model_template"):
-            return
         system, exchange = _CHECK_CONVERSATION
         probe = list(system if self.has_system_turn else ()) + list(exchange)
         for reasoning in (False, True) if self.can_reason else (False,):
@@ -635,15 +605,11 @@ class ResolvedTemplate:
 
     def _resolve_tool_calls(self) -> ToolCallFragments | None:
         """What this model's template wraps a generated call in, if anything."""
-        if not hasattr(self._context, "render_with_model_template"):
-            return None
         return extract_tool_fragments(self._render,
                                       self._fragments)
 
     def _resolve_preamble(self, reasoning: bool) -> str | None:
         """What a conversation without a system message opens with, before its first turn."""
-        if not hasattr(self._context, "render_with_model_template"):
-            return None
         rendered = self._render(
             [{"role": "user", "content": _PROMPT}], reasoning=reasoning)
         opened = self._fragments.user_prefix + _PROMPT
@@ -656,8 +622,6 @@ class ResolvedTemplate:
 
     def _resolve_later_system(self) -> tuple[str, str] | None:
         """The tags of a system turn that follows an exchange, read from a render."""
-        if not hasattr(self._context, "render_with_model_template"):
-            return None
         frags = self._fragments
         rendered = self._render([
             {"role": "user", "content": _PROMPT},
@@ -676,11 +640,9 @@ class ResolvedTemplate:
 
     def _resolve_reasoning(self) -> Reasoning | None:
         """What turns this model's reasoning on, recovered from its template."""
-        if not hasattr(self._context, "render_with_model_template"):
-            return None
         render = self._render
         found = extract_reasoning(render, self._fragments, self._tool_calls)
-        if found is None and hasattr(self._context, "tags"):
+        if found is None:
             found = extract_removed_thought(render, self._fragments, self._context.tags())
         return found
 
@@ -689,7 +651,6 @@ class ResolvedTemplate:
         fragments = self._tool_calls
         if fragments is None:
             return None, ""
-        ensure_context_answers(self._context, _TOOL_SURFACE)
         opener = self._context.first_special_token(fragments.call_open)
         closer = self._call_closer(fragments)
         if opener is None or closer is None:
@@ -711,7 +672,7 @@ class ResolvedTemplate:
         found = self._template_call_texts()
         if found is not None:
             return found
-        call = self._context.addon_call() if hasattr(self._context, "addon_call") else {}
+        call = self._context.addon_call()
         if not call or self._tool_calls is None:
             return None
         rendered = self._render([{"role": "user", "content": _PROMPT},
@@ -726,7 +687,7 @@ class ResolvedTemplate:
 
     def _template_call_texts(self) -> tuple[str, str] | None:
         """The texts around a call, for a template whose call tags also mark every reply."""
-        if self._tool_calls is None or not hasattr(self._context, "first_special_token"):
+        if self._tool_calls is None:
             return None
         call_open = self._tool_calls.call_open
         if self._context.first_special_token(call_open) is None:
@@ -844,7 +805,7 @@ class ResolvedTemplate:
         conversation without tools; empty where the system turn declares them
         already, or no variable makes it.
         """
-        if not self._calls_marked or not hasattr(self._context, "chat_template_text"):
+        if not self._calls_marked or self._context.chat_template_text() is None:
             return {}
         try:
             self._declaration_turn([_PROBE_TOOL])

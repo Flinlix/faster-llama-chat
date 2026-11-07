@@ -143,7 +143,7 @@ def _tool_calling_render(messages, **_options):
     out = []
     for m in messages:
         role = "model" if m["role"] == "assistant" else m["role"]
-        out.append(f"<|turn>{role}\n")
+        out.append(f"<[turn>{role}\n")
         calls = m.get("tool_calls", ())
         for call in calls:
             fn = call["function"]
@@ -153,7 +153,7 @@ def _tool_calling_render(messages, **_options):
         out.append(m["content"].strip())
         # A call still awaiting its result opens the result block instead of
         # closing the turn.
-        out.append("<|tool_response>" if calls else "<turn|>\n")
+        out.append("<|tool_response>" if calls else "<turn]>\n")
     return "".join(out)
 
 
@@ -175,10 +175,10 @@ def test_a_template_that_ignores_tool_calls_has_no_tool_fragments():
 
 def test_tool_extraction_does_not_disturb_the_role_fragments():
     f = extract_fragments(_tool_calling_render)
-    assert f.user_prefix == "<|turn>user\n"
-    assert f.user_suffix == "<turn|>\n"
-    assert f.assistant_prefix == "<|turn>model\n"
-    assert f.system_prefix == "<|turn>system\n"
+    assert f.user_prefix == "<[turn>user\n"
+    assert f.user_suffix == "<turn]>\n"
+    assert f.assistant_prefix == "<[turn>model\n"
+    assert f.system_prefix == "<[turn>system\n"
 
 
 def _untagged_call_render(messages, **_options):
@@ -225,7 +225,7 @@ def _element_render(messages, **_options):
     out = []
     for m in messages:
         role = "model" if m["role"] == "assistant" else m["role"]
-        out.append(f"<|turn>{role}\n")
+        out.append(f"<[turn>{role}\n")
         calls = m.get("tool_calls", ())
         for call in calls:
             fn = call["function"]
@@ -235,7 +235,7 @@ def _element_render(messages, **_options):
             out.append("</function>\n</tool_call>")
         out.append(m["content"].strip())
         if not calls:
-            out.append("<turn|>\n")
+            out.append("<turn]>\n")
     return "".join(out)
 
 
@@ -272,7 +272,7 @@ def test_a_model_that_renders_no_call_has_no_body_either():
 def _turn_tags(m, body):
     """One turn of a delimited model, wrapping ``body`` in the usual tags."""
     role = "model" if m["role"] == "assistant" else m["role"]
-    return f"<|turn>{role}\n{body}{m['content'].strip()}<turn|>\n"
+    return f"<[turn>{role}\n{body}{m['content'].strip()}<turn]>\n"
 
 
 def _no_call_without_arguments_render(messages, **_options):
@@ -430,7 +430,7 @@ def _dropped_assistant_render(messages, **_options):
     out = []
     for m in messages:
         if m["role"] != "assistant":
-            out.append(f"<|turn>{m['role']}\n{m['content'].strip()}<turn|>\n")
+            out.append(f"<[turn>{m['role']}\n{m['content'].strip()}<turn]>\n")
             continue
         for call in m.get("tool_calls", ()):
             fn = call["function"]

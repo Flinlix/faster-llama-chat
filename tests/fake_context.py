@@ -7,11 +7,13 @@ the message table.
 
 Two correctness guarantees fall out of this fake:
 
-* ``prefill`` asserts ``start_pos == len(cache)``, so the wrapper only ever
-  *appends*. It never re-prefills survivors. That is the design guarantee,
-  checked mechanically.
+* ``prefill`` asserts ``start_pos == len(cache)``: every decode lands at the
+  cache's end, after whatever cut, restore or rebuild put it there.
 * After eviction the physical cache equals the concatenation of the surviving
   messages' tokens, proving remove-and-shift closes the gap correctly.
+
+Each cache edit asserts the ability it needs, so a wrapper that cuts a cache
+which cannot cut, or shifts one which cannot shift, fails here.
 
 Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 ``add_special`` is set. Deterministic and easy to reason about.
@@ -19,13 +21,17 @@ Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
 
 from __future__ import annotations
 
-from dataclasses import replace
+import re
+from dataclasses import fields, replace
 
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
 from llama_chat.template import TemplateFragments
 
 BOS = -1
+
+# Every tag this fake model writes is spelled inside angle brackets.
+_TAG = re.compile(r"<[^<>\s]+>")
 
 # Synthetic control tokens, outside the 1:1 char tokenizer's range so they can
 # never be produced by ordinary text.
@@ -36,9 +42,9 @@ CALL_LEAD_IN = "fn:"
 # The default fragments for tests. The tags are invented, not any real
 # model's, so nothing can pass by matching a format hard-coded somewhere.
 DEFAULT_FRAGMENTS = TemplateFragments(
-    system_prefix="<|turn>system\n", system_suffix="<turn|>\n",
-    user_prefix="<|turn>user\n", user_suffix="<turn|>\n",
-    assistant_prefix="<|turn>model\n", assistant_suffix="<turn|>\n",
+    system_prefix="<[turn>system\n", system_suffix="<turn]>\n",
+    user_prefix="<[turn>user\n", user_suffix="<turn]>\n",
+    assistant_prefix="<[turn>model\n", assistant_suffix="<turn]>\n",
     trim_content=True,
 )
 
@@ -66,8 +72,10 @@ class FakeContext:
                  can_reason: bool = False,
                  user_join: str | None = "",
                  keeps_thought: bool = False,
-                 declares_in_newest_turn: bool = False) -> None:
+                 declares_in_newest_turn: bool = False,
+                 can_cut_tail: bool = False) -> None:
         self.cache: list[int] = []
+        self.can_cut_tail = can_cut_tail
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
         self._fragments = fragments
@@ -132,6 +140,30 @@ class FakeContext:
     def extract_fragments(self) -> TemplateFragments:
         return self._fragments
 
+    def tags(self) -> tuple[str, ...]:
+        return tuple(sorted(set(_TAG.findall("".join(
+            getattr(self._fragments, field.name) for field in fields(self._fragments)
+            if isinstance(getattr(self._fragments, field.name), str))))))
+
+    def split_at_tags(self, text: str) -> list[tuple[str, bool]]:
+        pieces, at = [], 0
+        for found in _TAG.finditer(text):
+            if found.start() > at:
+                pieces.append((text[at:found.start()], False))
+            pieces.append((found.group(), True))
+            at = found.end()
+        return pieces + ([(text[at:], False)] if at < len(text) else [])
+
+    def tokenizes_to_tags(self, text: str) -> bool:
+        pieces = self.split_at_tags(text.strip())
+        return bool(pieces) and all(is_tag for _, is_tag in pieces)
+
+    def chat_template_text(self) -> str | None:
+        return None                 # the renders below stand in for one
+
+    def addon_call(self) -> dict:
+        return {}
+
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:
         self.cache = []
@@ -159,10 +191,12 @@ class FakeContext:
         self.cache = list(state)
 
     def remove_from(self, pos: int) -> None:
+        assert self.can_shift or self.can_cut_tail, "a cache that cannot cut was cut"
         assert 0 <= pos <= len(self.cache)
         del self.cache[pos:]
 
     def apply_eviction(self, ev: Eviction) -> None:
+        assert self.can_shift, "a cache that cannot shift was shifted"
         assert len(self.cache) == ev.old_total
         del self.cache[ev.remove_start:ev.remove_end]  # remove + implicit shift
         self.evictions.append(ev)
@@ -206,20 +240,20 @@ class FakeContext:
             previous = role
             if turn_open and role != "tool" and role != "model" \
                     and self._closes_turn_before_next:
-                out.append("<turn|>\n")
+                out.append("<turn]>\n")
                 turn_open = False
             if role == "tool":
                 out.append(f"<result>{m['name']}({m['content']})</result>")
                 continue
             if role == "model" and turn_open:
                 out.append(m["content"].strip())
-                out.append("<turn|>\n")
+                out.append("<turn]>\n")
                 turn_open = False
                 continue
             if self._declares_in_newest_turn and index == newest_user:
                 for declared in tools or ():
                     out.append(f"<decl>{declared['function']['name']}</decl>")
-            out.append(f"<|turn>{role}\n")
+            out.append(f"<[turn>{role}\n")
             if role == "system" and renders_reasoning:
                 out.append(THINK_ON)
             calls = m.get("tool_calls", ()) if self._calls_tools else ()
@@ -237,9 +271,9 @@ class FakeContext:
             if calls:
                 turn_open = True               # the result belongs in this turn
             else:
-                out.append("<turn|>\n")
+                out.append("<turn]>\n")
         if generation_prompt and not turn_open:
-            out.append("<|turn>model\n")
+            out.append("<[turn>model\n")
             if self._can_reason and not renders_reasoning:
                 out.append(EMPTY_THOUGHT)
         return "".join(out)

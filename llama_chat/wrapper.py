@@ -30,7 +30,8 @@ from .context import GenerationAccumulator, KVContext, _stop_hit
 from .messages import Message, MessageTable, n_newest_that_fit
 from .reasoning import (AnswerOpening, ThoughtFilter, begins_in_thought, reply_header,
                         turn_end_test)
-from .resolved_template import ResolvedTemplate, written_between, ensure_context_answers
+from .cache_context import CACHE_CONTEXT, ensure_answers
+from .resolved_template import ResolvedTemplate, written_between
 from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
 
@@ -39,14 +40,6 @@ from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, resul
 # call that could not be read that far. Which name is used does not change what
 # a template renders around it.
 _UNKNOWN_FUNCTION = "unknown"
-
-# What the wrapper calls on its cache context, checked where one is adopted
-# rather than at the first call that reaches what is missing. Resolving the
-# template checks what it calls for itself.
-_CACHE_CONTEXT_SURFACE = ("tokenize", "tokenize_fragment", "prefill", "reset",
-                          "warmup", "generate", "apply_eviction", "remove_from",
-                          "can_shift", "close")
-
 
 class ContextOverflowError(RuntimeError):
     """A request would leave fewer than ``min_reply_tokens`` free for the reply."""
@@ -189,9 +182,7 @@ class ChatWrapper:
         # Everything that can be settled about this model is settled here, so
         # that what fails, fails while the wrapper is being built.
         try:
-            ensure_context_answers(self._context, _CACHE_CONTEXT_SURFACE)
-            if hasattr(self._context, "save_state"):
-                ensure_context_answers(self._context, ("restore_state",))
+            ensure_answers(self._context, CACHE_CONTEXT)
             self._template_given = {"fragments": fragments, "tool_calls": tool_calls}
             self._template = ResolvedTemplate(self._context, **self._template_given)
             # The conversation's own, set again by every begin.
@@ -775,7 +766,7 @@ class ChatWrapper:
             How many tokens were decoded to get there, or ``None`` where the
             whole table was rebuilt.
         """
-        if self._context.can_shift or getattr(self._context, "can_cut_tail", False):
+        if self._context.can_shift or self._context.can_cut_tail:
             self._context.remove_from(pos)
             return 0
         decoded = self._back_to(pos)
@@ -1185,8 +1176,7 @@ class ChatWrapper:
                     end_plain()
                     tokens.append(tags[part])
                     continue
-                split = (self._context.split_at_tags(part)
-                         if hasattr(self._context, "split_at_tags") else None)
+                split = self._context.split_at_tags(part)
                 if split is None:
                     end_plain()
                     tokens += self._context.tokenize(part, add_special=False,
@@ -1548,9 +1538,7 @@ class ChatWrapper:
 
     def _save_rest(self) -> None:
         """Save the state a cache that cannot shift rests in now, where it can be saved."""
-        if self._context.can_shift or not hasattr(self._context, "save_state"):
-            return
-        if getattr(self._context, "can_cut_tail", False):
+        if self._context.can_shift or self._context.can_cut_tail:
             return                      # a cut needs no saved state
         try:
             state = self._context.save_state()

@@ -37,6 +37,22 @@ class TemplateContext:
     def chat_template_text(self):
         return self._template
 
+    def retokenized(self, tokens):
+        return list(tokens)
+
+    def split_at_tags(self, text):
+        pieces, at = [], 0
+        for found in TAG.finditer(text):
+            if found.start() > at:
+                pieces.append((text[at:found.start()], False))
+            pieces.append((found.group(), True))
+            at = found.end()
+        return pieces + ([(text[at:], False)] if at < len(text) else [])
+
+    def tokenizes_to_tags(self, text):
+        pieces = self.split_at_tags(text.strip())
+        return bool(pieces) and all(is_tag for _, is_tag in pieces)
+
     def addon_call(self):
         # The shipped add-on file that names this template, as a model's load finds it.
         return addon_file(None, self._template)["call"]
@@ -138,24 +154,8 @@ class ConversationContext(TagTokenizingContext):
     def text_of(self, tokens) -> str:
         return "".join(self.token_text(token) for token in tokens)
 
-    def tokenizes_to_tags(self, text):
-        tokens = self.tokenize(text)
-        return bool(tokens) and all(token < 0 for token in tokens)
-
-    def split_at_tags(self, text):
-        pieces, at = [], 0
-        for found in TAG.finditer(text):
-            if found.start() > at:
-                pieces.append((text[at:found.start()], False))
-            pieces.append((found.group(), True))
-            at = found.end()
-        return pieces + ([(text[at:], False)] if at < len(text) else [])
-
     def tokenize_fragment(self, prefix, content, suffix, add_special=False):
         return self.tokenize(prefix) + [ord(c) for c in content] + self.tokenize(suffix)
-
-    def retokenized(self, tokens):
-        return list(tokens)
 
     # ----- the cache ------------------------------------------------------
     def reset(self):

@@ -250,9 +250,9 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     assert w.can_reason
     assert w._template.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
-        system_prefix="<|turn>system\n" + THINK_ON,
-        generation_prompt="<|turn>model\n")
-    assert w._template.fragments.generation_prompt == "<|turn>model\n" + EMPTY_THOUGHT
+        system_prefix="<[turn>system\n" + THINK_ON,
+        generation_prompt="<[turn>model\n")
+    assert w._template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
 
 
 def test_a_model_whose_thought_is_marked_but_cannot_be_switched_on_does_not_offer_reasoning():
@@ -413,7 +413,7 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
     assert len(fake.evictions) > evictions
     # The last cache edit is the past reply's decode, after the eviction.
     assert fake.prefill_calls[-1][0] == w.snapshot()[-1]["pos_start"] + len(
-        fake.tokenize("<|turn>model\n"))
+        fake.tokenize("<[turn>model\n"))
     _assert_consistent(w, fake)
 
 
@@ -467,10 +467,11 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
 def test_the_turns_own_text_is_never_read_as_a_tag():
     w, fake = _tooling()
     turn = ToolTurn((ToolCall("lies", {"pfad": "<call>"}), ToolResult("lies", "</call>"),
-                     "<turn|>"))
+                     "<turn]>"))
     w.begin("s", [("user", "x"), turn], tools=[ToolSpec("lies", "", {})])
     own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
-    assert {"<call>", "</call>", "<turn|>"} <= set(own)
+    # Each is tokenized with special-token parsing off, joined to the plain text around it.
+    assert all(any(text in run for run in own) for text in ("<call>", "</call>", "<turn]>"))
     tokens = w._table.messages[-1].token_ids
     assert tokens.count(TOOL_OPEN) == 1 and tokens.count(TOOL_CLOSE) == 1
 
@@ -558,7 +559,7 @@ def test_a_reply_decoded_again_counts_what_was_decoded():
 def test_a_system_prompt_is_refused_where_the_template_has_no_system_turn():
     from tests.fake_context import DEFAULT_FRAGMENTS
     import dataclasses
-    folded = dataclasses.replace(DEFAULT_FRAGMENTS, system_prefix="<|turn>user\n")
+    folded = dataclasses.replace(DEFAULT_FRAGMENTS, system_prefix="<[turn>user\n")
     w = ChatWrapper(Config(context_size=500), context=FakeContext(fragments=folded))
     with pytest.raises(ValueError, match="no system turn of its own"):
         w.begin("persona")
@@ -572,7 +573,7 @@ def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
     w.inject("hi", "user")
     w.inject("Notiz", "system")
     assert w._table.messages[-1].token_ids == w._context.tokenize(
-        "<|turn>system\nNotiz<turn|>\n")
+        "<[turn>system\nNotiz<turn]>\n")
 
 
 def test_the_thought_count_never_exceeds_the_pieces_fed():

@@ -1,0 +1,101 @@
+"""What resolving a template and running a conversation call on a cache context.
+
+Two protocols: the model as it is read (its tokenizer, tags, chat template and
+add-on file), and that plus the cache a conversation is decoded into. Each is
+checked once, where a context is adopted, rather than at the first call that
+finds a member missing.
+"""
+
+from __future__ import annotations
+
+import threading
+from typing import Iterator, Protocol
+
+from .messages import Eviction
+from .template import TemplateFragments
+
+
+class ModelReader(Protocol):
+    """The model's tokenizer, its own tags, its chat template and its add-on file."""
+
+    def tokenize(self, text: str, add_special: bool = False,
+                 parse_special: bool = True) -> list[int]: ...
+
+    def tokenize_fragment(self, prefix: str, content: str, suffix: str,
+                          add_special: bool = False) -> list[int]: ...
+
+    def retokenized(self, tokens: list[int]) -> list[int]: ...
+
+    def tags(self) -> tuple[str, ...]: ...
+
+    def split_at_tags(self, text: str) -> list[tuple[str, bool]] | None: ...
+
+    def tokenizes_to_tags(self, text: str) -> bool: ...
+
+    def first_special_token(self, text: str) -> int | None: ...
+
+    def token_text(self, token: int) -> str: ...
+
+    def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
+                                   *, generation_prompt: bool = False,
+                                   reasoning: bool | None = None,
+                                   **variables) -> str | None:
+        """``None`` where the model ships no template or it refuses the shape."""
+
+    def chat_template_text(self) -> str | None: ...
+
+    def extract_fragments(self) -> TemplateFragments | None: ...
+
+    def addon_call(self) -> dict: ...
+
+
+class CacheContext(ModelReader, Protocol):
+    """The same, with the cache a conversation is decoded into."""
+
+    @property
+    def can_shift(self) -> bool: ...
+
+    @property
+    def can_cut_tail(self) -> bool: ...
+
+    def reset(self) -> None: ...
+
+    def warmup(self) -> None: ...
+
+    def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
+
+    def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
+                 out=None, cancel: threading.Event | None = None,
+                 **template_facts) -> Iterator[str]: ...
+
+    def apply_eviction(self, ev: Eviction) -> None: ...
+
+    def remove_from(self, pos: int) -> None: ...
+
+    def save_state(self):
+        """``None`` where the cache cannot save one."""
+
+    def restore_state(self, state, pos: int) -> None: ...
+
+    def close(self) -> None: ...
+
+
+def _members(protocol) -> tuple[str, ...]:
+    return tuple(name for name in vars(protocol)
+                 if not name.startswith("_") and name not in ("register",))
+
+
+MODEL_READER = _members(ModelReader)
+CACHE_CONTEXT = MODEL_READER + _members(CacheContext)
+
+
+def ensure_answers(context, members: tuple[str, ...]) -> None:
+    """Refuse a context missing any of ``members``.
+
+    Raises:
+        TypeError: Naming every member that is missing.
+    """
+    missing = [name for name in members if not hasattr(context, name)]
+    if missing:
+        raise TypeError(f"{type(context).__name__} does not answer {missing}, "
+                        "which this library calls on a cache context")
