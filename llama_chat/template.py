@@ -232,11 +232,6 @@ class TemplateFormatter:
         prompt, tag = self.generation_prompt(), self._fragments.assistant_prefix
         return tag[len(prompt):] if tag.startswith(prompt) else ""
 
-    def prompt_beyond_tag(self) -> str:
-        """What the generation prompt holds beyond what it shares with a past reply's tag."""
-        prompt = self.generation_prompt()
-        return prompt[shared_tags_length(prompt, self._fragments.assistant_prefix):]
-
 
 def shared_tags_length(text: str, other: str) -> int:
     """How long a beginning the two share, ending where a tag or a word ends.

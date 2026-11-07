@@ -417,9 +417,9 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
     _assert_consistent(w, fake)
 
 
-@pytest.mark.parametrize("reasoning, decoded", [(False, EMPTY_THOUGHT), (True, "")])
-def test_a_resumed_reply_opens_as_a_new_one_does(reasoning, decoded):
-    """The result here leaves the turn open, and nothing of the opening with it."""
+@pytest.mark.parametrize("reasoning", [False, True])
+def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
+    """Nothing is added after the result: the template's wrapping ends the turn as it ends it."""
     w, fake = _reasoning(reasoning, gen_text="ok", gen_tokens=2)
     fake.call_script.append("uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
@@ -428,7 +428,7 @@ def test_a_resumed_reply_opens_as_a_new_one_does(reasoning, decoded):
     w.inject_tool_result(call, "12:00")
     before = len(fake.cache)
     list(w.resume_until_tool())
-    assert fake.cache[before:before + len(decoded)] == fake.tokenize(decoded)
+    assert fake.cache[before:before + 2] == fake.tokenize("ok")
     _assert_consistent(w, fake)
 
 

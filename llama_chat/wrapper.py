@@ -1165,18 +1165,9 @@ class ChatWrapper:
                 raise ValueError("no reply is open; start one with reply_until_tool()")
             close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
-            # See the README, "A resumed turn opens as a new one does".
-            opening = self._formatter.prompt_beyond_tag()
-            n_opened = 0
-            if not self._turn_ends_with.endswith(opening):
-                open_tokens = self._context.tokenize(opening, add_special=False)
-                self._context.prefill(open_tokens, start_pos=self._table.total,
-                                      want_logits=True)
-                self._table.extend_last(open_tokens)
-                self._turn_ends_with += opening
-                n_opened = len(open_tokens)
+            # The turn goes on from where the template's result wrapping ends it.
             return (yield from self._generate_into_reply(
-                open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=n_opened,
+                open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
                 max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                 allow_tools=allow_tools, sampling=sampling,
                 decoded=self._turn_ends_with))

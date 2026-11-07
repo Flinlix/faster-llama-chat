@@ -950,13 +950,12 @@ of calls made together: one after another, with what closes the block, and the
 generation prompt, only after the last. Any other shape ends at its closing
 tag, so generation stops after one call either way.
 
-### A resumed turn opens as a new one does
+### A resumed turn goes on as the template writes it
 
-A reply resumed after a tool result opens the way a new reply opens after its
-tag, unless the result's wrapping already ends that way. A template whose
-generation prompt carries an empty thought, to keep the model from reasoning,
-may leave that out after a result; left alone, the model would then open a
-thought of its own.
+A reply resumed after a tool result goes on from exactly where the template's
+result wrapping ends, with nothing added. A template whose generation prompt
+carries an empty thought may leave it out after a result; the model then writes
+that thought itself, and it is kept out of the reply as any thought is.
 
 ## Reasoning
 
