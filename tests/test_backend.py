@@ -409,3 +409,15 @@ def test_a_plain_text_opening_inside_a_sentence_is_text():
     shown = "".join(context.generate(0, 20, [], out=out, call_texts=_PLAIN,
                                      call_opens_as_text=True))
     assert out.stop_reason == "end_of_turn" and shown == "Say assistant to=functions.x"
+
+
+def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
+    """Llama 3 ends a call with one end-of-turn token where its template writes another."""
+    context, decoded = _plain_context(['{"', 'name": "', 'clock', '"}', "<|eom|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    context.tokenize = lambda text, add_special=False, parse_special=True: [text]
+    out = GenerationAccumulator()
+    "".join(context.generate(0, 20, [], out=out, call_texts=('{"name": "', "<|eot|>"),
+                             call_opens_as_text=True))
+    assert out.stop_reason == "tool_call" and out.tool_call == 'clock"}'
+    assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded

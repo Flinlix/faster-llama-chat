@@ -461,6 +461,16 @@ class KVContext:
             closes_call = call is not None and (tok == call_close or (
                 close_text is not None and close_text in "".join(call) + self._backend
                 .token_to_piece_bytes(self._vocab, tok).decode("utf-8", errors="replace")))
+            if ends and not closes_call and call is not None and close_text is not None:
+                # Ended inside a call: the call ends here, closed as the template closes one.
+                closing = self.tokenize(close_text, add_special=False, parse_special=True)
+                self._backend.decode(self._llama_context, closing, pos, SEQ, True,
+                                     self._max_batch_tokens)
+                pos += len(closing)
+                generated.token_ids.extend(closing)
+                generated.stop_reason = "tool_call"
+                generated.tool_call = "".join(call)
+                break
             if ends and not closes_call:
                 generated.stop_reason = "end_of_turn"
                 break
