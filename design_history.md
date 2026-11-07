@@ -530,3 +530,61 @@ tests, the tidying, two restructurings and a public way to forbid calls.
   call otherwise; it goes back to a saved state on a cache that cannot be cut,
   instead of decoding everything again; and it refuses at `begin` a template
   that writes an older exchange otherwise once another follows.
+
+## 2026-11-07: Rendering windows
+
+The user chose to try the window design (194A) in the prototype, so that the
+work after a reply does not grow with the conversation.
+
+- After a reply, only the system message, the newest two exchanges and the
+  stand-in question are rendered. From the first tag after the older
+  exchange's reply on, that render is the whole render. The tag is found in the
+  cache from where the newest question's run was decoded: the stretch between
+  them is checked token for token, and everything before it is kept.
+- When the oldest exchange is dropped, only the system message and the oldest
+  two kept are rendered, up to the first tag after the first one's reply. The
+  stretch the dropped exchange held is found and removed as before; what
+  follows that tag stays as it is in the cache. Exchanges are dropped before
+  the decode ahead, not after it: the engine shifts the cache at its next
+  decode, and after it that is the next question's, which made the wait
+  before the first word 500 ms instead of 200 ms on Gemma 4 26B-A4B at 8k.
+  Only where the window's own older exchange must go too is it dropped after
+  the decode.
+- At `begin`, and when tools are declared later, five probe exchanges check
+  both properties against whole renders, with the conversation's system
+  message, tools and reasoning: the window's end, the history before the tag
+  as the prompt for the newest reply wrote it, and the oldest two kept after a
+  drop, with everything after them unchanged. A template that fails is
+  rendered whole after every reply, as before.
+- A whole render is still made after the first reply, which follows no spliced
+  question, after a question rendered as it came, where either window holds a
+  tool turn, where a reply is empty so nothing anchors the tag, and wherever a
+  check on the cache fails. Tool turns are left whole because the probes hold
+  none.
+
+Tests: all 52 test templates pass the probes. Over a conversation that drops
+exchanges, on caches that shift and on ones that cannot, the cache equals the
+render before every reply, and every reply after the first is settled in
+windows on the 47 templates whose scripted replies have text. On the other
+five, the template opens a thought for the reply, the scripted reply is all
+thought, and its text is empty.
+
+Measured on 8 real models (Gemma 3 1B, Llama 3.2 3B, Qwen 3.5 9B, Ministral
+3 8B, MiniCPM 5 2B, Gemma 4 26B-A4B, gpt-oss 20B, R1 distill 8B), 12 replies
+at 512 tokens of context: the cache equals the tokenized render before every
+reply, and with a past tool turn on the 7 that call tools. After the first
+reply every reply was settled in windows on 6; gpt-oss and the R1 distill
+spent the 40 tokens of each reply on thought, so their replies were empty and
+were rendered whole. Qwen 3.5, whose cache can neither shift nor be cut, was
+decoded again whole 2 times, at evictions, as before.
+
+Gemma 4 26B-A4B at 8k, memory full, every turn evicting, median of 7 turns,
+against `ChatWrapper`:
+
+| messages | wait before the first word | work after each reply |
+|---|---|---|
+| short | 198 ms against 197 ms | 415 ms against 418 ms (whole renders: 763 ms) |
+| medium | 200 ms against 201 ms | 411 ms against 413 ms (whole renders: 513 ms) |
+
+What remains after a reply is the shift after the eviction and decoding the
+newest reply again as the template writes it, which `ChatWrapper` does too.
