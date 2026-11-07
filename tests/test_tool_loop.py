@@ -1579,3 +1579,13 @@ def test_a_running_exchange_holds_the_wrapper_while_its_tool_runs():
     fake.call_script = ["weather{city:'Bonn'}"]
     assert wrapper.reply("wetter?", calls="run").finish().text == "Sonnig"
     assert seen == [False]
+
+
+def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
+    wrapper, fake = tool_wrapper(gen_tokens=6, gen_text="Sonnig")
+    wrapper.begin("persona", tools=weather_registry())
+    fake.call_script = ["weather{city:'Bonn'}"]
+    reply = wrapper.reply("wetter?", calls="withhold").finish()
+    assert (reply.text, reply.stop_reason, reply.tool_calls) == ("Sonnig", "end_of_turn", [])
+    assert fake.call_script == ["weather{city:'Bonn'}"]    # never offered the call tokens
+    assert not wrapper.reply_open

@@ -501,7 +501,7 @@ def _stub_context(chains):
     ctx._sampler, ctx._vocab, ctx._engine_context = "loaded", None, None
     ctx._max_batch_tokens = 8
     ctx._config = Config()
-    ctx._build_sampler = lambda config: ("own", config.temperature)
+    ctx._build_sampler = lambda config, withheld=(): ("own", config.temperature) + withheld
     return ctx
 
 
@@ -596,3 +596,23 @@ def test_every_generation_starts_its_penalties_and_its_seed_afresh():
     list(ctx.generate(0, 1, out=GenerationAccumulator()))
     list(ctx.generate(1, 1, out=GenerationAccumulator(), sampling=Sampling()))
     assert chains["reset"] == ["loaded", "loaded"]
+
+
+def test_a_withheld_token_gets_a_chain_of_its_own_that_never_draws_it():
+    chains = {"sampled": [], "freed": []}
+    ctx = _stub_context(chains)
+    list(ctx.generate(0, 3, out=GenerationAccumulator(),
+                      boundary=CallBoundary(withheld_tokens=(42,))))
+    assert chains["sampled"][0] == ("own", Config().temperature, 42)
+    assert chains["freed"] == [chains["sampled"][0]]
+
+
+def test_the_withheld_stage_biases_each_token_to_never():
+    added = []
+    backend = Backend.__new__(Backend)
+    backend._llama_cpp = llama_cpp
+    backend._vocab_n_tokens = lambda vocab: 100
+    backend._init_logit_bias = lambda n_vocab, n, biases: (n_vocab, [(b.token, b.bias) for b in biases[:n]])
+    backend._chain_add = lambda chain, stage: added.append(stage)
+    backend.add_withheld("chain", "vocab", (7, 9))
+    assert added == [(100, [(7, float("-inf")), (9, float("-inf"))])]

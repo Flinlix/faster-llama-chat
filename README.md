@@ -173,6 +173,7 @@ were declared, since a model may write a call tag unasked:
 
 | `calls=` | what happens | what the stream yields |
 |------|------|------|
+| `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool | text |
 | `"refuse"` (the default) | nothing runs, not even a tool `begin` was given. The model is told no tool can be run and answers in words | text |
 | `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply(calls="yield")` again | text, then each `ToolCall` |
 | `"run"`, or a `ToolRegistry` | each call runs against the registry `begin` was given, or the one passed, until the model answers. The last round `max_calls` allows withholds the call tags, so the turn always closes | text |

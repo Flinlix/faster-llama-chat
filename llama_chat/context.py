@@ -347,7 +347,11 @@ class KVContext:
             Visible reply text deltas; their concatenation equals ``out.text``.
         """
         own_sampler = None
-        if sampling is not None and sampling.overrides:
+        if boundary.withheld_tokens:
+            own_sampler = self._build_sampler(
+                sampling.applied_to(self._config) if sampling is not None else self._config,
+                boundary.withheld_tokens)
+        elif sampling is not None and sampling.overrides:
             own_sampler = self._build_sampler(sampling.applied_to(self._config))
         else:
             # Penalties count this generation's tokens only, and a seed
@@ -531,10 +535,12 @@ class KVContext:
         finally:
             self._backend.kv_clear(self._engine_context)
 
-    def _build_sampler(self, config: Config):
-        """Assemble the sampler chain ``config`` asks for, in sampling order."""
+    def _build_sampler(self, config: Config, withheld: tuple[int, ...] = ()):
+        """Assemble the sampler chain ``config`` asks for, in sampling order, ``withheld`` never drawn."""
         backend = self._backend
         chain = backend.sampler_chain()
+        if withheld:
+            backend.add_withheld(chain, self._vocab, withheld)
         if config.repetition_penalty != 1.0 \
                 or config.presence_penalty or config.frequency_penalty:
             backend.add_penalties(chain, self._vocab, config.penalty_window_tokens,

@@ -126,6 +126,7 @@ class Backend:
         self._init_min_p = _required_symbol("llama_sampler_init_min_p")
         self._init_temp = _required_symbol("llama_sampler_init_temp")
         self._init_dist = _required_symbol("llama_sampler_init_dist")
+        self._init_logit_bias = _required_symbol("llama_sampler_init_logit_bias")
         self._sampler_sample = _required_symbol("llama_sampler_sample")
         self._sampler_free = _required_symbol("llama_sampler_free")
         self._sampler_reset = _required_symbol("llama_sampler_reset")
@@ -339,6 +340,13 @@ class Backend:
                 "repetition/presence/frequency penalties are ignored",
                 RuntimeWarning,
             )
+
+    def add_withheld(self, chain, vocab, tokens: tuple[int, ...]) -> None:
+        """Add the stage that keeps ``tokens`` from ever being drawn."""
+        biases = (self._llama_cpp.llama_logit_bias * len(tokens))(
+            *(self._llama_cpp.llama_logit_bias(token, float("-inf")) for token in tokens))
+        self._chain_add(chain, self._init_logit_bias(
+            self._vocab_n_tokens(vocab), len(tokens), biases))
 
     def add_greedy(self, chain) -> None:
         """Add the stage that takes the most likely token."""

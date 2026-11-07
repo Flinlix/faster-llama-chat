@@ -17,12 +17,15 @@ class CallBoundary:
             which opens a call only at the reply's start or right after a tag.
         turn_end_text: Text that ends a reply where generated, removed from the
             reply again and never yielded.
+        withheld_tokens: Tokens never drawn, such as the one that opens a
+            call where calls are withheld.
     """
 
     tool_tokens: tuple[int, int] | None = None
     call_texts: tuple[str, str] | None = None
     opens_as_text: bool = False
     turn_end_text: str | None = None
+    withheld_tokens: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

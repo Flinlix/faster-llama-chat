@@ -356,6 +356,10 @@ class ChatWrapper:
                 goes on with a turn a call left open once every result is in.
             calls: What becomes of a tool call the model makes.
 
+                * ``"withhold"``: the model cannot write a call at all; the
+                  token that opens one is never drawn, so the reply is text. A
+                  model that wanted to call may then write something else
+                  entirely; see design_history.md, "Second structure review".
                 * ``"refuse"``: nothing is run, not even a tool :meth:`begin`
                   was given. The call is kept out of the text, the model is
                   told no tool can be run, and the reply goes on, a blank line
@@ -400,6 +404,8 @@ class ChatWrapper:
                        sampling=sampling)
         if calls == "yield":
             return self._until_call(text, allow_tools=True, **options)
+        if calls == "withhold":
+            return self._until_call(text, allow_tools=False, withhold=True, **options)
         if calls == "refuse":
             registry = None
         elif calls == "run":
@@ -407,13 +413,13 @@ class ChatWrapper:
         elif isinstance(calls, ToolRegistry):
             registry = calls
         else:
-            raise ValueError(f"calls must be 'refuse', 'yield', 'run' or a ToolRegistry, "
+            raise ValueError(f"calls must be 'withhold', 'refuse', 'yield', 'run' or a ToolRegistry, "
                              f"not {calls!r}")
         return ReplyStream(self._generate_until_answered(
             text, registry=registry, max_calls=max_calls, **options))
 
     def _until_call(self, text: str | None, *, allow_tools: bool, held: bool = False,
-                    **options) -> ReplyStream[str | ToolCall]:
+                    withhold: bool = False, **options) -> ReplyStream[str | ToolCall]:
         """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
 
         ``allow_tools`` False withholds the call tokens, which is what makes
@@ -421,16 +427,19 @@ class ChatWrapper:
         ``held`` says the caller holds the lock already, for a whole exchange.
         """
         return ReplyStream(_deltas_then_calls(
-            self._one_generation(text, allow_tools, held, **options)))
+            self._one_generation(text, allow_tools, held, withhold, **options)))
 
-    def _one_generation(self, text, allow_tools: bool, held: bool, **options):
+    def _one_generation(self, text, allow_tools: bool, held: bool, withhold: bool = False,
+                        **options):
         """Resume the open turn or start a request, decided under the lock."""
         with contextlib.nullcontext() if held else self._lock:
             self._ensure_open()
             self._cache.repair()
             if text is None and self._reply_open:
-                return (yield from self._resume(allow_tools=allow_tools, **options))
-            return (yield from self._request_and_generate(text, **options))
+                return (yield from self._resume(allow_tools=allow_tools, withhold=withhold,
+                                                **options))
+            return (yield from self._request_and_generate(text, allow_tools=allow_tools,
+                                                          withhold=withhold, **options))
 
     def inject_tool_result(self, call: ToolCall | str, result) -> None:
         """Hand the model what the tool it called returned.
@@ -886,7 +895,7 @@ class ChatWrapper:
     def _request_and_generate(
         self, text: str | None, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None, cancel: threading.Event | None = None,
-        sampling: Sampling | None = None,
+        sampling: Sampling | None = None, allow_tools: bool = True, withhold: bool = False,
     ) -> Generator[str, None, Reply]:
         """Add the user request, then generate one reply from the cache's end.
 
@@ -958,13 +967,13 @@ class ChatWrapper:
         return (yield from self._generate_into_reply(
             open_tokens=open_tokens, close_tokens=close_tokens,
             n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
-            cancel=cancel, allow_tools=True, sampling=sampling,
+            cancel=cancel, allow_tools=allow_tools, withhold=withhold, sampling=sampling,
             decoded=self._formatter.generation_prompt()))
 
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
                 cancel: threading.Event | None = None,
-                allow_tools: bool = True,
+                allow_tools: bool = True, withhold: bool = False,
                 sampling: Sampling | None = None):
         """Generate on into the open reply, adding no message of its own. The lock must be held."""
         self._ensure_open()
@@ -979,7 +988,7 @@ class ChatWrapper:
         return (yield from self._generate_into_reply(
             open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
             max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            allow_tools=allow_tools, sampling=sampling,
+            allow_tools=allow_tools, withhold=withhold, sampling=sampling,
             decoded=self._turn_ends_with))
 
     def _history_tokens(self, formatter, item: tuple[str, str] | ToolTurn,
@@ -1039,6 +1048,7 @@ class ChatWrapper:
                              allow_tools: bool,
                              sampling: Sampling | None = None,
                              decoded: str = "",
+                             withhold: bool = False,
                              ) -> Generator[str, None, Reply]:
         """Generate from the cache's end and record what it left, as a Reply.
 
@@ -1053,6 +1063,7 @@ class ChatWrapper:
                 :meth:`reply`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
+            withhold: Also keep a call's opening token from ever being drawn.
             decoded: The template text generation follows, which says whether
                 it starts inside a thought.
         """
@@ -1071,7 +1082,7 @@ class ChatWrapper:
         pieces = self._cache.generate(
             max(0, min(cap, budget)), generated, cancel=cancel,
             sampling=sampling, ends_turn=self._turn_end_test(thought),
-            boundary=self._template.call_boundary(allow_tools))
+            boundary=self._template.call_boundary(allow_tools, withhold))
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
