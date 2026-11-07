@@ -223,16 +223,13 @@ class ChatWrapper:
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
                 self._config.evict_above_tokens, self._config.max_history_messages,
+                roles=["user" if _is_user(item) else "assistant" for item in messages],
             )
-            # The kept history opens on a user turn, as every template writes one.
-            while kept and not _is_user(messages[len(messages) - kept]):
-                kept -= 1
             keep_from = len(messages) - kept
             kept_messages = messages[keep_from:]
             kept_tokens = hist_tokens[keep_from:]
 
             self._context.reset()
-            self._table.reset()
             self._begun = False     # true again only once the prefill lands
             # The turn a call was holding open went with the table.
             self._reply_open = False
@@ -253,7 +250,7 @@ class ChatWrapper:
                 all_tokens.extend(toks)
             self._context.prefill(all_tokens, start_pos=0, want_logits=ends_open)
 
-            self._table.append(Message(
+            self._table.reset(Message(
                 "system", system_prompt, sys_tokens,
                 declares=tuple(spec.name for spec in specs or [])))
             for i, (item, toks) in enumerate(zip(kept_messages, kept_tokens), keep_from):
@@ -302,7 +299,7 @@ class ChatWrapper:
             join_tokens = self._user_turn_join_tokens(role)
             # Checked against the best case before anything is evicted, so a
             # rejected message cannot destroy history it would never fit beside.
-            floor = self._table.messages[0].n_tokens if self._table.has_system else 0
+            floor = self._table.messages[0].n_tokens
             tokens = self._fit_or_raise(
                 tokens, budget=self._config.evict_above_tokens - floor - len(held),
                 description="injected message", role=role,
@@ -450,7 +447,7 @@ class ChatWrapper:
             # leaves the call still owed.
             self._write_tool_result(name, result)
             self._pending_calls.pop(0)      # results are owed in call order
-            self._table.messages[-1].steps.append(ToolResult(name, result))
+            self._table.add_steps(ToolResult(name, result))
 
     def _write_tool_result(self, name: str, result) -> None:
         """Prefill one result block into the open turn. The lock must be held.
@@ -885,7 +882,7 @@ class ChatWrapper:
             # The prompt plus its turn closer must fit in the context once
             # everything but the system prompt is evicted; checked before
             # anything is, so a refused request destroys no history.
-            floor = self._table.messages[0].n_tokens if self._table.has_system else 0
+            floor = self._table.messages[0].n_tokens
             if text is not None:
                 user_tokens = held + self._fit_or_raise(
                     user_tokens,
@@ -1129,10 +1126,10 @@ class ChatWrapper:
         self._pending_calls = self._read_calls(generated)
         self._batch = [call.name for call in self._pending_calls]
         if generated.stop_reason == "tool_call":
-            msg.holds_call = True
+            self._table.mark_holds_call()
         if msg.holds_call:
             # The turn as a history hands it over: what the model wrote, then its calls.
-            msg.steps += ([answer] if answer else []) + self._pending_calls
+            self._table.add_steps(*([answer] if answer else []), *self._pending_calls)
         unreadable = (generated.stop_reason == "tool_call"
                       and not self._pending_calls)
         if unreadable:

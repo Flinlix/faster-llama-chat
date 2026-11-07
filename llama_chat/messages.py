@@ -9,6 +9,7 @@ Invariants, asserted after every structural change:
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 
@@ -116,24 +117,32 @@ class MessageTable:
             ]
 
     @property
-    def has_system(self) -> bool:
-        with self._lock:
-            return bool(self._messages) and self._messages[0].role == "system"
-
-    @property
     def n_evictable(self) -> int:
         """Number of messages that may be evicted (everything but the system prompt)."""
         with self._lock:
-            return max(0, len(self._messages) - (1 if self.has_system else 0))
+            return max(0, len(self._messages) - 1)
 
     def __len__(self) -> int:
         with self._lock:
             return len(self._messages)
 
     # ----- mutation ------------------------------------------------------
-    def reset(self) -> None:
+    def reset(self, system: Message) -> None:
+        """Begin again from ``system``, the system prompt every conversation opens with."""
+        assert system.role == "system", system.role
         with self._lock:
-            self._messages.clear()
+            self._messages = []
+            self.append(system)
+
+    def add_steps(self, *steps) -> None:
+        """Record the newest turn's next steps: its text, calls or results, in order."""
+        with self._lock:
+            self._messages[-1].steps.extend(steps)
+
+    def mark_holds_call(self) -> None:
+        """Record that the newest turn called a tool."""
+        with self._lock:
+            self._messages[-1].holds_call = True
 
     def append(self, message: Message) -> Message:
         """Append a message at the end of the cache, assigning its positions."""
@@ -210,15 +219,17 @@ class MessageTable:
         with self._lock:
             if fits() or self.n_evictable == 0:
                 return None, 0
-            idx = 1 if self.has_system else 0
             old_total = self.total
-            remove_start = self._messages[idx].pos_start
+            remove_start = self._messages[1].pos_start
             count = 0
-            while self.n_evictable > 0 and (
-                    not fits() or (count and self._messages[idx].role != "user")):
-                del self._messages[idx]
+            while self.n_evictable > 0 and not fits():
+                del self._messages[1]
                 self._renumber()  # keeps total and fits() correct each iteration
                 count += 1
+            following = next_turn_start([m.role for m in self._messages], 1)
+            count += following - 1
+            del self._messages[1:following]
+            self._renumber()
             self._assert_invariants()
             eviction = Eviction(
                 remove_start=remove_start,
@@ -245,13 +256,22 @@ class MessageTable:
                 f"message {i} width mismatch"
             )
             cursor = msg.pos_end
-        if self._messages:
-            assert self._messages[-1].pos_end == self.total
+        assert not self._messages or self._messages[0].role == "system"
+
+
+def next_turn_start(roles: Sequence[str], start: int) -> int:
+    """Where kept history may open from ``start`` on: the first user message, or the end.
+
+    A conversation that evicted or dropped its oldest messages opens on a user
+    turn, as every template writes one. See design_history.md, "Eviction removes
+    whole exchanges".
+    """
+    return next((i for i in range(start, len(roles)) if roles[i] == "user"), len(roles))
 
 
 def n_newest_that_fit(
     n_tokens_per_message: list[int], system_tokens: int, budget: int,
-    max_messages: int | None = None,
+    max_messages: int | None = None, roles: Sequence[str] | None = None,
 ) -> int:
     """Select how many of the most recent messages fit alongside the system prompt.
 
@@ -266,6 +286,8 @@ def n_newest_that_fit(
         budget: Maximum total tokens allowed (e.g. ``evict_above_tokens``).
         max_messages: Maximum messages to keep. ``None`` leaves ``budget`` as
             the only limit.
+        roles: The messages' roles, where the kept ones must open on a user
+            turn; see :func:`next_turn_start`.
 
     Returns:
         The number of *trailing* (most recent) messages that fit. Messages
@@ -280,4 +302,6 @@ def n_newest_that_fit(
             break
         used += n
         kept += 1
+    if roles is not None and kept:
+        kept = len(roles) - next_turn_start(roles, len(roles) - kept)
     return kept
