@@ -673,6 +673,12 @@ class ChatWrapper:
         self._lock.release()
         return True
 
+    @property
+    def system_prompt(self) -> str:
+        """The system prompt the conversation was begun with, for :meth:`begin` beside :meth:`history`."""
+        messages = self._table.messages
+        return messages[0].text if messages else ""
+
     def history(self) -> list[tuple[str, str] | ToolTurn]:
         """The conversation the cache holds, oldest first, as :meth:`begin` takes it.
 

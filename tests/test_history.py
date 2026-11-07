@@ -103,3 +103,13 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
         pass
     assert past._table.messages[-1].token_ids == live._table.messages[-1].token_ids
     assert_consistent(past, past_fake)
+
+
+def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_the_same():
+    live, fake = tool_wrapper()
+    live.begin("persona", tools=weather_registry())
+    live.reply("hallo").finish()
+    again, fake_again = tool_wrapper()
+    again.begin(live.system_prompt, live.history(), tools=weather_registry())
+    assert live.system_prompt == "persona"
+    assert fake_again.cache == fake.cache

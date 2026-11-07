@@ -121,7 +121,7 @@ model and makes later actions raise.
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_unknown_tools(registry_or_specs)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
-| reading the conversation back | `history()`: what `begin` takes, tool turns included; `snapshot()`: the cache layout, one row per message |
+| reading the conversation back | `system_prompt` and `history()`: what `begin` takes, tool turns included, so `begin(chat.system_prompt, chat.history())` begins again as it was; `snapshot()`: the cache layout, one row per message |
 | where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `reply_open`, `awaiting_tool_result`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 
