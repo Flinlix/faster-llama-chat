@@ -1044,8 +1044,10 @@ one token the tag is.
 The load-time checks make a mismatch fail loudly instead of degrading silently:
 
 - **At construction** the turn-terminator (`assistant_suffix`) is validated
-  against the model's vocabulary: if it does not tokenize to a single special
-  token, which is the silent mismatch described above, construction raises.
+  against the model's vocabulary: if it does not tokenize into the model's own
+  tags, which is the silent mismatch described above, construction raises. A
+  reply ends at the first of those tags, so a model whose closing takes several
+  writes none of them into its answer.
 - **At construction** the fragments are checked against the model's own chat
   template read from the GGUF: a conversation of a system prompt, a past reply
   and a newest user turn, followed by the generation prompt, is rendered both

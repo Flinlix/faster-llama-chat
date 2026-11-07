@@ -1231,7 +1231,7 @@ class ChatWrapper:
             gen_start, max(0, min(cap, budget)), [] if thought else stops,
             out=generated, cancel=cancel,
             tool_tokens=self._template.tool_tokens if allow_tools else None,
-            sampling=sampling)
+            sampling=sampling, turn_end=self._template.turn_end_token)
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))

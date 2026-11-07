@@ -116,6 +116,7 @@ class ResolvedTemplate:
         self._fragments = (fragments if fragments is not None
                            else self._resolve_fragments())
         self._validate_template()
+        self._turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
         self._tool_calls = (tool_calls if tool_calls is not None
                             else self._resolve_tool_calls())
@@ -134,6 +135,14 @@ class ResolvedTemplate:
     def fragments(self) -> TemplateFragments:
         """The per-role tags a turn is wrapped in."""
         return self._fragments
+
+    @property
+    def turn_end_token(self) -> int | None:
+        """The tag a reply's closing begins with, which ends a reply where sampled.
+
+        ``None`` where the closing does not begin with one of the model's tags.
+        """
+        return self._turn_end_token
 
     @property
     def reasoning(self) -> Reasoning | None:
@@ -423,21 +432,30 @@ class ResolvedTemplate:
         return fragments
 
     def _validate_template(self) -> None:
-        """Ensure the turn-terminator is a real special token of this model.
+        """Ensure the turn-terminator is made of this model's own tags.
 
         A terminator that splits into plain text never lets the model stop, so
         it would run to the token cap every generation.
         """
-        if not hasattr(self._context, "tokenizes_to_special"):
+        if not hasattr(self._context, "tokenizes_to_tags"):
             return
         terminator = self._fragments.assistant_suffix.strip()
-        if terminator and not self._context.tokenizes_to_special(terminator):
+        if terminator and not self._context.tokenizes_to_tags(terminator):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
-                f"{terminator!r} does not tokenize to a special token, so "
+                f"{terminator!r} does not tokenize into the model's own tags, so "
                 "generation would never stop. The model's embedded chat template "
                 "is malformed; supply correct tags with ChatWrapper(fragments=...)."
             )
+
+    def _resolve_turn_end_token(self) -> int | None:
+        """The first token of the turn-terminator, where it is one of the model's tags."""
+        terminator = self._fragments.assistant_suffix.strip()
+        if not terminator or not hasattr(self._context, "first_special_token"):
+            return None
+        first = self._context.first_special_token(terminator)
+        tokens = self._context.tokenize(terminator, add_special=False)
+        return first if tokens and tokens[0] == first else None
 
     def _check_fragments_match_model(self) -> None:
         """Assert the fragments encode a conversation as the model's own template does.

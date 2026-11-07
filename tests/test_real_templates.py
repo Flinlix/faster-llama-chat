@@ -141,6 +141,27 @@ class _TaggedContext(_TemplateContext):
         return self._tags[-1 - token] if token < 0 else chr(token)
 
 
+class _TagTokenizingContext(_TaggedContext):
+    """The same, with each tag tokenized as the one token it resolves to."""
+
+    def tokenize(self, text, add_special=False, parse_special=True):
+        tokens, pos = [], 0
+        for found in _TAG.finditer(text):
+            tokens += [ord(c) for c in text[pos:found.start()]]
+            tokens.append(self.first_special_token(found.group()))
+            pos = found.end()
+        return tokens + [ord(c) for c in text[pos:]]
+
+
+@pytest.mark.parametrize("stem, first_tag", [("cohere-aya", "<|END_RESPONSE|>"),
+                                             ("qwen-3.6", "<|im_end|>")])
+def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
+    fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
+    context = _TagTokenizingContext(fixture)
+    template = ResolvedTemplate(context)
+    assert context.token_text(template.turn_end_token) == first_tag
+
+
 def _closers(tag: str) -> list[str]:
     """The tags that would close ``tag``."""
     inner = tag.strip("<>[]")

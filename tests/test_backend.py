@@ -18,7 +18,7 @@ import llama_chat
 
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
-from llama_chat.context import SEQ, KVContext
+from llama_chat.context import SEQ, GenerationAccumulator, KVContext
 
 
 def _backend(attr):
@@ -241,3 +241,41 @@ def test_a_removal_reports_the_caches_answer_and_takes_none_for_yes(answer, take
     backend._mem = lambda ctx: "the memory"
     backend._mem_rm = lambda *args: answer
     assert backend.kv_seq_rm("the context", 0, 3, -1) is taken
+
+
+def _tag_context(tags):
+    """A context whose vocabulary splits text on spaces and holds ``tags`` as tags."""
+    context = object.__new__(KVContext)
+    context._vocab = None
+    context._backend = SimpleNamespace(
+        tokenize=lambda vocab, text, add_special, parse_special: text.split(),
+        is_special=lambda vocab, token: token in tags)
+    return context
+
+
+@pytest.mark.parametrize("text, made_of_tags", [
+    ("<end>", True), ("<response_end> <end>", True), ("<end> plain", False),
+    ("plain", False), ("", False)])
+def test_a_text_is_made_of_tags_where_every_token_is_one(text, made_of_tags):
+    assert _tag_context({"<end>", "<response_end>"}).tokenizes_to_tags(text) is made_of_tags
+
+
+def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
+    """A model whose closing takes two tags writes the first itself, as text would be."""
+    sampled = iter(["Pa", "ris", "<response_end>", "<end>"])
+    decoded = []
+    context = object.__new__(KVContext)
+    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
+    context._sampler = "sampler"
+    context._backend = SimpleNamespace(
+        sampler_reset=lambda sampler: None,
+        sample=lambda sampler, ctx: next(sampled),
+        is_eog=lambda vocab, token: token == "<end>",
+        decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
+        token_to_piece_bytes=lambda vocab, token: token.encode())
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 10, [], out=out, turn_end="<response_end>"))
+    assert shown == out.text == "Paris"
+    assert decoded == out.token_ids == ["Pa", "ris"]
+    assert out.stop_reason == "end_of_turn"
+

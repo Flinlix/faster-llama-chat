@@ -158,14 +158,14 @@ class KVContext:
         toks += self.tokenize(suffix, add_special=False, parse_special=True)
         return toks
 
-    def tokenizes_to_special(self, text: str) -> bool:
-        """Whether ``text`` tokenizes to exactly one of the model's own tags.
+    def tokenizes_to_tags(self, text: str) -> bool:
+        """Whether ``text`` tokenizes into the model's own tags and nothing else.
 
         A tag is a control token or one a fine-tune added. See the README,
         "Tool calling".
         """
         toks = self.tokenize(text, add_special=False)
-        return len(toks) == 1 and self._backend.is_special(self._vocab, toks[0])
+        return bool(toks) and all(self._backend.is_special(self._vocab, t) for t in toks)
 
     def first_special_token(self, text: str) -> int | None:
         """The first of the model's own tags in ``text``, or ``None``.
@@ -296,6 +296,7 @@ class KVContext:
         cancel: threading.Event | None = None,
         tool_tokens: tuple[int, int] | None = None,
         sampling: Sampling | None = None,
+        turn_end: int | None = None,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -320,6 +321,9 @@ class KVContext:
             sampling: This generation's own settings. One that overrides
                 anything gets a sampler chain of its own, freed when the
                 generation ends; without one the chain built at load is used.
+            turn_end: A token that ends the reply as an end-of-generation token
+                does, neither cached nor yielded: the first of a closing the
+                model writes in several tags.
 
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
@@ -335,7 +339,7 @@ class KVContext:
             yield from self._sample_into(
                 own_sampler if own_sampler is not None else self._sampler,
                 start_pos, max_generated_tokens,
-                stop, out, cancel, tool_tokens)
+                stop, out, cancel, tool_tokens, turn_end)
         finally:
             if own_sampler is not None:
                 self._backend.free_sampler(own_sampler)
@@ -343,7 +347,7 @@ class KVContext:
     def _sample_into(self, sampler, start_pos: int, max_generated_tokens: int,
                      stop: list[str], out: GenerationAccumulator | None,
                      cancel: threading.Event | None,
-                     tool_tokens: tuple[int, int] | None):
+                     tool_tokens: tuple[int, int] | None, turn_end: int | None = None):
         """The generation loop of :meth:`generate`, drawing from ``sampler``."""
         generated = out if out is not None else GenerationAccumulator()
         pos = start_pos
@@ -359,7 +363,7 @@ class KVContext:
                 break
             tok = self._backend.sample(sampler, self._llama_context)
             # A call may close with the token that otherwise ends a turn.
-            if self._backend.is_eog(self._vocab, tok) and not (
+            if (self._backend.is_eog(self._vocab, tok) or tok == turn_end) and not (
                     call is not None and tok == call_close):
                 generated.stop_reason = "end_of_turn"
                 break
