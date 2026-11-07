@@ -319,6 +319,9 @@ class ChatWrapper:
                 [len(t) for t in hist_tokens], len(sys_tokens),
                 self._config.evict_above_tokens, self._config.max_history_messages,
             )
+            # The kept history opens on a user turn, as every template writes one.
+            while kept and not _is_user(messages[len(messages) - kept]):
+                kept -= 1
             keep_from = len(messages) - kept
             kept_messages = messages[keep_from:]
             kept_tokens = hist_tokens[keep_from:]
@@ -400,6 +403,8 @@ class ChatWrapper:
                 lambda: self._fits(len(join_tokens) + len(tokens), arriving_messages=1))
             if evicted:             # the turn it would have closed may be gone
                 join_tokens = self._user_turn_join_tokens(role)
+            if self._on_message:    # before the message is written; see the request's
+                self._on_message(role, text)
             if held:
                 self._move_declaration_on()
 
@@ -408,8 +413,6 @@ class ChatWrapper:
             if join_tokens:
                 self._table.extend_last(join_tokens)
             self._table.append(Message(role, text, tokens, declares=declares))
-            if self._on_message:
-                self._on_message(role, text)
             self._save_rest()
             return evicted
 
@@ -1102,14 +1105,22 @@ class ChatWrapper:
             open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
             close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
 
-            # The prompt plus its turn closer must fit in the context.
+            # The prompt plus its turn closer must fit in the context once
+            # everything but the system prompt is evicted; checked before
+            # anything is, so a refused request destroys no history.
+            floor = self._table.messages[0].n_tokens if self._table.has_system else 0
             user_tokens = self._fit_or_raise(
                 user_tokens,
                 budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
-                        - len(join_tokens) - len(held) - self._table.total),
+                        - len(join_tokens) - len(held) - floor),
                 description="request", role="user",
             )
             user_tokens = held + user_tokens
+            needed = (len(join_tokens) + len(user_tokens) + len(open_tokens)
+                      + len(close_tokens) + self._config.min_reply_tokens)
+            if self._evict_until(
+                    lambda: self._table.total + needed <= self._config.context_size):
+                join_tokens = self._user_turn_join_tokens("user")   # the turn it joined may be gone
             n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
 
             # Refused before the cache is mutated.
@@ -1121,6 +1132,10 @@ class ChatWrapper:
                     f"the request or lower evict_above_fraction"
                 )
 
+            # Reported after every check and before the cache changes, so a
+            # callback that raises refuses the request with nothing written.
+            if self._on_message:
+                self._on_message("user", text)
             # One decode for the request text and the assistant-open tag: the
             # backend flags logits on the final token only either way.
             self._move_declaration_on()
@@ -1129,8 +1144,6 @@ class ChatWrapper:
             if join_tokens:
                 self._table.extend_last(join_tokens)
             self._table.append(Message("user", text, user_tokens, declares=declares))
-            if self._on_message:
-                self._on_message("user", text)
 
             return (yield from self._generate_into_reply(
                 open_tokens=open_tokens, close_tokens=close_tokens,
@@ -1322,11 +1335,13 @@ class ChatWrapper:
             # Runs on normal completion and on early close alike.
             had_thought = bool(thought and thought.thought_pieces)
             kept_as_generated = had_thought and tags.past_keeps_thought
-            n_evicted_messages, n_decoded = self._record_reply(
+            n_evicted_messages, n_decoded, answered = self._record_reply(
                 generated, answer.text, open_tokens, close_tokens,
                 as_past=not kept_as_generated)
             if not self._reply_open:
                 self._save_rest()
+            if answered is not None and self._on_message:
+                self._on_message("assistant", answered)
 
         return Reply(
             text=answer.text,
@@ -1349,7 +1364,7 @@ class ChatWrapper:
 
     def _record_reply(self, generated: GenerationAccumulator, answer: str,
                       open_tokens: list[int], close_tokens: list[int],
-                      as_past: bool) -> tuple[int, int]:
+                      as_past: bool) -> tuple[int, int, str | None]:
         """Record what one generation left.
 
         The turn is closed unless a call is waiting for its result. Where
@@ -1365,8 +1380,9 @@ class ChatWrapper:
         turns in a row, and kept as an empty reply where it does not.
 
         Returns:
-            How many messages were evicted, and how many tokens were decoded
-            after the generation.
+            How many messages were evicted, how many tokens were decoded after
+            the generation, and the answer of a closed reply that stays, which
+            the caller reports to ``on_message`` once all of this has landed.
         """
         tokens = open_tokens + generated.token_ids
         if self._reply_open:
@@ -1390,33 +1406,31 @@ class ChatWrapper:
             })
         self._reply_open = bool(self._pending_calls) or unreadable
         if self._reply_open:
-            return 0, 0
+            return 0, 0, None
         holds_call = self._holds_call(msg)
         if not msg.text and not holds_call and self._template.user_turn_join is not None:
             self._remove_newest(msg)
-            return self._evict_until(lambda: self._fits(0)), 0
-        if self._on_message:
-            self._on_message("assistant", msg.text)
+            return self._evict_until(lambda: self._fits(0)), 0, None
         past = self._fragment_tokens("assistant", msg.text)
         fits = self._table.total - msg.n_tokens + len(past) <= self._config.context_size
         # A thought, what a generation prompt adds after the tag, the whitespace
         # a template strips, and a word generated in other pieces than its
         # text tokenizes into all make the two differ.
         if as_past and fits and not holds_call and past != msg.token_ids + close_tokens:
-            return self._record_as_past(msg, past)
+            return *self._record_as_past(msg, past), msg.text
         if not as_past and not holds_call:
             # Kept as generated, in the tokens its text tokenizes into.
             n_open = len(open_tokens)
             kept = (msg.token_ids[:n_open] + self._context.retokenized(msg.token_ids[n_open:])
                     + close_tokens)
             if kept != msg.token_ids + close_tokens:
-                return self._record_as_past(msg, kept)
+                return *self._record_as_past(msg, kept), msg.text
         # Trim back after the reply, so the cache rests inside both eviction
         # limits for the next generation, an early close included. The closer
         # counts against the threshold even though it is decoded after the trim.
         n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
-        return n_evicted_messages, 0
+        return n_evicted_messages, 0, msg.text
 
     def _record_as_past(self, msg, past: list[int]) -> tuple[int, int]:
         """Evict as ``past`` needs, then give the newest reply ``past``.

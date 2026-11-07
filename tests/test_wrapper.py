@@ -57,13 +57,12 @@ def test_begin_prefills_system_and_history_once():
 def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
     # system fragment "<|turn>user\ns<turn|>\n" + BOS is well under budget;
-    # pick a tiny threshold so only the newest message fits.
+    # pick a tiny threshold so only the newest exchange fits.
     w = ChatWrapper(_config(context_size=1000, evict_above_fraction=0.08), context=fake)
-    w.begin("s", [("user", "old message that is long"), ("assistant", "x")])
+    w.begin("s", [("user", "old message that is long"), ("assistant", "x"), ("user", "y")])
 
-    roles = [s["role"] for s in w.snapshot()]
-    # Oldest user message dropped; only system + newest assistant kept.
-    assert roles == ["system", "assistant"]
+    # The oldest exchange is dropped whole: the kept history opens on a user turn.
+    assert [s["text"] for s in w.snapshot()] == ["s", "y"]
     _assert_consistent(w, fake)
 
 
@@ -328,7 +327,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
         w.reply_without_tools(f"message number {i} with some length")
         assert w.total_tokens <= w._config.evict_above_tokens  # rests under threshold
         assert w.snapshot()[0]["role"] == "system"        # system survives
-        assert w.snapshot()[-1]["role"] == "assistant"    # newest turn kept
+        assert [r["role"] for r in w.snapshot()][1:2] in ([], ["user"])  # opens on a user turn
         _assert_consistent(w, fake)
 
 
@@ -338,7 +337,7 @@ def test_turn_closes_after_the_eviction_not_before():
     # The assertion is what pins that ordering. See the README,
     # "How eviction works".
     fake = FakeContext(gen_tokens=2)
-    w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
+    w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.35), context=fake)
     w.begin("s")
 
     evicting = 0
@@ -429,9 +428,9 @@ def test_inject_evicts_to_leave_room_under_the_message_limit():
     w = ChatWrapper(_config(context_size=4000, max_history_messages=3), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")])
     assert _n_kept(w) == 3
-    assert w.inject("reference material") == 1   # one dropped to make room
-    assert _n_kept(w) == 3
-    assert [r["text"] for r in w.snapshot()][1:] == ["b", "c", "reference material"]
+    # The oldest exchange goes whole, so the survivors open on a user turn.
+    assert w.inject("reference material") == 2
+    assert [r["text"] for r in w.snapshot()][1:] == ["c", "reference material"]
     _assert_consistent(w, fake)
 
 
@@ -444,15 +443,15 @@ def test_begin_prefills_no_more_than_the_message_limit():
     _assert_consistent(w, fake)
 
 
-def test_a_limit_of_one_keeps_the_newest_message_and_the_system_prompt():
-    # The floor: eviction stops with one message left, so a turn still closes
-    # and the reply it just produced is the message that survives.
+def test_a_limit_of_one_keeps_only_the_system_prompt_between_turns():
+    # An exchange is two messages and goes whole, so under a limit of one the
+    # reply leaves with its request; the turn still closes cleanly.
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000, max_history_messages=1), context=fake)
     w.begin("s")
     for i in range(3):
         w.reply_without_tools(f"q{i}")
-        assert [r["role"] for r in w.snapshot()] == ["system", "assistant"]
+        assert [r["role"] for r in w.snapshot()] == ["system"]
         _assert_consistent(w, fake)
 
 
@@ -1076,3 +1075,38 @@ def test_a_call_may_close_with_the_token_that_ends_a_turn():
     list(ctx.generate(0, 10, [], out=acc, tool_tokens=(OPEN, END)))
     assert acc.stop_reason == "tool_call" and acc.tool_call == "f{}"
     assert acc.token_ids == [OPEN, BODY, END]
+
+
+# ----- what the review found: room for a request, and a callback that fails ----
+def test_a_request_evicts_old_history_when_it_would_not_fit_otherwise():
+    fake = FakeContext(gen_tokens=4)
+    w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.75), context=fake)
+    w.begin("s")
+    while w.total_tokens < 240:
+        w.reply_without_tools("a question of moderate length")
+    long_request = "x" * 170
+    assert w.total_tokens + 170 > w.context_size       # would not fit beside the history
+    reply = w.reply_without_tools(long_request)
+    assert reply.n_generated_tokens == 4
+    assert [r["text"] for r in w.snapshot()][-2] == long_request
+    _assert_consistent(w, fake)
+
+
+def test_a_failing_message_callback_leaves_the_cache_and_the_table_agreeing():
+    calls = []
+
+    def store(role, text):
+        calls.append(role)
+        if len(calls) == 3:
+            raise OSError("disk full")
+
+    fake = FakeContext(gen_tokens=2)
+    w = ChatWrapper(_config(context_size=4000), context=fake, on_message=store)
+    w.begin("s")
+    w.reply_without_tools("first")
+    with pytest.raises(OSError):
+        w.reply_without_tools("second")
+    _assert_consistent(w, fake)
+    assert [r["text"] for r in w.snapshot()][1:] == ["first", "re"]   # "second" was refused
+    w.reply_without_tools("third")                     # the conversation goes on
+    _assert_consistent(w, fake)

@@ -7,71 +7,24 @@ compared is the text.
 """
 
 import json
-import re
 from pathlib import Path
 
 import pytest
 
-from llama_chat._backend import Backend
 from llama_chat.call_parsing import parse_calls
 from llama_chat.reasoning import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.template_extract import reasoning_switch
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
+
+from .template_contexts import TaggedContext, TagTokenizingContext, TemplateContext
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
 _CONVERSATION = [("user", " ping "), ("assistant", " pong "), ("user", " again ")]
 
 
-class _TemplateContext:
-    """A cache context reduced to rendering through one real template."""
-
-    def __init__(self, fixture: dict) -> None:
-        backend = Backend()
-        self._template = fixture["chat_template"]
-        self._renderers = {prompted: backend.template_renderer(
-            fixture["chat_template"], fixture["eos_token"], prompted)
-            for prompted in (False, True)}
-        self._switch = reasoning_switch(lambda messages, generation_prompt=False, **variables:
-                                        self._renderers[generation_prompt](
-                                            messages=messages, **variables).prompt)
-
-    def render_with_model_template(self, messages, tools=None, *,
-                                   generation_prompt=False, reasoning=None, **variables):
-        try:
-            return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **self._switch(reasoning), **variables).prompt
-        except Exception:
-            return None
-
-    def chat_template_text(self):
-        return self._template
-
-    def tokenize(self, text, add_special=False, parse_special=True):
-        return [ord(c) for c in text]
-
-    def tags(self):
-        # As a vocabulary holds them: every tag-shaped text, and what each closer closes.
-        found = set(_TAG.findall(self._template))
-        return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
-
-    def tokenize_fragment(self, prefix, content, suffix, add_special=False):
-        return self.tokenize(prefix + content + suffix)
-
-    def extract_fragments(self):
-        from llama_chat.template_extract import extract_fragments
-        return extract_fragments(self.render_with_model_template)
-
-    def first_special_token(self, text):
-        return None             # no vocabulary, so no call tag resolves
-
-    def token_text(self, token):
-        return ""
-
-
 def _load(path):
     fixture = json.loads(path.read_text())
-    context = _TemplateContext(fixture)
+    context = TemplateContext(fixture)
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
     return fixture, context, ResolvedTemplate(context)
@@ -138,61 +91,11 @@ def test_a_reply_that_reasons_streams_only_its_answer(path):
     assert thought.thought_pieces > 0
 
 
-# ----- tool turns, with a vocabulary for the call tags ----------------------
-_TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z_]+)?>|\[[A-Z_]+\]|<｜[^｜]+｜>")
-
-
-class _TaggedContext(_TemplateContext):
-    """The same, with tags single tokens.
-
-    A stand-in for a vocabulary that holds every tag-shaped text, such as one
-    closing each argument of a call, and the tags that close those, spelled as
-    tags are paired (``<x>`` and ``</x>``, ``<|x>`` and ``<x|>``, ``start`` and
-    ``end``). The earliest of them in a text is its first tag.
-    """
-
-    def __init__(self, fixture: dict) -> None:
-        super().__init__(fixture)
-        self._tags: list[str] = []
-
-    def first_special_token(self, text):
-        # The earliest tag in the text, as a vocabulary finds it.
-        known = [(text.index(tag), tag) for tag in self._tags if tag in text]
-        found = _TAG.search(text)
-        if found is not None and found.group() not in self._tags:
-            known.append((found.start(), found.group()))
-        if not known:
-            return None
-        tag = min(known)[1]
-        if tag not in self._tags:
-            self._tags += [tag] + [closer for closer in _closers(tag)
-                                   if closer not in self._tags]
-        return self._id(tag)
-
-    def _id(self, tag):
-        return -1 - self._tags.index(tag)
-
-    def token_text(self, token):
-        return self._tags[-1 - token] if token < 0 else chr(token)
-
-
-class _TagTokenizingContext(_TaggedContext):
-    """The same, with each tag tokenized as the one token it resolves to."""
-
-    def tokenize(self, text, add_special=False, parse_special=True):
-        tokens, pos = [], 0
-        for found in _TAG.finditer(text):
-            tokens += [ord(c) for c in text[pos:found.start()]]
-            tokens.append(self.first_special_token(found.group()))
-            pos = found.end()
-        return tokens + [ord(c) for c in text[pos:]]
-
-
 @pytest.mark.parametrize("stem, first_tag", [("cohere-aya", "<|END_RESPONSE|>"),
                                              ("qwen-3.6", "<|im_end|>")])
 def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = _TagTokenizingContext(fixture)
+    context = TagTokenizingContext(fixture)
     template = ResolvedTemplate(context)
     assert context.token_text(template.turn_end_token) == first_tag
 
@@ -202,7 +105,7 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     """gpt-oss closes a thought with the tag that also closes its turn."""
     from llama_chat.reasoning import AnswerOpening, turn_end_test
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = _TagTokenizingContext(fixture)
+    context = TagTokenizingContext(fixture)
     template = ResolvedTemplate(context)
     tags, turn_end = template.reasoning, template.turn_end_token
     formatter = template.formatter(True)
@@ -218,13 +121,6 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
             break
         shown += opening.feed(thought.feed(context.token_text(token)))
     assert shown + opening.feed(thought.flush()) + opening.flush() == "Antwort."
-
-
-def _closers(tag: str) -> list[str]:
-    """The tags that would close ``tag``."""
-    inner = tag.strip("<>[]")
-    return [f"</{inner}>", f"<{inner.lstrip('|')}|>", tag.replace("start", "end"),
-            tag.replace("calls", "calls").replace("<｜", "</｜", 1)]
 
 
 # Families whose calls cannot be read, so tools are refused, and why.
@@ -246,7 +142,7 @@ def _tool_templates():
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
 def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
     fixture = json.loads(path.read_text())
-    context = _TaggedContext(fixture)
+    context = TaggedContext(fixture)
     template = ResolvedTemplate(context)
     if path.stem in _TOOLS_REFUSED:
         with pytest.raises(ValueError, match=_TOOLS_REFUSED[path.stem]):
@@ -285,7 +181,7 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
                          ids=lambda p: p.stem)
 def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
     fixture = json.loads(path.read_text())
-    context = _TaggedContext(fixture)
+    context = TaggedContext(fixture)
     template = ResolvedTemplate(context)
     template.ensure_tools_usable()
     rendered = context.render_with_model_template(
@@ -304,7 +200,7 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
 def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path):
-    context = _TaggedContext(json.loads(path.read_text()))
+    context = TaggedContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
     if template.call_texts is None:
         return
@@ -317,7 +213,7 @@ def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path)
 
 
 def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
-    context = _TaggedContext(json.loads((Path(__file__).parent / "templates"
+    context = TaggedContext(json.loads((Path(__file__).parent / "templates"
                                          / "kimi-k3.json").read_text()))
     template = ResolvedTemplate(context)
     assert template.turn_end_text == "<|close|>response<|sep|><|close|>"
@@ -330,7 +226,7 @@ def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
                          ids=lambda p: p.stem)
 def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
     fixture = json.loads(path.read_text())
-    context = _TaggedContext(fixture)
+    context = TaggedContext(fixture)
     template = ResolvedTemplate(context)
     formatter = template.formatter()
     if template.declares_in_newest_turn:
@@ -365,7 +261,7 @@ _QUOTED_RESULT = '{"weather": "sunny"}\nsecond line'
                          ids=lambda p: p.stem)
 def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
     from llama_chat.resolved_template import written_between
-    context = _TaggedContext(json.loads(path.read_text()))
+    context = TaggedContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", _QUOTED_RESULT), "Sunny."))

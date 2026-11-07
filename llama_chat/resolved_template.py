@@ -534,18 +534,21 @@ class ResolvedTemplate:
         return fragments
 
     def _validate_template(self) -> None:
-        """Ensure the turn-terminator is made of this model's own tags.
+        """Ensure the turn-terminator opens with one of this model's own tags.
 
-        A terminator that splits into plain text never lets the model stop, so
-        it would run to the token cap every generation.
+        The model ends a reply by generating that tag; a terminator that opens
+        with plain text never lets it stop, so it would run to the token cap
+        every generation.
         """
         if not hasattr(self._context, "tokenizes_to_tags"):
             return
         terminator = self._fragments.assistant_suffix.strip()
-        if terminator and not self._context.tokenizes_to_tags(terminator):
+        first = self._context.tokenize(terminator, add_special=False)[:1]
+        if terminator and not (
+                first and self._context.tokenizes_to_tags(self._context.token_text(first[0]))):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
-                f"{terminator!r} does not tokenize into the model's own tags, so "
+                f"{terminator!r} does not open with one of the model's own tags, so "
                 "generation would never stop. The model's embedded chat template "
                 "is malformed; supply correct tags with ChatWrapper(fragments=...)."
             )

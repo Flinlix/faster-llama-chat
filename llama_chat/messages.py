@@ -190,10 +190,12 @@ class MessageTable:
             self._assert_invariants()
 
     def evict_oldest_until(self, fits) -> tuple[Eviction | None, int]:
-        """Drop oldest non-system messages until ``fits()``, or none remain.
+        """Drop oldest non-system messages until ``fits()``, then up to the next user message.
 
-        The victims are the contiguous block after the system prompt, so a whole
-        batch collapses into one removed range and one survivor shift.
+        The survivors open on a user turn, as every template writes a
+        conversation, or none remain. The victims are the contiguous block after
+        the system prompt, so a whole batch collapses into one removed range and
+        one survivor shift.
 
         Returns:
             The combined :class:`Eviction` (``None`` if nothing was dropped) and
@@ -206,7 +208,8 @@ class MessageTable:
             old_total = self.total
             remove_start = self._messages[idx].pos_start
             count = 0
-            while not fits() and self.n_evictable > 0:
+            while self.n_evictable > 0 and (
+                    not fits() or (count and self._messages[idx].role != "user")):
                 del self._messages[idx]
                 self._renumber()  # keeps total and fits() correct each iteration
                 count += 1

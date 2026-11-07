@@ -16,20 +16,21 @@ def test_append_assigns_contiguous_positions():
     assert t.total == 12
 
 
-def test_evict_oldest_until_single_message_renumbers():
+def test_evicting_removes_whole_exchanges_so_the_survivors_open_on_a_user_turn():
     t = MessageTable()
     t.append(_msg("system", 3))
-    t.append(_msg("user", 4))      # positions [3, 7)
+    t.append(_msg("user", 4))       # positions [3, 7)
     t.append(_msg("assistant", 5))  # positions [7, 12)
+    t.append(_msg("user", 2))       # positions [12, 14)
 
-    ev, count = t.evict_oldest_until(lambda: t.total <= 8)
-    assert count == 1
-    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 7, 12)
-    assert ev.shift_delta == 4
-    # System preserved, assistant shifted down to close the gap.
+    ev, count = t.evict_oldest_until(lambda: t.total <= 12)
+    # The user turn alone would fit; its reply goes with it.
+    assert count == 2
+    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 12, 14)
+    assert ev.shift_delta == 9
     roles = [(m.role, m.pos_start, m.pos_end) for m in t.messages]
-    assert roles == [("system", 0, 3), ("assistant", 3, 8)]
-    assert t.total == 8
+    assert roles == [("system", 0, 3), ("user", 3, 5)]
+    assert t.total == 5
 
 
 def test_evict_oldest_until_coalesces():
