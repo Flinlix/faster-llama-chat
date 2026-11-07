@@ -10,10 +10,10 @@ import codecs
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
 
 from ._backend import Backend, set_log_level
 from .config import Config, Sampling
+from .cache_context import GenerationAccumulator
 from .messages import Eviction
 from .reply_text import earliest
 from .template import CallBoundary, TemplateFragments
@@ -51,33 +51,6 @@ class _TextBuffer:
 
     def __len__(self) -> int:
         return len(self._buf)
-
-
-@dataclass
-class GenerationAccumulator:
-    """What one generation has produced so far, filled as tokens stream in.
-
-    Every token is decoded into the cache before its text is yielded, so a
-    caller that abandons the stream still reads exactly what reached the cache.
-
-    Attributes:
-        token_ids: Every token decoded into the cache.
-        text: Visible reply text so far.
-        stop_reason: ``"end_of_turn"``, ``"token_limit"``, ``"interrupted"`` or
-            ``"tool_call"``.
-        tool_call: What the model generated between its call tags, tags
-            excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
-            ``text``.
-        cached_beyond: Tokens decoded into the cache after ``token_ids`` that
-            belong to no reply, such as the first tokens of a closing written
-            whole later; the caller cuts them away again.
-    """
-
-    token_ids: list[int] = field(default_factory=list)
-    text: str = ""
-    stop_reason: str = "token_limit"
-    tool_call: str = ""
-    cached_beyond: int = 0
 
 
 class KVContext:

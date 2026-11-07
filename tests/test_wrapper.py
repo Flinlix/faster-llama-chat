@@ -288,7 +288,7 @@ def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
 def test_generator_close_marks_interrupted():
     # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     fake = FakeContext(gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
@@ -826,7 +826,8 @@ def test_a_stream_closed_early_ends_the_turn_and_reports_no_reply():
 def test_a_call_may_close_with_the_token_that_ends_a_turn():
     """A template may end a call with its end-of-turn token, as some do with EOS."""
     from types import SimpleNamespace
-    from llama_chat.context import GenerationAccumulator, KVContext
+    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.context import KVContext
 
     OPEN, BODY, END = 0, 1, 2
     pieces = {OPEN: b"[CALL]", BODY: b"f{}", END: b"</s>"}

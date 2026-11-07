@@ -22,7 +22,8 @@ from .config import Config, Sampling
 from .messages import Eviction
 from .template import CallBody, TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
+from .reply import ContextOverflowError, Reply, ReplyStream
+from .wrapper import ChatWrapper
 
 __all__ = [
     "Config",

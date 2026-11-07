@@ -36,7 +36,7 @@ _TAGS = (1, 3)
 
 # ----- detecting a call as it is generated ---------------------------------
 def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
@@ -50,7 +50,7 @@ def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
 
 def test_the_held_back_tail_is_released_when_a_call_opens():
     """A stop string holds text back; the call is not what it was waiting for."""
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     # "ZZZZ" is longer than "hi ", so nothing can be emitted before the call.
@@ -65,7 +65,7 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
     It used to sit outside the ``GeneratorExit`` handler, and a consumer that
     closed exactly then saw ``stop_reason == "token_limit"``.
     """
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
@@ -76,7 +76,7 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
 
 def test_a_call_the_token_cap_cuts_short_is_dropped():
     """Truncation mid-call loses the call, not the reply, and closes normally."""
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = _generating(_PIECES, [0, 1, 2]).generate(0, 3, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
@@ -88,7 +88,7 @@ def test_a_call_the_token_cap_cuts_short_is_dropped():
 
 def test_without_tool_tokens_a_call_tag_is_ordinary_text():
     """A model that cannot call tools has its tags yielded like any other text."""
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 4, out=acc)
@@ -100,7 +100,7 @@ def test_without_tool_tokens_a_call_tag_is_ordinary_text():
 # here for the same reason as the call detection above: only the real loop
 # decides what reaches the cache before it stops.
 def test_end_of_generation_stops_before_the_token_reaches_the_cache():
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = _generating(_PIECES, [0, 4], eog=4).generate(0, 10, out=acc)
@@ -112,7 +112,7 @@ def test_end_of_generation_stops_before_the_token_reaches_the_cache():
 def test_cancelling_ends_the_stream_within_one_token():
     import threading
 
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     cancel = threading.Event()
@@ -129,7 +129,7 @@ def test_cancelling_ends_the_stream_within_one_token():
 
 
 def test_the_held_back_tail_is_flushed_when_generation_runs_out():
-    from llama_chat.context import GenerationAccumulator
+    from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     # A stop string this long holds back three characters at every step, so

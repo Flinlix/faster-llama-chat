@@ -9,12 +9,40 @@ finds a member missing.
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Iterator, Protocol
 
 from .config import Sampling
 from .messages import Eviction
 from .template import CallBoundary, TemplateFragments
+
+
+@dataclass
+class GenerationAccumulator:
+    """What one generation has produced so far, filled as tokens stream in.
+
+    Every token is decoded into the cache before its text is yielded, so a
+    caller that abandons the stream still reads exactly what reached the cache.
+
+    Attributes:
+        token_ids: Every token decoded into the cache.
+        text: Visible reply text so far.
+        stop_reason: ``"end_of_turn"``, ``"token_limit"``, ``"interrupted"`` or
+            ``"tool_call"``.
+        tool_call: What the model generated between its call tags, tags
+            excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
+            ``text``.
+        cached_beyond: Tokens decoded into the cache after ``token_ids`` that
+            belong to no reply, such as the first tokens of a closing written
+            whole later; the caller cuts them away again.
+    """
+
+    token_ids: list[int] = field(default_factory=list)
+    text: str = ""
+    stop_reason: str = "token_limit"
+    tool_call: str = ""
+    cached_beyond: int = 0
 
 
 class ModelReader(Protocol):
@@ -63,7 +91,8 @@ class CacheContext(ModelReader, Protocol):
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
 
-    def generate(self, start_pos: int, max_generated_tokens: int, out=None,
+    def generate(self, start_pos: int, max_generated_tokens: int,
+                 out: GenerationAccumulator | None = None,
                  cancel: threading.Event | None = None, sampling: Sampling | None = None,
                  ends_turn: Callable[[int], bool] | None = None,
                  boundary: CallBoundary = CallBoundary()) -> Iterator[str]: ...

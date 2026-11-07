@@ -57,7 +57,7 @@ class Config:
             everything but the system prompt evicted: ``"reject"`` raises,
             ``"truncate"`` clips the content and keeps the turn-terminator tag.
         min_reply_tokens: Refuse a request with
-            :class:`~llama_chat.wrapper.ContextOverflowError` when fewer than
+            :class:`~llama_chat.reply.ContextOverflowError` when fewer than
             this many tokens would be left for the reply. ``0`` disables it,
             and it must stay below ``context_size``, which no request can leave
             entirely free.

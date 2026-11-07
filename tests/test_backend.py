@@ -23,7 +23,8 @@ from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import tokenize_message
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
-from llama_chat.context import SEQ, GenerationAccumulator, KVContext
+from llama_chat.cache_context import GenerationAccumulator
+from llama_chat.context import SEQ, KVContext
 from llama_chat.config import Config, Sampling
 
 

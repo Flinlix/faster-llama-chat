@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import fields, replace
 
-from llama_chat.context import GenerationAccumulator
+from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.messages import Eviction
 from llama_chat.template import CallBoundary, TemplateFragments
 

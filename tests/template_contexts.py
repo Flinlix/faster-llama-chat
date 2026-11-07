@@ -8,7 +8,7 @@ text.
 import re
 
 from llama_chat.addon_files import addon_file
-from llama_chat.context import GenerationAccumulator
+from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.model_template import ModelTemplate
 
 
