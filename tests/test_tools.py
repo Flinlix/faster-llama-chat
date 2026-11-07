@@ -2119,7 +2119,7 @@ def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
     assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)
 
 
-# ----- the third review ------------------------------------------------------
+# ----- reading values back out of a call -------------------------------------
 _KEY_VALUE = CallBody(name_close="", key_open="<arg_key>", key_close="</arg_key><arg_value>",
                       pair_sep="</arg_value><arg_key>", body_close="</arg_value>",
                       empty_close="")

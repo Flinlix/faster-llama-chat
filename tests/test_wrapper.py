@@ -1038,7 +1038,7 @@ def test_a_call_may_close_with_the_token_that_ends_a_turn():
     assert acc.token_ids == [OPEN, BODY, END]
 
 
-# ----- what the review found: room for a request, and a callback that fails ----
+# ----- room for a request, and a message callback that fails ----------------
 def test_a_request_evicts_old_history_when_it_would_not_fit_otherwise():
     fake = FakeContext(gen_tokens=4)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.75), context=fake)

@@ -516,7 +516,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     _assert_consistent(past, past_fake)
 
 
-# ----- what the review found ------------------------------------------------
+# ----- stop strings and a reasoning reply --------------------------------------
 def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
     thoughtful = "<thought>a\n\nb</thought>Antwort.\n\nRest"
     w, fake = _reasoning(gen_text=thoughtful, gen_tokens=len(thoughtful))
@@ -591,7 +591,7 @@ def test_the_thought_count_never_exceeds_the_pieces_fed():
         assert 0 < f.thought_pieces <= len(pieces)
 
 
-# ----- the third review ------------------------------------------------------
+# ----- saved states of a cache that cannot shift --------------------------------
 def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
     w, fake = _reasoning(can_shift=False)
     w.reply("hi").finish()
