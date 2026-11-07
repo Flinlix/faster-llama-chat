@@ -31,4 +31,4 @@ test = ["pytest>=7"]
 include = ["llama_chat*"]
 
 [tool.setuptools.package-data]
-llama_chat = ["families/*.json"]
+llama_chat = ["addons/*.json"]

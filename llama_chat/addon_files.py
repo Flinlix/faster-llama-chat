@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import Config
 
-FAMILY_FILES = Path(__file__).parent / "families"
+SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty")
 CALL_FIELDS = ("opening", "name_close", "closing")
 _FILE_KEYS = {"templates", "source", "sampling", "call"}
@@ -23,7 +23,7 @@ def addon_file(model_path: str | None, template: str | None) -> dict:
     """A model's add-on file, with ``sampling`` and ``call`` always present, possibly empty.
 
     The file next to the model with its name and ``.json`` comes first, then a
-    file shipped in :data:`FAMILY_FILES` that names the model's template.
+    file shipped in :data:`SHIPPED_ADDONS` that names the model's template.
 
     Raises:
         ValueError: If the file found is malformed.
@@ -34,7 +34,7 @@ def addon_file(model_path: str | None, template: str | None) -> dict:
     if template is None:
         return read_addon_file(None)
     fingerprint = template_fingerprint(template)
-    for path in sorted(FAMILY_FILES.glob("*.json")):
+    for path in sorted(SHIPPED_ADDONS.glob("*.json")):
         found = read_addon_file(path)
         if fingerprint in found["templates"]:
             return found

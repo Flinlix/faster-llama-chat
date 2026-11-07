@@ -1,4 +1,4 @@
-"""A model's own sampling: what its GGUF states, else its family's add-on file, else a default."""
+"""A model's own sampling: what its GGUF states, else its add-on file, else a default."""
 
 from __future__ import annotations
 
@@ -38,12 +38,12 @@ def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -
     if not unset:
         return config
     stated = (_stated_in_gguf(metadata)
-              or family_sampling(config.model_path, metadata("tokenizer.chat_template")))
+              or addon_sampling(config.model_path, metadata("tokenizer.chat_template")))
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
 
 
-def family_sampling(model_path: str | None, template: str | None) -> dict:
+def addon_sampling(model_path: str | None, template: str | None) -> dict:
     """The sampling a model's add-on file recommends, empty where it has none.
 
     Raises:

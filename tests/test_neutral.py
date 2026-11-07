@@ -9,7 +9,7 @@ import pytest
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 _ENGINE_MODULE, _ENGINE_WORDS = "_backend.py", {"llama", "llama-cpp-python"}
 _KNOWN_FILES = [*(Path(__file__).parent / "templates").glob("*.json"),
-                *(_PACKAGE / "families").glob("*.json")]
+                *(_PACKAGE / "addons").glob("*.json")]
 
 
 def _families() -> set[str]:

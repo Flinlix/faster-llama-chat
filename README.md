@@ -425,7 +425,7 @@ taken whole: what the GGUF states under `general.sampling`, else the model's
 add-on file, a field it leaves out being switched off; with neither,
 llama.cpp's defaults (temperature `0.8`, `top_k` `40`, `top_p` `0.95`, `min_p`
 `0.05`). An add-on file is JSON: the one next to the GGUF, with its name and
-`.json`, or one shipped in `llama_chat/families/` that names the model's chat
+`.json`, or one shipped in `llama_chat/addons/` that names the model's chat
 template by its SHA-256. It holds `sampling`, with any of the five fields,
 `call` (see "Tool calling"), `templates` and `source`, and is checked when the
 model loads; anything else in it is refused.

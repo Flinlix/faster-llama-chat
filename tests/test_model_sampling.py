@@ -6,9 +6,9 @@ import re
 import pytest
 
 from llama_chat import addon_files
-from llama_chat.addon_files import FAMILY_FILES, read_addon_file, template_fingerprint
+from llama_chat.addon_files import SHIPPED_ADDONS, read_addon_file, template_fingerprint
 from llama_chat.config import Config
-from llama_chat.model_sampling import (DEFAULT_SAMPLING, UNSTATED_SAMPLING, family_sampling,
+from llama_chat.model_sampling import (DEFAULT_SAMPLING, UNSTATED_SAMPLING, addon_sampling,
                                        with_model_sampling)
 
 _TEMPLATE = "{{ messages }}"
@@ -47,11 +47,11 @@ def test_what_a_recommendation_leaves_out_stays_switched_off(tmp_path):
 
 
 def test_a_shipped_file_applies_to_the_template_it_names(tmp_path, monkeypatch):
-    monkeypatch.setattr(addon_files, "FAMILY_FILES", tmp_path)
+    monkeypatch.setattr(addon_files, "SHIPPED_ADDONS", tmp_path)
     (tmp_path / "family.json").write_text(json.dumps(
         {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
-    assert family_sampling(None, _TEMPLATE) == {"top_p": 0.8}
-    assert family_sampling(None, "another template") == {}
+    assert addon_sampling(None, _TEMPLATE) == {"top_p": 0.8}
+    assert addon_sampling(None, "another template") == {}
 
 
 @pytest.mark.parametrize("contents", ["not json", json.dumps({"sampler": {}}),
@@ -63,7 +63,7 @@ def test_a_malformed_add_on_file_is_refused_when_the_model_loads(tmp_path, conte
         with_model_sampling(Config(model_path=str(tmp_path / "m.gguf")), _metadata())
 
 
-@pytest.mark.parametrize("path", sorted(FAMILY_FILES.glob("*.json")), ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", sorted(SHIPPED_ADDONS.glob("*.json")), ids=lambda p: p.stem)
 def test_every_shipped_file_names_its_templates_and_says_where_its_values_come_from(path):
     found = json.loads(path.read_text())
     assert found["templates"] and all(re.fullmatch("[0-9a-f]{64}", t) for t in found["templates"])
