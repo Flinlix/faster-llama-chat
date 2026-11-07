@@ -9,7 +9,7 @@ Invariants, asserted after every structural change:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -29,6 +29,8 @@ class Message:
             here so that evicting the message takes the declaration with it.
         holds_call: Whether this assistant turn called a tool, as recorded
             when the call was generated or handed over in a history.
+        steps: For a turn that called tools, the turn in order: its text, each
+            call and each result, as a history hands one over.
     """
 
     role: str
@@ -38,6 +40,7 @@ class Message:
     pos_end: int = 0
     declares: tuple[str, ...] = ()
     holds_call: bool = False
+    steps: list = field(default_factory=list)
 
     @property
     def n_tokens(self) -> int:

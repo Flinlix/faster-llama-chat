@@ -353,8 +353,9 @@ class ChatWrapper:
                 role, text = (("assistant", item.text) if isinstance(item, ToolTurn)
                               else item)
                 declares = (tuple(spec.name for spec in specs) if i == carrier else ())
-                self._table.append(Message(role, text, toks, declares=declares,
-                                           holds_call=isinstance(item, ToolTurn)))
+                self._table.append(Message(
+                    role, text, toks, declares=declares, holds_call=isinstance(item, ToolTurn),
+                    steps=list(item.steps) if isinstance(item, ToolTurn) else []))
             self._reply_open = ends_open
             self._turn_ends_with = hist[-1][1] if ends_open else ""
             self._begun = True
@@ -547,6 +548,7 @@ class ChatWrapper:
             # leaves the call still owed.
             self._write_tool_result(name, result)
             self._pending_calls.pop(0)      # results are owed in call order
+            self._table.messages[-1].steps.append(ToolResult(name, result))
             return 0
 
     def _write_tool_result(self, name: str, result) -> None:
@@ -751,6 +753,18 @@ class ChatWrapper:
             return False
         self._lock.release()
         return True
+
+    def history(self) -> list[tuple[str, str] | ToolTurn]:
+        """The conversation the cache holds, oldest first, as :meth:`begin` takes it.
+
+        Every message after the system prompt: ``(role, text)`` pairs, and a
+        :class:`~llama_chat.tools.ToolTurn` for an assistant turn that called
+        tools, with its calls and results. Begun again from it, with the same
+        system prompt and tools, the conversation reads in as the template
+        writes it.
+        """
+        return [ToolTurn(tuple(m.steps)) if m.steps else (m.role, m.text)
+                for m in self._table.messages[1:]]
 
     def snapshot(self) -> list[dict]:
         """Return the conversation and its cache layout, as plain dict rows.
@@ -1215,6 +1229,9 @@ class ChatWrapper:
         self._batch = [call.name for call in self._pending_calls]
         if generated.stop_reason == "tool_call":
             msg.holds_call = True
+        if msg.holds_call:
+            # The turn as a history hands it over: what the model wrote, then its calls.
+            msg.steps += ([answer] if answer else []) + self._pending_calls
         unreadable = (generated.stop_reason == "tool_call"
                       and not self._pending_calls)
         if unreadable:

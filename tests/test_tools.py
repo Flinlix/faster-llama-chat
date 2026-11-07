@@ -2186,3 +2186,23 @@ def test_an_unknown_call_policy_is_refused():
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="calls must be"):
         wrapper.reply("x", calls="sometimes")
+
+
+def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
+    registry = _weather_registry()
+    live, fake = _wrapper()
+    live.begin("persona", tools=registry)
+    live.reply("hallo").finish()
+    fake.call_script = ["weather{city:'Bonn'}"]
+    live.reply("wetter?", calls="run").finish()
+    live.reply("danke").finish()
+    history = live.history()
+    assert [type(item).__name__ for item in history] == [
+        "tuple", "tuple", "tuple", "ToolTurn", "tuple", "tuple"]
+    turn = history[3]
+    assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
+
+    again, fake_again = _wrapper()
+    again.begin("persona", history, tools=registry)
+    assert fake_again.cache == fake.cache
+    assert again.history() == history
