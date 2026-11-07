@@ -1,0 +1,11 @@
+{
+ "templates": [
+  "a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146"
+ ],
+ "source": "how openai/gpt-oss-20b writes a call, measured on the model: <|start|>assistant<|channel|>commentary to=functions.NAME <|constrain|>json<|message|>{...}<|call|>",
+ "call": {
+  "opening": "<|channel|>commentary to=functions.",
+  "name_close": " <|constrain|>json<|message|>",
+  "closing": "<|call|>"
+ }
+}

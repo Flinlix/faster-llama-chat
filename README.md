@@ -426,8 +426,8 @@ llama.cpp's defaults (temperature `0.8`, `top_k` `40`, `top_p` `0.95`, `min_p`
 `0.05`). An add-on file is JSON: the one next to the GGUF, with its name and
 `.json`, or one shipped in `llama_chat/families/` that names the model's chat
 template by its SHA-256. It holds `sampling`, with any of the five fields,
-`templates` and `source`, and is checked when the model loads; anything else in
-it is refused.
+`call` (see "Tool calling"), `templates` and `source`, and is checked when the
+model loads; anything else in it is refused.
 
 ```json
 {"templates": ["<sha256 of the chat template>"],
@@ -880,6 +880,13 @@ cannot tell how a call it generates begins. Where a model ends its turn inside
 such a call, the call ends there, closed as the template closes one. A result
 the template writes between quotes is escaped as a JSON string, as the template
 escapes it.
+
+Where the template cannot tell how a model writes a call, because the model
+writes it in another form than its template shows a past one in, the model's
+add-on file says so, under `call`: the `opening` a generated call starts with,
+the `name_close` after its name, and the `closing` that ends it, which the
+template must write after a call too. The arguments after `name_close` are read
+as JSON.
 
 A template that declares tools somewhere other than the system turn, such as in
 the first user turn, may have a variable of its own that moves them there. A

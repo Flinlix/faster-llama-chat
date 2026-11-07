@@ -16,6 +16,7 @@ from ._backend import Backend, set_log_level
 from .config import Config, Sampling
 from .messages import Eviction
 from .template import TemplateFragments
+from .addon_files import addon_file
 from .model_sampling import with_model_sampling
 from .template_extract import reasoning_switch
 
@@ -109,6 +110,7 @@ class KVContext:
         try:
             self._config = config = with_model_sampling(
                 config, lambda key: self._backend.metadata_value(self._model, key))
+            self._addon_call = addon_file(config.model_path, self.chat_template_text())["call"]
             kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
                        if config.kv_cache_type else None)
             self._llama_context = self._backend.new_context(
@@ -283,6 +285,10 @@ class KVContext:
         """
         from .template_extract import extract_fragments
         return extract_fragments(self.render_with_model_template)
+
+    def addon_call(self) -> dict:
+        """How the model's add-on file says a generated call is written, if it says."""
+        return dict(self._addon_call)
 
     def chat_template_text(self) -> str | None:
         """The source of the model's own chat template, or ``None`` where it ships none."""

@@ -701,9 +701,29 @@ class ResolvedTemplate:
         return (opener, closer), lead_in
 
     def _resolve_call_texts(self) -> tuple[str, str] | None:
+        """The texts around a call, from the template, else from the model's add-on file."""
+        self._call_from_file = False
+        if self._tool_tokens is not None:
+            return None
+        found = self._template_call_texts()
+        if found is not None:
+            return found
+        call = self._context.addon_call() if hasattr(self._context, "addon_call") else {}
+        if not call or self._tool_calls is None:
+            return None
+        rendered = self._render([{"role": "user", "content": _PROMPT},
+                                 {"role": "assistant", "content": "", "tool_calls": [
+                                     {"id": call_id(0), "type": "function",
+                                      "function": {"name": _PROBE_FUNCTION, "arguments": {}}}]}])
+        if rendered is None or call["closing"] not in rendered:
+            raise ValueError("the model's add-on file closes a call with text its "
+                             "template never writes after one")
+        self._call_from_file = True
+        return call["opening"], call["closing"]
+
+    def _template_call_texts(self) -> tuple[str, str] | None:
         """The texts around a call, for a template whose call tags also mark every reply."""
-        if self._tool_tokens is not None or self._tool_calls is None \
-                or not hasattr(self._context, "first_special_token"):
+        if self._tool_calls is None or not hasattr(self._context, "first_special_token"):
             return None
         call_open = self._tool_calls.call_open
         if self._context.first_special_token(call_open) is None \
@@ -783,6 +803,10 @@ class ResolvedTemplate:
             return None
         if self._tool_calls.body is not None:
             return self._tool_calls.body
+        if self._call_from_file:
+            # The name ends where the file says; the arguments are read as written.
+            return CallBody(name_close=self._context.addon_call()["name_close"], key_open="",
+                            key_close="", pair_sep="", body_close="", empty_close="")
         return extract_call_body(self._render,
                                  self._tool_calls.call_open, self._call_close_text())
 

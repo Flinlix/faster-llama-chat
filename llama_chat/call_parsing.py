@@ -92,6 +92,9 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
+    whole = _as_json_object(rest)
+    if whole is not None:
+        return ToolCall(name=name, arguments=whole)
     # Compared whole, not by its ending: a model that wraps each argument closes
     # the last one with the very same text.
     if rest == call_body.empty_close:
@@ -103,6 +106,15 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     if call_body.key_open and rest.startswith(call_body.key_open):
         rest = rest[len(call_body.key_open):]
     return ToolCall(name=name, arguments=_parse_pairs(rest, call_body))
+
+
+def _as_json_object(text: str) -> dict | None:
+    """``text`` as the JSON object it holds, or ``None`` where it holds none."""
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def _parse_pairs(text: str, call_body: CallBody) -> dict:

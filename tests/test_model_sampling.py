@@ -5,10 +5,10 @@ import re
 
 import pytest
 
-from llama_chat import model_sampling
+from llama_chat import addon_files
+from llama_chat.addon_files import FAMILY_FILES, read_addon_file, template_fingerprint
 from llama_chat.config import Config
-from llama_chat.model_sampling import (DEFAULT_SAMPLING, FAMILY_FILES, UNSTATED_SAMPLING,
-                                       family_sampling, template_fingerprint,
+from llama_chat.model_sampling import (DEFAULT_SAMPLING, UNSTATED_SAMPLING, family_sampling,
                                        with_model_sampling)
 
 _TEMPLATE = "{{ messages }}"
@@ -47,7 +47,7 @@ def test_what_a_recommendation_leaves_out_stays_switched_off(tmp_path):
 
 
 def test_a_shipped_file_applies_to_the_template_it_names(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_sampling, "FAMILY_FILES", tmp_path)
+    monkeypatch.setattr(addon_files, "FAMILY_FILES", tmp_path)
     (tmp_path / "family.json").write_text(json.dumps(
         {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
     assert family_sampling(None, _TEMPLATE) == {"top_p": 0.8}
@@ -67,5 +67,14 @@ def test_a_malformed_add_on_file_is_refused_when_the_model_loads(tmp_path, conte
 def test_every_shipped_file_names_its_templates_and_says_where_its_values_come_from(path):
     found = json.loads(path.read_text())
     assert found["templates"] and all(re.fullmatch("[0-9a-f]{64}", t) for t in found["templates"])
-    assert found["source"] and found["sampling"]
-    model_sampling._read_family_file(path)      # passes the check a model's load runs
+    assert found["source"] and (found.get("sampling") or found.get("call"))
+    read_addon_file(path)                       # passes the check a model's load runs
+
+
+@pytest.mark.parametrize("call", [{"opening": "x"},
+                                  {"opening": "x", "name_close": "y", "closing": 3}])
+def test_an_add_on_file_with_an_incomplete_call_is_refused(tmp_path, call):
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps({"call": call}))
+    with pytest.raises(ValueError, match="call"):
+        read_addon_file(path)

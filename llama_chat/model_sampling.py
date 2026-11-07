@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
 
+from .addon_files import SAMPLING_FIELDS, addon_file
 from .config import Config
 
-# The sampling fields a model may recommend, and the GGUF keys that state them.
-SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty")
+# The GGUF keys that state the sampling fields a model may recommend.
 _GGUF_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
               "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
               "repetition_penalty": "general.sampling.penalty_repeat"}
@@ -21,8 +18,6 @@ DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.0
 # What a field a recommendation leaves out stands at: switched off.
 UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
                      "repetition_penalty": 1.0}
-FAMILY_FILES = Path(__file__).parent / "families"
-_FILE_KEYS = {"templates", "source", "sampling"}
 
 
 def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -> Config:
@@ -48,54 +43,13 @@ def with_model_sampling(config: Config, metadata: Callable[[str], str | None]) -
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
 
 
-def template_fingerprint(template: str) -> str:
-    """The fingerprint an add-on file names a chat template by."""
-    return hashlib.sha256(template.encode("utf-8")).hexdigest()
-
-
 def family_sampling(model_path: str | None, template: str | None) -> dict:
     """The sampling a model's add-on file recommends, empty where it has none.
 
-    The file next to the model with its name and ``.json`` comes first, then a
-    file shipped in :data:`FAMILY_FILES` that names the model's template.
-
     Raises:
-        ValueError: If the file found is malformed.
+        ValueError: If the add-on file found is malformed.
     """
-    own = Path(model_path).with_suffix(".json") if model_path else None
-    if own is not None and own.is_file():
-        return _read_family_file(own)["sampling"]
-    if template is None:
-        return {}
-    fingerprint = template_fingerprint(template)
-    for path in sorted(FAMILY_FILES.glob("*.json")):
-        found = _read_family_file(path)
-        if fingerprint in found["templates"]:
-            return found["sampling"]
-    return {}
-
-
-def _read_family_file(path: Path) -> dict:
-    """An add-on file's contents, checked as a model loads.
-
-    Raises:
-        ValueError: If it is not JSON, holds a key no add-on file has, or a
-            sampling value :class:`Config` refuses.
-    """
-    try:
-        found = json.loads(path.read_text())
-    except ValueError as error:
-        raise ValueError(f"{path} is not valid JSON: {error}") from None
-    if not isinstance(found, dict) or not set(found) <= _FILE_KEYS:
-        raise ValueError(f"{path} may hold only {sorted(_FILE_KEYS)}")
-    sampling = found.get("sampling", {})
-    if not isinstance(sampling, dict) or not set(sampling) <= set(SAMPLING_FIELDS):
-        raise ValueError(f"{path}: sampling may set only {list(SAMPLING_FIELDS)}")
-    try:
-        Config(**sampling)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"{path}: {error}") from None
-    return {"templates": list(found.get("templates", [])), "sampling": sampling}
+    return addon_file(model_path, template)["sampling"]
 
 
 def _stated_in_gguf(metadata: Callable[[str], str | None]) -> dict:
