@@ -893,8 +893,11 @@ thought of its own.
 A template that turns reasoning on through the variable chat templates share
 for it, `enable_thinking`, and that marks a thought in a reply, is read for
 both: what the system turn, its opening and its closing, and the generation
-prompt are with reasoning on and off, and the tags around a thought.
-`ChatWrapper.can_reason` says whether that succeeded.
+prompt are with reasoning on and off, and the tags around a thought. Where
+`enable_thinking` changes nothing, `reasoning_effort` is the switch if its
+setting changes what follows the user turn: `"high"` turns reasoning on, and
+the template's own default stands for off. `ChatWrapper.can_reason` says
+whether that succeeded.
 
 Reasoning belongs to the conversation, because a template may switch it in the
 system turn, so it is chosen per `begin`:

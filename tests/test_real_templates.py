@@ -16,6 +16,7 @@ from llama_chat._backend import Backend
 from llama_chat.call_parsing import parse_calls
 from llama_chat.reasoning import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
+from llama_chat.template_extract import reasoning_switch
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
@@ -30,13 +31,15 @@ class _TemplateContext:
         self._renderers = {prompted: backend.template_renderer(
             fixture["chat_template"], fixture["eos_token"], prompted)
             for prompted in (False, True)}
+        self._switch = reasoning_switch(lambda messages, generation_prompt=False, **variables:
+                                        self._renderers[generation_prompt](
+                                            messages=messages, **variables).prompt)
 
     def render_with_model_template(self, messages, tools=None, *,
                                    generation_prompt=False, reasoning=None):
-        switch = {} if reasoning is None else {"enable_thinking": reasoning}
         try:
             return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **switch).prompt
+                messages=messages, tools=tools, **self._switch(reasoning)).prompt
         except Exception:
             return None
 

@@ -16,6 +16,7 @@ from ._backend import Backend, set_log_level
 from .config import Config, Sampling
 from .messages import Eviction
 from .template import TemplateFragments
+from .template_extract import reasoning_switch
 
 SEQ = 0  # single active conversation -> single sequence id
 
@@ -117,6 +118,7 @@ class KVContext:
             self._settle_cache_edits()
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
+            self._reasoning_switch = self._build_reasoning_switch()
         except BaseException:
             # Free whatever was created before the failure.
             if self._sampler is not None:
@@ -221,9 +223,9 @@ class KVContext:
 
         Args:
             generation_prompt: Append the prompt a reply is generated after.
-            reasoning: Set the template's reasoning switch, ``enable_thinking``,
-                the variable chat templates share for it. ``None`` leaves it
-                unset.
+            reasoning: Turn the template's reasoning switch on or off, as
+                :func:`~llama_chat.template_extract.reasoning_switch` reads it.
+                ``None`` leaves it unset.
 
         Returns:
             The prompt string, or ``None`` where the model ships no template or
@@ -231,10 +233,9 @@ class KVContext:
         """
         if self._model_formatter is None:
             return None
-        switch = {} if reasoning is None else {"enable_thinking": reasoning}
         try:
             return self._model_formatter[generation_prompt](
-                messages=messages, tools=tools, **switch).prompt
+                messages=messages, tools=tools, **self._reasoning_switch(reasoning)).prompt
         except Exception:
             return None
 
@@ -255,6 +256,14 @@ class KVContext:
         eos = self._backend.eos_text(self._vocab)
         return {prompted: self._backend.template_renderer(template, eos, prompted)
                 for prompted in (False, True)}
+
+    def _build_reasoning_switch(self) -> Callable[[bool | None], dict]:
+        """What turns this model's reasoning on and off, read from its template."""
+        if self._model_formatter is None:
+            return lambda reasoning: {}
+        return reasoning_switch(lambda messages, generation_prompt=False, **variables:
+                                self._model_formatter[generation_prompt](
+                                    messages=messages, **variables).prompt)
 
     # ----- cache edits ---------------------------------------------------
     def reset(self) -> None:

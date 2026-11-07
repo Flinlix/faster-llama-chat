@@ -54,6 +54,34 @@ _STRING2 = "VALTWO"
 Render = Callable[..., "str | None"]
 
 
+def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | None], dict]:
+    """The template variables that turn reasoning on or off, as a render reads them.
+
+    ``enable_thinking``, the variable chat templates share for it, or, where
+    that changes nothing, ``reasoning_effort`` where its setting changes what
+    follows the user turn: ``"high"`` for on, the template's own default for
+    off.
+
+    Args:
+        render_variables: Renders ``messages`` with ``generation_prompt`` and
+            template variables as keywords, raising where the template does.
+    """
+    probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
+
+    def rendered(**variables):
+        try:
+            return render_variables(probe, generation_prompt=True, **variables)
+        except Exception:
+            return None
+
+    thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
+    if rendered(**thinking[True]) == rendered(**thinking[False]):
+        on, off = rendered(reasoning_effort="high"), rendered()
+        if None not in (on, off) and on.split(_USER, 1)[-1] != off.split(_USER, 1)[-1]:
+            thinking = {True: {"reasoning_effort": "high"}, False: {}}
+    return lambda reasoning: {} if reasoning is None else thinking[reasoning]
+
+
 def call_id(n: int) -> str:
     """The id of the ``n``-th call this library writes, nine letters and digits."""
     return f"call{n:05d}"

@@ -7,11 +7,13 @@ carries no model's name, because it reproduces none.
 
 import itertools
 
+import pytest
+
 from llama_chat.template import CallBody
 from llama_chat.template_extract import (_KEY, _KEY2, _NUMBER, _STRING,
                                          _STRING2, _TOOL, extract_call_body,
                                          extract_fragments,
-                                         extract_tool_fragments)
+                                         extract_tool_fragments, reasoning_switch)
 
 
 def _tool_fragments(render):
@@ -486,3 +488,27 @@ def test_no_render_makes_body_extraction_raise():
                 render = _degenerate_render(dropped, constant_body)
                 body = extract_call_body(render, "<call>fn:", "</call>")
                 assert body is None or isinstance(body, CallBody)
+
+
+def _rendering(open_thought):
+    """A render of the probe conversation whose ending ``open_thought(variables)`` decides."""
+    def render(messages, generation_prompt=False, **variables):
+        text = "".join(f"<{m['role']}>{m['content']}" for m in messages)
+        return text + (open_thought(variables) if generation_prompt else "")
+    return render
+
+
+@pytest.mark.parametrize("ending, switch_on", [
+    # Reads the shared variable: it stays the switch.
+    (lambda v: "<think>" if v.get("enable_thinking") else "<think></think>",
+     {"enable_thinking": True}),
+    # Reads only an effort, and that opens the thought: the effort is the switch.
+    (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>",
+     {"reasoning_effort": "high"}),
+    # An effort that changes nothing after the user turn is not a switch.
+    (lambda v: "", {"enable_thinking": True}),
+])
+def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, switch_on):
+    switch = reasoning_switch(_rendering(ending))
+    assert switch(True) == switch_on
+    assert switch(None) == {}
