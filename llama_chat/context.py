@@ -187,8 +187,8 @@ class KVContext:
     def tokenizes_to_tags(self, text: str) -> bool:
         """Whether ``text`` tokenizes into the model's own tags and nothing else.
 
-        A tag is a control token or one a fine-tune added. See the README,
-        "Tool calling".
+        A tag is a control token or one a fine-tune added. See
+        design_history.md, "How a call's format is recovered".
         """
         toks = self.tokenize(text, add_special=False)
         return bool(toks) and all(self._backend.is_special(self._vocab, t) for t in toks)

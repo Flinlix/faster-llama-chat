@@ -12,7 +12,7 @@ cache equals the concatenation of the message table, and every prefill appends
 at the cache's end.
 
 The turn-closing tag is decoded after the post-reply eviction rather than before
-it. See the README, "How eviction works".
+it. See design_history.md, "How eviction works".
 """
 
 from __future__ import annotations
@@ -569,7 +569,7 @@ class ChatWrapper:
         tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
         closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
         text = written_between(result_text(result), prefix, suffix)
-        # The body is clipped to fit; the tags never are. See the README,
+        # The body is clipped to fit; the tags never are. See
         # "Tool calling".
         free = self._config.context_size - self._table.total
         if len(tags) + len(closing) > free:
@@ -596,8 +596,8 @@ class ChatWrapper:
         model is left holding only what the reader got. The cut is at the
         cache's end, so the tokens the shortened message shares with the old
         one are not decoded again; the rest of it, its closing tag at least, is.
-        A cache that cannot shift is rebuilt from the whole conversation
-        instead, as its eviction is.
+        A cache that cannot cut there goes back to a state it rested in, and is
+        decoded again from the whole conversation only where none is saved.
 
         Args:
             keep_text: What stays, a prefix of the message's text. The whole
@@ -735,8 +735,8 @@ class ChatWrapper:
     def can_shift(self) -> bool:
         """Whether eviction can shift surviving KV in place.
 
-        ``False`` means eviction re-prefills the survivors instead. See the
-        README, "How eviction works".
+        ``False`` means a cut, a saved state or decoding the survivors again
+        instead. See design_history.md, "How eviction works".
         """
         return self._context.can_shift
 

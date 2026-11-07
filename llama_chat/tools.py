@@ -107,10 +107,10 @@ class _RegisteredTool:
 class ToolRegistry:
     """The tools this process can run, by the name the model calls them.
 
-    Registering makes a tool runnable at once and says where the model is to be
-    told about it: in the system turn, or in a message of its own later. Nothing
+    Registering makes a tool runnable at once and says when the model is to be
+    told about it: by ``begin``, or later by ``declare_unknown_tools``. Nothing
     here writes to a model, so nothing here learns what the conversation still
-    holds. See the README, "Registering, and where the declaration lands".
+    holds. See the README, "Tool calling".
     """
 
     def __init__(self) -> None:

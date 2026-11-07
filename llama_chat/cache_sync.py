@@ -14,7 +14,7 @@ class CacheSync:
     A cache that shifts takes an eviction in place. One that cannot shift is
     cut at its end where it takes that; otherwise it goes back to a state it
     rested in, where one is saved, and is decoded again from the table where
-    none is. See the README, "How eviction works".
+    none is. See design_history.md, "How eviction works".
     """
 
     def __init__(self, context: CacheContext, table: MessageTable) -> None:
