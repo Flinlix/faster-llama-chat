@@ -6,9 +6,8 @@ from llama_chat.config import Config
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
-from tests.wrappers import assert_consistent, begun_wrapper, reasoning_wrapper
-
-
+from tests.wrappers import (assert_consistent, begun_wrapper, reasoning_wrapper, rendered_close,
+                            rendered_reply)
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -39,7 +38,7 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     """Same text, other tokens: the template's past reply is the text, tokenized."""
     w, fake = begun_wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
     reply = w.reply("hi").finish()
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
+    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "ok!!"))
     assert reply.text == "ok!!"
     assert_consistent(w, fake)
 
@@ -58,7 +57,7 @@ def test_a_reply_after_an_empty_assistant_tag_is_kept_as_its_text_too():
                     fragments=replace(DEFAULT_FRAGMENTS, assistant_prefix=""))
     w.begin("s")
     w.reply("hi").finish()
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
+    assert w._table.messages[-1].token_ids == fake.tokenize("ok!!" + DEFAULT_FRAGMENTS.assistant_suffix)
     assert_consistent(w, fake)
 
 
@@ -68,7 +67,7 @@ def test_the_tokens_that_stay_are_not_decoded_again():
     before = list(fake.prefill_calls)
     w.truncate_last_reply("Eins.")
     (start, n, _logits), = fake.prefill_calls[len(before):]
-    closing = fake.tokenize(w._formatter.assistant_close())
+    closing = fake.tokenize(rendered_close(fake))
     assert n == len(closing)
     assert start == w.snapshot()[-1]["pos_start"] + w.snapshot()[-1]["n_tokens"] - n
 
@@ -101,7 +100,7 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     w, fake = begun_wrapper()
     w.inject("Eins. Zwei.", "assistant")
     w.truncate_last_reply("Eins.")
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Eins.")
+    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Eins."))
     assert_consistent(w, fake)
 
 

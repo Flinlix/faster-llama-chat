@@ -210,6 +210,11 @@ class FakeContext:
     def token_text(self, token: int) -> str:
         return {TOOL_OPEN: "<call>", TOOL_CLOSE: "</call>"}.get(token, "")
 
+    def text_of(self, tokens: list[int]) -> str:
+        """What ``tokens`` spell: characters, the generated ones as they were generated, and the call tags."""
+        return "".join(self._generated_chars.get(t) or self.token_text(t)
+                       or (chr(t) if 0 < t < 0x110000 else "") for t in tokens)
+
     def render_with_model_template(self, messages: list[dict],
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,

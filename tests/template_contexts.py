@@ -135,6 +135,8 @@ class ConversationContext(TagTokenizingContext):
         self.can_shift = can_shift
         self.can_cut_tail = can_shift
         self.context_size = 1 << 20
+        self.resets = 0             # how often the whole cache was emptied
+        self.edits: list[tuple[str, int]] = []   # ("cut", position) and ("shift", tokens), in order
         self._replies = list(replies)
         self.before_reply = None
 
@@ -143,6 +145,7 @@ class ConversationContext(TagTokenizingContext):
 
     def reset(self):
         self.cache = []
+        self.resets += 1
 
     def warmup(self):
         pass
@@ -160,10 +163,12 @@ class ConversationContext(TagTokenizingContext):
 
     def remove_from(self, pos):
         assert self.can_cut_tail and 0 <= pos <= len(self.cache)
+        self.edits.append(("cut", pos))
         del self.cache[pos:]
 
     def apply_eviction(self, ev):
         assert self.can_shift and len(self.cache) == ev.old_total
+        self.edits.append(("shift", ev.shift_delta))
         del self.cache[ev.remove_start:ev.remove_end]
 
     def generate(self, start_pos, max_generated_tokens, out=None, cancel=None,
@@ -172,6 +177,8 @@ class ConversationContext(TagTokenizingContext):
         if self.before_reply is not None:
             self.before_reply(self.text_of(self.cache))
         generated = out if out is not None else GenerationAccumulator()
+        if isinstance(self._replies[0], ScriptedCall):
+            return (yield from self._generate_call(generated, boundary))
         reply = self._replies.pop(0)[:max(0, max_generated_tokens)]
         for ch in reply:
             self.cache.append(ord(ch))
@@ -181,5 +188,42 @@ class ConversationContext(TagTokenizingContext):
         generated.stop_reason = "end_of_turn"
         return generated
 
+    def _generate_call(self, generated, boundary):
+        """Write the scripted call as the model would: its opening, its body, its closing."""
+        call = self._replies.pop(0)
+        assert boundary is not None and (boundary.tool_tokens or boundary.call_texts), \
+            "a call was scripted where calls are withheld"
+        if boundary.tool_tokens:
+            opening, closing = ([token] for token in boundary.tool_tokens)
+        else:
+            opening, closing = ([ord(c) for c in text] for text in boundary.call_texts)
+        for token in opening + [ord(c) for c in call.body] + closing:
+            self.cache.append(token)
+            generated.token_ids.append(token)
+        generated.stop_reason, generated.tool_call = "tool_call", call.body
+        return generated
+        yield
+
     def close(self):
         pass
+
+
+class ScriptedCall:
+    """A call the conversation context writes in place of a reply, ``body`` between its tags."""
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+
+class HonestTagContext(ConversationContext):
+    """The same, tokenizing a tag as its token only where special-token parsing is on.
+
+    Text tokenized with parsing off, as a caller's own is, keeps a tag it
+    contains as its characters, so a tag typed into a message cannot become
+    the model's own.
+    """
+
+    def tokenize(self, text, add_special=False, parse_special=True):
+        if not parse_special:
+            return [ord(c) for c in text]
+        return super().tokenize(text, add_special, parse_special)

@@ -11,9 +11,8 @@ from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import EMPTY_THOUGHT, FakeContext, THINK_ON
 
-from tests.wrappers import THOUGHTFUL, assert_consistent, reasoning_wrapper
-
-
+from tests.wrappers import (THOUGHTFUL, assert_consistent, reasoning_wrapper, rendered_close,
+                            rendered_prompt, rendered_reply)
 class _KeepsThought(FakeContext):
     """A template that writes a past reply's thought into the conversation."""
 
@@ -76,13 +75,16 @@ def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     w, fake = reasoning_wrapper(False, gen_text="Antwort.", gen_tokens=8)
     before = len(fake.cache)
     w.reply("hi").finish()
-    user = w._fragment_tokens("user", "hi")
-    opening = fake.tokenize(w._formatter.generation_prompt())
-    assert w._formatter.generation_prompt().endswith(EMPTY_THOUGHT)
+    user = fake.tokenize(fake.render_with_model_template(
+        [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}], reasoning=False)
+        [len(fake.render_with_model_template([{"role": "system", "content": "s"}],
+                                              reasoning=False)):])
+    opening = fake.tokenize(rendered_prompt(fake, reasoning=False))
+    assert rendered_prompt(fake, reasoning=False).endswith(EMPTY_THOUGHT)
     # Generated after the empty thought, kept without it, as a past reply is.
     assert (before, len(user) + len(opening)) in [(start, n) for start, n, _
                                                   in fake.prefill_calls]
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
+    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Antwort.", w._reasoning))
     assert_consistent(w, fake)
 
 
@@ -93,7 +95,7 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     assert stream.reply.text == "Antwort."
     assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
     assert w.snapshot()[-1]["text"] == "Antwort."
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
+    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Antwort.", w._reasoning))
     assert_consistent(w, fake)
     w.reply("weiter").finish()
     assert_consistent(w, fake)
@@ -135,7 +137,7 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w, fake = reasoning_wrapper()
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
-    assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Ant")
+    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Ant", w._reasoning))
     assert_consistent(w, fake)
 
 
@@ -206,7 +208,7 @@ def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
     w.reply("hi").finish()
     assert w.snapshot()[-1]["text"] == "Antwort."
     assert fake.tokenize(THOUGHTFUL) == w._table.messages[-1].token_ids[
-        len(fake.tokenize(w._formatter.generation_prompt())):][:len(THOUGHTFUL)]
+        len(fake.tokenize(rendered_prompt(fake, reasoning=True))):][:len(THOUGHTFUL)]
     assert_consistent(w, fake)
 
 
@@ -225,7 +227,7 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
     newest = w._table.messages[-1]
     assert reply.text == "Antwort."
     assert newest.token_ids == w._context.tokenize(
-        w._formatter.generation_prompt() + THOUGHTFUL + w._formatter.assistant_close())
+        rendered_prompt(fake, reasoning=True) + THOUGHTFUL + rendered_close(fake, reasoning=True))
     assert_consistent(w, fake)
 
 

@@ -15,9 +15,8 @@ from llama_chat.config import Config, Sampling
 from llama_chat.template import CallBoundary, TemplateFormatter
 from llama_chat.wrapper import ChatWrapper, ContextOverflowError
 from tests.fake_context import BOS, DEFAULT_FRAGMENTS, FakeContext
-from tests.wrappers import assert_consistent, begun_wrapper, cache_tokens, fragments_with, tool_wrapper
-
-
+from tests.wrappers import (assert_consistent, begun_wrapper, cache_tokens, fragments_with,
+                            rendered_close, tool_wrapper)
 def _n_kept(wrapper):
     """Messages the limit counts: everything but the system prompt."""
     return len(wrapper.snapshot()) - 1
@@ -143,7 +142,7 @@ def test_a_refusing_reply_prefills_only_new_tokens_and_reuses_context():
 
     # The only new prefill is the request prompt (user fragment + assistant-open)
     # plus the turn-closing tag, never any survivor.
-    close_len = len(fake.tokenize(w._formatter.assistant_close()))
+    close_len = len(fake.tokenize(rendered_close(fake)))
     new_prefill = fake.total_prefilled() - prefilled_after_begin
     assert new_prefill == reply.n_prefilled_tokens + close_len
     assert reply.n_generated_tokens == 4
@@ -164,7 +163,7 @@ def test_the_request_and_its_opening_tag_are_one_decode():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    close_len = len(fake.tokenize(w._formatter.assistant_close()))
+    close_len = len(fake.tokenize(rendered_close(fake)))
     mark = len(fake.prefill_calls)
 
     reply = w.reply("hi").finish()
@@ -186,7 +185,7 @@ def test_a_second_generation_does_not_reprefill_history():
     reply = w.reply("second").finish()
     # The second generation prefills only its own prompt and closer; the fake's
     # append-only assertion already guarantees no survivor was re-prefilled.
-    close_len = len(fake.tokenize(w._formatter.assistant_close()))
+    close_len = len(fake.tokenize(rendered_close(fake)))
     assert fake.total_prefilled() - mark == reply.n_prefilled_tokens + close_len
     assert_consistent(w, fake)
 

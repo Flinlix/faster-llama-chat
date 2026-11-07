@@ -73,3 +73,26 @@ def unbegun_tool_wrapper():
     fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.")
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     return w, fake
+
+
+# ----- what the fake template writes, read from its render ----------------------
+_QUESTION = [{"role": "user", "content": "x"}]
+
+
+def rendered_prompt(fake, reasoning=None) -> str:
+    """The generation prompt as the fake template renders one after a question."""
+    asked = fake.render_with_model_template(_QUESTION, reasoning=reasoning)
+    return fake.render_with_model_template(_QUESTION, generation_prompt=True,
+                                           reasoning=reasoning)[len(asked):]
+
+
+def rendered_reply(fake, text, reasoning=None) -> str:
+    """A past reply as the fake template renders one after a question, its tags included."""
+    asked = fake.render_with_model_template(_QUESTION, reasoning=reasoning)
+    return fake.render_with_model_template(
+        _QUESTION + [{"role": "assistant", "content": text}], reasoning=reasoning)[len(asked):]
+
+
+def rendered_close(fake, reasoning=None) -> str:
+    """What the fake template writes after a reply's text to close its turn."""
+    return rendered_reply(fake, "TEXT", reasoning).split("TEXT", 1)[1]

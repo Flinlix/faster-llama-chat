@@ -125,8 +125,6 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
 
 # Families whose calls cannot be read, so tools are refused, and why. A family
 # whose shipped add-on file says how it writes a call is not among them.
-_TOOLS_REFUSED: dict[str, str] = {}
-
 _TOOL = ToolSpec(name="get_weather", description="Weather for a city",
                  parameters={"type": "object", "properties": {"city": {"type": "string"}}})
 
@@ -147,10 +145,6 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
     fixture = json.loads(path.read_text())
     context = TaggedContext(fixture)
     template = ResolvedTemplate(context)
-    if path.stem in _TOOLS_REFUSED:
-        with pytest.raises(ValueError, match=_TOOLS_REFUSED[path.stem]):
-            template.ensure_tools_usable()
-        return
     template.ensure_tools_usable()
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", "sunny"), "It is sunny."))
@@ -182,8 +176,7 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
         assert ours == rendered, reasoning
 
 
-@pytest.mark.parametrize("path", [p for p in _tool_templates()
-                                  if p.stem not in _TOOLS_REFUSED],
+@pytest.mark.parametrize("path", list(_tool_templates()),
                          ids=lambda p: p.stem)
 def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
     fixture = json.loads(path.read_text())
@@ -233,8 +226,7 @@ def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
     assert template.call_body.string_type == "string"
 
 
-@pytest.mark.parametrize("path", [p for p in _tool_templates()
-                                  if p.stem not in _TOOLS_REFUSED],
+@pytest.mark.parametrize("path", list(_tool_templates()),
                          ids=lambda p: p.stem)
 def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
     fixture = json.loads(path.read_text())
@@ -269,7 +261,7 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
 _QUOTED_RESULT = '{"weather": "sunny"}\nsecond line'
 
 
-@pytest.mark.parametrize("path", [p for p in _tool_templates() if p.stem not in _TOOLS_REFUSED],
+@pytest.mark.parametrize("path", list(_tool_templates()),
                          ids=lambda p: p.stem)
 def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
     from llama_chat.resolved_template import written_between
