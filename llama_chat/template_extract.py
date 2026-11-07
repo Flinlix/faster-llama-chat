@@ -47,6 +47,7 @@ _KEY2 = "AKEYTWO"
 _STRING = "VALONE"
 _NUMBER = 1234
 _STRING2 = "VALTWO"
+_MARK = "QQMARK"
 
 # Renders messages through the model's template, or returns None where the
 # template rejects their shape, as a template that raises does too. Keywords:
@@ -796,6 +797,31 @@ def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
         return {"system_prefix": user_prefix, "system_suffix": user_suffix}
     sys_prefix, _, sys_suffix = head.partition(_SYS)
     return {"system_prefix": sys_prefix, "system_suffix": sys_suffix}
+
+
+# Characters a template may write otherwise in content, as an escaping filter does.
+ESCAPABLE = ("<", ">", "&", '"', "'")
+
+
+def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ...]:
+    """What the template writes in a user message's content for each of ``texts`` it changes.
+
+    One render, each text between markers of its own, so a template that
+    escapes or drops a tag, or escapes a character, is read as it does so.
+    ``()`` where the render cannot be read that way.
+    """
+    texts = [text for text in dict.fromkeys(texts) if text and _MARK not in text]
+    marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]
+    content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
+    rendered = _refusing(render)([{"role": "user", "content": content}], reasoning=False)
+    if rendered is None or not all(mark in rendered for mark in marks):
+        return ()
+    rewrites = []
+    for n, text in enumerate(texts):
+        written = rendered.split(marks[n], 1)[1].split(marks[n + 1], 1)[0]
+        if written != text:
+            rewrites.append((text, written))
+    return tuple(rewrites)
 
 
 def _trims_content(render: Render) -> bool:

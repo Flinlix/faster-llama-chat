@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 
 
@@ -131,6 +133,9 @@ class TemplateFragments:
         generation_prompt: The whole generation prompt of a reply that does
             not reason, the assistant tag included, where it is more than the
             tag or differs from it, such as by an empty thought.
+        rewrites: Text the template writes otherwise where a message holds
+            it, each with what it writes instead: a tag it escapes or drops,
+            a character it escapes.
     """
 
     system_prefix: str
@@ -143,6 +148,7 @@ class TemplateFragments:
     reply_strip: str | None = None
     system_strip: str | None = None
     generation_prompt: str = ""
+    rewrites: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("reply_strip", "system_strip"):
@@ -154,8 +160,15 @@ class TemplateFragments:
         """``text`` as the template writes it as ``role``'s content."""
         strip = {"assistant": self.reply_strip, "system": self.system_strip}.get(role)
         if strip is not None:
-            return _STRIPS[strip](text)
-        return text.strip() if self.trim_content else text
+            text = _STRIPS[strip](text)
+        elif self.trim_content:
+            text = text.strip()
+        if self.rewrites:
+            written = dict(self.rewrites)
+            # One pass, longest first, so nothing rewritten is rewritten again.
+            pattern = "|".join(re.escape(old) for old in sorted(written, key=len, reverse=True))
+            text = re.sub(pattern, lambda found: written[found.group()], text)
+        return text
 
 
 # What each `reply_strip` and `system_strip` does to a content's text.

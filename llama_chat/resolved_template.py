@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import json
 import re
+import dataclasses
 from dataclasses import dataclass
 
 from .cache_context import MODEL_READER, ensure_answers
 from .tokenizing import tokenize_message
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
-from .template_extract import (call_id, extract_call_body, extract_call_close_text,
+from .template_extract import (ESCAPABLE, call_id, extract_call_body, extract_call_close_text,
+                               extract_content_rewrites,
                                extract_call_separator, extract_named_twice_opening,
                                extract_reasoning, extract_removed_thought,
                                extract_tool_fragments, names_read)
@@ -502,7 +504,9 @@ class ResolvedTemplate:
                 "the model ships no chat template, so the fragments cannot be "
                 "derived; pass them explicitly with ChatWrapper(fragments=...)"
             )
-        return fragments
+        rewrites = extract_content_rewrites(self._context.render_with_model_template,
+                                            (*self._context.tags(), *ESCAPABLE))
+        return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
 
     def _validate_template(self) -> None:
         """Ensure the turn-terminator opens with one of this model's own tags.
