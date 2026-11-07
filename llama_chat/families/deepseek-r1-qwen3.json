@@ -1,0 +1,10 @@
+{
+ "templates": [
+  "97ee3167ef705d0e9e5dc1610dd019322c60b51dd3823ad51eb5562092e320bc"
+ ],
+ "source": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B, model card",
+ "sampling": {
+  "temperature": 0.6,
+  "top_p": 0.95
+ }
+}

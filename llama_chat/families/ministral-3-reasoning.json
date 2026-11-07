@@ -1,0 +1,10 @@
+{
+ "templates": [
+  "87989798313de539b55bdeb19c98214e1a7bdd8c3a62b7d7cf4138d58ffdbeb5"
+ ],
+ "source": "mistralai/Ministral-3-8B-Reasoning-2512, model card: temperature 0.7, and top_p 0.95 in its examples",
+ "sampling": {
+  "temperature": 0.7,
+  "top_p": 0.95
+ }
+}

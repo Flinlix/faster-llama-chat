@@ -1,0 +1,13 @@
+{
+ "templates": [
+  "7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67"
+ ],
+ "source": "Qwen/Qwen3.5-9B, model card, thinking mode for general tasks; its presence_penalty 1.5 has no field here",
+ "sampling": {
+  "temperature": 1.0,
+  "top_k": 20,
+  "top_p": 0.95,
+  "min_p": 0.0,
+  "repetition_penalty": 1.0
+ }
+}
