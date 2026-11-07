@@ -188,6 +188,8 @@ _TOOLS_REFUSED = {
     "ministral-2410": "declares no tools",  # declared before the newest user turn only
     "mistral-small-3.2": "declares no tools",  # declared before the newest user turn only
     "kimi-k3": "call format",           # a call's body is not recovered
+    "gpt-oss": "plain text",            # the call is named in the turn's header, before any tag
+    "muse-glimmer": "plain text",       # the call is named in the turn's header, before any tag
     "minicpm-5": "plain text",          # a call is bare JSON, without a tag
     "hunyuan-4": "plain text",          # no call tag resolves in this stand-in
 }

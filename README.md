@@ -831,7 +831,9 @@ argument and the second call's opening. The first tag after the arguments is
 not enough, because a template may close each argument with a tag of its own,
 `<arg_value>v</arg_value></tool_call>`. Where a template writes no tag between
 two calls, the closing tag is the first after the last argument, which may be
-the token that ends the turn.
+the token that ends the turn. A turn that calls may open without the content
+tag a reply in words opens with; the call then begins after the tags the two
+share.
 
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is

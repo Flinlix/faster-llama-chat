@@ -311,10 +311,17 @@ def extract_tool_fragments(render: Render,
     head = text.split(_TOOL, 1)[0]
     # The turn holding the call has to be locatable, or there is no telling
     # where the conversation before it ends and the call's own opening begins.
-    opened = _USER + fragments.user_suffix + fragments.assistant_prefix
-    if opened not in head:
+    # It may open without the content tag a reply in words opens with, and
+    # then begins after the tags the two share.
+    after_user = _USER + fragments.user_suffix
+    if after_user not in head:
         return None
-    call_open = head.split(opened, 1)[1]
+    turn = head.split(after_user, 1)[1]
+    shared = (len(fragments.assistant_prefix) if turn.startswith(fragments.assistant_prefix)
+              else shared_tags_length(turn, fragments.assistant_prefix))
+    if not shared and fragments.assistant_prefix:
+        return None
+    call_open = turn[shared:]
     # A newest reply may open with more than a past one, an empty thought for
     # instance, which is not part of the call.
     call_open = call_open.removeprefix(_newest_opening(render, fragments))
