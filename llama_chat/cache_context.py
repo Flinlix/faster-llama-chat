@@ -9,10 +9,12 @@ finds a member missing.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Iterator, Protocol
 
+from .config import Sampling
 from .messages import Eviction
-from .template import TemplateFragments
+from .template import CallBoundary, TemplateFragments
 
 
 class ModelReader(Protocol):
@@ -61,9 +63,10 @@ class CacheContext(ModelReader, Protocol):
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
 
-    def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
-                 out=None, cancel: threading.Event | None = None,
-                 **template_facts) -> Iterator[str]: ...
+    def generate(self, start_pos: int, max_generated_tokens: int, out=None,
+                 cancel: threading.Event | None = None, sampling: Sampling | None = None,
+                 ends_turn: Callable[[int], bool] | None = None,
+                 boundary: CallBoundary = CallBoundary()) -> Iterator[str]: ...
 
     def apply_eviction(self, ev: Eviction) -> None: ...
 

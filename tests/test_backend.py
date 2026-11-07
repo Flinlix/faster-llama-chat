@@ -8,6 +8,7 @@ everywhere else, which answers that question itself and so cannot test it. See
 the README, "Tool calling".
 """
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +22,7 @@ import llama_chat
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import tokenize_message
+from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.context import SEQ, GenerationAccumulator, KVContext
 
 
@@ -452,3 +454,16 @@ def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache
 
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
     assert tokenize_message(_merging_context(), "", "", "", add_special=True) == ["BOS"]
+
+
+def test_every_method_takes_the_arguments_the_written_boundary_lists():
+    from tests.fake_context import FakeContext
+    from tests.template_contexts import ConversationContext
+
+    def parameters(owner, name):
+        member = inspect.getattr_static(owner, name, None)
+        return list(inspect.signature(member).parameters) if inspect.isfunction(member) else None
+
+    for context in (KVContext, FakeContext, ConversationContext):
+        for name in CACHE_CONTEXT:
+            assert parameters(context, name) == parameters(CacheContext, name), (context, name)
