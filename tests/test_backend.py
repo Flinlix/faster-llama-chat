@@ -316,3 +316,25 @@ def test_a_tag_typed_inside_a_message_stays_text():
 
 def test_the_beginning_of_a_conversation_is_attached_to_the_first_message():
     assert _merging_context().tokenize_fragment("lead ", "word", "", add_special=True)[0] == "BOS"
+
+
+def test_tokens_generated_in_other_pieces_come_back_as_their_text_tokenizes():
+    """A word the model wrote as "Nut" + "zer" holds the one token its text gives."""
+    context = object.__new__(KVContext)
+    context._vocab = None
+    context._backend = SimpleNamespace(
+        is_special=lambda vocab, token: token.startswith("TAG"),
+        token_to_piece_bytes=lambda vocab, token: token.encode(),
+        tokenize=lambda vocab, text, add_special, parse_special: text.split(" "))
+    retokenized = context.retokenized(["Nut", "zer", "TAG<e>", "a", " b"])
+    assert retokenized == ["Nutzer", "TAG<e>", "a", "b"]
+
+
+def test_text_cut_inside_a_character_keeps_the_tokens_it_was_generated_as():
+    context = object.__new__(KVContext)
+    context._vocab = None
+    context._backend = SimpleNamespace(
+        is_special=lambda vocab, token: False,
+        token_to_piece_bytes=lambda vocab, token: token,
+        tokenize=lambda vocab, text, add_special, parse_special: [text.encode()])
+    assert context.retokenized([b"a", "ä".encode()[:1]]) == [b"a", "ä".encode()[:1]]

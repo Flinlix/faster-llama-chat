@@ -933,7 +933,8 @@ thought. A finished reply is kept as the template
 writes a past reply: without its thought where the template leaves a past
 thought out, and without what a generation prompt adds, such as an empty
 thought, and in the tokens its text tokenizes into, where the model generated
-a word in other pieces. Where that differs from what
+a word in other pieces. A reply whose thought the template keeps stays as it
+was generated, thought included, in the tokens its text tokenizes into. Where that differs from what
 was generated, the reply is decoded again in that form, from the first token
 that differs, before the next request, under the same lock. The post-reply eviction is sized by that form, so a long
 thought evicts nothing, and runs first, so the decode carries its shift. A

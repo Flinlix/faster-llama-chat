@@ -1299,8 +1299,10 @@ class ChatWrapper:
         ``as_past`` is set and a closed reply's tokens differ from the
         template's past reply of its answer, the reply is decoded again in that
         form, from the first token that differs, after an eviction sized by
-        that form, so the decode carries the eviction's shift; a turn that
-        called tools keeps the tokens it was generated as. The message's text
+        that form, so the decode carries the eviction's shift. A reply kept as
+        generated, its thought included, is decoded again where its text
+        tokenizes into other tokens than were generated; a turn that called
+        tools keeps the tokens it was generated as. The message's text
         is the answer either way. A closed reply without one, all thought or
         cut before its answer, is removed where the template writes two user
         turns in a row, and kept as an empty reply where it does not.
@@ -1345,6 +1347,13 @@ class ChatWrapper:
         # text tokenizes into all make the two differ.
         if as_past and fits and not holds_call and past != msg.token_ids + close_tokens:
             return self._record_as_past(msg, past)
+        if not as_past and not holds_call:
+            # Kept as generated, in the tokens its text tokenizes into.
+            n_open = len(open_tokens)
+            kept = (msg.token_ids[:n_open] + self._context.retokenized(msg.token_ids[n_open:])
+                    + close_tokens)
+            if kept != msg.token_ids + close_tokens:
+                return self._record_as_past(msg, kept)
         # Trim back after the reply, so the cache rests inside both eviction
         # limits for the next generation, an early close included. The closer
         # counts against the threshold even though it is decoded after the trim.

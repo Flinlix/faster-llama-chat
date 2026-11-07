@@ -199,6 +199,27 @@ class KVContext:
         toks = self.tokenize(text, add_special=False)
         return bool(toks) and all(self._backend.is_special(self._vocab, t) for t in toks)
 
+    def retokenized(self, tokens: list[int]) -> list[int]:
+        """``tokens`` as their text tokenizes: the tags kept, the text between tokenized again."""
+        out, run = [], []
+        for token in tokens:
+            if self._backend.is_special(self._vocab, token):
+                out += self._tokenized_text(run)
+                out.append(token)
+                run = []
+            else:
+                run.append(token)
+        return out + self._tokenized_text(run)
+
+    def _tokenized_text(self, run: list[int]) -> list[int]:
+        """Plain tokens as their text tokenizes, or as they are where it is not whole UTF-8."""
+        try:
+            text = b"".join(self._backend.token_to_piece_bytes(self._vocab, token)
+                            for token in run).decode("utf-8")
+        except UnicodeDecodeError:
+            return run          # a reply cut inside a character
+        return self.tokenize(text, add_special=False, parse_special=False) if text else []
+
     def tags(self) -> tuple[str, ...]:
         """The texts of every one of the model's own tags, read once."""
         if self._tags is None:

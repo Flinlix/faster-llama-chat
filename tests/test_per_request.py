@@ -741,3 +741,14 @@ def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
     assert [m["text"] for m in w.snapshot()] == ["s", "zwei"]
     _as_rendered(w, fake)
 
+
+# ----- a reply kept with its thought -----------------------------------------
+def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into():
+    w, fake = _reasoning(keeps_thought=True, tokens_spell_text=False)
+    assert w._template.reasoning.past_keeps_thought
+    reply = w.reply_without_tools("hi")
+    newest = w._table.messages[-1]
+    assert reply.text == "Antwort."
+    assert newest.token_ids == w._context.tokenize(
+        w._formatter.generation_prompt() + _THOUGHTFUL + w._formatter.assistant_close())
+    _assert_consistent(w, fake)

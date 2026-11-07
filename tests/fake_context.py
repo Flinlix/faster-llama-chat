@@ -64,7 +64,8 @@ class FakeContext:
                  tokens_spell_text: bool = True,
                  closes_turn_before_next: bool = False,
                  can_reason: bool = False,
-                 user_join: str | None = "") -> None:
+                 user_join: str | None = "",
+                 keeps_thought: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -80,6 +81,9 @@ class FakeContext:
         # What this template writes between two user turns in a row; ``None``
         # for one that refuses them.
         self._user_join = user_join
+        # Whether a past reply keeps its thought, where one that called no tool
+        # otherwise loses it.
+        self._keeps_thought = keeps_thought
         if can_reason:
             self._fragments = replace(
                 fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
@@ -97,6 +101,7 @@ class FakeContext:
         # generates a word in other pieces than its text tokenizes into.
         self._tokens_spell_text = tokens_spell_text
         self._next_gen = 1000
+        self._generated_chars: dict[int, str] = {}   # what each generated token spells
         self.samplings = []  # the sampling each generation was handed
 
     # ----- tokenization --------------------------------------------------
@@ -114,6 +119,11 @@ class FakeContext:
         return (self.tokenize(prefix, add_special=add_special, parse_special=True)
                 + self.tokenize(content, parse_special=False)
                 + self.tokenize(suffix, parse_special=True))
+
+    def retokenized(self, tokens: list[int]) -> list[int]:
+        # As the text tokenizes: one token per character, the tags kept.
+        return [ord(self._generated_chars[t]) if t in self._generated_chars else t
+                for t in tokens]
 
     def extract_fragments(self) -> TemplateFragments:
         return self._fragments
@@ -205,7 +215,7 @@ class FakeContext:
             if role == "system" and renders_reasoning:
                 out.append(THINK_ON)
             calls = m.get("tool_calls", ()) if self._calls_tools else ()
-            if calls and self._can_reason and m.get("reasoning_content"):
+            if (calls or self._keeps_thought) and self._can_reason and m.get("reasoning_content"):
                 out.append(THOUGHT_OPEN + m["reasoning_content"] + THOUGHT_CLOSE)
             for call in calls:
                 fn = call["function"]
@@ -251,6 +261,7 @@ class FakeContext:
                 break
             ch = self._gen_text[i] if i < len(self._gen_text) else "x"
             tok = ord(ch) if self._tokens_spell_text else self._next_gen + i
+            self._generated_chars[tok] = ch
             self.cache.append(tok)  # decoded into the cache before surfacing text
             generated.token_ids.append(tok)
             generated.text += ch
