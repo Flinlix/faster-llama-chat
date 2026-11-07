@@ -938,7 +938,9 @@ was generated, the reply is decoded again in that form, from the first token
 that differs, before the next request, under the same lock. The post-reply eviction is sized by that form, so a long
 thought evicts nothing, and runs first, so the decode carries its shift. A
 reply left with no answer, all thought or cut before its first word, is
-removed. A turn that called tools keeps the tokens it was generated as.
+removed where the template writes two user turns in a row, and kept as an
+empty reply where it does not. A turn that called tools keeps the tokens it was
+generated as.
 
 ## Persistence
 
@@ -995,6 +997,13 @@ that strips a reply or a system prompt differently from a user turn says so in
 `reply_strip` or `system_strip`.
 The assistant tags are those of a past reply; what the generation prompt holds
 where it is more than that tag is `generation_prompt`.
+
+Two user turns in a row, as an injected message or a request after a reply that
+was removed leaves them, are written as the template writes them: a template
+may close the first with tags of its own, such as the opening of a reply that
+never came, and those are written at its end when the second follows, so they
+leave with it when it is evicted. A template that refuses such a pair, or
+merges it into one turn, gets none: writing one raises `ValueError`.
 
 **The fragments are derived from the model automatically.** At construction the
 wrapper reads the model's own chat template from the GGUF

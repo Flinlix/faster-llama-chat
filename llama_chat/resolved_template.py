@@ -118,6 +118,7 @@ class ResolvedTemplate:
                            else self._resolve_fragments())
         self._validate_template()
         self._turn_end_token = self._resolve_turn_end_token()
+        self._user_turn_join = self._resolve_user_turn_join()
         # None where this model cannot call tools at all.
         self._tool_calls = (tool_calls if tool_calls is not None
                             else self._resolve_tool_calls())
@@ -144,6 +145,15 @@ class ResolvedTemplate:
         ``None`` where the closing does not begin with one of the model's tags.
         """
         return self._turn_end_token
+
+    @property
+    def user_turn_join(self) -> str | None:
+        """What a user turn ends with, beyond its own closing, where another follows it.
+
+        ``None`` where the template does not write two user turns in a row as
+        two turns: it refuses them, or merges them into one.
+        """
+        return self._user_turn_join
 
     @property
     def reasoning(self) -> Reasoning | None:
@@ -448,6 +458,26 @@ class ResolvedTemplate:
                 "generation would never stop. The model's embedded chat template "
                 "is malformed; supply correct tags with ChatWrapper(fragments=...)."
             )
+
+    def _resolve_user_turn_join(self) -> str | None:
+        """Read what the template writes between two user turns in a row."""
+        if not hasattr(self._context, "render_with_model_template"):
+            return ""
+        rendered = self._context.render_with_model_template(
+            [{"role": "user", "content": _PROMPT}, {"role": "user", "content": _NEXT}])
+        if rendered is None or _PROMPT not in rendered or _NEXT not in rendered:
+            return None
+        between = rendered.split(_PROMPT, 1)[1].split(_NEXT, 1)[0]
+        closing, opening = self._fragments.user_suffix, self._fragments.user_prefix
+        if (len(between) < len(closing) + len(opening) or not between.startswith(closing)
+                or not between.endswith(opening)):
+            return None
+        join = between[len(closing):len(between) - len(opening)]
+        # Plain text would tokenize together with the end of the turn before it.
+        if join and hasattr(self._context, "tokenizes_to_tags") \
+                and not self._context.tokenizes_to_tags(join):
+            return None
+        return join
 
     def _resolve_turn_end_token(self) -> int | None:
         """The first token of the turn-terminator, where it is one of the model's tags."""

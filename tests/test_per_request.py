@@ -676,3 +676,68 @@ def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
     assert f.feed(" ") + f.feed(" x") + f.flush() == "  x"
     g = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
     assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") + g.flush() == "b"
+
+
+# ----- two user turns in a row ---------------------------------------------
+def _as_rendered(w, fake):
+    """The cache equals the template's own render of the conversation."""
+    _assert_consistent(w, fake)
+    rows = w.snapshot()
+    rendered = fake.render_with_model_template(
+        [{"role": r["role"], "content": r["text"]} for r in rows])
+    assert "".join(chr(t) for t in fake.cache if t >= 0) == rendered
+
+
+def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_template_does():
+    w, fake = _wrapper(user_join="<sep>", gen_tokens=0)
+    w.reply_without_tools("eins")
+    assert [m["role"] for m in w.snapshot()] == ["system", "user"]
+    fake._gen_tokens = 5
+    w.reply_without_tools("zwei")
+    _as_rendered(w, fake)
+
+
+def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer():
+    w, fake = _wrapper(user_join=None, gen_tokens=0)
+    w.reply_without_tools("eins")
+    rows = [(m["role"], m["text"]) for m in w.snapshot()]
+    assert rows[1:] == [("user", "eins"), ("assistant", "")]
+    fake._gen_tokens = 5
+    w.reply_without_tools("zwei")
+    _as_rendered(w, fake)
+
+
+def test_an_injected_user_turn_after_a_user_turn_is_joined_or_refused():
+    w, fake = _wrapper(user_join="<sep>")
+    w.inject("eins")
+    w.inject("zwei")
+    _as_rendered(w, fake)
+    w, fake = _wrapper(user_join=None)
+    w.inject("eins")
+    before = list(fake.cache)
+    with pytest.raises(ValueError, match="two user turns"):
+        w.inject("zwei")
+    assert fake.cache == before and len(w.snapshot()) == 2
+
+
+def test_a_history_with_two_user_turns_in_a_row_is_joined_or_refused():
+    fake = FakeContext(user_join="<sep>")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "eins"), ("user", "zwei"), ("assistant", "drei")])
+    _as_rendered(w, fake)
+    fake = FakeContext(user_join=None)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    with pytest.raises(ValueError, match="two user turns"):
+        w.begin("s", [("user", "eins"), ("user", "zwei")])
+
+
+def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
+    fake = FakeContext(user_join="<sep>")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, max_history_messages=1),
+                    context=fake)
+    w.begin("s")
+    w.inject("eins")
+    w.inject("zwei")
+    assert [m["text"] for m in w.snapshot()] == ["s", "zwei"]
+    _as_rendered(w, fake)
+

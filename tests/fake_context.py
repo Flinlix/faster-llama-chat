@@ -63,7 +63,8 @@ class FakeContext:
                  calls_tools: bool = False,
                  tokens_spell_text: bool = True,
                  closes_turn_before_next: bool = False,
-                 can_reason: bool = False) -> None:
+                 can_reason: bool = False,
+                 user_join: str | None = "") -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -76,6 +77,9 @@ class FakeContext:
         self._closes_turn_before_next = closes_turn_before_next
         # A third model, one with a reasoning switch.
         self._can_reason = can_reason
+        # What this template writes between two user turns in a row; ``None``
+        # for one that refuses them.
+        self._user_join = user_join
         if can_reason:
             self._fragments = replace(
                 fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
@@ -177,9 +181,14 @@ class FakeContext:
         if any(not isinstance(m.get("content", ""), str) for m in messages):
             return None             # content blocks: a shape this template refuses
         renders_reasoning = self._can_reason and reasoning is not False
-        out, turn_open = [], False
+        out, turn_open, previous = [], False, None
         for m in messages:
             role = "model" if m["role"] == "assistant" else m["role"]
+            if role == previous == "user":
+                if self._user_join is None:
+                    return None
+                out.append(self._user_join)
+            previous = role
             if turn_open and role != "tool" and role != "model" \
                     and self._closes_turn_before_next:
                 out.append("<turn|>\n")

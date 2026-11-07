@@ -83,6 +83,29 @@ def test_the_template_loads_and_supports_what_it_is_known_to(path):
 
 
 @pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
+def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(path):
+    _fixture, context, template = _load(path)
+    messages = [{"role": "user", "content": " ping "}, {"role": "user", "content": " again "}]
+    rendered = context.render_with_model_template(messages, generation_prompt=True,
+                                                  reasoning=False)
+    formatter = template.formatter()
+    ours = (template.preamble() + formatter.fragment("user", " ping ")
+            + (template.user_turn_join or "") + formatter.fragment("user", " again ")
+            + formatter.generation_prompt())
+    if template.user_turn_join is None:
+        assert rendered != ours
+    else:
+        assert rendered == ours
+
+
+@pytest.mark.parametrize("stem, join", [("deepseek-r1-qwen3", "<｜Assistant｜>"), ("qwen-3.6", ""),
+                                        ("mistral-3", None), ("deepseek-v4.1", None)])
+def test_the_join_of_two_user_turns_is_read_from_the_template(stem, join):
+    _fixture, _context, template = _load(Path(__file__).parent / "templates" / f"{stem}.json")
+    assert template.user_turn_join == join
+
+
+@pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
 def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(path):
     _fixture, context, template = _load(path)
     for reasoning in (False, True) if template.can_reason else (False,):

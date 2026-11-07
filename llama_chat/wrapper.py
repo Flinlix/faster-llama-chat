@@ -302,6 +302,9 @@ class ChatWrapper:
                                          reasoning)
                     for i, item in enumerate(messages)]
             hist_tokens = [tokens for tokens, _ in hist]
+            for i in range(len(messages) - 1):
+                if _is_user(messages[i]) and _is_user(messages[i + 1]):
+                    hist_tokens[i] = hist_tokens[i] + self._join_tokens()
 
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
@@ -371,6 +374,7 @@ class ChatWrapper:
                     prefix, self._template.fragments.content(role, text), suffix)
             else:
                 tokens = self._fragment_tokens(role, text)
+            join_tokens = self._user_turn_join_tokens(role)
             # Checked against the best case before anything is evicted, so a
             # rejected message cannot destroy history it would never fit beside.
             floor = self._table.messages[0].n_tokens if self._table.has_system else 0
@@ -379,9 +383,14 @@ class ChatWrapper:
                 description="injected message", role=role,
             )
             evicted = self._evict_until(
-                lambda: self._fits(len(tokens), arriving_messages=1))
+                lambda: self._fits(len(join_tokens) + len(tokens), arriving_messages=1))
+            if evicted:             # the turn it would have closed may be gone
+                join_tokens = self._user_turn_join_tokens(role)
 
-            self._context.prefill(tokens, start_pos=self._table.total, want_logits=False)
+            self._context.prefill(join_tokens + tokens, start_pos=self._table.total,
+                                  want_logits=False)
+            if join_tokens:
+                self._table.extend_last(join_tokens)
             self._table.append(Message(role, text, tokens))
             if self._on_message:
                 self._on_message(role, text)
@@ -1062,6 +1071,7 @@ class ChatWrapper:
             self._ensure_open()
             self._ensure_begun("generate into")
             self._ensure_no_open_reply("start a request")
+            join_tokens = self._user_turn_join_tokens("user")
             user_tokens = self._fragment_tokens("user", text)
             open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
             close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
@@ -1069,10 +1079,11 @@ class ChatWrapper:
             # The prompt plus its turn closer must fit in the context.
             user_tokens = self._fit_or_raise(
                 user_tokens,
-                budget=self._config.context_size - len(open_tokens) - len(close_tokens) - self._table.total,
+                budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
+                        - len(join_tokens) - self._table.total),
                 description="request", role="user",
             )
-            n_prompt = len(user_tokens) + len(open_tokens)
+            n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
 
             # Refused before the cache is mutated.
             free = self._config.context_size - self._table.total - n_prompt - len(close_tokens)
@@ -1085,8 +1096,10 @@ class ChatWrapper:
 
             # One decode for the request text and the assistant-open tag: the
             # backend flags logits on the final token only either way.
-            self._context.prefill(user_tokens + open_tokens,
+            self._context.prefill(join_tokens + user_tokens + open_tokens,
                               start_pos=self._table.total, want_logits=True)
+            if join_tokens:
+                self._table.extend_last(join_tokens)
             self._table.append(Message("user", text, user_tokens))
             if self._on_message:
                 self._on_message("user", text)
@@ -1288,8 +1301,9 @@ class ChatWrapper:
         form, from the first token that differs, after an eviction sized by
         that form, so the decode carries the eviction's shift; a turn that
         called tools keeps the tokens it was generated as. The message's text
-        is the answer either way, and a closed reply without one, all thought
-        or cut before its answer, is removed.
+        is the answer either way. A closed reply without one, all thought or
+        cut before its answer, is removed where the template writes two user
+        turns in a row, and kept as an empty reply where it does not.
 
         Returns:
             How many messages were evicted, and how many tokens were decoded
@@ -1319,7 +1333,7 @@ class ChatWrapper:
         if self._reply_open:
             return 0, 0
         holds_call = self._holds_call(msg)
-        if not msg.text and not holds_call:
+        if not msg.text and not holds_call and self._template.user_turn_join is not None:
             self._remove_newest(msg)
             return self._evict_until(lambda: self._fits(0)), 0
         if self._on_message:
@@ -1540,10 +1554,34 @@ class ChatWrapper:
             f"(oversize_policy='{self._config.oversize_policy}')"
         )
 
+    def _user_turn_join_tokens(self, role: str) -> list[int]:
+        """What the newest message gains before a ``role`` message is written after it.
+
+        Raises:
+            ValueError: If both are user turns and the template writes no such pair.
+        """
+        newest = self._table.messages[-1] if self._table.messages else None
+        if role != "user" or newest is None or newest.role != "user":
+            return []
+        return self._join_tokens()
+
+    def _join_tokens(self) -> list[int]:
+        """What a user turn ends with where another user turn follows it."""
+        join = self._template.user_turn_join
+        if join is None:
+            raise ValueError("this model's template does not write two user turns "
+                             "in a row; write a reply between them")
+        return self._context.tokenize(join, add_special=False) if join else []
+
     def _fragment_tokens(self, role: str, text: str, add_special: bool = False) -> list[int]:
         """Tokenize one message: tags special-on, content special-off."""
         prefix, content, suffix = self._formatter.parts(role, text)
         return self._context.tokenize_fragment(prefix, content, suffix, add_special=add_special)
+
+
+def _is_user(item) -> bool:
+    """Whether a ``begin`` history item is a user turn."""
+    return not isinstance(item, ToolTurn) and item[0] == "user"
 
 
 class _AnswerStops:
