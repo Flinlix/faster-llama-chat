@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 
 from .cache_context import MODEL_READER, ensure_answers
+from .tokenizing import tokenize_message
 from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
 from .template_extract import (call_id, extract_call_body, extract_call_close_text,
@@ -585,7 +586,7 @@ class ResolvedTemplate:
             fragment_text = ""
             for role, text in probe:
                 prefix, content, suffix = formatter.parts(role, text)
-                fragment_tokens += self._context.tokenize_fragment(prefix, content, suffix)
+                fragment_tokens += tokenize_message(self._context, prefix, content, suffix)
                 fragment_text += prefix + content + suffix
             # The generation prompt is compared where the renderer adds one.
             if prompted is not None and prompted != rendered:
@@ -756,11 +757,9 @@ class ResolvedTemplate:
 
     def _tags_in(self, text: str) -> list[int]:
         """The model's own tags in ``text``, in order."""
-        tags = []
-        while (tag := self._context.first_special_token(text)) is not None:
-            tags.append(tag)
-            text = text.partition(self._context.token_text(tag))[2]
-        return tags
+        found = (self._context.first_special_token(piece)
+                 for piece, is_tag in self._context.split_at_tags(text) or () if is_tag)
+        return [tag for tag in found if tag is not None]
 
     def _resolve_call_body(self) -> CallBody | None:
         """This model's argument spelling, or ``None`` if it cannot be read.

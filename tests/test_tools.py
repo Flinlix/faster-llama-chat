@@ -104,9 +104,8 @@ def test_a_declaration_is_tokenized_as_tags_and_the_prompt_is_not():
 
     # The prompt is a caller's text and must not be able to forge a tag; the
     # declarations are the model's own and have to parse as tags.
-    assert ("persona", False) in fake.tokenize_calls
-    assert any("<decl>clock</decl>" in text and special
-               for text, special in fake.tokenize_calls)
+    assert any("persona" in text and not special for text, special in fake.tokenize_calls)
+    assert {("<decl>", True), ("</decl>", True)} <= set(fake.tokenize_calls)
 
 
 # ----- reading a call back ------------------------------------------------

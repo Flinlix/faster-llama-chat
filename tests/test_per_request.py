@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from llama_chat.tokenizing import tokenize_message
 from llama_chat.config import Config, Sampling
 from llama_chat.context import GenerationAccumulator, KVContext
 from llama_chat.tools import ToolSpec
@@ -278,7 +279,7 @@ def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
         w, fake = _reasoning(reasoning)
         prefix, content, suffix = w._formatter.parts("system", "s")
         assert prefix.endswith(THINK_ON) == reasoning
-        assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+        assert w._table.messages[0].token_ids == tokenize_message(fake, 
             prefix, content, suffix, add_special=True)
 
 
@@ -288,7 +289,7 @@ def test_with_tools_declared_the_switch_is_rendered_with_them():
     w.begin("s", tools=specs, reasoning=True)
     head, tail = w._template.system_turn_declaring(specs, reasoning=True)
     assert THINK_ON in head
-    assert w._table.messages[0].token_ids == fake.tokenize_fragment(
+    assert w._table.messages[0].token_ids == tokenize_message(fake, 
         head, "s", tail, add_special=True)
 
 

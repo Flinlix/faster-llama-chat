@@ -18,6 +18,7 @@ import llama_chat
 
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
+from llama_chat.tokenizing import tokenize_message
 from llama_chat.context import SEQ, GenerationAccumulator, KVContext
 
 
@@ -305,17 +306,17 @@ def _merging_context():
 ])
 def test_a_message_tokenizes_as_the_whole_render_does(prefix, content, suffix):
     context = _merging_context()
-    assert context.tokenize_fragment(prefix, content, suffix) == context._backend.tokenize(
+    assert tokenize_message(context, prefix, content, suffix) == context._backend.tokenize(
         None, prefix + content + suffix, False, True)
 
 
 def test_a_tag_typed_inside_a_message_stays_text():
-    tokens = _merging_context().tokenize_fragment("<t>", "a<e>b", "<e>")
+    tokens = tokenize_message(_merging_context(), "<t>", "a<e>b", "<e>")
     assert tokens.count("TAG<e>") == 1 and tokens[-1] == "TAG<e>"
 
 
 def test_the_beginning_of_a_conversation_is_attached_to_the_first_message():
-    assert _merging_context().tokenize_fragment("lead ", "word", "", add_special=True)[0] == "BOS"
+    assert tokenize_message(_merging_context(), "lead ", "word", "", add_special=True)[0] == "BOS"
 
 
 def test_tokens_generated_in_other_pieces_come_back_as_their_text_tokenizes():
@@ -449,3 +450,7 @@ def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache
     context.warmup()
 
     assert performed == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
+
+
+def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
+    assert tokenize_message(_merging_context(), "", "", "", add_special=True) == ["BOS"]

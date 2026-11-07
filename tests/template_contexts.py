@@ -65,9 +65,6 @@ class TemplateContext:
         found = set(TAG.findall(self._template))
         return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
 
-    def tokenize_fragment(self, prefix, content, suffix, add_special=False):
-        return self.tokenize(prefix + content + suffix)
-
     def extract_fragments(self):
         from llama_chat.template_extract import extract_fragments
         return extract_fragments(self.render_with_model_template)
@@ -154,10 +151,6 @@ class ConversationContext(TagTokenizingContext):
     def text_of(self, tokens) -> str:
         return "".join(self.token_text(token) for token in tokens)
 
-    def tokenize_fragment(self, prefix, content, suffix, add_special=False):
-        return self.tokenize(prefix) + [ord(c) for c in content] + self.tokenize(suffix)
-
-    # ----- the cache ------------------------------------------------------
     def reset(self):
         self.cache = []
 

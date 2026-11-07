@@ -126,12 +126,6 @@ class FakeContext:
         toks = [ord(c) for c in text]
         return [BOS] + toks if add_special else toks
 
-    def tokenize_fragment(self, prefix: str, content: str, suffix: str,
-                          add_special: bool = False) -> list[int]:
-        return (self.tokenize(prefix, add_special=add_special, parse_special=True)
-                + self.tokenize(content, parse_special=False)
-                + self.tokenize(suffix, parse_special=True))
-
     def retokenized(self, tokens: list[int]) -> list[int]:
         # As the text tokenizes: one token per character, the tags kept.
         return [ord(self._generated_chars[t]) if t in self._generated_chars else t

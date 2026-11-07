@@ -18,7 +18,6 @@ it. See the README, "How eviction works".
 from __future__ import annotations
 
 import math
-import re
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field, replace
@@ -31,6 +30,7 @@ from .messages import Message, MessageTable, n_newest_that_fit
 from .reasoning import (AnswerOpening, ThoughtFilter, begins_in_thought, reply_header,
                         turn_end_test)
 from .cache_context import CACHE_CONTEXT, ensure_answers
+from .tokenizing import tokenize_message, tokenize_pieces
 from .resolved_template import ResolvedTemplate, written_between
 from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
@@ -382,7 +382,7 @@ class ChatWrapper:
             self._ensure_no_open_reply("inject")
             if role == "system":
                 prefix, suffix = self._later_system_tags()
-                tokens = self._context.tokenize_fragment(
+                tokens = tokenize_message(self._context, 
                     prefix, self._template.fragments.content(role, text), suffix)
             else:
                 tokens = self._fragment_tokens(role, text)
@@ -669,7 +669,7 @@ class ChatWrapper:
                 f"start a new conversation with begin()")
         room = free - len(tags) - len(closing) - self._config.min_reply_tokens
         # Whole, as a render of the conversation tokenizes it; clipped where it must be.
-        tokens = self._context.tokenize_fragment(prefix, text, suffix)
+        tokens = tokenize_message(self._context, prefix, text, suffix)
         if len(tokens) > room + len(tags) + len(closing):
             body = self._context.tokenize(text, add_special=False, parse_special=False)
             tokens = tags + body[:max(0, room)] + closing
@@ -1148,48 +1148,13 @@ class ChatWrapper:
         """
         if not isinstance(item, ToolTurn):
             prefix, content, suffix = formatter.parts(*item)
-            return self._context.tokenize_fragment(prefix, content, suffix), ""
+            return tokenize_message(self._context, prefix, content, suffix), ""
         # Refuses a model that cannot call tools.
         pieces = self._template.past_tool_turn(item, open_turn, reasoning, specs)
+        # The call tags as the single tokens a generated call holds.
         tags = {text: token for token in (self._template.tool_tokens or ())
                 if (text := self._context.token_text(token))}
-        between_tags = re.compile("(" + "|".join(map(re.escape, tags)) + ")")
-        tokens: list[int] = []
-        plain = ""          # the text between two tags, own and template alike
-
-        def end_plain() -> None:
-            nonlocal plain
-            if plain:
-                tokens.extend(self._context.tokenize(plain, add_special=False,
-                                                     parse_special=False))
-            plain = ""
-
-        for text, own in pieces:
-            if own:
-                plain += text
-                continue
-            # The call tags as the single tokens a generated call holds.
-            for part in (between_tags.split(text) if tags else [text]):
-                if not part:
-                    continue
-                if part in tags:
-                    end_plain()
-                    tokens.append(tags[part])
-                    continue
-                split = self._context.split_at_tags(part)
-                if split is None:
-                    end_plain()
-                    tokens += self._context.tokenize(part, add_special=False,
-                                                     parse_special=True)
-                    continue
-                for piece, is_tag in split:
-                    if is_tag:
-                        end_plain()
-                        tokens += self._context.tokenize(piece, add_special=False,
-                                                         parse_special=True)
-                    else:
-                        plain += piece
-        end_plain()
+        tokens = tokenize_pieces(self._context, pieces, tag_tokens=tags)
         ending = pieces[-1][0] if open_turn and pieces and not pieces[-1][1] else ""
         return tokens, ending
 
@@ -1206,7 +1171,7 @@ class ChatWrapper:
         if not system_prompt and preamble is not None:
             if specs:
                 preamble = self._template.preamble_declaring(specs, reasoning)
-            return self._context.tokenize_fragment(preamble, "", "", add_special=True)
+            return tokenize_message(self._context, preamble, "", "", add_special=True)
         if preamble is not None and not self._template.has_system_turn:
             raise ValueError(
                 "this model's template has no system turn of its own: it writes a "
@@ -1214,11 +1179,11 @@ class ChatWrapper:
                 "kept for the whole conversation cannot be")
         prefix, content, suffix = formatter.parts("system", system_prompt)
         if not specs:
-            return self._context.tokenize_fragment(prefix, content, suffix,
+            return tokenize_message(self._context, prefix, content, suffix,
                                                    add_special=True)
         # Rendered whole: where declarations go is the template's business.
         head, tail = self._template.system_turn_declaring(specs, reasoning)
-        return self._context.tokenize_fragment(head, content, tail,
+        return tokenize_message(self._context, head, content, tail,
                                                add_special=True)
 
     def _generate_into_reply(self, *, open_tokens: list[int],
@@ -1667,7 +1632,7 @@ class ChatWrapper:
     def _fragment_tokens(self, role: str, text: str, add_special: bool = False) -> list[int]:
         """Tokenize one message: tags special-on, content special-off."""
         prefix, content, suffix = self._formatter.parts(role, text)
-        return self._context.tokenize_fragment(prefix, content, suffix, add_special=add_special)
+        return tokenize_message(self._context, prefix, content, suffix, add_special=add_special)
 
 
 def _is_user(item) -> bool:

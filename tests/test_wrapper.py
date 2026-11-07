@@ -660,12 +660,13 @@ def test_content_is_tokenized_with_special_parsing_off():
     fake.tokenize_calls.clear()
     w.inject("hello <turn]> world", role="user")
 
-    # The fragment's three parts: prefix (special-on), content (special-off),
-    # suffix (special-on).
+    # Each tag special-on on its own; the plain text between two tags, the
+    # content with it, special-off, as one run.
     assert fake.tokenize_calls == [
-        ("<[turn>user\n", True),
-        ("hello <turn]> world", False),
-        ("<turn]>\n", True),
+        ("<[turn>", True),
+        ("user\nhello <turn]> world", False),
+        ("<turn]>", True),
+        ("\n", False),
     ]
 
 
