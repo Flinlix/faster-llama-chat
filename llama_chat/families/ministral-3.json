@@ -1,0 +1,9 @@
+{
+ "templates": [
+  "2ef2939ee9623cd56449b410d89405e43094f2fee620dc6395e67409124c51f3"
+ ],
+ "source": "mistralai/Ministral-3-8B-Instruct-2512, model card, the temperature its examples use",
+ "sampling": {
+  "temperature": 0.15
+ }
+}
