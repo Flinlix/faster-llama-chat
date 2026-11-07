@@ -884,15 +884,29 @@ def test_a_failing_message_callback_leaves_the_cache_and_the_table_agreeing():
     assert_consistent(w, fake)
 
 
-def test_a_restart_whose_newest_item_cannot_fit_is_refused_before_anything_is_reset():
+@pytest.mark.parametrize("history", [[("user", "old"), ("assistant", "x" * 150)],
+                                     [("user", "x" * 150), ("assistant", "short")]],
+                         ids=["long-reply", "long-question"])
+def test_a_restart_whose_newest_exchange_cannot_fit_is_refused_before_anything_is_reset(history):
+    # A short reply after a question too long to keep used to leave nothing, said nothing.
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5), context=fake)
     w.begin("s", [("user", "kept")])
     before = w.snapshot()
-    with pytest.raises(ValueError, match="newest history item"):
-        w.begin("s", [("user", "old"), ("assistant", "x" * 150)])
+    with pytest.raises(ContextOverflowError, match="newest exchange"):
+        w.begin("s", history)
     assert w.snapshot() == before
     assert_consistent(w, fake)
+
+
+def test_every_request_that_does_not_fit_raises_the_one_error_for_it():
+    fake = FakeContext(gen_tokens=2)
+    w = ChatWrapper(Config(context_size=200, evict_above_fraction=0.9), context=fake)
+    w.begin("s")
+    for ask in (lambda: w.reply("y" * 400).finish(), lambda: w.inject("y" * 400),
+                lambda: w.begin("y" * 400)):
+        with pytest.raises(ContextOverflowError):
+            ask()
 
 
 def test_a_restart_says_how_much_history_it_kept():

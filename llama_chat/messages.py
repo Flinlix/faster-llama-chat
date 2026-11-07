@@ -264,7 +264,7 @@ def next_turn_start(roles: Sequence[str], start: int) -> int:
 
     A conversation that evicted or dropped its oldest messages opens on a user
     turn, as every template writes one. See design_history.md, "Eviction removes
-    whole exchanges".
+    whole exchanges" under "Structure review: what changed and why".
     """
     return next((i for i in range(start, len(roles)) if roles[i] == "user"), len(roles))
 

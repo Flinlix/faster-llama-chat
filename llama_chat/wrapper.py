@@ -168,9 +168,10 @@ class ChatWrapper:
             How many items of ``messages`` were kept.
 
         Raises:
-            ValueError: If the system prompt alone exceeds
-                ``evict_above_tokens``, or the newest item of ``messages``
-                cannot fit beside it, or if ``tools`` names anything or the
+            ContextOverflowError: If the system prompt alone exceeds
+                ``evict_above_tokens``, or the newest exchange of ``messages``,
+                from its user message on, cannot fit beside it.
+            ValueError: If ``tools`` names anything or the
                 history holds a tool turn and this model cannot call tools: no
                 call in its template, no declarations, no recoverable argument
                 spelling, or no result block, or if ``reasoning`` is asked of a
@@ -193,7 +194,7 @@ class ChatWrapper:
             sys_tokens = self._system_tokens(formatter, system_prompt,
                                              None if moving else specs, reasoning)
             if len(sys_tokens) > self._config.evict_above_tokens:
-                raise ValueError(
+                raise ContextOverflowError(
                     f"system prompt needs {len(sys_tokens)} tokens but the "
                     f"eviction threshold is {self._config.evict_above_tokens}; "
                     "shorten the prompt or raise context_size/evict_above_fraction"
@@ -215,16 +216,19 @@ class ChatWrapper:
                 held, _ = self._moving_declaration(specs, reasoning)
                 hist_tokens[carrier] = held + hist_tokens[carrier]
 
-            if hist_tokens and len(sys_tokens) + len(hist_tokens[-1]) > self._config.evict_above_tokens:
-                raise ValueError(
-                    f"the newest history item needs {len(hist_tokens[-1])} tokens but only "
+            roles = ["user" if _is_user(item) else "assistant" for item in messages]
+            lengths = [len(t) for t in hist_tokens]
+            # Under the token limit alone: the message limit may keep nothing on purpose.
+            if "user" in roles and not n_newest_that_fit(
+                    lengths, len(sys_tokens), self._config.evict_above_tokens, roles=roles):
+                newest = sum(lengths[len(roles) - 1 - roles[::-1].index("user"):])
+                raise ContextOverflowError(
+                    f"the newest exchange of the history, from its user message on, needs "
+                    f"{newest} tokens but only "
                     f"{self._config.evict_above_tokens - len(sys_tokens)} fit beside the "
                     "system prompt; shorten it or raise context_size/evict_above_fraction")
-            kept = n_newest_that_fit(
-                [len(t) for t in hist_tokens], len(sys_tokens),
-                self._config.evict_above_tokens, self._config.max_history_messages,
-                roles=["user" if _is_user(item) else "assistant" for item in messages],
-            )
+            kept = n_newest_that_fit(lengths, len(sys_tokens), self._config.evict_above_tokens,
+                                     self._config.max_history_messages, roles=roles)
             keep_from = len(messages) - kept
             kept_messages = messages[keep_from:]
             kept_tokens = hist_tokens[keep_from:]
@@ -279,8 +283,9 @@ class ChatWrapper:
             The number of messages evicted to make room.
 
         Raises:
-            ValueError: If no conversation has been begun, if a tool call has
-                left a reply open, or if the message cannot fit even after
+            ValueError: If no conversation has been begun, or if a tool call
+                has left a reply open.
+            ContextOverflowError: If the message cannot fit even after
                 evicting every non-system message. Raised before anything is
                 evicted.
         """
@@ -608,7 +613,7 @@ class ChatWrapper:
             tokens = self._system_tokens(self._formatter, system.text, declared,
                                          self._reasoning)
             if len(tokens) > self._config.evict_above_tokens:
-                raise ValueError(
+                raise ContextOverflowError(
                     f"the system turn with these declarations needs {len(tokens)} tokens "
                     f"but the eviction threshold is {self._config.evict_above_tokens}; "
                     "declare fewer tools or raise context_size/evict_above_fraction")
@@ -1300,7 +1305,7 @@ class ChatWrapper:
             suffix = self._context.tokenize(self._formatter.suffix(role), add_special=False)
             if budget > len(suffix):
                 return tokens[: budget - len(suffix)] + suffix
-        raise ValueError(
+        raise ContextOverflowError(
             f"{description} needs {len(tokens)} tokens but only {budget} fit "
             f"(oversize_policy='{self._config.oversize_policy}')"
         )

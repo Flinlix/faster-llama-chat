@@ -77,10 +77,8 @@ def main() -> None:
     print(file=sys.stderr)  # ... then terminate the bar's line
     w = ChatWrapper(cfg, context=ctx)
 
-    w.begin(
-        "You are a concise, helpful assistant.",
-        [("user", "Remember my name is Felix."), ("assistant", "Got it, Felix.")],
-    )
+    begin(w, "You are a concise, helpful assistant.",
+          [("user", "Remember my name is Felix."), ("assistant", "Got it, Felix.")])
     print(f"begin: prefilled {ctx.prefilled} tokens (system + history)")
     show(w)
 
@@ -112,11 +110,11 @@ def main() -> None:
         max_reply_tokens=32,
     )
     sw = ChatWrapper(small, context=KVContext(small))
-    sw.begin("You are a terse assistant. Keep replies under 10 words.")
+    begin(sw, "You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
         roles = [r["role"] for r in sw.snapshot()]
-        assert roles[0] == "system", "system prompt was evicted"
+        assert roles[0] == "system", "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
@@ -125,6 +123,16 @@ def main() -> None:
     show(sw)
     sw.close()
     print("\nOK: system prompt survived every eviction; context never overflowed.")
+
+
+def begin(chat, system_prompt, history=None):
+    """Begin with ``system_prompt``, or without one where the model's template has no system turn."""
+    try:
+        return chat.begin(system_prompt, history)
+    except ValueError as refused:
+        if "no system turn" not in str(refused):
+            raise
+        return chat.begin("", history)
 
 
 if __name__ == "__main__":

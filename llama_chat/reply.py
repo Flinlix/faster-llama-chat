@@ -9,8 +9,8 @@ from typing import Generic, TypeVar
 from .tools import ToolCall
 
 
-class ContextOverflowError(RuntimeError):
-    """A request would leave fewer than ``min_reply_tokens`` free for the reply."""
+class ContextOverflowError(ValueError):
+    """What was asked for does not fit the context: a message, a history, a declaration, or room for the reply."""
 
 
 @dataclass

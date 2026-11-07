@@ -83,7 +83,8 @@ from llama_chat import ChatWrapper, Config
 chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192,
                           gpu_layers=-1))
 
-# begin: reset, and prefill the system prompt and as much recent history as fits
+# begin: reset, and prefill the system prompt and as much recent history as fits.
+# A template with no system turn of its own refuses a system prompt; pass "" there.
 chat.begin("You are a helpful assistant.", [("user", "Hi"), ("assistant", "Hello!")])
 
 # inject: prefill one message as context, without generating
@@ -114,7 +115,7 @@ model and makes later actions raise.
 
 | doing what | call |
 |------|------|
-| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits under both eviction limits, from a user turn on, and returns how many history items it kept. Refused before anything is reset where the system prompt or the newest item cannot fit |
+| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits under both eviction limits, from a user turn on, and returns how many history items it kept. Refused before anything is reset where the system prompt or the newest exchange cannot fit, and where the template has no system turn of its own for a system prompt |
 | adding context | `inject(text, role="user")`: prefilled, no reply. Evicts first where needed; returns how many messages went |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open |
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
@@ -147,7 +148,8 @@ a context of your own answers everything called on it, that the template's
 pieces round-trip through the model's own template and its reply ends with one
 of the model's tags, and whether tool calling works (`can_call_tools`). What is
 left is what only a conversation can know: whether a request fits
-(`ContextOverflowError`), whether the model calls a tool that exists, and what
+(`ContextOverflowError`, a `ValueError`, for every message, history, declaration
+or reply that does not), whether the model calls a tool that exists, and what
 the tool does.
 
 ## Tool calling
@@ -397,7 +399,8 @@ the add-on files that ship.
 
 | File | Role |
 |------|------|
-| `llama_chat/wrapper.py` | `ChatWrapper`, `Reply`, `ReplyStream`, `ContextOverflowError`: the conversation |
+| `llama_chat/wrapper.py` | `ChatWrapper`: the conversation |
+| `llama_chat/reply.py` | `Reply`, `ReplyStream`, `ContextOverflowError`: what a request produces |
 | `llama_chat/config.py` | `Config`, `Sampling` |
 | `llama_chat/cache_context.py` | the two protocols a cache context answers |
 | `llama_chat/context.py` | `KVContext`: the model loaded, its tokenizer, prefill, generation and cache edits |
