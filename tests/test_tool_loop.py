@@ -1559,3 +1559,23 @@ def test_a_later_declaration_joins_the_newest_user_turn():
     _as_rendered_with(w, fake, both)
     w.reply("zwei").finish()
     _as_rendered_with(w, fake, both)
+
+
+def test_a_running_exchange_holds_the_wrapper_while_its_tool_runs():
+    # Another thread's action used to slip in between the rounds of a running reply.
+    import threading
+    wrapper, fake = tool_wrapper(gen_tokens=6, gen_text="Sonnig")
+    registry = ToolRegistry()
+    seen = []
+
+    def weather(city: str) -> dict:
+        idle = threading.Thread(target=lambda: seen.append(wrapper.wait_idle(timeout_s=0.05)))
+        idle.start()
+        idle.join()
+        return {"city": city}
+
+    registry.register(weather, "Wetter.")
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["weather{city:'Bonn'}"]
+    assert wrapper.reply("wetter?", calls="run").finish().text == "Sonnig"
+    assert seen == [False]

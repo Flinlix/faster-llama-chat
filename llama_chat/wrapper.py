@@ -17,6 +17,7 @@ it. See design_history.md, "How eviction works".
 
 from __future__ import annotations
 
+import contextlib
 import math
 import threading
 from collections.abc import Callable, Generator
@@ -413,17 +414,24 @@ class ChatWrapper:
         return ReplyStream(self._generate_until_answered(
             text, registry=registry, max_calls=max_calls, **options))
 
-    def _until_call(self, text: str | None, *, allow_tools: bool,
+    def _until_call(self, text: str | None, *, allow_tools: bool, held: bool = False,
                     **options) -> ReplyStream[str | ToolCall]:
         """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
 
         ``allow_tools`` False withholds the call tokens, which is what makes
         the last permitted round of an exchange certain to close the turn.
+        ``held`` says the caller holds the lock already, for a whole exchange.
         """
-        if text is None and self._reply_open:
-            return ReplyStream(_deltas_then_calls(
-                self._resume(allow_tools=allow_tools, **options)))
-        return ReplyStream(_deltas_then_calls(self._request_and_generate(text, **options)))
+        return ReplyStream(_deltas_then_calls(
+            self._one_generation(text, allow_tools, held, **options)))
+
+    def _one_generation(self, text, allow_tools: bool, held: bool, **options):
+        """Resume the open turn or start a request, decided under the lock."""
+        with contextlib.nullcontext() if held else self._lock:
+            self._ensure_open()
+            if text is None and self._reply_open:
+                return (yield from self._resume(allow_tools=allow_tools, **options))
+            return (yield from self._request_and_generate(text, **options))
 
     def inject_tool_result(self, call: ToolCall | str, result) -> None:
         """Hand the model what the tool it called returned.
@@ -443,21 +451,25 @@ class ChatWrapper:
             ContextOverflowError: If not even the wrapping fits in what is left
                 of the context.
         """
-        name = call.name if isinstance(call, ToolCall) else call
         with self._lock:
             self._ensure_open()
-            if not self._pending_calls:
-                raise ValueError("no tool call is waiting for a result")
-            owed = self._pending_calls[0]
-            if name != owed.name or (isinstance(call, ToolCall) and call != owed):
-                raise ValueError(
-                    f"the waiting call is {owed.name!r}, not {name!r}; results "
-                    "are owed in the order the model asked for them")
-            # Popped only once the write has succeeded, so a refused result
-            # leaves the call still owed.
-            self._write_tool_result(name, result)
-            self._pending_calls.pop(0)      # results are owed in call order
-            self._table.add_steps(ToolResult(name, result))
+            self._inject_result(call, result)
+
+    def _inject_result(self, call: ToolCall | str, result) -> None:
+        """As :meth:`inject_tool_result`, with the lock held."""
+        name = call.name if isinstance(call, ToolCall) else call
+        if not self._pending_calls:
+            raise ValueError("no tool call is waiting for a result")
+        owed = self._pending_calls[0]
+        if name != owed.name or (isinstance(call, ToolCall) and call != owed):
+            raise ValueError(
+                f"the waiting call is {owed.name!r}, not {name!r}; results "
+                "are owed in the order the model asked for them")
+        # Popped only once the write has succeeded, so a refused result
+        # leaves the call still owed.
+        self._write_tool_result(name, result)
+        self._pending_calls.pop(0)      # results are owed in call order
+        self._table.add_steps(ToolResult(name, result))
 
     def _write_tool_result(self, name: str, result) -> None:
         """Prefill one result block into the open turn. The lock must be held.
@@ -754,57 +766,62 @@ class ChatWrapper:
                 does not bind there.
             text, **kwargs: As :meth:`reply`.
 
+        The lock is held for the whole exchange, tools running included, so
+        no other action comes between its rounds; a tool must not call back
+        into the wrapper.
+
         Raises:
             ValueError: If ``registry`` holds tools this model could never
                 call, which is what
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
-        # A registry is the same promise a declaration is, so it is checked the
-        # same way: an exchange that cannot run a tool is refused before it
-        # starts, not after the model has asked for one.
-        if registry is not None and len(registry) > 0:
-            self._template.ensure_tools_usable()
-        stream = self._until_call(text, allow_tools=True, **kwargs)
-        # An absent ceiling counts down without ever reaching zero, so the
-        # three places that read it need no case of their own.
-        calls_left = math.inf if max_calls is None else max_calls
-        any_call_asked = False
-        generations: list[Reply] = []
-        try:
-            while True:
-                asked, generation = yield from self._read_generation(
-                    stream, after="".join(g.text for g in generations))
-                generations.append(generation)
-                if not asked:
-                    if self.reply_open:
-                        # An unreadable call: its result is already written, and
-                        # the turn wants the reply that follows it. Nothing is
-                        # owed, since nothing could be read, so the resume is
-                        # free to run. It spends budget like any other failed
-                        # call, so a model that cannot write a readable one
-                        # retries at most `max_calls` times.
-                        any_call_asked = True
-                        if registry is not None and calls_left > 0:
-                            calls_left -= 1
-                        stream = self._until_call(
-                            None, allow_tools=registry is not None and calls_left > 0,
-                            **kwargs)
-                        continue
-                    # The ceiling binds only once a call has been asked for:
-                    # without one the last generation kept its call tokens.
-                    return _sum_generations(generations,
-                                            any_call_asked and calls_left == 0)
-                any_call_asked = True
-                settled, calls_left = self._settle_calls(
-                    asked, registry, calls_left, max_calls)
-                may_call_again = registry is not None and calls_left > 0
-                for call, result in settled:
-                    self.inject_tool_result(
-                        call, _explain_failure(result, may_call_again))
-                stream = self._until_call(None, allow_tools=may_call_again, **kwargs)
-        finally:
-            stream.close()   # the current generation holds the wrapper's lock
+        with self._lock:
+            # A registry is the same promise a declaration is, so it is checked the
+            # same way: an exchange that cannot run a tool is refused before it
+            # starts, not after the model has asked for one.
+            if registry is not None and len(registry) > 0:
+                self._template.ensure_tools_usable()
+            stream = self._until_call(text, allow_tools=True, held=True, **kwargs)
+            # An absent ceiling counts down without ever reaching zero, so the
+            # three places that read it need no case of their own.
+            calls_left = math.inf if max_calls is None else max_calls
+            any_call_asked = False
+            generations: list[Reply] = []
+            try:
+                while True:
+                    asked, generation = yield from self._read_generation(
+                        stream, after="".join(g.text for g in generations))
+                    generations.append(generation)
+                    if not asked:
+                        if self.reply_open:
+                            # An unreadable call: its result is already written, and
+                            # the turn wants the reply that follows it. Nothing is
+                            # owed, since nothing could be read, so the resume is
+                            # free to run. It spends budget like any other failed
+                            # call, so a model that cannot write a readable one
+                            # retries at most `max_calls` times.
+                            any_call_asked = True
+                            if registry is not None and calls_left > 0:
+                                calls_left -= 1
+                            stream = self._until_call(
+                                None, allow_tools=registry is not None and calls_left > 0,
+                                held=True, **kwargs)
+                            continue
+                        # The ceiling binds only once a call has been asked for:
+                        # without one the last generation kept its call tokens.
+                        return _sum_generations(generations,
+                                                any_call_asked and calls_left == 0)
+                    any_call_asked = True
+                    settled, calls_left = self._settle_calls(
+                        asked, registry, calls_left, max_calls)
+                    may_call_again = registry is not None and calls_left > 0
+                    for call, result in settled:
+                        self._inject_result(call, _explain_failure(result, may_call_again))
+                    stream = self._until_call(None, allow_tools=may_call_again, held=True,
+                                              **kwargs)
+            finally:
+                stream.close()
 
     def _read_generation(self, stream, after: str):
         """Yield one generation's text, and return what it left behind.
@@ -870,98 +887,96 @@ class ChatWrapper:
 
         Without ``text``, the reply answers the newest message, which must be
         a user message already written. One generation, so a call it stops on
-        leaves the turn open for a result.
+        leaves the turn open for a result. The lock must be held.
         """
-        with self._lock:
-            self._ensure_open()
-            self._ensure_begun("generate into")
-            self._ensure_no_open_reply("start a request")
-            if text is None:
-                newest = self._table.messages[-1]
-                if newest.role != "user":
-                    raise ValueError("there is nothing to answer: the newest message "
-                                     "is not a user message")
-                join_tokens, held, declares, user_tokens = [], [], (), []
-            else:
+        self._ensure_open()
+        self._ensure_begun("generate into")
+        self._ensure_no_open_reply("start a request")
+        if text is None:
+            newest = self._table.messages[-1]
+            if newest.role != "user":
+                raise ValueError("there is nothing to answer: the newest message "
+                                 "is not a user message")
+            join_tokens, held, declares, user_tokens = [], [], (), []
+        else:
+            join_tokens = self._user_turn_join_tokens("user")
+            held, declares = self._moving_declaration(self._moving_specs, self._reasoning)
+            user_tokens = self._fragment_tokens("user", text)
+        open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
+        close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
+
+        # The prompt plus its turn closer must fit in the context once
+        # everything but the system prompt is evicted; checked before
+        # anything is, so a refused request destroys no history.
+        floor = self._table.messages[0].n_tokens
+        if text is not None:
+            user_tokens = held + self._fit_or_raise(
+                user_tokens,
+                budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
+                        - len(join_tokens) - len(held) - floor),
+                description="request", role="user",
+            )
+        needed = (len(join_tokens) + len(user_tokens) + len(open_tokens)
+                  + len(close_tokens) + self._config.min_reply_tokens)
+        if self._cache.evict(
+                lambda: self._table.total + needed <= self._config.context_size):
+            if text is None and self._table.messages[-1].role != "user":
+                raise ContextOverflowError("the message to answer does not fit "
+                                           "beside room for its reply")
+            if text is not None:    # the turn it joined may be gone
                 join_tokens = self._user_turn_join_tokens("user")
-                held, declares = self._moving_declaration(self._moving_specs, self._reasoning)
-                user_tokens = self._fragment_tokens("user", text)
-            open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
-            close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
+        n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
 
-            # The prompt plus its turn closer must fit in the context once
-            # everything but the system prompt is evicted; checked before
-            # anything is, so a refused request destroys no history.
-            floor = self._table.messages[0].n_tokens
-            if text is not None:
-                user_tokens = held + self._fit_or_raise(
-                    user_tokens,
-                    budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
-                            - len(join_tokens) - len(held) - floor),
-                    description="request", role="user",
-                )
-            needed = (len(join_tokens) + len(user_tokens) + len(open_tokens)
-                      + len(close_tokens) + self._config.min_reply_tokens)
-            if self._cache.evict(
-                    lambda: self._table.total + needed <= self._config.context_size):
-                if text is None and self._table.messages[-1].role != "user":
-                    raise ContextOverflowError("the message to answer does not fit "
-                                               "beside room for its reply")
-                if text is not None:    # the turn it joined may be gone
-                    join_tokens = self._user_turn_join_tokens("user")
-            n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
+        # Refused before the cache is mutated.
+        free = self._config.context_size - self._table.total - n_prompt - len(close_tokens)
+        if free < self._config.min_reply_tokens:
+            raise ContextOverflowError(
+                f"only {free} tokens free for the reply "
+                f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
+                f"the request or lower evict_above_fraction"
+            )
 
-            # Refused before the cache is mutated.
-            free = self._config.context_size - self._table.total - n_prompt - len(close_tokens)
-            if free < self._config.min_reply_tokens:
-                raise ContextOverflowError(
-                    f"only {free} tokens free for the reply "
-                    f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
-                    f"the request or lower evict_above_fraction"
-                )
+        # Reported after every check and before the cache changes, so a
+        # callback that raises refuses the request with nothing written.
+        if self._on_message and text is not None:
+            self._on_message("user", text)
+        # One decode for the request text and the assistant-open tag: the
+        # backend flags logits on the final token only either way.
+        if text is not None:
+            self._move_declaration_on()
+        self._context.prefill(join_tokens + user_tokens + open_tokens,
+                              start_pos=self._table.total, want_logits=True)
+        if join_tokens:
+            self._table.extend_last(join_tokens)
+        if text is not None:
+            self._table.append(Message("user", text, user_tokens, declares=declares))
 
-            # Reported after every check and before the cache changes, so a
-            # callback that raises refuses the request with nothing written.
-            if self._on_message and text is not None:
-                self._on_message("user", text)
-            # One decode for the request text and the assistant-open tag: the
-            # backend flags logits on the final token only either way.
-            if text is not None:
-                self._move_declaration_on()
-            self._context.prefill(join_tokens + user_tokens + open_tokens,
-                                  start_pos=self._table.total, want_logits=True)
-            if join_tokens:
-                self._table.extend_last(join_tokens)
-            if text is not None:
-                self._table.append(Message("user", text, user_tokens, declares=declares))
-
-            return (yield from self._generate_into_reply(
-                open_tokens=open_tokens, close_tokens=close_tokens,
-                n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
-                cancel=cancel, allow_tools=True, sampling=sampling,
-                decoded=self._formatter.generation_prompt()))
+        return (yield from self._generate_into_reply(
+            open_tokens=open_tokens, close_tokens=close_tokens,
+            n_prefilled_tokens=n_prompt, max_reply_tokens=max_reply_tokens, stop=stop,
+            cancel=cancel, allow_tools=True, sampling=sampling,
+            decoded=self._formatter.generation_prompt()))
 
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
                 cancel: threading.Event | None = None,
                 allow_tools: bool = True,
                 sampling: Sampling | None = None):
-        """Generate on into the open reply, adding no message of its own."""
-        with self._lock:
-            self._ensure_open()
-            if self._pending_calls:
-                raise ValueError(f"{len(self._pending_calls)} call(s) still owe "
-                                 f"a result")
-            if not self._reply_open:
-                raise ValueError("no reply is open; start one with reply(text, calls='yield')")
-            close_tokens = self._context.tokenize(self._formatter.assistant_close(),
-                                              add_special=False)
-            # The turn goes on from where the template's result wrapping ends it.
-            return (yield from self._generate_into_reply(
-                open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
-                max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-                allow_tools=allow_tools, sampling=sampling,
-                decoded=self._turn_ends_with))
+        """Generate on into the open reply, adding no message of its own. The lock must be held."""
+        self._ensure_open()
+        if self._pending_calls:
+            raise ValueError(f"{len(self._pending_calls)} call(s) still owe "
+                             f"a result")
+        if not self._reply_open:
+            raise ValueError("no reply is open; start one with reply(text, calls='yield')")
+        close_tokens = self._context.tokenize(self._formatter.assistant_close(),
+                                          add_special=False)
+        # The turn goes on from where the template's result wrapping ends it.
+        return (yield from self._generate_into_reply(
+            open_tokens=[], close_tokens=close_tokens, n_prefilled_tokens=0,
+            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+            allow_tools=allow_tools, sampling=sampling,
+            decoded=self._turn_ends_with))
 
     def _history_tokens(self, formatter, item: tuple[str, str] | ToolTurn,
                         open_turn: bool, reasoning: bool,
