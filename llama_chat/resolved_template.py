@@ -100,20 +100,13 @@ class ResolvedTemplate:
         self._fragments = (fragments if fragments is not None
                            else self._resolve_fragments())
         self._validate_template()
-        self._turn_end_token = self._resolve_turn_end_token()
+        turn_end_token = self._resolve_turn_end_token()
         self._user_turn_join = self._resolve_user_turn_join()
         # None where this model cannot call tools at all.
         self._tool_calls = (tool_calls if tool_calls is not None
                             else self._resolve_tool_calls())
-        self._tool_tokens, self._call_lead_in = self._resolve_tool_tokens()
-        self._call_texts = self._resolve_call_texts()
-        self._call_opens_as_text = (self._call_texts is not None and
-                                    self._context.first_special_token(self._call_texts[0]) is None)
-        if self._call_texts is not None:
-            self._call_lead_in = self._text_after_last_tag(self._call_texts[0])
-        self._turn_end_text = self._resolve_turn_end_text()
-        if self._turn_end_text is not None:
-            self._turn_end_token = None
+        (self._boundary, self._call_lead_in, self._call_from_file,
+         self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
         self._declares_in_newest_turn = self._resolve_declares_in_newest_turn()
         if not self._declares_in_newest_turn:
@@ -245,7 +238,7 @@ class ResolvedTemplate:
 
         ``None`` also where :attr:`call_texts` marks a call instead.
         """
-        return self._tool_tokens
+        return self._boundary.tool_tokens
 
     @property
     def call_texts(self) -> tuple[str, str] | None:
@@ -253,7 +246,7 @@ class ResolvedTemplate:
 
         ``None`` where :attr:`tool_tokens` marks a call, or nothing does.
         """
-        return self._call_texts
+        return self._boundary.call_texts
 
     @property
     def turn_end_text(self) -> str | None:
@@ -262,7 +255,7 @@ class ResolvedTemplate:
         Such a reply ends once the text has passed the last point a call could
         still begin from; ``None`` where :attr:`turn_end_token` says it.
         """
-        return self._turn_end_text
+        return self._boundary.turn_end_text
 
     @property
     def call_lead_in(self) -> str:
@@ -288,13 +281,13 @@ class ResolvedTemplate:
     @property
     def _calls_marked(self) -> bool:
         """Whether a call can be told from a reply, by its tags or by its texts."""
-        return self._tool_tokens is not None or self._call_texts is not None
+        return self._boundary.tool_tokens is not None or self._boundary.call_texts is not None
 
     def _call_close_text(self) -> str:
         """The text a call ends with."""
-        if self._call_texts is not None:
-            return self._call_texts[1]
-        return self._context.token_text(self._tool_tokens[1])
+        if self._boundary.call_texts is not None:
+            return self._boundary.call_texts[1]
+        return self._context.token_text(self._boundary.tool_tokens[1])
 
     @property
     def declares_in_newest_turn(self) -> bool:
@@ -665,17 +658,36 @@ class ResolvedTemplate:
         lead_in = fragments.call_open.partition(tag)[2]
         return (opener, closer), lead_in
 
-    def _resolve_call_texts(self) -> tuple[str, str] | None:
-        """The texts around a call, from the template, else from the model's add-on file."""
-        self._call_from_file = False
-        if self._tool_tokens is not None:
-            return None
+    def _resolve_calls(self, turn_end_token: int | None):
+        """How a generated call is marked, in one step, as nothing later changes it.
+
+        Returns:
+            The call boundary, the text a call writes before its function's
+            name, whether the add-on file gave the call's texts, and the token
+            that ends a reply, which a reply ended by text has none of.
+        """
+        tool_tokens, lead_in = self._resolve_tool_tokens()
+        call_texts, from_file = (None, False) if tool_tokens is not None else self._resolve_call_texts()
+        opens_as_text = (call_texts is not None
+                         and self._context.first_special_token(call_texts[0]) is None)
+        if call_texts is not None:
+            lead_in = self._text_after_last_tag(call_texts[0])
+        turn_end_text = self._resolve_turn_end_text(call_texts)
+        boundary = CallBoundary(tool_tokens, call_texts, opens_as_text, turn_end_text)
+        return boundary, lead_in, from_file, None if turn_end_text else turn_end_token
+
+    def _resolve_call_texts(self) -> tuple[tuple[str, str] | None, bool]:
+        """The texts around a call, from the template, else from the model's add-on file.
+
+        Returns:
+            The texts, and whether they came from the add-on file.
+        """
         found = self._template_call_texts()
         if found is not None:
-            return found
+            return found, False
         call = self._context.addon_call()
         if not call or self._tool_calls is None:
-            return None
+            return None, False
         rendered = self._render([{"role": "user", "content": _PROMPT},
                                  {"role": "assistant", "content": "", "tool_calls": [
                                      {"id": call_id(0), "type": "function",
@@ -683,8 +695,7 @@ class ResolvedTemplate:
         if rendered is None or call["closing"] not in rendered:
             raise ValueError("the model's add-on file closes a call with text its "
                              "template never writes after one")
-        self._call_from_file = True
-        return call["opening"], call["closing"]
+        return (call["opening"], call["closing"]), True
 
     def _template_call_texts(self) -> tuple[str, str] | None:
         """The texts around a call, for a template whose call tags also mark every reply."""
@@ -711,7 +722,7 @@ class ResolvedTemplate:
     @property
     def call_opens_as_text(self) -> bool:
         """Whether a call opens with plain text, which counts only after a tag or at the start."""
-        return self._call_opens_as_text
+        return self._boundary.opens_as_text
 
     def call_boundary(self, allow_tools: bool = True) -> CallBoundary:
         """Where a generated call opens and closes and where a reply ends, as generation reads it.
@@ -719,11 +730,10 @@ class ResolvedTemplate:
         Without ``allow_tools`` no call is recognized, so the reply is certain
         to close.
         """
-        return CallBoundary(
-            tool_tokens=self._tool_tokens if allow_tools else None,
-            call_texts=self._call_texts if allow_tools else None,
-            opens_as_text=self._call_opens_as_text,
-            turn_end_text=self._turn_end_text)
+        if allow_tools:
+            return self._boundary
+        return CallBoundary(opens_as_text=self._boundary.opens_as_text,
+                            turn_end_text=self._boundary.turn_end_text)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
         """Whether a plain-text opening begins with text of a reply's own opening.
@@ -738,11 +748,11 @@ class ResolvedTemplate:
         words = (text + " " + header).split()
         return any(call_open.lstrip().startswith(word) for word in words)
 
-    def _resolve_turn_end_text(self) -> str | None:
+    def _resolve_turn_end_text(self, call_texts: tuple[str, str] | None) -> str | None:
         """Where a reply ends, where a call opens with the start of a reply's closing."""
-        if self._call_texts is None:
+        if call_texts is None:
             return None
-        closing, call_open = self._fragments.assistant_suffix, self._call_texts[0]
+        closing, call_open = self._fragments.assistant_suffix, call_texts[0]
         shared = shared_tags_length(closing, call_open)
         if not shared:
             return None
@@ -787,7 +797,8 @@ class ResolvedTemplate:
             # The name ends where the file says; the arguments are read as written.
             return CallBody(name_close=self._context.addon_call()["name_close"], key_open="",
                             key_close="", pair_sep="", body_close="", empty_close="")
-        call_open = self._call_texts[0] if self._call_texts else self._tool_calls.call_open
+        call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
+                     else self._tool_calls.call_open)
         return extract_call_body(self._render, call_open, self._call_close_text())
 
     def _resolve_can_declare_tools(self) -> bool:
