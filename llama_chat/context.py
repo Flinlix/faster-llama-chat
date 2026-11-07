@@ -83,7 +83,7 @@ class KVContext:
         self._backend = Backend()
         self._model = self._backend.load_model(
             config.model_path, config.gpu_layers, progress=on_load_progress)
-        self._llama_context = None
+        self._engine_context = None
         self._sampler = None
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
@@ -93,7 +93,7 @@ class KVContext:
             self._addon_call = addon["call"]
             kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
                        if config.kv_cache_type else None)
-            self._llama_context = self._backend.new_context(
+            self._engine_context = self._backend.new_context(
                 self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
                 flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
@@ -109,8 +109,8 @@ class KVContext:
             # Free whatever was created before the failure.
             if self._sampler is not None:
                 self._backend.free_sampler(self._sampler)
-            if self._llama_context is not None:
-                self._backend.free_context(self._llama_context)
+            if self._engine_context is not None:
+                self._backend.free_context(self._engine_context)
             self._backend.free_model(self._model)
             raise
         self._closed = False
@@ -239,10 +239,10 @@ class KVContext:
         return None if self._model_template is None else self._model_template.text
 
     def reset(self) -> None:
-        self._backend.kv_clear(self._llama_context)
+        self._backend.kv_clear(self._engine_context)
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
-        self._backend.decode(self._llama_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
+        self._backend.decode(self._engine_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
     def warmup(self) -> None:
         """Decode a full batch and a single token, then clear the cache again.
@@ -256,7 +256,7 @@ class KVContext:
             tok = 0
         full = min(self._max_batch_tokens, self._config.context_size)
         for tokens in ([tok] * full, [tok]):
-            self._backend.decode(self._llama_context, tokens, 0, SEQ, True, self._max_batch_tokens)
+            self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
             self.reset()  # kv_clear -> cache empty again for the real prefill
 
     def apply_eviction(self, ev: Eviction) -> None:
@@ -266,13 +266,13 @@ class KVContext:
             RuntimeError: If the cache refuses the removal, which a cache that
                 can shift does only when it is corrupted.
         """
-        if not self._backend.kv_seq_rm(self._llama_context, SEQ, ev.remove_start,
+        if not self._backend.kv_seq_rm(self._engine_context, SEQ, ev.remove_start,
                                        ev.remove_end):
             raise RuntimeError(f"the cache refused to remove tokens "
                                f"{ev.remove_start} to {ev.remove_end}")
         if ev.remove_end < ev.old_total:
             self._backend.kv_seq_add(
-                self._llama_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
+                self._engine_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
             )
 
     def save_state(self):
@@ -282,7 +282,7 @@ class KVContext:
         """
         if not self._backend.can_save_state:
             return None
-        return self._backend.save_state(self._llama_context, SEQ)
+        return self._backend.save_state(self._engine_context, SEQ)
 
     def restore_state(self, state, pos: int) -> None:
         """Put the cache back to ``state``, saved when it held ``pos`` tokens.
@@ -290,7 +290,7 @@ class KVContext:
         Raises:
             RuntimeError: If the cache refuses the state or the cut after it.
         """
-        self._backend.restore_state(self._llama_context, SEQ, state)
+        self._backend.restore_state(self._engine_context, SEQ, state)
         self.remove_from(pos)
 
     def remove_from(self, pos: int) -> None:
@@ -299,7 +299,7 @@ class KVContext:
         Raises:
             RuntimeError: If the cache refuses a partial removal.
         """
-        if not self._backend.kv_seq_rm(self._llama_context, SEQ, pos, -1):
+        if not self._backend.kv_seq_rm(self._engine_context, SEQ, pos, -1):
             raise RuntimeError(f"the cache refused to remove its tokens from {pos} on")
 
     # ----- generation ----------------------------------------------------
@@ -378,7 +378,7 @@ class KVContext:
             if cancel is not None and cancel.is_set():
                 generated.stop_reason = "interrupted"
                 break
-            tok = self._backend.sample(sampler, self._llama_context)
+            tok = self._backend.sample(sampler, self._engine_context)
             ends = self._backend.is_eog(self._vocab, tok) or (
                 ends_turn is not None and ends_turn(tok))
             # A call may close with the token that otherwise ends a turn.
@@ -388,7 +388,7 @@ class KVContext:
             if ends and not closes_call and call is not None and close_text is not None:
                 # Ended inside a call: the call ends here, closed as the template closes one.
                 closing = self.tokenize(close_text, add_special=False, parse_special=True)
-                self._backend.decode(self._llama_context, closing, pos, SEQ, True,
+                self._backend.decode(self._engine_context, closing, pos, SEQ, True,
                                      self._max_batch_tokens)
                 pos += len(closing)
                 generated.token_ids.extend(closing)
@@ -400,7 +400,7 @@ class KVContext:
                 break
             # Cache, then record, then surface: this order is what keeps
             # token_ids equal to the cache across an early close.
-            self._backend.decode(self._llama_context, [tok], pos, SEQ, True, self._max_batch_tokens)
+            self._backend.decode(self._engine_context, [tok], pos, SEQ, True, self._max_batch_tokens)
             pos += 1
             generated.token_ids.append(tok)
             piece = decoder.decode(self._backend.token_to_piece_bytes(self._vocab, tok))
@@ -488,7 +488,7 @@ class KVContext:
         try:
             self._backend.free_sampler(self._sampler)
         finally:
-            self._backend.free_context(self._llama_context)
+            self._backend.free_context(self._engine_context)
             self._backend.free_model(self._model)
 
     # ----- internals -----------------------------------------------------
@@ -506,13 +506,13 @@ class KVContext:
             RuntimeError: If this build offers no function for the shift.
         """
         if self._can_shift:
-            self._backend.kv_seq_add(self._llama_context, SEQ, 0, 0, 0)
+            self._backend.kv_seq_add(self._engine_context, SEQ, 0, 0, 0)
 
     def _settle_cache_edits(self) -> None:
         """Which edits this cache takes, each proven on it while it is empty."""
         self._can_cut_tail = self._probe_tail_cut()
         # A running state refuses the cut, and is not shifted whatever the cache reports.
-        self._can_shift = self._can_cut_tail and self._backend.can_shift(self._llama_context)
+        self._can_shift = self._can_cut_tail and self._backend.can_shift(self._engine_context)
         self._verify_cache_edits()
 
     def _probe_tail_cut(self) -> bool:
@@ -520,11 +520,11 @@ class KVContext:
         # A cut at a running state's last position may clear it whole and succeed.
         token = max(self._backend.token_eos(self._vocab), 0)
         try:
-            self._backend.decode(self._llama_context, [token] * 3, 0, SEQ, False,
+            self._backend.decode(self._engine_context, [token] * 3, 0, SEQ, False,
                                  self._max_batch_tokens)
-            return self._backend.kv_seq_rm(self._llama_context, SEQ, 1, -1)
+            return self._backend.kv_seq_rm(self._engine_context, SEQ, 1, -1)
         finally:
-            self._backend.kv_clear(self._llama_context)
+            self._backend.kv_clear(self._engine_context)
 
     def _build_sampler(self, config: Config):
         """Assemble the sampler chain ``config`` asks for, in sampling order."""

@@ -82,7 +82,7 @@ def test_every_cache_edit_is_performed_while_loading():
     for can_shift in (True, False):
         performed = []
         context = object.__new__(KVContext)
-        context._llama_context = "the context"
+        context._engine_context = "the context"
         context._can_shift = can_shift
         context._backend = SimpleNamespace(
             kv_seq_rm=lambda *args: performed.append(("seq_rm",) + args),
@@ -100,7 +100,7 @@ def _probed_context(reports_shift, cuts_tail):
     """A context over a backend reporting a shift and taking or refusing a cut at its end."""
     performed = []
     context = object.__new__(KVContext)
-    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
+    context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._backend = SimpleNamespace(
         can_shift=lambda ctx: reports_shift,
         token_eos=lambda vocab: 2,
@@ -234,7 +234,7 @@ def test_every_cache_quantization_config_offers_resolves_to_a_type_id():
 
 def test_a_removal_the_cache_refuses_is_raised():
     context = object.__new__(KVContext)
-    context._llama_context = "the context"
+    context._engine_context = "the context"
     context._backend = SimpleNamespace(kv_seq_rm=lambda *args: False)
     with pytest.raises(RuntimeError, match="refused"):
         context.remove_from(3)
@@ -270,7 +270,7 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
     sampled = iter(["Pa", "ris", "<response_end>", "<end>"])
     decoded = []
     context = object.__new__(KVContext)
-    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
+    context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._sampler = "sampler"
     context._backend = SimpleNamespace(
         sampler_reset=lambda sampler: None,
@@ -348,7 +348,7 @@ def _sampling_context(sampled):
     """A context that samples ``sampled`` in order and records what it decodes and removes."""
     sampled, decoded, removed = iter(sampled), [], []
     context = object.__new__(KVContext)
-    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
+    context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._sampler = "sampler"
     context._backend = SimpleNamespace(
         sampler_reset=lambda sampler: None,
@@ -438,7 +438,7 @@ def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache
         max_batch_tokens, context_size, full):
     performed = []
     context = object.__new__(KVContext)
-    context._llama_context, context._vocab = "ctx", None
+    context._engine_context, context._vocab = "ctx", None
     context._max_batch_tokens = max_batch_tokens
     context._config = SimpleNamespace(context_size=context_size)
     context._backend = SimpleNamespace(
@@ -498,7 +498,7 @@ def _stub_context(chains):
         free_sampler=lambda sampler: chains["freed"].append(sampler),
         sampler_reset=lambda sampler: chains.setdefault("reset", []).append(sampler),
     )
-    ctx._sampler, ctx._vocab, ctx._llama_context = "loaded", None, None
+    ctx._sampler, ctx._vocab, ctx._engine_context = "loaded", None, None
     ctx._max_batch_tokens = 8
     ctx._config = Config()
     ctx._build_sampler = lambda config: ("own", config.temperature)

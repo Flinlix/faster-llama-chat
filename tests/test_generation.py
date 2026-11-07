@@ -23,7 +23,7 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
         decode=lambda *_a: None,
         token_to_piece_bytes=lambda vocab, token: pieces[token],
         sampler_reset=lambda sampler: None)
-    ctx._sampler = ctx._vocab = ctx._llama_context = None
+    ctx._sampler = ctx._vocab = ctx._engine_context = None
     ctx._max_batch_tokens = 8
     return ctx
 

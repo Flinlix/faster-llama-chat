@@ -69,7 +69,7 @@ class Config:
         decode_threads: CPU threads for decode. ``None`` lets llama.cpp decide.
         prefill_threads: CPU threads for prefill. ``None`` means as many as
             ``decode_threads``.
-        max_batch_tokens: Most tokens handed to one ``llama_decode``; a longer
+        max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
         flash_attention: Enable flash attention. Required by a quantized
             ``kv_cache_type``.

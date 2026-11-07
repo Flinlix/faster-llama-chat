@@ -28,28 +28,55 @@ def _vendors() -> set[str]:
     return {source.split("/")[0].lower() for source in sources if "/" in source} | _NAMED
 
 
+# The library's and its engine's own names, which hold a family's letters.
+_OWN_NAMES = {"llama_chat", "llama.cpp", "llama_cpp", "llama-cpp-python"}
+
+
+def _parts(word: str) -> list[str]:
+    """``word`` whole and in its parts: split at ``_``, between letters and digits, and before capitals."""
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])|_", " ", word)
+    return [word.lower()] + spaced.lower().split()
+
+
+# Publishers whose name is also an everyday word, which as a part of a name means the word.
+_WORDS_FIRST = {"meta"}
+
+
 def _names_a_model(word: str, families: set[str], vendors: set[str]) -> bool:
-    if word in families or word in vendors:
+    if word.lower() in _OWN_NAMES:
+        return False
+    whole, *parts = _parts(word)
+    if whole in vendors:
         return True
-    return any(re.fullmatch(re.escape(family) + r"(\d[\d.]*|-.+)", word) for family in families)
+    for part in [whole, *parts]:
+        if part in families or (part in vendors and part not in _WORDS_FIRST):
+            return True
+        if any(re.fullmatch(re.escape(family) + r"(\d[\d.]*|-.+)", part) for family in families):
+            return True
+    return False
 
 
 @pytest.mark.parametrize("module", sorted(_PACKAGE.rglob("*.py")),
                          ids=lambda path: str(path.relative_to(_PACKAGE)))
 def test_a_module_names_no_model_family_or_vendor(module):
     families, vendors = _families(), _vendors()
-    words = set(re.findall(r"[a-z0-9_]+(?:[.\-][a-z0-9_]+)*", module.read_text().lower()))
-    if module.name == _ENGINE_MODULE:
-        words -= _ENGINE_WORDS                  # the engine's own module may name the engine
+    text = re.sub(r"(?i)llama_chat|llama[._-]cpp(?:-python)?", " ", module.read_text())
+    words = set(re.findall(r"[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*", text))
+    if module.name == _ENGINE_MODULE:      # the engine's own module may name the engine
+        words = {w for w in words if w.lower() not in _ENGINE_WORDS
+                 and not w.lower().startswith("llama_")}
     assert not sorted(word for word in words if _names_a_model(word, families, vendors))
 
 
-@pytest.mark.parametrize("word", ["qwen", "qwen3", "qwen2.5", "gpt-oss", "llama-3", "openai"])
+@pytest.mark.parametrize("word", ["qwen", "qwen3", "qwen2.5", "gpt-oss", "llama-3", "openai",
+                                  "is_qwen", "qwen_tags", "deepseek_v3", "qwen3coder",
+                                  "QwenTags", "harmony_format"])
 def test_a_model_family_or_vendor_name_is_recognized(word):
     assert _names_a_model(word, _families(), _vendors())
 
 
-@pytest.mark.parametrize("word", ["llama_chat", "llama.cpp", "llama_cpp", "sampling"])
+@pytest.mark.parametrize("word", ["llama_chat", "llama.cpp", "llama_cpp", "sampling",
+                                  "max_batch_tokens", "ThoughtFilter"])
 def test_the_library_and_its_engine_are_not_taken_for_a_model(word):
     assert not _names_a_model(word, _families(), _vendors())
 

@@ -840,7 +840,7 @@ def test_a_call_may_close_with_the_token_that_ends_a_turn():
         token_to_piece_bytes=lambda vocab, tok: pieces[tok],
         sampler_reset=lambda sampler: None,
     )
-    ctx._sampler = ctx._vocab = ctx._llama_context = None
+    ctx._sampler = ctx._vocab = ctx._engine_context = None
     ctx._max_batch_tokens = 8
 
     acc = GenerationAccumulator()
