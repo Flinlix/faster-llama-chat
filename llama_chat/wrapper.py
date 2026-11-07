@@ -239,10 +239,10 @@ class ChatWrapper:
               reasoning: bool = False) -> None:
         """Reset the conversation: prefill the system prompt and recent history.
 
-        The first call also warms the generation graph, so the first request
-        streams without a cold start. Every other action refuses until this has
-        run, because only this prefills the sequence opener and the system
-        prompt.
+        The first call also warms the model for every size of batch it will
+        decode, so the first request streams without a cold start. Every other
+        action refuses until this has run, because only this prefills the
+        sequence opener and the system prompt.
 
         Args:
             system_prompt: Always kept, never evicted. Empty, and with no

@@ -428,3 +428,22 @@ def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
     assert context.split_at_tags("a <t>b c<e>") == [
         ("a ", False), ("<t>", True), ("b c", False), ("<e>", True)]
     assert context.split_at_tags("plain") == [("plain", False)]
+
+
+@pytest.mark.parametrize("max_batch_tokens, context_size, full", [(8, 32, 8), (64, 16, 16)])
+def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache_empty(
+        max_batch_tokens, context_size, full):
+    performed = []
+    context = object.__new__(KVContext)
+    context._llama_context, context._vocab = "ctx", None
+    context._max_batch_tokens = max_batch_tokens
+    context._config = SimpleNamespace(context_size=context_size)
+    context._backend = SimpleNamespace(
+        token_eos=lambda vocab: 2,
+        decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", len(tokens), pos)),
+        kv_clear=lambda ctx: performed.append(("clear",)),
+    )
+
+    context.warmup()
+
+    assert performed == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]

@@ -249,8 +249,9 @@ are: measure decode throughput on the host once, and set `decode_threads` below
   restart / conversation switch. Prefills the system prompt (pinned at position
   0, never evicted) plus the most recent history that fits in a single decode,
   under the token threshold and `max_history_messages` alike; older excess is
-  dropped. The first call also warms the generation graph (a throwaway decode,
-  immediately cleared) so the first reply has no cold start. A system prompt
+  dropped. The first call also warms the model for every size of batch it
+  will decode (a full batch and a single token, each decoded and immediately
+  cleared) so the first reply has no cold start. A system prompt
   that alone exceeds the threshold raises `ValueError` before the previous
   conversation is touched. `tools` declares functions to the model in the same
   decode; see [Tool calling](#tool-calling). Nothing else may run before it:

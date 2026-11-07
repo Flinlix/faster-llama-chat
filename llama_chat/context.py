@@ -337,16 +337,19 @@ class KVContext:
         self._backend.decode(self._llama_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
     def warmup(self) -> None:
-        """Warm the single-token generation graph, then clear the cache again.
+        """Decode a full batch and a single token, then clear the cache again.
 
-        Prefill warms only the batched graph, so without this the first reply
-        pays a one-time graph-build cost.
+        The engine prepares each size of batch the first time it decodes one,
+        so without this the first reply pays that cost: a full batch covers
+        every prefill, the single token every generated token.
         """
         tok = self._backend.token_eos(self._vocab)
         if tok < 0:  # no EOS; any valid id warms the graph
             tok = 0
-        self._backend.decode(self._llama_context, [tok], 0, SEQ, True, self._max_batch_tokens)
-        self.reset()  # kv_clear -> cache empty again for the real prefill
+        full = min(self._max_batch_tokens, self._config.context_size)
+        for tokens in ([tok] * full, [tok]):
+            self._backend.decode(self._llama_context, tokens, 0, SEQ, True, self._max_batch_tokens)
+            self.reset()  # kv_clear -> cache empty again for the real prefill
 
     def apply_eviction(self, ev: Eviction) -> None:
         """Remove the evicted tokens, then shift survivors to close the gap.
