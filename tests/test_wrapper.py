@@ -544,9 +544,11 @@ def test_oversize_truncate_rejects_when_no_room_for_suffix():
 
 
 # ----- construction / lifecycle -------------------------------------------
-def test_config_and_kwargs_are_mutually_exclusive():
-    with pytest.raises(TypeError, match="not both"):
-        ChatWrapper(_config(), context=FakeContext(), context_size=8192)
+def test_the_config_cannot_be_changed_once_a_wrapper_runs_with_it():
+    """A change would not reach the context, already built with the old size."""
+    w = ChatWrapper(_config(context_size=800), context=FakeContext())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        w.config.context_size = 99
 
 
 def test_begin_rejects_system_prompt_over_threshold():
@@ -891,35 +893,16 @@ def test_can_shift_reports_the_contexts_capability():
     assert ChatWrapper(_config(), context=FakeContext(can_shift=False)).can_shift is False
 
 
-def test_the_eviction_limits_are_readable_beside_the_total():
-    """total_tokens alone has no denominator, and kwargs hand back no Config."""
-    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS,
-                    context_size=800, evict_above_fraction=0.5,
-                    max_history_messages=7)
-    assert w.context_size == 800
-    # Multiplied out, so a caller does not redo the arithmetic to know the trigger.
-    assert w.evict_above_tokens == 400
-    assert w.max_history_messages == 7
-
-
-def test_no_message_limit_reads_back_as_none():
-    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS)
-    assert w.max_history_messages is None
-
-
-def test_the_limits_cannot_be_assigned_through_the_wrapper():
-    """Assignment would not reach the context, already built with the old size."""
-    w = ChatWrapper(context=FakeContext(), fragments=DEFAULT_FRAGMENTS,
-                    context_size=800)
-    for name in ("context_size", "evict_above_tokens", "max_history_messages"):
-        with pytest.raises(AttributeError):
-            setattr(w, name, 99)
-    assert w.context_size == 800
+def test_the_limits_are_read_from_the_config_the_wrapper_runs_with():
+    w = ChatWrapper(Config(context_size=800, evict_above_fraction=0.5, max_history_messages=7),
+                    context=FakeContext(), fragments=DEFAULT_FRAGMENTS)
+    assert w.config.context_size == 800
+    assert w.config.evict_above_tokens == 400
+    assert w.config.max_history_messages == 7
 
 
 def test_wait_idle_is_true_when_nothing_holds_the_wrapper():
     w = ChatWrapper(_config(context_size=200), context=FakeContext())
-    assert w.busy is False
     assert w.wait_idle(timeout_s=0.1) is True
 
 
@@ -942,12 +925,10 @@ def test_wait_idle_blocks_until_a_generation_releases_the_lock():
     t.start()
     entered.wait(5)
 
-    assert w.busy is True
     assert w.wait_idle(timeout_s=0.05) is False   # the turn still holds it
     release.set()
     t.join(5)
     assert w.wait_idle(timeout_s=1.0) is True
-    assert w.busy is False
 
 
 def test_a_cache_context_missing_an_edit_is_refused_where_it_is_adopted():
@@ -1085,7 +1066,7 @@ def test_a_request_evicts_old_history_when_it_would_not_fit_otherwise():
     while w.total_tokens < 240:
         w.reply_without_tools("a question of moderate length")
     long_request = "x" * 170
-    assert w.total_tokens + 170 > w.context_size       # would not fit beside the history
+    assert w.total_tokens + 170 > w.config.context_size       # would not fit beside the history
     reply = w.reply_without_tools(long_request)
     assert reply.n_generated_tokens == 4
     assert [r["text"] for r in w.snapshot()][-2] == long_request

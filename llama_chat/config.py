@@ -15,7 +15,7 @@ UNQUANTIZED_KV_CACHE_TYPE = "f16"
 LOG_LEVELS = ("debug", "info", "warn", "error", "none")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`.
 

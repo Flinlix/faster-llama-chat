@@ -21,7 +21,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from llama_chat import ChatWrapper, Config, KVContext
+from llama_chat import ChatWrapper, Config
+from llama_chat.context import KVContext
 
 
 class CountingContext(KVContext):

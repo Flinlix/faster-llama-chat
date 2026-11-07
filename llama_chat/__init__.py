@@ -29,10 +29,8 @@ argument spelling being recovered from that template:
 """
 
 from .config import Config, Sampling
-from .context import KVContext
-from .messages import Eviction, Message, MessageTable, n_newest_that_fit
-from .persistent_wrapper import ConversationStore, InMemoryStore, PersistentChat
-from .template import CallBody, Reasoning, TemplateFragments, ToolCallFragments
+from .messages import Eviction
+from .template import CallBody, TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, tool
 from .wrapper import ChatWrapper, ContextOverflowError, Reply, ReplyStream
 
@@ -43,22 +41,16 @@ __all__ = [
     "ContextOverflowError",
     "Reply",
     "ReplyStream",
-    "KVContext",
-    "Message",
-    "MessageTable",
-    "Eviction",
-    "n_newest_that_fit",
-    "TemplateFragments",
-    "Reasoning",
-    "ToolCallFragments",
-    "CallBody",
     "ToolCall",
     "ToolResult",
     "ToolTurn",
     "ToolSpec",
     "ToolRegistry",
     "tool",
-    "PersistentChat",
-    "ConversationStore",
-    "InMemoryStore",
+    # For a cache context of one's own, ``ChatWrapper(context=...)``, and a
+    # model whose template describes too little, ``fragments=`` and ``tool_calls=``.
+    "Eviction",
+    "TemplateFragments",
+    "ToolCallFragments",
+    "CallBody",
 ]

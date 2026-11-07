@@ -149,12 +149,12 @@ class ChatWrapper:
         tool_calls: ToolCallFragments | None = None,
         on_message: Callable[[str, str], None] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
-        **kwargs,
     ) -> None:
         """Load the model, resolve the chat template, and validate it.
 
         Args:
-            config: Full configuration. Mutually exclusive with ``**kwargs``.
+            config: The configuration; :class:`~llama_chat.config.Config`'s
+                defaults where it is not given.
             context: A cache context of your own, in place of the one built
                 from ``config``. :meth:`close` closes it too; only a
                 construction that fails part-way leaves it alone.
@@ -170,23 +170,15 @@ class ChatWrapper:
             on_load_progress: Invoked during model loading with a fraction in
                 ``[0.0, 1.0]``. Must not raise. Ignored when ``context`` is
                 supplied.
-            **kwargs: :class:`~llama_chat.config.Config` field overrides, used
-                to build the config when ``config`` is not given.
 
         Raises:
-            TypeError: If both ``config`` and config ``**kwargs`` are passed,
-                or if ``context`` does not answer everything the wrapper calls
-                on it.
+            TypeError: If ``context`` does not answer everything the wrapper
+                calls on it.
             ValueError: If the chat template cannot be recovered, or if it
                 fails validation against the model.
         """
         if config is None:
-            config = Config(**kwargs)
-        elif kwargs:
-            raise TypeError(
-                "pass either a Config or Config field overrides, not both "
-                f"(got config and {sorted(kwargs)})"
-            )
+            config = Config()
         self._on_message = on_message
         owns_context = context is None
         self._context = (
@@ -852,19 +844,9 @@ class ChatWrapper:
         return self._table.total
 
     @property
-    def context_size(self) -> int:
-        """The hard limit in tokens, which :attr:`total_tokens` counts against."""
-        return self._config.context_size
-
-    @property
-    def evict_above_tokens(self) -> int:
-        """The total above which the oldest messages are evicted."""
-        return self._config.evict_above_tokens
-
-    @property
-    def max_history_messages(self) -> int | None:
-        """The most non-system messages kept, or ``None`` for no message limit."""
-        return self._config.max_history_messages
+    def config(self) -> Config:
+        """The configuration this wrapper runs with, its limits included."""
+        return self._config
 
     @property
     def can_shift(self) -> bool:
@@ -874,14 +856,6 @@ class ChatWrapper:
         README, "How eviction works".
         """
         return self._context.can_shift
-
-    @property
-    def busy(self) -> bool:
-        """Whether a generation holds the wrapper. Advisory: it can be stale."""
-        if not self._lock.acquire(blocking=False):
-            return True
-        self._lock.release()
-        return False
 
     def wait_idle(self, timeout_s: float | None = None) -> bool:
         """Block until no generation holds the wrapper. Advisory, as :attr:`busy` is.
