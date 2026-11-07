@@ -881,6 +881,12 @@ such a call, the call ends there, closed as the template closes one. A result
 the template writes between quotes is escaped as a JSON string, as the template
 escapes it.
 
+A template that declares tools somewhere other than the system turn, such as in
+the first user turn, may have a variable of its own that moves them there. A
+variable the template reads qualifies where setting it changes nothing in a
+conversation without tools and puts the declarations into the system turn; it is
+found when the model loads and passed with every render.
+
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
 JSON is read directly instead, because it already carries the function name and

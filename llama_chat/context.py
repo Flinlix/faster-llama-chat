@@ -249,7 +249,8 @@ class KVContext:
     def render_with_model_template(self, messages: list[dict],
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
-                                   reasoning: bool | None = None) -> str | None:
+                                   reasoning: bool | None = None,
+                                   **variables) -> str | None:
         """Render ``messages`` with the model's own GGUF chat template.
 
         BOS is suppressed, so the render aligns with a fragment prefill.
@@ -259,6 +260,7 @@ class KVContext:
             reasoning: Turn the template's reasoning switch on or off, as
                 :func:`~llama_chat.template_extract.reasoning_switch` reads it.
                 ``None`` leaves it unset.
+            variables: Further template variables, by name.
 
         Returns:
             The prompt string, or ``None`` where the model ships no template or
@@ -268,7 +270,8 @@ class KVContext:
             return None
         try:
             return self._model_formatter[generation_prompt](
-                messages=messages, tools=tools, **self._reasoning_switch(reasoning)).prompt
+                messages=messages, tools=tools, **self._reasoning_switch(reasoning),
+                **variables).prompt
         except Exception:
             return None
 
@@ -280,6 +283,10 @@ class KVContext:
         """
         from .template_extract import extract_fragments
         return extract_fragments(self.render_with_model_template)
+
+    def chat_template_text(self) -> str | None:
+        """The source of the model's own chat template, or ``None`` where it ships none."""
+        return self._backend.metadata_value(self._model, "tokenizer.chat_template")
 
     def _build_model_formatter(self):
         """One renderer without the generation prompt and one with it, or ``None``."""

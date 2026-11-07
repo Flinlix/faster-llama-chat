@@ -184,7 +184,7 @@ class FakeContext:
     def render_with_model_template(self, messages: list[dict],
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
-                                   reasoning: bool | None = None) -> str:
+                                   reasoning: bool | None = None, **variables) -> str:
         """Render just enough for the wrapper to slice declarations and results.
 
         A call leaves its turn open, and the result and the prose after it stay

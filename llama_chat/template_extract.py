@@ -83,6 +83,16 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     return lambda reasoning: {} if reasoning is None else thinking[reasoning]
 
 
+def names_read(template: str) -> set[str]:
+    """Every name a template reads, a variable it gives a default when undefined included."""
+    import jinja2
+    try:
+        parsed = jinja2.Environment().parse(template)
+    except jinja2.TemplateError:
+        return set()
+    return {node.name for node in parsed.find_all(jinja2.nodes.Name) if node.ctx == "load"}
+
+
 def call_id(n: int) -> str:
     """The id of the ``n``-th call this library writes, nine letters and digits."""
     return f"call{n:05d}"

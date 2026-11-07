@@ -20,7 +20,7 @@ from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
 from .template_extract import (call_id, extract_call_body, extract_call_close_text,
                                extract_call_separator, extract_reasoning,
-                               extract_removed_thought, extract_tool_fragments)
+                               extract_removed_thought, extract_tool_fragments, names_read)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
 # Where the prompt and a tool result go in a render. Neither contains the
@@ -114,6 +114,7 @@ class ResolvedTemplate:
     def __init__(self, context, *, fragments: TemplateFragments | None = None,
                  tool_calls: ToolCallFragments | None = None) -> None:
         self._context = context
+        self._variables: dict = {}      # template variables every render passes
         self._fragments = (fragments if fragments is not None
                            else self._resolve_fragments())
         self._validate_template()
@@ -133,6 +134,8 @@ class ResolvedTemplate:
             self._turn_end_token = None
         self._call_body = self._resolve_call_body()
         self._declares_in_newest_turn = self._resolve_declares_in_newest_turn()
+        if not self._declares_in_newest_turn:
+            self._variables = self._resolve_declaration_variables()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
         self._reasoning = self._resolve_reasoning()
@@ -140,6 +143,13 @@ class ResolvedTemplate:
         self._preambles = {reasoning: self._resolve_preamble(reasoning)
                            for reasoning in (False, True)}
         self._later_system = self._resolve_later_system()
+
+    def _render(self, messages, tools=None, *, generation_prompt=False, reasoning=None,
+                **variables):
+        """The model's template's render, with the variables this template needs."""
+        return self._context.render_with_model_template(
+            messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
+            **self._variables, **variables)
 
     # ----- what the wrapper reads ----------------------------------------------
     @property
@@ -154,6 +164,11 @@ class ResolvedTemplate:
         ``None`` where the closing does not begin with one of the model's tags.
         """
         return self._turn_end_token
+
+    @property
+    def template_variables(self) -> dict:
+        """The template variables every render passes, such as one moving tool declarations."""
+        return dict(self._variables)
 
     @property
     def user_turn_join(self) -> str | None:
@@ -201,9 +216,9 @@ class ResolvedTemplate:
             ValueError: If the template does not write it where it can be located.
         """
         messages = [{"role": "user", "content": _PROMPT}, *_EXCHANGE]
-        rendered = self._context.render_with_model_template(
+        rendered = self._render(
             messages, tools=[spec.as_declaration() for spec in specs], reasoning=reasoning)
-        plain = self._context.render_with_model_template(messages, reasoning=reasoning)
+        plain = self._render(messages, reasoning=reasoning)
         opened = self._fragments.user_prefix + _PROMPT
         if rendered is None or plain is None or opened not in rendered or opened not in plain \
                 or (rendered != plain
@@ -300,9 +315,9 @@ class ResolvedTemplate:
         for messages in ([{"role": "user", "content": _NEXT}],
                          [{"role": "user", "content": _PROMPT}, *_EXCHANGE[:1],
                           {"role": "user", "content": _NEXT}]):
-            rendered = self._context.render_with_model_template(
+            rendered = self._render(
                 messages, tools=tools, reasoning=reasoning)
-            plain = self._context.render_with_model_template(messages, reasoning=reasoning)
+            plain = self._render(messages, reasoning=reasoning)
             newest = self._fragments.user_prefix + _NEXT
             if rendered is None or plain is None or newest not in rendered \
                     or newest not in plain:
@@ -365,7 +380,7 @@ class ResolvedTemplate:
         """
         names = batch or [name]
         markers = [_RESULT_N.format(i) for i in range(len(names))]
-        rendered = self._context.render_with_model_template([
+        rendered = self._render([
             {"role": "user", "content": _PROMPT},
             {"role": "assistant", "content": "", "tool_calls": [
                 {"id": call_id(i), "type": "function",
@@ -421,7 +436,7 @@ class ResolvedTemplate:
 
         frags = self._fragments
         after = [] if open_turn else [{"role": "user", "content": _NEXT}]
-        rendered = self._context.render_with_model_template(
+        rendered = self._render(
             [{"role": "user", "content": _PROMPT}]
             + _turn_messages(turn, field, frags) + after,
             generation_prompt=open_turn, reasoning=reasoning)
@@ -538,7 +553,7 @@ class ResolvedTemplate:
         """Read what the template writes between two user turns in a row."""
         if not hasattr(self._context, "render_with_model_template"):
             return ""
-        rendered = self._context.render_with_model_template(
+        rendered = self._render(
             [{"role": "user", "content": _PROMPT}, {"role": "user", "content": _NEXT}])
         if rendered is None or _PROMPT not in rendered or _NEXT not in rendered:
             return None
@@ -578,12 +593,12 @@ class ResolvedTemplate:
         probe = list(system if self.has_system_turn else ()) + list(exchange)
         for reasoning in (False, True) if self.can_reason else (False,):
             messages = [{"role": role, "content": text} for role, text in probe]
-            rendered = self._context.render_with_model_template(
+            rendered = self._render(
                 messages, reasoning=reasoning)
-            prompted = self._context.render_with_model_template(
+            prompted = self._render(
                 messages, generation_prompt=True, reasoning=reasoning)
             if rendered is None:
-                if self._context.render_with_model_template(
+                if self._render(
                         [{"role": "user", "content": _PROMPT}]) is None:
                     return          # the model ships no template to check against
                 raise ValueError(
@@ -619,14 +634,14 @@ class ResolvedTemplate:
         """What this model's template wraps a generated call in, if anything."""
         if not hasattr(self._context, "render_with_model_template"):
             return None
-        return extract_tool_fragments(self._context.render_with_model_template,
+        return extract_tool_fragments(self._render,
                                       self._fragments)
 
     def _resolve_preamble(self, reasoning: bool) -> str | None:
         """What a conversation without a system message opens with, before its first turn."""
         if not hasattr(self._context, "render_with_model_template"):
             return None
-        rendered = self._context.render_with_model_template(
+        rendered = self._render(
             [{"role": "user", "content": _PROMPT}], reasoning=reasoning)
         opened = self._fragments.user_prefix + _PROMPT
         if rendered is None:
@@ -641,7 +656,7 @@ class ResolvedTemplate:
         if not hasattr(self._context, "render_with_model_template"):
             return None
         frags = self._fragments
-        rendered = self._context.render_with_model_template([
+        rendered = self._render([
             {"role": "user", "content": _PROMPT},
             {"role": "assistant", "content": _RESULT},
             {"role": "system", "content": _NEXT},
@@ -660,7 +675,7 @@ class ResolvedTemplate:
         """What turns this model's reasoning on, recovered from its template."""
         if not hasattr(self._context, "render_with_model_template"):
             return None
-        render = self._context.render_with_model_template
+        render = self._render
         found = extract_reasoning(render, self._fragments, self._tool_calls)
         if found is None and hasattr(self._context, "tags"):
             found = extract_removed_thought(render, self._fragments, self._context.tags())
@@ -694,7 +709,7 @@ class ResolvedTemplate:
         if self._context.first_special_token(call_open) is None \
                 and self._opens_in_reply_header(call_open):
             return None
-        close = extract_call_close_text(self._context.render_with_model_template, call_open)
+        close = extract_call_close_text(self._render, call_open)
         return (call_open, close) if close else None
 
     def _text_after_last_tag(self, text: str) -> str:
@@ -743,7 +758,7 @@ class ResolvedTemplate:
         last argument with a tag of its own first. Otherwise the first tag of
         ``call_close``.
         """
-        separator = extract_call_separator(self._context.render_with_model_template,
+        separator = extract_call_separator(self._render,
                                            fragments.call_open)
         tags = self._tags_in(separator or "")
         if tags and self._context.token_text(tags[-1]) in fragments.call_close:
@@ -768,7 +783,7 @@ class ResolvedTemplate:
             return None
         if self._tool_calls.body is not None:
             return self._tool_calls.body
-        return extract_call_body(self._context.render_with_model_template,
+        return extract_call_body(self._render,
                                  self._tool_calls.call_open, self._call_close_text())
 
     def _resolve_can_declare_tools(self) -> bool:
@@ -789,6 +804,38 @@ class ResolvedTemplate:
             return True
         except Exception:
             return False
+
+    def _resolve_declaration_variables(self) -> dict:
+        """A template variable that puts tool declarations into the system turn, where needed.
+
+        One the template reads qualifies where setting it changes nothing in a
+        conversation without tools; empty where the system turn declares them
+        already, or no variable makes it.
+        """
+        if not self._calls_marked or not hasattr(self._context, "chat_template_text"):
+            return {}
+        try:
+            self._declaration_turn([_PROBE_TOOL])
+            return {}
+        except Exception:
+            pass
+        conversation = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
+        plain = self._render(conversation)
+        names = names_read(self._context.chat_template_text() or "")
+        for name in sorted(names - {"messages", "tools", "add_generation_prompt",
+                                    "generation_prompt", "reasoning"}):
+            for value in (False, True):
+                self._variables = {}
+                if self._render(conversation, **{name: value}) != plain:
+                    continue
+                self._variables = {name: value}
+                try:
+                    self._declaration_turn([_PROBE_TOOL])
+                    return {name: value}
+                except Exception:
+                    pass
+        self._variables = {}
+        return {}
 
     def _resolve_declares_in_newest_turn(self) -> bool:
         """Whether the template declares tools right before the newest user turn alone."""
@@ -831,7 +878,7 @@ class ResolvedTemplate:
         Cut where the user turn begins, so whatever the template writes between
         the two belongs to the system turn.
         """
-        rendered = self._context.render_with_model_template(
+        rendered = self._render(
             [{"role": "system", "content": _PROMPT},
              {"role": "user", "content": _NEXT}, *_EXCHANGE], tools=tools, reasoning=reasoning)
         opened = self._fragments.user_prefix + _NEXT

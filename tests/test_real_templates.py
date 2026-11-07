@@ -37,12 +37,15 @@ class _TemplateContext:
                                             messages=messages, **variables).prompt)
 
     def render_with_model_template(self, messages, tools=None, *,
-                                   generation_prompt=False, reasoning=None):
+                                   generation_prompt=False, reasoning=None, **variables):
         try:
             return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **self._switch(reasoning)).prompt
+                messages=messages, tools=tools, **self._switch(reasoning), **variables).prompt
         except Exception:
             return None
+
+    def chat_template_text(self):
+        return self._template
 
     def tokenize(self, text, add_special=False, parse_special=True):
         return [ord(c) for c in text]
@@ -226,7 +229,6 @@ def _closers(tag: str) -> list[str]:
 
 # Families whose calls cannot be read, so tools are refused, and why.
 _TOOLS_REFUSED = {
-    "llama-3.2": "declares no tools",   # declared in the first user turn
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
     "gpt-oss": "plain text",            # the model names a call in its header in another order
     "muse-glimmer": "call format",      # the call is named where a reply names its reader
@@ -276,7 +278,7 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
                 {"role": "user", "content": "Thanks."}]
     rendered = context.render_with_model_template(
         messages, tools=[_TOOL.as_declaration()], generation_prompt=True,
-        reasoning=False)
+        reasoning=False, **template.template_variables)
     assert ours == rendered
 
 
@@ -340,7 +342,7 @@ def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
     ours = opening + formatter.fragment("user", "Weather?") + formatter.generation_prompt()
     rendered = context.render_with_model_template(
         [{"role": "user", "content": "Weather?"}], tools=[_TOOL.as_declaration()],
-        generation_prompt=True, reasoning=False)
+        generation_prompt=True, reasoning=False, **template.template_variables)
     assert ours == rendered
 
 
@@ -378,7 +380,7 @@ def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
          {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
           "content": _QUOTED_RESULT},
          {"role": "assistant", "content": "Sunny."}, {"role": "user", "content": "Thanks."}],
-        reasoning=False)
+        reasoning=False, **template.template_variables)
     assert past in rendered
     prefix, suffix = template.result_wrapping("get_weather")
     assert prefix + written_between(_QUOTED_RESULT, prefix, suffix) in rendered
