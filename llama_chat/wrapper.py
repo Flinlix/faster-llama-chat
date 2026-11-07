@@ -81,8 +81,9 @@ class ChatWrapper:
         Raises:
             TypeError: If ``context`` does not answer everything the wrapper
                 calls on it.
-            ValueError: If the chat template cannot be recovered, or if it
-                fails validation against the model.
+            ValueError: If the chat template cannot be recovered, if it
+                fails validation against the model, or if ``config`` asks for a
+                larger context than ``context`` holds.
         """
         if config is None:
             config = Config()
@@ -97,6 +98,10 @@ class ChatWrapper:
         # that what fails, fails while the wrapper is being built.
         try:
             ensure_answers(self._context, CACHE_CONTEXT)
+            if config.context_size > self._context.context_size:
+                raise ValueError(
+                    f"context_size is {config.context_size} but the cache context holds "
+                    f"{self._context.context_size} tokens; give both the same size")
             self._template_given = {"fragments": fragments, "tool_calls": tool_calls}
             self._template = ResolvedTemplate(self._context, **self._template_given)
             # The conversation's own, set again by every begin.

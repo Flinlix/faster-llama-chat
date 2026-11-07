@@ -80,6 +80,10 @@ class CacheContext(ModelReader, Protocol):
     """The same, with the cache a conversation is decoded into."""
 
     @property
+    def context_size(self) -> int:
+        """How many tokens the cache holds at most."""
+
+    @property
     def can_shift(self) -> bool: ...
 
     @property

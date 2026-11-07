@@ -1017,3 +1017,10 @@ def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
     w.inject("zwei")
     assert [m["text"] for m in w.snapshot()] == ["s", "zwei"]
     _as_rendered(w, fake)
+
+
+def test_a_config_larger_than_the_cache_context_is_refused_at_the_start():
+    small = FakeContext()
+    small.context_size = 256
+    with pytest.raises(ValueError, match="holds 256 tokens"):
+        ChatWrapper(Config(context_size=512), context=small)

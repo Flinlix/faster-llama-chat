@@ -103,6 +103,7 @@ class FakeContext:
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
         self.can_shift = can_shift
+        self.context_size = 1 << 20      # no limit of its own: the config's is the one tested
         self.rebuilds = 0  # how many times the cache was rebuilt (no-shift path)
         self.saved_states = 0
         self.warmups = 0  # how many times warmup() was called

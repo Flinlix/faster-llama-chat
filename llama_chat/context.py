@@ -116,6 +116,11 @@ class KVContext:
         self._closed = False
 
     @property
+    def context_size(self) -> int:
+        """How many tokens the cache was built to hold."""
+        return self._config.context_size
+
+    @property
     def can_shift(self) -> bool:
         """Whether eviction can shift survivors in place, rather than rebuild."""
         return self._can_shift

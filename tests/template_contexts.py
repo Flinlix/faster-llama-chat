@@ -134,6 +134,7 @@ class ConversationContext(TagTokenizingContext):
         self.cache: list[int] = []
         self.can_shift = can_shift
         self.can_cut_tail = can_shift
+        self.context_size = 1 << 20
         self._replies = list(replies)
         self.before_reply = None
 

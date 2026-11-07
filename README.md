@@ -144,7 +144,7 @@ model and makes later actions raise.
 wrapper is built, so a deployment that could never work says so then: every
 `Config` field and the combinations no call could succeed under, that
 `model_path` names a file, each cache edit tried once on the empty cache, that
-a context of your own answers everything called on it, that the template's
+a context of your own answers everything called on it and holds the `context_size` asked for, that the template's
 pieces round-trip through the model's own template and its reply ends with one
 of the model's tags, and whether tool calling works (`can_call_tools`). What is
 left is what only a conversation can know: whether a request fits
