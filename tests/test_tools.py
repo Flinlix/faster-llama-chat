@@ -1359,13 +1359,7 @@ def test_a_parser_that_fails_unexpectedly_still_closes_the_turn(monkeypatch):
     assert fake.cache == _flatten(wrapper)
 
 
-def test_the_registry_keeps_naming_a_declaration_the_cache_dropped():
-    """``specs`` is intent, not a record of what the model knows.
-
-    A declaration prefilled mid-conversation is an ordinary message, so a long
-    conversation evicts it. Nothing tells the registry, and nothing should: it
-    answers what ought to be declared, which is what a later ``begin`` needs.
-    """
+def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction():
     def clock(city: str) -> str:
         return "09:00"
 
@@ -1377,15 +1371,14 @@ def test_the_registry_keeps_naming_a_declaration_the_cache_dropped():
                           context=fake)
     wrapper.begin("persona")
     wrapper.declare_unknown_tools([registry.spec("clock")])
-    assert [m["role"] for m in wrapper.snapshot()] == ["system", "system"]
+    assert [m["role"] for m in wrapper.snapshot()] == ["system"]
 
     for i in range(6):
         wrapper.reply_without_tools(f"frage {i}")
 
-    # The declaration went with the oldest messages; only the prompt is pinned.
-    assert [m["role"] for m in wrapper.snapshot()][:2] == ["system", "user"]
-    # And the registry still names it, so another begin() would declare it again.
-    assert [s.name for s in registry.specs()] == ["clock"]
+    # The system turn is pinned, so the declaration in it is never evicted.
+    assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
+    assert wrapper.declare_unknown_tools(registry) == 0
     assert fake.cache == _flatten(wrapper)
 
 
@@ -1860,37 +1853,6 @@ def test_a_template_with_no_result_block_refuses_the_result():
     assert fake.cache == _flatten(wrapper)
 
 
-class _UnsliceableDeclarations(FakeContext):
-    """Declarations in a system turn that is rebuilt around them.
-
-    The turn with tools shares neither its opening nor its whole ending with
-    the turn without, so what the two differ by cannot be cut out of it.
-    """
-
-    def render_with_model_template(self, messages, tools=None, **_options):
-        plain = super().render_with_model_template(messages, tools=None, **_options)
-        if not tools or plain is None:
-            return plain
-        system, user, rest = plain.partition("<|turn>user")
-        return system.replace("<|turn>", "<|TURN>").replace("<turn|>", "<TURN|>") \
-            + user + rest
-
-
-def test_declarations_that_cannot_be_cut_out_are_refused():
-    fake = _UnsliceableDeclarations(calls_tools=True)
-    wrapper = ChatWrapper(Config(context_size=512), context=fake)
-    wrapper.begin("persona")
-    spec = ToolSpec("clock", "Zeit.", {"type": "object", "properties": {}})
-
-    # The two renders differ, so the template does declare something, and the
-    # refusal says the thing that is actually wrong: the difference is not a
-    # block that can be lifted out and prefilled on its own.
-    with pytest.raises(ValueError, match="lifted out of the system turn"):
-        wrapper.declare_unknown_tools([spec])
-    assert [m["role"] for m in wrapper.snapshot()] == ["system"]
-    assert fake.cache == _flatten(wrapper)
-
-
 def test_no_render_sentinel_contains_another():
     """A split on one has to land on that one, whatever else the render holds.
 
@@ -1989,7 +1951,7 @@ def _declared_in(wrapper, index):
 
 
 def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
-    """One registry for both: begin takes its half, declaring takes the rest."""
+    """One registry for both: begin takes its half, declaring adds the rest."""
     registry = ToolRegistry()
 
     @registry.tool("Sagt die Zeit.")
@@ -2006,10 +1968,11 @@ def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert "<decl>weather</decl>" not in _declared_in(wrapper, 0)
 
-    wrapper.declare_unknown_tools(registry)          # the rest, in a message of its own
+    wrapper.declare_unknown_tools(registry)          # the rest, where the template puts them
 
-    assert "<decl>weather</decl>" in _declared_in(wrapper, -1)
-    assert "<decl>clock</decl>" not in _declared_in(wrapper, -1)
+    assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
+    assert "<decl>weather</decl>" in _declared_in(wrapper, 0)
+    assert [m["role"] for m in wrapper.snapshot()] == ["system"]
     assert fake.cache == _flatten(wrapper)
 
 
@@ -2033,36 +1996,8 @@ def test_declaring_the_same_registry_again_writes_nothing():
     assert fake.cache == _flatten(wrapper)
 
 
-def test_a_declaration_the_cache_dropped_is_written_again():
-    """Known is read off the messages, so eviction takes the knowledge with it."""
-    registry = ToolRegistry()
-
-    @registry.tool("Sagt die Zeit.", in_system_prompt=False)
-    def clock() -> dict:
-        return {}
-
-    fake = FakeContext(calls_tools=True)
-    wrapper = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5),
-                          context=fake)
-    wrapper.begin("persona")
-    wrapper.declare_unknown_tools(registry)
-    assert [m["role"] for m in wrapper.snapshot()] == ["system", "system"]
-
-    for i in range(6):
-        wrapper.reply_without_tools(f"frage {i}")
-    assert [m["role"] for m in wrapper.snapshot()][:2] == ["system", "user"]
-
-    wrapper.declare_unknown_tools(registry)      # the model no longer knows it
-    assert "<decl>clock</decl>" in _declared_in(wrapper, -1)
-    assert fake.cache == _flatten(wrapper)
-
-
 def test_declaring_skips_what_the_system_turn_already_holds():
-    """Repeating those is pure cost: the system turn is never evicted.
-
-    A tool declared later is written again, because the message carrying that
-    declaration can be evicted, and then the model no longer knows it.
-    """
+    """Repeating those is pure cost: the system turn is never evicted."""
     registry = ToolRegistry()
 
     @registry.tool("Sagt die Zeit.")
@@ -2081,16 +2016,12 @@ def test_declaring_skips_what_the_system_turn_already_holds():
         return {}
 
     wrapper.declare_unknown_tools(registry)              # only the one it has not heard
-    declared = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
-                       if 0 < t < 0x11000)
-    assert "<decl>weather</decl>" in declared
-    assert "<decl>clock</decl>" not in declared
+    declared = _declared_in(wrapper, 0)
+    assert declared.count("<decl>clock</decl>") == 1 and "<decl>weather</decl>" in declared
 
     wrapper.begin("persona")                     # a reset forgets what was said
     wrapper.declare_unknown_tools(registry)
-    declared = "".join(chr(t) for t in wrapper._table.messages[-1].token_ids
-                       if 0 < t < 0x11000)
-    assert "<decl>clock</decl>" in declared
+    assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert fake.cache == _flatten(wrapper)
 
 

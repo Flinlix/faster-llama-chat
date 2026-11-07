@@ -483,31 +483,6 @@ class ResolvedTemplate:
         pieces.append((body[at:], False))
         return [(text, own) for text, own in pieces if text]
 
-    def declaration_block(self, specs: list[ToolSpec]) -> str:
-        """Only the declarations, for adding to a conversation already begun.
-
-        What the two renders differ by, from whichever side of the prompt the
-        template put them on.
-
-        Raises:
-            ValueError: If the template renders no declarations, or renders
-                them where they cannot be told apart from the system turn.
-        """
-        split = self._declaration_turn(specs)
-        block = ""
-        if split.declared_head.startswith(split.plain_head):
-            block += split.declared_head[len(split.plain_head):]
-        if split.declared_tail.endswith(split.plain_tail):
-            block += split.declared_tail[:len(split.declared_tail)
-                                         - len(split.plain_tail)]
-        if not block:
-            raise ValueError(
-                "this model's template does not render its declarations as a "
-                "block that can be lifted out of the system turn, so they "
-                "cannot be added as a message of their own; declare them with "
-                "begin(tools=...) instead")
-        return block
-
     def ensure_tools_usable(self) -> None:
         """Refuse to declare tools this model could never use.
 

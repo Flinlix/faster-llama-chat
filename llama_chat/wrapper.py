@@ -211,6 +211,7 @@ class ChatWrapper:
         self._table = MessageTable()
         self._registry = None
         self._moving_specs: list[ToolSpec] = []   # declared before the newest user turn
+        self._system_specs: list[ToolSpec] = []   # declared in the system turn
         # An open turn and the calls owing a result are not the same thing: the
         # last result empties the list while the turn is still open.
         self._reply_open = False
@@ -345,6 +346,7 @@ class ChatWrapper:
             self._pending_calls = []
             self._registry = registry
             self._moving_specs = list(specs) if moving else []
+            self._system_specs = [] if moving else list(specs or [])
             self._formatter, self._reasoning = formatter, reasoning
             if not self._warmed:
                 self._context.warmup()
@@ -792,23 +794,19 @@ class ChatWrapper:
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
-        Costs one prefill, and writes an ordinary message, so this declaration
-        can be evicted later. One that has to survive belongs in ``begin``.
-        Where the template declares tools right before the newest user turn,
-        they join what that turn carries instead, decoded again from there.
+        Written where the template declares tools, never as a message of its
+        own: into the system turn, with the conversation after it decoded again
+        once, or, where the template declares tools right before the newest
+        user turn, into what that turn carries, decoded again from there.
 
         Args:
             tools: What to declare: a whole
                 :class:`~llama_chat.tools.ToolRegistry`, of which everything it
-                holds is taken, or the specs themselves. Nothing to
-                declare does nothing, and neither does a tool the conversation
-                already declares, wherever that declaration sits: the system
-                turn, which cannot be evicted, or a message this method wrote.
-                One whose message has since been evicted counts as unknown
-                again and is written back. The registry is not
-                kept, unlike ``begin``'s: which one a turn runs against is that
-                method's decision, and a declaration adds names rather than
-                replacing what can run.
+                holds is taken, or the specs themselves. Nothing to declare does
+                nothing, and neither does a tool the conversation already
+                declares. The registry is not kept, unlike ``begin``'s: which
+                one a turn runs against is that method's decision, and a
+                declaration adds names rather than replacing what can run.
 
         Returns:
             How many messages were evicted to make room.
@@ -817,7 +815,8 @@ class ChatWrapper:
             ValueError: If no conversation has been begun, if a tool call has
                 left a reply open, if this model cannot call tools at all (see
                 :meth:`begin`), if its template declares no tools, or if the
-                declarations cannot fit beside the system prompt.
+                system turn with the declarations would exceed
+                ``evict_above_tokens``.
         """
         with self._lock:
             self._ensure_open()
@@ -831,25 +830,18 @@ class ChatWrapper:
             self._template.ensure_tools_usable()
             if self._template.declares_in_newest_turn:
                 return self._declare_in_newest_turn(specs)
-            block = self._template.declaration_block(specs)
-            prefix, suffix = self._later_system_tags()
-            # The model's own tags, so it joins the suffix and tokenizes
-            # special-on. There is no caller text in this message.
-            tokens = self._context.tokenize_fragment(prefix, "", block + suffix)
-            floor = self._table.messages[0].n_tokens if self._table.has_system else 0
-            # Never truncated: half a declaration is a tag block no template
-            # produces, and it would sit in the cache for the whole conversation.
-            room = self._config.evict_above_tokens - floor
-            if len(tokens) > room:
+            declared = self._system_specs + specs
+            system = self._table.messages[0]
+            tokens = self._system_tokens(self._formatter, system.text, declared,
+                                         self._reasoning)
+            if len(tokens) > self._config.evict_above_tokens:
                 raise ValueError(
-                    f"these declarations need {len(tokens)} tokens but only "
-                    f"{room} fit beside the system prompt; declare fewer tools "
-                    f"or raise context_size/evict_above_fraction")
-            evicted = self._evict_until(
-                lambda: self._fits(len(tokens), arriving_messages=1))
-            self._context.prefill(tokens, start_pos=self._table.total, want_logits=False)
-            self._table.append(Message("system", "", tokens,
-                                       declares=tuple(spec.name for spec in specs)))
+                    f"the system turn with these declarations needs {len(tokens)} tokens "
+                    f"but the eviction threshold is {self._config.evict_above_tokens}; "
+                    "declare fewer tools or raise context_size/evict_above_fraction")
+            evicted = self._evict_until(lambda: self._fits(len(tokens) - system.n_tokens))
+            self._rewrite_from(0, tokens, tuple(spec.name for spec in declared))
+            self._system_specs = declared
             self._save_rest()
             return evicted
 

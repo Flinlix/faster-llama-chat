@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from llama_chat import ChatWrapper, Config
+from llama_chat.tools import ToolSpec
 
 from .template_contexts import ConversationContext
 
@@ -30,11 +31,12 @@ def _conversation(path, context_size):
     return context, chat, seen
 
 
-def _rendered(context, rows):
+def _rendered(context, rows, tools=None, variables=None):
     messages = [{"role": row["role"], "content": row["text"]} for row in rows
                 if not (row["role"] == "system" and not row["text"])]
-    return context.render_with_model_template(messages, generation_prompt=True,
-                                              reasoning=False)
+    return context.render_with_model_template(
+        messages, tools=[spec.as_declaration() for spec in tools] if tools else None,
+        generation_prompt=True, reasoning=False, **(variables or {}))
 
 
 def _system_prompt(chat):
@@ -118,3 +120,21 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call():
     chat.reply_without_tools("How do I name it?")
     chat.truncate_last_reply("Write")
     assert chat.snapshot()[-1]["text"] == "Write"
+
+
+_TOOL = ToolSpec(name="get_weather", description="Weather for a city",
+                 parameters={"type": "object", "properties": {"city": {"type": "string"}}})
+
+
+@pytest.mark.parametrize("path", [p for p in _TEMPLATES if json.loads(p.read_text())["calls_tools"]],
+                         ids=lambda p: p.stem)
+def test_tools_declared_mid_conversation_are_written_where_the_template_writes_them(path):
+    context, chat, seen = _conversation(path, context_size=4096)
+    if not chat.can_call_tools:
+        return
+    chat.begin(_system_prompt(chat))
+    chat.reply_without_tools(_QUESTIONS[0])
+    chat.declare_unknown_tools([_TOOL])
+    chat.reply_without_tools(_QUESTIONS[1])
+    cached, rows = seen[-1]
+    assert cached == _rendered(context, rows, [_TOOL], chat._template.template_variables)
