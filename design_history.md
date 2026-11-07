@@ -35,7 +35,7 @@ re-prefilling them. It does not do that work where you call it: `seq_add` only
 marks the cells as shifted, and the RoPE K-shift over the whole cache is built
 into the graph of the **next** `llama_decode` (the shift is expensive only for a
 quantized cache). That cost is therefore paid by whatever decodes next, which is
-why `reply_without_tools_stream` decodes the assistant turn's closing tag
+why `reply(calls="refuse")` decodes the assistant turn's closing tag
 *after* the post-reply eviction rather than before it: a decode the turn
 performs anyway then carries the shift, instead of the next generation's
 prefill.
@@ -66,7 +66,7 @@ those tokens.
   the cache comes to rest, the last two kept in RAM, one from before the
   newest reply and one from after it. That part's size is the model's, not
   the conversation's. A reply
-  kept in another form than it was generated in, see [Reasoning](#reasoning),
+  kept in another form than it was generated in, see the README's "Reasoning",
   a cut and a removed reply then restore the earlier state and decode only
   what follows it. Where the build saves no state, or the newest reply lies
   before both, the conversation is rebuilt instead. A cache that cannot shift
@@ -76,12 +76,7 @@ those tokens.
 churn: the modern `llama_memory_*` handle API when present, falling back to the
 older `llama_kv_self_*` / `llama_kv_cache_*` names.
 
-**The shift's cost and its quality.** `seq_add` marks cells as shifted; the
-RoPE K-shift over the whole cache runs in the graph of the next decode, which
-is why a reply's closing tag is decoded after the post-reply eviction: a decode
-the turn performs anyway carries the shift. The reuse is lossy in the
-StreamingLLM sense (the survivors' K/V were computed attending to the removed
-tokens), with slight quality drift. On a GPU, `flash_attention=True` with
+**Memory and quality settings.** On a GPU, `flash_attention=True` with
 `kv_cache_type="q8_0"` roughly halves the KV cache's memory at a small cost in
 output quality; `kv_cache_on_gpu=False` frees VRAM at the cost of speed.
 Decode is often faster with fewer threads than prefill, because filling the
@@ -150,9 +145,7 @@ tag is the one after which a past reply keeps only its answer, the opening tag
 the one of the same name without the slash. `ChatWrapper.can_reason` says
 whether that succeeded.
 
-### How a call's format is recovered
-
-### What is recovered, and what happens when it cannot be
+### How a call's format is recovered: what is recovered, and what happens when it cannot be
 
 The call tags are found by probing the model's template, then resolving each
 one to the single token it stands for. A tag counts as such if it is either a
@@ -284,7 +277,7 @@ would ask for the one thing it cannot do.
 An unreadable call is retryable like any other, and spends the budget like any
 other, so under a `max_calls` ceiling a model that cannot write a readable one
 gives up after that many attempts rather than looping. Under
-`reply_without_tools` the retry is skipped, since a second call could only be
+`reply(calls="refuse")` the retry is skipped, since a second call could only be
 refused as well. It is the one failure whose
 result carries no instruction: it is written while the reply is being recorded,
 before the round settles the budget, so there is nothing true to say yet.
@@ -399,3 +392,141 @@ and tokenizer, which was not checked.
   round that added them. The helpers that several files build on are in
   `tests/wrappers.py`. The move kept every test: the collected test names
   before and after are the same list.
+
+## 2026-11-07: The template as the program
+
+The user asked whether a model could work every time, a future one included,
+and chose a prototype (182A) of the answer: the template renders the whole
+conversation, and the cache is kept equal to that render by decoding only what
+differs. It is `llama_chat/rendered_chat.py`, beside `ChatWrapper`, which it
+replaces nothing of. It reopens the wording of 123C ("we will not render the
+whole conversation each turn"), which the user knew when choosing it. It never
+decodes the whole conversation again on a cache that shifts.
+
+How it works:
+
+- After each reply, while it is read or spoken, the conversation is rendered
+  with a stand-in where the next question goes. The cache is compared with
+  that render token by token, and decoded up to the run of text the question
+  joins.
+- A question is put in the stand-in's place where the template writes plain
+  questions exactly so. That is checked at `begin` with three questions. Only
+  its own tokens and the generation prompt are decoded before the reply.
+  Other questions, such as ones with surrounding spaces or a tag, are rendered
+  when they come.
+- When the conversation renders longer than `evict_above_fraction`, the
+  oldest exchanges are dropped from the list. The stretch they held is found
+  where the cache goes on as the new render does, removed and shifted past.
+  Everything from the first token that still differs is decoded again.
+
+Measured:
+
+- All 52 test templates: the cache equals the render before every reply, over
+  conversations, evictions on caches that shift and on ones that cannot,
+  restarts from a history, a past tool turn and a later declaration (357
+  tests). Splicing a plain question was exact on all 52. Evicting removed a
+  stretch from the middle on 51. On the last, the only exchange left was the
+  newest, which was cut from the end.
+- 8 real models (Gemma 3 1B, Llama 3.2 3B, Qwen 3.5 9B, Ministral 3 8B,
+  MiniCPM 5 2B, Gemma 4 26B-A4B, gpt-oss 20B, R1 distill 8B, Q4 or MXFP4,
+  RTX 3090): the cache equals the tokenized render before each of 12 replies,
+  at 1,024 and at 512 tokens of context, and with a past tool turn on the 7
+  that call tools. Every cut after a reply lay at the newest reply, which the
+  template writes without the empty thought it was generated with.
+- Gemma 4 26B-A4B at 8k, memory full, every turn evicting, median of 7 turns:
+  the wait before the first word was 199 ms against 194 ms for `ChatWrapper`
+  with short messages, and 200 against 201 ms with medium ones. The work after
+  each reply was 1.27 s against 0.42 s with short messages, and 0.63 against
+  0.41 s with medium ones. The prototype renders three to five times there.
+
+Not done in the prototype, so not comparable yet:
+
+- A cache that can neither shift nor be cut at its end is decoded again whole
+  at every cut (Qwen 3.5: 12 times in 12 turns). `CacheSync`'s saved states
+  would serve it, if they took the tokens the cache should hold instead of the
+  message table.
+- A turn that called tools is written as the template writes it, not kept as
+  generated, which rule 1 asks for.
+- No refusal at load of a template that rewrites older history every turn.
+- `inject`, `snapshot`, the capability properties, `wait_idle`, the failure
+  results of the tool loop and the reply's prefill and eviction counts are
+  missing.
+
+A reviewer proposed a third design: render a window of constant size, the
+system message and the last two exchanges with the stand-in, and compare its
+end with the cache's end. It measured that window's text identical to the full
+render from the second-newest reply on, for all 52 templates. That would make
+the render cost per turn independent of the conversation's length. Not
+measured: tool loops and reasoning inside the window.
+
+## 2026-11-07: Second structure review: what changed and why
+
+Five fresh reviewers read the library again; the user chose the fixes, the
+tests, the tidying, two restructurings and a public way to forbid calls.
+
+- **One place decodes into the cache.** `CacheSync` now holds the cache's end
+  and every decode, generation, removal and cut, and takes the tokens the cache
+  should hold as a callable instead of the message table, so the prototype uses
+  the same saved states. A decode that fails part-way marks the cache unknown,
+  and the next action decodes it again whole from the table: before, it left
+  the cache and the table apart until the next `begin`.
+- **Every "does not fit" is one error.** `ContextOverflowError` is now a
+  `ValueError` and is raised for a request, an injected message, a history, a
+  system prompt and a declaration that do not fit, not only for room to reply.
+  A server could not tell a request too long from one it cannot serve.
+- **A restart that would keep nothing is refused.** The newest exchange, from
+  its user message on, must fit under the token limit; before, a short reply
+  after a question too long to keep emptied the conversation without a word.
+  The message limit may still keep nothing, as it does between turns.
+- **The context's own size is checked where it is adopted.** `context_size` is
+  part of the cache-context protocol, and a `Config` asking for more is refused
+  at construction instead of breaking a reply halfway.
+- **A running exchange holds the lock throughout**, tools running included, and
+  the choice between resuming and starting a request is made under it. Another
+  thread's action used to slip in between rounds. A tool must therefore not
+  call back into the wrapper.
+- **Withholding calls.** `calls="withhold"` keeps the call's opening token
+  from ever being drawn, with a logit-bias stage in a sampler chain of the
+  generation's own. A call that opens with plain text cannot be kept from the
+  model that way. A new request also never passed the call setting on before:
+  only a resumed turn did. Measured on 8 real models with a weather tool
+  declared and the question asking to use it: Llama 3.2, Qwen 3.5 and
+  Ministral 3 wrote the call's markup as text anyway, and Gemma 4 26B-A4B
+  wrote one repeated phrase up to the token limit. A question that needs no
+  tool was answered normally. `"refuse"` on the same question let Gemma 4
+  call, told it no tool can be run, and it then made up a weather report. So
+  withholding is offered for a request that wants no tool, and the last round
+  under `max_calls` keeps leaving a call unrecognized rather than withheld.
+- **What a template does to a message's text is learned at load.** One render
+  with every tag of the model and the characters an escaping filter changes,
+  each between markers, finds what the template drops, escapes or replaces in
+  content, and content is written that way. Found by the new token-level test:
+  one template drops its thought tags from a message and escapes its turn tags,
+  so a question holding one was encoded unlike the render.
+- **`history()` comes with `system_prompt`**, so a server begins again from the
+  conversation's own history and keeps its tool turns as the template writes
+  them, instead of from a text-only copy.
+- **The tests try to break the rules.** The conversation test now runs with
+  reasoning on in every template that reasons, with a live call on every tool
+  template (the call keeps its generated tokens, the result and the turn after
+  read as the template writes them), with a tokenizer stand-in that keeps a
+  tag typed into a message as text, and with checks that no eviction rebuilds
+  the cache and no cut reaches before the newest reply. Every test on the
+  model-free cache now ends with that cache read against the template's render
+  where nothing is kept otherwise. The check for model names splits names at
+  `_`, digits and capitals; it caught the engine's name in an attribute and a
+  docstring outside the engine's module.
+- **Removed:** the free `@tool` decorator and `ToolRegistry.spec`, so a tool is
+  declared either as a `ToolSpec` or by registering it; `CacheSync.rested_at`;
+  the add-on path of `with_model_sampling` that only tests used; the doubled
+  cut and clear in the load-time cache check. `Backend.can_edit_cache` stays:
+  the install script reads it.
+- **Moved:** `Reply`, `ReplyStream` and `ContextOverflowError` to `reply.py`,
+  and `GenerationAccumulator` into the cache-context protocol it belongs to.
+  The message table enforces that it opens with the system message, and where
+  kept history may open is decided by one function.
+- **The prototype's gaps are closed.** It keeps a tool turn as it was
+  generated, by holding that stretch of the cache where the template writes the
+  call otherwise; it goes back to a saved state on a cache that cannot be cut,
+  instead of decoding everything again; and it refuses at `begin` a template
+  that writes an older exchange otherwise once another follows.
