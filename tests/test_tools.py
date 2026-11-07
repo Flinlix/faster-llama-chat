@@ -2229,3 +2229,11 @@ def test_a_call_body_that_cannot_end_a_name_is_refused():
 def test_a_json_call_may_name_its_function_as_tool_name():
     body = '[{"tool_call_id": "0", "tool_name": "clock", "parameters": {"zone": "CET"}}]'
     assert parse_calls(body, None) == [ToolCall("clock", {"zone": "CET"})]
+
+
+def test_a_value_after_its_written_type_is_read_by_that_type():
+    body = CallBody(name_close='"', key_open="<a ", key_close=' type="', pair_sep="</a><a ",
+                    body_close="</a>", empty_close='"', type_close='">', string_type="string")
+    text = ('clock"<a zone type="string">12</a><a n type="number">3</a>'
+            '<a o type="object">{"x": [1]}</a>')
+    assert parse_calls(text, body) == [ToolCall("clock", {"zone": "12", "n": 3, "o": {"x": [1]}})]

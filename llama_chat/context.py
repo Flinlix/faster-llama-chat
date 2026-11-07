@@ -365,6 +365,8 @@ class KVContext:
         tool_tokens: tuple[int, int] | None = None,
         sampling: Sampling | None = None,
         ends_turn: Callable[[int], bool] | None = None,
+        call_texts: tuple[str, str] | None = None,
+        turn_end_text: str | None = None,
     ):
         """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -392,6 +394,10 @@ class KVContext:
             ends_turn: Whether a sampled token ends the reply as an
                 end-of-generation token does, neither cached nor yielded: the
                 first of a closing the model writes in several tags.
+            call_texts: The ``(open, close)`` texts around a call, for a model
+                whose call has no tag of its own; read as ``tool_tokens`` are.
+            turn_end_text: Text that ends the reply where generated, removed
+                from the cache again and never yielded.
 
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
@@ -407,7 +413,7 @@ class KVContext:
             yield from self._sample_into(
                 own_sampler if own_sampler is not None else self._sampler,
                 start_pos, max_generated_tokens,
-                stop, out, cancel, tool_tokens, ends_turn)
+                stop, out, cancel, tool_tokens, ends_turn, call_texts, turn_end_text)
         finally:
             if own_sampler is not None:
                 self._backend.free_sampler(own_sampler)
@@ -416,7 +422,9 @@ class KVContext:
                      stop: list[str], out: GenerationAccumulator | None,
                      cancel: threading.Event | None,
                      tool_tokens: tuple[int, int] | None,
-                     ends_turn: Callable[[int], bool] | None = None):
+                     ends_turn: Callable[[int], bool] | None = None,
+                     call_texts: tuple[str, str] | None = None,
+                     turn_end_text: str | None = None):
         """The generation loop of :meth:`generate`, drawing from ``sampler``."""
         generated = out if out is not None else GenerationAccumulator()
         pos = start_pos
@@ -425,6 +433,11 @@ class KVContext:
         visible = _TextBuffer()
         call_open, call_close = tool_tokens if tool_tokens else (None, None)
         call = None            # pieces of the call being generated, once one is
+        open_text, close_text = call_texts if call_texts else (None, None)
+        marks = [mark for mark in (open_text, turn_end_text) if mark]
+        held_chars = max([longest_stop_chars] + [len(mark) for mark in marks])
+        starts = []            # where each token's text begins in ``visible``
+        ended_at_text = False
 
         for _ in range(max(0, max_generated_tokens)):
             if cancel is not None and cancel.is_set():
@@ -450,11 +463,38 @@ class KVContext:
                     generated.tool_call = "".join(call)
                     break
                 call.append(piece)
+                if close_text is not None and close_text in "".join(call):
+                    generated.stop_reason = "tool_call"
+                    generated.tool_call = "".join(call).split(close_text, 1)[0]
+                    break
                 continue
             if tok == call_open:
                 # The held-back tail is ordinary reply text; release it.
                 call = []
                 upto = len(visible)
+            elif marks:
+                starts.append(len(visible))
+                visible.append(piece)
+                hit = _stop_hit(visible.text, stop, search_from=visible.emitted)
+                mark_at = _stop_hit(visible.text, marks, search_from=visible.emitted)
+                if mark_at is not None and (hit is None or mark_at < hit):
+                    upto = mark_at
+                    if open_text is not None and visible.text.startswith(open_text, mark_at):
+                        call = [visible.text[mark_at + len(open_text):]]
+                    else:
+                        generated.stop_reason = "end_of_turn"
+                        ended_at_text = True
+                        # Its tokens leave the cache: the closing is written whole.
+                        if mark_at in starts:
+                            kept = starts.index(mark_at)
+                            self.remove_from(start_pos + kept)
+                            del generated.token_ids[kept:]
+                            pos = start_pos + kept
+                elif hit is not None:
+                    generated.stop_reason = "stop_string"
+                    upto = hit
+                else:
+                    upto = len(visible) - (held_chars - 1)
             else:
                 visible.append(piece)
                 if longest_stop_chars:
@@ -478,13 +518,15 @@ class KVContext:
                     if generated.stop_reason != "stop_string":
                         generated.stop_reason = "interrupted"
                     raise
-            if generated.stop_reason == "stop_string":
+            if generated.stop_reason == "stop_string" or ended_at_text:
                 break
         else:
             generated.stop_reason = "token_limit"
 
         # Flush the held-back tail unless a stop string truncated the reply.
-        if generated.stop_reason not in ("stop_string", "tool_call"):
+        in_text_call = call is not None and close_text is not None
+        if generated.stop_reason not in ("stop_string", "tool_call") and not ended_at_text \
+                and not in_text_call:
             visible.append(decoder.decode(b"", final=True))
             delta = visible.emit(len(visible))
             if delta:

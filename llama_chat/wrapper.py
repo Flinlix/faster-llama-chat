@@ -701,7 +701,9 @@ class ChatWrapper:
         return msg
 
     def _holds_call(self, msg) -> bool:
-        tool_tokens = self._template.tool_tokens
+        tool_tokens, call_texts = self._template.tool_tokens, self._template.call_texts
+        if call_texts is not None:
+            return call_texts[0] in "".join(map(self._context.token_text, msg.token_ids))
         return tool_tokens is not None and tool_tokens[0] in msg.token_ids
 
     def _later_system_tags(self) -> tuple[str, str]:
@@ -1154,8 +1156,7 @@ class ChatWrapper:
             return self._context.tokenize_fragment(prefix, content, suffix), ""
         # Refuses a model that cannot call tools.
         pieces = self._template.past_tool_turn(item, open_turn, reasoning)
-        open_id, close_id = self._template.tool_tokens
-        tags = {text: token for token in (open_id, close_id)
+        tags = {text: token for token in (self._template.tool_tokens or ())
                 if (text := self._context.token_text(token))}
         between_tags = re.compile("(" + "|".join(map(re.escape, tags)) + ")")
         tokens: list[int] = []
@@ -1165,7 +1166,7 @@ class ChatWrapper:
                                                  parse_special=False)
                 continue
             # The call tags as the single tokens a generated call holds.
-            for part in between_tags.split(text):
+            for part in (between_tags.split(text) if tags else [text]):
                 if part in tags:
                     tokens.append(tags[part])
                 elif part:
@@ -1244,7 +1245,9 @@ class ChatWrapper:
             gen_start, max(0, min(cap, budget)), [] if thought else stops,
             out=generated, cancel=cancel,
             tool_tokens=self._template.tool_tokens if allow_tools else None,
-            sampling=sampling, ends_turn=self._turn_end_test(thought))
+            sampling=sampling, ends_turn=self._turn_end_test(thought),
+            call_texts=self._template.call_texts if allow_tools else None,
+            turn_end_text=self._template.turn_end_text)
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))

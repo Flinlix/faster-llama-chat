@@ -17,10 +17,10 @@ import re
 from dataclasses import dataclass
 
 from .template import (CallBody, Reasoning, TemplateFormatter,
-                       TemplateFragments, ToolCallFragments)
-from .template_extract import (call_id, extract_call_body, extract_call_separator,
-                               extract_reasoning, extract_removed_thought,
-                               extract_tool_fragments)
+                       TemplateFragments, ToolCallFragments, shared_tags_length)
+from .template_extract import (call_id, extract_call_body, extract_call_close_text,
+                               extract_call_separator, extract_reasoning,
+                               extract_removed_thought, extract_tool_fragments)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
 # Where the prompt and a tool result go in a render. Neither contains the
@@ -123,6 +123,10 @@ class ResolvedTemplate:
         self._tool_calls = (tool_calls if tool_calls is not None
                             else self._resolve_tool_calls())
         self._tool_tokens, self._call_lead_in = self._resolve_tool_tokens()
+        self._call_texts = self._resolve_call_texts()
+        self._turn_end_text = self._resolve_turn_end_text()
+        if self._turn_end_text is not None:
+            self._turn_end_token = None
         self._call_body = self._resolve_call_body()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
@@ -218,8 +222,28 @@ class ResolvedTemplate:
 
     @property
     def tool_tokens(self) -> tuple[int, int] | None:
-        """The ``(open, close)`` tokens bracketing a call, or ``None``."""
+        """The ``(open, close)`` tokens bracketing a call, or ``None``.
+
+        ``None`` also where :attr:`call_texts` marks a call instead.
+        """
         return self._tool_tokens
+
+    @property
+    def call_texts(self) -> tuple[str, str] | None:
+        """The texts that open and end a call, where a call has no tag of its own.
+
+        ``None`` where :attr:`tool_tokens` marks a call, or nothing does.
+        """
+        return self._call_texts
+
+    @property
+    def turn_end_text(self) -> str | None:
+        """Where a reply ends, where a call goes on from the start of its closing.
+
+        Such a reply ends once the text has passed the last point a call could
+        still begin from; ``None`` where :attr:`turn_end_token` says it.
+        """
+        return self._turn_end_text
 
     @property
     def call_lead_in(self) -> str:
@@ -239,8 +263,19 @@ class ResolvedTemplate:
         argument spelling, and the block a result goes in.
         :meth:`ensure_tools_usable` says which one is missing.
         """
-        return (self._tool_tokens is not None and self._can_declare_tools
+        return (self._calls_marked and self._can_declare_tools
                 and self._call_body is not None and self._can_write_results)
+
+    @property
+    def _calls_marked(self) -> bool:
+        """Whether a call can be told from a reply, by its tags or by its texts."""
+        return self._tool_tokens is not None or self._call_texts is not None
+
+    def _call_close_text(self) -> str:
+        """The text a call ends with."""
+        if self._call_texts is not None:
+            return self._call_texts[1]
+        return self._context.token_text(self._tool_tokens[1])
 
     def system_turn_declaring(self, specs: list[ToolSpec],
                               reasoning: bool = False) -> tuple[str, str]:
@@ -296,7 +331,7 @@ class ResolvedTemplate:
             *({"role": "tool", "name": called, "tool_call_id": call_id(i),
                "content": markers[i]} for i, called in enumerate(names)),
         ], generation_prompt=True, reasoning=reasoning)
-        closer = self._context.token_text(self._tool_tokens[1])
+        closer = self._call_close_text()
         if rendered is None or any(m not in rendered for m in markers) \
                 or closer not in rendered:
             raise ValueError("this model's template renders no tool result")
@@ -407,11 +442,11 @@ class ResolvedTemplate:
             ValueError: If the call tags, the declarations, the argument
                 spelling or the result block cannot be had from this model.
         """
-        if self._tool_tokens is None and self._tool_calls is not None:
+        if not self._calls_marked and self._tool_calls is not None:
             raise ValueError(
                 "this model writes a tool call as plain text, without a tag "
                 "token of its own, so a call could not be told from a reply")
-        if self._tool_tokens is None:
+        if not self._calls_marked:
             raise ValueError(
                 "this model's template describes no tool call, so a tool "
                 "could never be reached; supply the tags with "
@@ -602,9 +637,38 @@ class ResolvedTemplate:
         if opener is None or closer is None:
             return None, ""
         tag = self._context.token_text(opener)
+        reply = self._fragments
+        if any(tag in text for text in (reply.assistant_prefix, reply.assistant_suffix,
+                                        reply.generation_prompt)):
+            return None, ""         # it marks every reply, not a call
         # Text the template writes before the tag belongs to the reply, not to the call.
         lead_in = fragments.call_open.partition(tag)[2]
         return (opener, closer), lead_in
+
+    def _resolve_call_texts(self) -> tuple[str, str] | None:
+        """The texts around a call, for a template whose call tags also mark every reply."""
+        if self._tool_tokens is not None or self._tool_calls is None \
+                or not hasattr(self._context, "first_special_token"):
+            return None
+        call_open = self._tool_calls.call_open
+        if self._context.first_special_token(call_open) is None:
+            return None             # no tag at all: a call is plain text
+        close = extract_call_close_text(self._context.render_with_model_template, call_open)
+        return (call_open, close) if close else None
+
+    def _resolve_turn_end_text(self) -> str | None:
+        """Where a reply ends, where a call opens with the start of a reply's closing."""
+        if self._call_texts is None:
+            return None
+        closing, call_open = self._fragments.assistant_suffix, self._call_texts[0]
+        shared = shared_tags_length(closing, call_open)
+        if not shared:
+            return None
+        tag = self._context.first_special_token(closing[shared:])
+        text = self._context.token_text(tag) if tag is not None else ""
+        if not text or not closing[shared:].startswith(text):
+            return None
+        return closing[:shared] + text
 
     def _call_closer(self, fragments: ToolCallFragments) -> int | None:
         """The tag that ends a call.
@@ -635,13 +699,12 @@ class ResolvedTemplate:
         A supplied one wins; a call stays detectable without either, and only
         its contents cannot be read.
         """
-        if self._tool_tokens is None or self._tool_calls is None:
+        if not self._calls_marked or self._tool_calls is None:
             return None
         if self._tool_calls.body is not None:
             return self._tool_calls.body
         return extract_call_body(self._context.render_with_model_template,
-                                 self._tool_calls.call_open,
-                                 self._context.token_text(self._tool_tokens[1]))
+                                 self._tool_calls.call_open, self._call_close_text())
 
     def _resolve_can_declare_tools(self) -> bool:
         """Whether this model's template renders tool declarations at all.
@@ -652,7 +715,7 @@ class ResolvedTemplate:
         decides an optional capability and must not stop a conversation that
         wants no tools.
         """
-        if self._tool_tokens is None:
+        if not self._calls_marked:
             return False
         try:
             self._declaration_turn([_PROBE_TOOL])
@@ -668,7 +731,7 @@ class ResolvedTemplate:
         Any failure answers ``False``, because this decides an optional
         capability and must not stop a conversation that wants no tools.
         """
-        if self._tool_tokens is None:
+        if not self._calls_marked:
             return False
         try:
             self.result_wrapping(_PROBE_FUNCTION)

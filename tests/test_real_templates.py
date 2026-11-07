@@ -231,7 +231,6 @@ _TOOLS_REFUSED = {
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
     "ministral-2410": "declares no tools",  # declared before the newest user turn only
     "mistral-small-3.2": "declares no tools",  # declared before the newest user turn only
-    "kimi-k3": "call format",           # a call's body is not recovered
     "gpt-oss": "plain text",            # the call is named in the turn's header, before any tag
     "muse-glimmer": "plain text",       # the call is named in the turn's header, before any tag
     "minicpm-5": "plain text",          # a call is bare JSON, without a tag
@@ -295,11 +294,33 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
              {"id": "call00000", "type": "function", "function": {
                  "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
         tools=[_TOOL.as_declaration()], reasoning=False)
-    opener, closer = (context.token_text(t) for t in template.tool_tokens)
+    opener, closer = (template.call_texts if template.call_texts is not None
+                      else (context.token_text(t) for t in template.tool_tokens))
     # The last call: a declaration may show an example call first.
     body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     assert parse_calls(body, template.call_body, template.call_lead_in) == [
         ToolCall("get_weather", {"city": "Berlin"})]
+
+
+@pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
+def test_a_call_is_read_by_its_texts_only_where_its_tag_marks_every_reply(path):
+    context = _TaggedContext(json.loads(path.read_text()))
+    template = ResolvedTemplate(context)
+    if template.call_texts is None:
+        return
+    tag = context.token_text(context.first_special_token(template.call_texts[0]))
+    reply = template.fragments
+    assert template.tool_tokens is None
+    assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
+
+
+def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
+    context = _TaggedContext(json.loads((Path(__file__).parent / "templates"
+                                         / "kimi-k3.json").read_text()))
+    template = ResolvedTemplate(context)
+    assert template.turn_end_text == "<|close|>response<|sep|><|close|>"
+    assert template.turn_end_token is None
+    assert template.call_body.string_type == "string"
 
 
 @pytest.mark.parametrize("path", [p for p in _tool_templates()

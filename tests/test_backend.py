@@ -338,3 +338,44 @@ def test_text_cut_inside_a_character_keeps_the_tokens_it_was_generated_as():
         token_to_piece_bytes=lambda vocab, token: token,
         tokenize=lambda vocab, text, add_special, parse_special: [text.encode()])
     assert context.retokenized([b"a", "ä".encode()[:1]]) == [b"a", "ä".encode()[:1]]
+
+
+def _sampling_context(sampled):
+    """A context that samples ``sampled`` in order and records what it decodes and removes."""
+    sampled, decoded, removed = iter(sampled), [], []
+    context = object.__new__(KVContext)
+    context._llama_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
+    context._sampler = "sampler"
+    context._backend = SimpleNamespace(
+        sampler_reset=lambda sampler: None,
+        sample=lambda sampler, ctx: next(sampled),
+        is_eog=lambda vocab, token: token == "<end>",
+        decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
+        kv_seq_rm=lambda ctx, seq, start, end: removed.append(start) or True,
+        token_to_piece_bytes=lambda vocab, token: token.encode())
+    return context, decoded, removed
+
+
+_CALL_TEXTS = ('<close>resp<sep><open>tools<sep><open>call tool="', '<sep><close>call<sep>')
+
+
+def test_a_call_without_a_tag_of_its_own_is_read_by_its_texts():
+    context, decoded, _ = _sampling_context(
+        ["Gleich.", "<close>", "resp", "<sep>", "<open>", "tools", "<sep>", "<open>",
+         'call tool="', "clock", '" index="1"', "<sep>", "<close>", "call", "<sep>", "x"])
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_CALL_TEXTS))
+    assert shown == out.text == "Gleich."
+    assert out.stop_reason == "tool_call" and out.tool_call == 'clock" index="1"'
+    assert decoded == out.token_ids and decoded[-1] == "<sep>"
+
+
+def test_a_reply_ends_where_its_closing_parts_from_a_call():
+    context, decoded, removed = _sampling_context(
+        ["Pa", "ris", "<close>", "resp", "<sep>", "<close>", "msg", "<end>"])
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_CALL_TEXTS,
+                                     turn_end_text="<close>resp<sep><close>"))
+    assert shown == out.text == "Paris"
+    assert out.stop_reason == "end_of_turn" and out.token_ids == ["Pa", "ris"]
+    assert removed == [2]           # the closing's first tokens leave the cache again

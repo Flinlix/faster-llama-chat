@@ -23,6 +23,10 @@ class CallBody:
         empty_close: After the name, when there are no arguments at all.
         quote_open, quote_close: Around a string value, empty where the model
             marks strings no differently from anything else.
+        type_close: Between the type a model writes after ``key_close`` and
+            the value, empty where it writes no type.
+        string_type: The type a string value is written with, read as the
+            text it stands as rather than as JSON.
     """
 
     name_close: str
@@ -33,6 +37,8 @@ class CallBody:
     empty_close: str
     quote_open: str = ""
     quote_close: str = ""
+    type_close: str = ""
+    string_type: str = ""
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:

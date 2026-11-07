@@ -112,8 +112,18 @@ def _parse_pairs(text: str, call_body: CallBody) -> dict:
         key, found, value = chunk.partition(call_body.key_close)
         if not found:
             raise ValueError(f"an argument with no value: {chunk!r}")
-        parsed[_unquote(key.strip(), call_body)] = _parse_value(value, call_body)
+        parsed[_unquote(key.strip(), call_body)] = _parse_typed_value(value, call_body)
     return parsed
+
+
+def _parse_typed_value(text: str, call_body: CallBody) -> Any:
+    """Read one value, after the type the model writes before it, where it writes one."""
+    if not call_body.type_close:
+        return _parse_value(text, call_body)
+    written_type, found, value = text.partition(call_body.type_close)
+    if not found:
+        raise ValueError(f"a value with no type: {text!r}")
+    return value if written_type == call_body.string_type else _parse_value(value, call_body)
 
 
 def _parse_value(text: str, call_body: CallBody) -> Any:

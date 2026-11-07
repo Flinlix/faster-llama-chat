@@ -837,6 +837,14 @@ the last argument, which may be the token that ends the turn. A turn that calls
 may open without the content tag a reply in words opens with; the call then
 begins after the tags the two share.
 
+Where the tag a call opens with also marks every reply, as in a template whose
+few tags open and close the message, the answer and the call alike, a call is
+recognized by its texts instead: the text it opens with, tags and plain text
+together, and the text that ends it, which a call with an argument and one
+without both go on with. Such a reply then ends where its closing parts from a
+call, once that much of the closing is generated; those tokens leave the cache
+again and the closing is written whole.
+
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
 JSON is read directly instead, because it already carries the function name and
@@ -844,7 +852,10 @@ the arguments, under `name` or `tool_name` and `arguments` or `parameters`. Toge
 `name{key:value}` with quoted strings, `name(k="v")`, attribute-style XML,
 `<function=name><parameter=k>v</parameter>`, and keys and values in tags of
 their own right after the name, `name<arg_key>k</arg_key><arg_value>v</arg_value>`,
-including nested objects, lists, and separators inside quoted values.
+including nested objects, lists, and separators inside quoted values. A type
+written between a key and its value, `key="k" type="string">v`, is recovered
+from where the render of a string argument and that of a number differ. A value
+of the string type stands as its text, and any other is read as JSON.
 
 What the recovered delimiters look like on two real models, since the field
 names alone are hard to picture:

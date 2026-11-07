@@ -417,8 +417,17 @@ def extract_call_body(render: Render, call_open: str,
     bare_before = number.split(_KEY, 1)[1].split(str(_NUMBER), 1)[0]
     after_value = text.split(_STRING, 1)[1]
     bare_after = number.split(str(_NUMBER), 1)[1]
-    if not before_value.startswith(bare_before) \
-            or not after_value.endswith(bare_after):
+    # A type written between the key and its value differs where the values do.
+    type_close = string_type = ""
+    if not before_value.startswith(bare_before):
+        type_close = _common_suffix(before_value, bare_before)
+        key_close = _common_prefix(before_value, bare_before)
+        string_type = before_value[len(key_close):len(before_value) - len(type_close)]
+        number_type = bare_before[len(key_close):len(bare_before) - len(type_close)]
+        if not (type_close and string_type and number_type):
+            return None
+        before_value = bare_before = key_close
+    if not after_value.endswith(bare_after):
         return None
 
     # Between the first value and the second key, the quoting excluded.
@@ -436,6 +445,8 @@ def extract_call_body(render: Render, call_open: str,
         empty_close=no_arguments[len(name_close):],
         quote_open=before_value[len(bare_before):],
         quote_close=quote_close,
+        type_close=type_close,
+        string_type=string_type,
     )
     # A delimiter holding a probe's own text, such as a key's name in its own
     # closing tag, is no fixed delimiter at all.
@@ -444,6 +455,25 @@ def extract_call_body(render: Render, call_open: str,
            for delimiter in dataclasses.astuple(body)):
         return None
     return body
+
+
+def extract_call_close_text(render: Render, call_open: str) -> str | None:
+    """The text that ends one call, for a template whose call has no closing tag of its own.
+
+    The longest end of what follows the first of two calls that a call with
+    an argument and one without both go on with, starting where a tag starts.
+    """
+    render = _refusing(render)
+    separator = extract_call_separator(render, call_open)
+    empty, text = _render_call(render, {}), _render_call(render, {_KEY: _STRING})
+    if separator is None or empty is None or text is None \
+            or call_open not in empty or call_open not in text:
+        return None
+    rest = _common_suffix(empty.split(call_open, 1)[1], text.split(call_open, 1)[1])
+    for start in range(len(separator)):
+        if separator[start] in "<[" and rest.startswith(separator[start:]):
+            return separator[start:]
+    return None
 
 
 def _common_prefix(one: str, other: str) -> str:
