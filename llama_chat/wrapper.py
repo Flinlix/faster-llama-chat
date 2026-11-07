@@ -1186,18 +1186,42 @@ class ChatWrapper:
                 if (text := self._context.token_text(token))}
         between_tags = re.compile("(" + "|".join(map(re.escape, tags)) + ")")
         tokens: list[int] = []
+        plain = ""          # the text between two tags, own and template alike
+
+        def end_plain() -> None:
+            nonlocal plain
+            if plain:
+                tokens.extend(self._context.tokenize(plain, add_special=False,
+                                                     parse_special=False))
+            plain = ""
+
         for text, own in pieces:
             if own:
-                tokens += self._context.tokenize(text, add_special=False,
-                                                 parse_special=False)
+                plain += text
                 continue
             # The call tags as the single tokens a generated call holds.
             for part in (between_tags.split(text) if tags else [text]):
+                if not part:
+                    continue
                 if part in tags:
+                    end_plain()
                     tokens.append(tags[part])
-                elif part:
+                    continue
+                split = (self._context.split_at_tags(part)
+                         if hasattr(self._context, "split_at_tags") else None)
+                if split is None:
+                    end_plain()
                     tokens += self._context.tokenize(part, add_special=False,
                                                      parse_special=True)
+                    continue
+                for piece, is_tag in split:
+                    if is_tag:
+                        end_plain()
+                        tokens += self._context.tokenize(piece, add_special=False,
+                                                         parse_special=True)
+                    else:
+                        plain += piece
+        end_plain()
         ending = pieces[-1][0] if open_turn and pieces and not pieces[-1][1] else ""
         return tokens, ending
 

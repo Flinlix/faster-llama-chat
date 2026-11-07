@@ -177,6 +177,24 @@ class KVContext:
         return [self.token_text(token) for token in self.tokenize(text, parse_special=True)
                 if self._backend.is_special(self._vocab, token)]
 
+    def split_at_tags(self, text: str) -> list[tuple[str, bool]] | None:
+        """``text`` as the model's tags and the plain text between them, each marked whether a tag.
+
+        ``None`` where a tag the tokenizer finds cannot be located in the text.
+        """
+        pieces, at = [], 0
+        for tag in self._tags_in(text):
+            start = text.find(tag, at)
+            if not tag or start < 0:
+                return None
+            if start > at:
+                pieces.append((text[at:start], False))
+            pieces.append((tag, True))
+            at = start + len(tag)
+        if at < len(text):
+            pieces.append((text[at:], False))
+        return pieces
+
     def _last_tag_end(self, text: str) -> int | None:
         """Where the last tag in ``text`` ends: 0 without one, ``None`` where one is not found."""
         end = 0

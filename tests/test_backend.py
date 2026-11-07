@@ -421,3 +421,10 @@ def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
                              call_opens_as_text=True))
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock"}'
     assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded
+
+
+def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
+    context = _merging_context()
+    assert context.split_at_tags("a <t>b c<e>") == [
+        ("a ", False), ("<t>", True), ("b c", False), ("<e>", True)]
+    assert context.split_at_tags("plain") == [("plain", False)]

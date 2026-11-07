@@ -1161,7 +1161,9 @@ The plain text a template writes between a tag and the content, such as a
 newline, is tokenized together with the content, also with special-token
 parsing off, because a tokenizer may merge across that boundary: a system
 prompt ending in a space followed by a blank line yields `' \n\n'` as one token
-in a render of the whole conversation, and the cache has to hold the same.
+in a render of the whole conversation, and the cache has to hold the same. The
+same holds for a tool result and for the pieces of a past tool turn: all the
+plain text between two tags is tokenized as one, its own and the template's.
 
 ## Verify
 
