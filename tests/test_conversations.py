@@ -48,7 +48,7 @@ def test_every_reply_starts_from_the_templates_render_of_what_the_cache_holds(pa
     context, chat, seen = _conversation(path, context_size=4096)
     chat.begin(_system_prompt(chat))
     for question in _QUESTIONS[:3]:
-        chat.reply_without_tools(question)
+        chat.reply(question).finish()
     for cached, rows in seen:
         assert cached == _rendered(context, rows)
 
@@ -62,7 +62,7 @@ def test_after_evictions_the_cache_still_holds_the_templates_render(path):
     context, chat, seen = _conversation(path, context_size=budget)
     chat.begin(_system_prompt(chat))
     for question in _QUESTIONS:
-        chat.reply_without_tools(question)
+        chat.reply(question).finish()
     assert any(len(rows) < 2 * len(_QUESTIONS) for _, rows in seen[-1:])
     for cached, rows in seen:
         rendered = _rendered(context, rows)
@@ -80,7 +80,7 @@ def test_a_restart_keeps_only_history_the_template_renders(path):
     for question, answer in zip(_QUESTIONS, _REPLIES):
         history += [("user", question), ("assistant", answer)]
     chat.begin(_system_prompt(chat), history)
-    chat.reply_without_tools("And now?")
+    chat.reply("And now?").finish()
     cached, rows = seen[-1]
     rendered = _rendered(context, rows)
     assert rendered is not None, [row["role"] for row in rows]
@@ -106,7 +106,7 @@ def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(monkeypat
     assert "07 Nov 2026" in context.text_of(context.cache)
     today[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     chat.begin("Be brief.")
-    chat.reply_without_tools("How are you?")
+    chat.reply("How are you?").finish()
     cached, rows = seen[-1]
     assert "08 Nov 2026" in cached and cached == _rendered(context, rows)
 
@@ -117,7 +117,7 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call():
     context = ConversationContext(fixture, ['Write {"name": "x"} in the file.'])
     chat = ChatWrapper(Config(context_size=4096), context=context)
     chat.begin("Be brief.")
-    chat.reply_without_tools("How do I name it?")
+    chat.reply("How do I name it?").finish()
     chat.truncate_last_reply("Write")
     assert chat.snapshot()[-1]["text"] == "Write"
 
@@ -133,8 +133,8 @@ def test_tools_declared_mid_conversation_are_written_where_the_template_writes_t
     if not chat.can_call_tools:
         return
     chat.begin(_system_prompt(chat))
-    chat.reply_without_tools(_QUESTIONS[0])
+    chat.reply(_QUESTIONS[0]).finish()
     chat.declare_unknown_tools([_TOOL])
-    chat.reply_without_tools(_QUESTIONS[1])
+    chat.reply(_QUESTIONS[1]).finish()
     cached, rows = seen[-1]
     assert cached == _rendered(context, rows, [_TOOL], chat._template.template_variables)

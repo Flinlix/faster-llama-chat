@@ -115,13 +115,13 @@ def test_inject_evicts_oldest_to_fit():
 
 
 # ----- replying without tools --------------------------------------------
-def test_reply_without_tools_prefills_only_new_tokens_and_reuses_context():
+def test_a_refusing_reply_prefills_only_new_tokens_and_reuses_context():
     fake = FakeContext(gen_tokens=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0, max_reply_tokens=50), context=fake)
     w.begin("s", [("user", "hi"), ("assistant", "hello")])
     prefilled_after_begin = fake.total_prefilled()
 
-    reply = w.reply_without_tools("what's up?")
+    reply = w.reply("what's up?").finish()
 
     # The only new prefill is the request prompt (user fragment + assistant-open)
     # plus the turn-closing tag, never any survivor.
@@ -149,7 +149,7 @@ def test_the_request_and_its_opening_tag_are_one_decode():
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
     mark = len(fake.prefill_calls)
 
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
 
     prompt_call, close_call = fake.prefill_calls[mark:]
     assert prompt_call[1] == reply.n_prefilled_tokens     # user fragment + assistant-open
@@ -163,9 +163,9 @@ def test_a_second_generation_does_not_reprefill_history():
     fake = FakeContext(gen_tokens=3)
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    w.reply_without_tools("first")
+    w.reply("first").finish()
     mark = fake.total_prefilled()
-    reply = w.reply_without_tools("second")
+    reply = w.reply("second").finish()
     # The second generation prefills only its own prompt and closer; the fake's
     # append-only assertion already guarantees no survivor was re-prefilled.
     close_len = len(fake.tokenize(w._formatter.assistant_close()))
@@ -174,21 +174,21 @@ def test_a_second_generation_does_not_reprefill_history():
 
 
 # ----- streaming ---------------------------------------------------------
-def test_reply_without_tools_stream_yields_incremental_deltas():
+def test_a_refusing_reply_stream_yields_incremental_deltas():
     fake = FakeContext(gen_tokens=4, gen_text="abcd")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    deltas = list(w.reply_without_tools_stream("hi"))
+    deltas = list(w.reply("hi"))
     assert "".join(deltas) == "abcd"
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
 
 
-def test_reply_without_tools_drains_its_own_stream():
+def test_a_refusing_reply_drains_its_own_stream():
     fake = FakeContext(gen_tokens=3, gen_text="xyz")
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
     assert reply.text == "xyz"
     assert reply.n_generated_tokens == 3
     _assert_consistent(w, fake)
@@ -200,7 +200,7 @@ def test_an_early_close_keeps_cache_consistent():
     w = ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
 
-    stream = w.reply_without_tools_stream("hi")
+    stream = w.reply("hi")
     first = next(stream)
     assert first == "a"
     stream.close()  # stop early
@@ -211,7 +211,7 @@ def test_an_early_close_keeps_cache_consistent():
     _assert_consistent(w, fake)
 
     # A following generation proceeds normally on the consistent cache.
-    reply = w.reply_without_tools("again")
+    reply = w.reply("again").finish()
     assert reply.stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
@@ -222,7 +222,7 @@ def test_cancel_event_interrupts_midstream():
     w.begin("s")
 
     cancel = threading.Event()
-    stream = w.reply_without_tools_stream("hi", cancel=cancel)
+    stream = w.reply("hi", cancel=cancel)
     assert next(stream) == "a"
     cancel.set()  # e.g. from another thread
     try:
@@ -237,7 +237,7 @@ def test_cancel_event_interrupts_midstream():
     assert w.snapshot()[-1]["role"] == "assistant"
     _assert_consistent(w, fake)
     # The spent event is scoped to that call; the next generation runs normally.
-    assert w.reply_without_tools("again").stop_reason == "end_of_turn"
+    assert w.reply("again").finish().stop_reason == "end_of_turn"
     _assert_consistent(w, fake)
 
 
@@ -247,7 +247,7 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     w.begin("s")
     cancel = threading.Event()
     cancel.set()
-    reply = w.reply_without_tools("hi", cancel=cancel)
+    reply = w.reply("hi", cancel=cancel).finish()
     assert reply.stop_reason == "interrupted"
     assert reply.n_generated_tokens == 0
     # A reply with nothing in it is no reply: only the request stays.
@@ -259,7 +259,7 @@ def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
     fake = FakeContext(gen_tokens=10, gen_text="helloSTOPx")
     w = ChatWrapper(_config(context_size=400), context=fake)
     w.begin("s")
-    with w.reply_without_tools_stream("hi", stop=["STOP"]) as stream:
+    with w.reply("hi", stop=["STOP"]) as stream:
         shown = "".join(stream)
     assert shown == stream.reply.text == "hello"
     assert stream.reply.stop_reason == "stop_string"   # not "interrupted"
@@ -284,18 +284,18 @@ def test_generation_is_capped_to_the_context_size():
     fake = FakeContext(gen_tokens=100)  # would generate 100 if uncapped
     w = ChatWrapper(_config(context_size=110, evict_above_fraction=1.0, max_reply_tokens=100), context=fake)
     w.begin("s")
-    reply = w.reply_without_tools("hello")
+    reply = w.reply("hello").finish()
     assert w.total_tokens <= 110
     assert reply.n_generated_tokens < 100
     _assert_consistent(w, fake)
 
 
-def test_reply_without_tools_evicts_then_stays_within_context():
+def test_a_refusing_reply_evicts_then_stays_within_context():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.reply_without_tools(f"message number {i} with some length")
+        w.reply(f"message number {i} with some length").finish()
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"
         assert w.total_tokens <= w._config.context_size
@@ -309,7 +309,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        w.reply_without_tools(f"message number {i} with some length")
+        w.reply(f"message number {i} with some length").finish()
         assert w.total_tokens <= w._config.evict_above_tokens  # rests under threshold
         assert w.snapshot()[0]["role"] == "system"        # system survives
         assert [r["role"] for r in w.snapshot()][1:2] in ([], ["user"])  # opens on a user turn
@@ -328,7 +328,7 @@ def test_turn_closes_after_the_eviction_not_before():
     evicting = 0
     for i in range(8):
         n_evictions = len(fake.evictions)
-        reply = w.reply_without_tools(f"message number {i} with some length")
+        reply = w.reply(f"message number {i} with some length").finish()
         if reply.n_evicted_messages:
             evicting += 1
             # The eviction landed, and the closer is the turn's last prefill.
@@ -349,7 +349,7 @@ def test_rebuild_mode_does_not_decode_the_closer_twice():
     rebuilt = 0
     for i in range(8):
         before = fake.rebuilds
-        w.reply_without_tools(f"message number {i} with some length")
+        w.reply(f"message number {i} with some length").finish()
         rebuilt += fake.rebuilds > before
         _assert_consistent(w, fake)          # would double-count the closer
     assert rebuilt
@@ -367,7 +367,7 @@ def test_a_generation_evicts_down_to_the_message_limit():
     w = ChatWrapper(_config(context_size=4000, max_history_messages=4), context=fake)
     w.begin("s")
     for i in range(8):
-        w.reply_without_tools(f"q{i}")
+        w.reply(f"q{i}").finish()
         assert _n_kept(w) <= 4
         assert w.total_tokens < w._config.evict_above_tokens  # the tokens never bound
         assert w.snapshot()[0]["role"] == "system"       # system still survives
@@ -383,7 +383,7 @@ def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
         w = ChatWrapper(_config(context_size=400, **limits), context=fake)
         w.begin("s")
         for i in range(8):
-            w.reply_without_tools(f"message number {i} with some length")
+            w.reply(f"message number {i} with some length").finish()
         _assert_consistent(w, fake)
         return _n_kept(w)
 
@@ -400,7 +400,7 @@ def test_a_limit_that_never_binds_changes_nothing():
                         context=fake)
         w.begin("s")
         for i in range(8):
-            w.reply_without_tools(f"message number {i} with some length")
+            w.reply(f"message number {i} with some length").finish()
         return w.snapshot()
 
     assert snapshot_under() == snapshot_under(max_history_messages=100)
@@ -435,7 +435,7 @@ def test_a_limit_of_one_keeps_only_the_system_prompt_between_turns():
     w = ChatWrapper(_config(context_size=4000, max_history_messages=1), context=fake)
     w.begin("s")
     for i in range(3):
-        w.reply_without_tools(f"q{i}")
+        w.reply(f"q{i}").finish()
         assert [r["role"] for r in w.snapshot()] == ["system"]
         _assert_consistent(w, fake)
 
@@ -449,7 +449,7 @@ def test_the_limit_holds_across_every_action_that_appends():
     for i in range(6):
         w.inject(f"context {i}")
         assert _n_kept(w) <= 3
-        w.reply_without_tools(f"q{i}")
+        w.reply(f"q{i}").finish()
         assert _n_kept(w) <= 3
         assert w.snapshot()[0]["role"] == "system"
         _assert_consistent(w, fake)
@@ -462,7 +462,7 @@ def test_eviction_shift_mode_does_not_rebuild():
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds  # begin() resets once
     for i in range(8):
-        w.reply_without_tools(f"message number {i} with some length")
+        w.reply(f"message number {i} with some length").finish()
     assert len(fake.evictions) > 0          # eviction did happen
     assert fake.rebuilds == rebuilds_after_begin  # but never via rebuild
     _assert_consistent(w, fake)
@@ -475,7 +475,7 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     w.begin("s")
     rebuilds_after_begin = fake.rebuilds
     for i in range(8):
-        w.reply_without_tools(f"message number {i} with some length")
+        w.reply(f"message number {i} with some length").finish()
         roles = [s["role"] for s in w.snapshot()]
         assert roles[0] == "system"             # system survives
         assert w.total_tokens <= w._config.context_size   # never overflows
@@ -570,7 +570,7 @@ def test_close_is_idempotent_and_blocks_actions():
     with pytest.raises(RuntimeError, match="closed"):
         w.inject("ctx")
     with pytest.raises(RuntimeError, match="closed"):
-        w.reply_without_tools("hi")
+        w.reply("hi").finish()
     with pytest.raises(RuntimeError, match="closed"):
         w.declare_unknown_tools([])     # even with nothing to declare
 
@@ -579,9 +579,9 @@ def test_context_manager_closes_on_exit():
     fake = FakeContext(gen_tokens=2)
     with ChatWrapper(_config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
         w.begin("s")
-        w.reply_without_tools("hi")
+        w.reply("hi").finish()
     with pytest.raises(RuntimeError, match="closed"):
-        w.reply_without_tools("again")
+        w.reply("again").finish()
 
 
 # ----- template formatting -----------------------------------------------
@@ -656,7 +656,7 @@ def test_content_is_tokenized_with_special_parsing_off():
 
 
 # ----- min-reply headroom guard ------------------------------------------
-def test_reply_without_tools_refuses_when_too_little_room_to_reply():
+def test_a_refusing_reply_refuses_when_too_little_room_to_reply():
     fake = FakeContext(gen_tokens=2)
     # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
     w = ChatWrapper(
@@ -664,19 +664,19 @@ def test_reply_without_tools_refuses_when_too_little_room_to_reply():
     )
     w.begin("s")
     with pytest.raises(ContextOverflowError):
-        w.reply_without_tools("hello")
+        w.reply("hello").finish()
     # The refused request never touched the cache.
     assert w.snapshot()[-1]["role"] == "system"
     _assert_consistent(w, fake)
 
 
-def test_reply_without_tools_proceeds_when_headroom_is_sufficient():
+def test_a_refusing_reply_proceeds_when_headroom_is_sufficient():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(
         _config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=10), context=fake
     )
     w.begin("s")
-    reply = w.reply_without_tools("hello")
+    reply = w.reply("hello").finish()
     assert reply.n_generated_tokens == 2
     _assert_consistent(w, fake)
 
@@ -894,7 +894,7 @@ def test_wait_idle_blocks_until_a_generation_releases_the_lock():
     entered, release = threading.Event(), threading.Event()
 
     def generate():
-        stream = w.reply_without_tools_stream("hi")
+        stream = w.reply("hi")
         next(stream)                 # takes the lock inside the generator body
         entered.set()
         release.wait(5)
@@ -943,13 +943,13 @@ def test_generating_before_begin_is_refused():
     w = ChatWrapper(_config(context_size=200), context=fake)
 
     with pytest.raises(ValueError, match="no conversation to generate into"):
-        w.reply_without_tools("hi")
+        w.reply("hi").finish()
     with pytest.raises(ValueError, match="no conversation to inject into"):
         w.inject("context")
     assert fake.cache == []                 # and nothing was prefilled first
 
     w.begin("sys")
-    assert w.reply_without_tools("hi").text == "reply"
+    assert w.reply("hi").finish().text == "reply"
 
 
 # ----- configurations that could never work ------------------------------
@@ -972,7 +972,7 @@ def test_a_stream_hands_back_the_reply_it_produced():
     w = ChatWrapper(_config(context_size=200), context=fake)
     w.begin("sys")
 
-    stream = w.reply_without_tools_stream("hi")
+    stream = w.reply("hi")
     assert stream.reply is None                  # lazy: nothing has run yet
     assert "".join(stream) == "abc"
 
@@ -987,7 +987,7 @@ def test_a_second_pass_over_a_finished_stream_keeps_the_reply():
     w = ChatWrapper(_config(context_size=200), context=fake)
     w.begin("sys")
 
-    stream = w.reply_without_tools_stream("hi")
+    stream = w.reply("hi")
     list(stream)
     produced = stream.reply
 
@@ -1004,13 +1004,13 @@ def test_a_stream_closed_early_ends_the_turn_and_reports_no_reply():
     w = ChatWrapper(_config(context_size=200), context=fake)
     w.begin("sys")
 
-    with w.reply_without_tools_stream("hi") as stream:
+    with w.reply("hi") as stream:
         assert next(stream) == "a"               # read one delta, then leave
 
     assert stream.reply is None
     assert not w.reply_open
     _assert_consistent(w, fake)
-    assert w.reply_without_tools("weiter").stop_reason == "end_of_turn"
+    assert w.reply("weiter").finish().stop_reason == "end_of_turn"
 
 
 def test_a_call_may_close_with_the_token_that_ends_a_turn():
@@ -1044,10 +1044,10 @@ def test_a_request_evicts_old_history_when_it_would_not_fit_otherwise():
     w = ChatWrapper(_config(context_size=400, evict_above_fraction=0.75), context=fake)
     w.begin("s")
     while w.total_tokens < 240:
-        w.reply_without_tools("a question of moderate length")
+        w.reply("a question of moderate length").finish()
     long_request = "x" * 170
     assert w.total_tokens + 170 > w.config.context_size       # would not fit beside the history
-    reply = w.reply_without_tools(long_request)
+    reply = w.reply(long_request).finish()
     assert reply.n_generated_tokens == 4
     assert [r["text"] for r in w.snapshot()][-2] == long_request
     _assert_consistent(w, fake)
@@ -1064,12 +1064,12 @@ def test_a_failing_message_callback_leaves_the_cache_and_the_table_agreeing():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(_config(context_size=4000), context=fake, on_message=store)
     w.begin("s")
-    w.reply_without_tools("first")
+    w.reply("first").finish()
     with pytest.raises(OSError):
-        w.reply_without_tools("second")
+        w.reply("second").finish()
     _assert_consistent(w, fake)
     assert [r["text"] for r in w.snapshot()][1:] == ["first", "re"]   # "second" was refused
-    w.reply_without_tools("third")                     # the conversation goes on
+    w.reply("third").finish()                     # the conversation goes on
     _assert_consistent(w, fake)
 
 

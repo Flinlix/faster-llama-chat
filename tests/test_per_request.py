@@ -51,19 +51,19 @@ def test_a_seed_the_config_refuses_is_refused_for_one_request_too():
         Sampling(seed=-1).applied_to(Config())
 
 
-@pytest.mark.parametrize("entry", ["reply_without_tools", "reply_with_tools"])
-def test_every_entry_point_hands_its_sampling_to_the_generation(entry):
+@pytest.mark.parametrize("calls", ["refuse", "run", "yield"])
+def test_every_call_policy_hands_its_sampling_to_the_generation(calls):
     w, fake = _wrapper()
     sampling = Sampling(temperature=0.1)
-    getattr(w, entry)("hi", sampling=sampling)
+    w.reply("hi", calls=calls, sampling=sampling).finish()
     assert fake.samplings == [sampling]
 
 
 def test_a_stream_and_a_resume_hand_it_over_as_well():
     w, fake = _wrapper()
     sampling = Sampling(top_p=0.5)
-    list(w.reply_without_tools_stream("hi", sampling=sampling))
-    list(w.reply_until_tool("again", sampling=sampling))
+    list(w.reply("hi", sampling=sampling))
+    list(w.reply("again", calls="yield", sampling=sampling))
     assert fake.samplings == [sampling, sampling]
 
 
@@ -115,7 +115,7 @@ def test_every_generation_starts_its_penalties_and_its_seed_afresh():
 # ----- cutting the newest reply ------------------------------------------
 def test_a_cut_keeps_the_prefix_and_the_cache_agrees():
     w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     w.truncate_last_reply("Eins.")
     assert w.snapshot()[-1]["text"] == "Eins."
     _assert_consistent(w, fake)
@@ -123,16 +123,16 @@ def test_a_cut_keeps_the_prefix_and_the_cache_agrees():
 
 def test_after_a_cut_the_next_request_appends_at_the_cache_end():
     w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     w.truncate_last_reply("Eins.")
-    w.reply_without_tools("weiter")
+    w.reply("weiter").finish()
     _assert_consistent(w, fake)
 
 
 def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_as_its_text():
     """Same text, other tokens: the template's past reply is the text, tokenized."""
     w, fake = _wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
     assert reply.text == "ok!!"
     _assert_consistent(w, fake)
@@ -151,14 +151,14 @@ def test_a_reply_after_an_empty_assistant_tag_is_kept_as_its_text_too():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
                     fragments=replace(DEFAULT_FRAGMENTS, assistant_prefix=""))
     w.begin("s")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "ok!!")
     _assert_consistent(w, fake)
 
 
 def test_the_tokens_that_stay_are_not_decoded_again():
     w, fake = _wrapper(gen_tokens=8, gen_text="Eins. Zw")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     before = list(fake.prefill_calls)
     w.truncate_last_reply("Eins.")
     (start, n, _logits), = fake.prefill_calls[len(before):]
@@ -169,7 +169,7 @@ def test_the_tokens_that_stay_are_not_decoded_again():
 
 def test_keeping_the_whole_text_changes_nothing():
     w, fake = _wrapper(gen_tokens=5, gen_text="Hallo")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     cache = list(fake.cache)
     w.truncate_last_reply("Hallo")
     assert fake.cache == cache
@@ -177,7 +177,7 @@ def test_keeping_the_whole_text_changes_nothing():
 
 def test_a_text_that_is_not_a_prefix_is_refused_and_changes_nothing():
     w, fake = _wrapper(gen_tokens=5, gen_text="Hallo")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     cache = list(fake.cache)
     with pytest.raises(ValueError, match="prefix"):
         w.truncate_last_reply("Tschüss")
@@ -203,7 +203,7 @@ def test_a_reply_that_called_a_tool_cannot_be_cut():
     w, fake = _wrapper(calls_tools=True)
     fake.call_script.append("uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for _event in w.reply_until_tool("wie spät?"):
+    for _event in w.reply("wie spät?", calls="yield"):
         pass
     with pytest.raises(ValueError, match="tool call"):
         w.truncate_last_reply("")
@@ -220,7 +220,7 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     if not saves_state:
         fake.save_state = lambda: None
         w.begin("s")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     rebuilds = fake.rebuilds
     w.truncate_last_reply("Eins.")
     # From the state saved before the reply where there is one, else rebuilt.
@@ -295,7 +295,7 @@ def test_with_tools_declared_the_switch_is_rendered_with_them():
 def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     w, fake = _reasoning(False, gen_text="Antwort.", gen_tokens=8)
     before = len(fake.cache)
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     user = w._fragment_tokens("user", "hi")
     opening = fake.tokenize(w._formatter.generation_prompt())
     assert w._formatter.generation_prompt().endswith(EMPTY_THOUGHT)
@@ -308,20 +308,20 @@ def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
 
 def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     w, fake = _reasoning()
-    stream = w.reply_without_tools_stream("hi")
+    stream = w.reply("hi")
     assert "".join(stream) == "Antwort."
     assert stream.reply.text == "Antwort."
     assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
     assert w.snapshot()[-1]["text"] == "Antwort."
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Antwort.")
     _assert_consistent(w, fake)
-    w.reply_without_tools("weiter")
+    w.reply("weiter").finish()
     _assert_consistent(w, fake)
 
 
 def test_a_thought_the_model_has_without_being_asked_is_kept_out_too():
     w, fake = _reasoning(False)
-    assert w.reply_without_tools("hi").text == "Antwort."
+    assert w.reply("hi").finish().text == "Antwort."
     _assert_consistent(w, fake)
 
 
@@ -331,7 +331,7 @@ def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
     w, fake = _reasoning(config=config, gen_text=thought, gen_tokens=len(thought))
     w.inject("hist", "user")
     w.inject("hist", "assistant")
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     _assert_consistent(w, fake)
     assert [m["text"] for m in w.snapshot()].count("hist") == 2
 
@@ -340,7 +340,7 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
     w, fake = _reasoning(can_shift=False)
     rebuilds = fake.rebuilds
     prefilled = fake.total_prefilled()
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     # No rebuild: the request and the past reply are all that is decoded again.
     assert fake.rebuilds == rebuilds
     assert fake.total_prefilled() - prefilled < 2 * (
@@ -356,7 +356,7 @@ def test_a_cache_that_saves_no_state_is_rebuilt_instead():
     fake.save_state = lambda: None
     w.begin("s", reasoning=True)
     rebuilds = fake.rebuilds
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     assert fake.rebuilds == rebuilds + 1
     _assert_consistent(w, fake)
 
@@ -365,11 +365,11 @@ def test_a_reply_that_called_a_tool_is_kept_as_generated():
     w, fake = _reasoning()
     fake.call_script.append("uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=True)
-    for event in w.reply_until_tool("wie spät?"):
+    for event in w.reply("wie spät?", calls="yield"):
         call = event
     w.inject_tool_result(call, {"zeit": "12:00"})
     generated = list(w._table.messages[-1].token_ids)
-    for _event in w.resume_until_tool():
+    for _event in w.reply(calls="yield"):
         pass
     assert w._table.messages[-1].token_ids[:len(generated)] == generated
     assert w.snapshot()[-1]["text"] == "Antwort."
@@ -378,7 +378,7 @@ def test_a_reply_that_called_a_tool_is_kept_as_generated():
 
 def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w, fake = _reasoning()
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     w.truncate_last_reply("Ant")
     assert w._table.messages[-1].token_ids == w._fragment_tokens("assistant", "Ant")
     _assert_consistent(w, fake)
@@ -386,17 +386,17 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
 
 def test_a_reply_that_is_all_thought_is_removed():
     w, fake = _reasoning()
-    reply = w.reply_without_tools("hi", max_reply_tokens=12)   # cut inside the thought
+    reply = w.reply("hi", max_reply_tokens=12).finish()   # cut inside the thought
     assert reply.text == "" and reply.stop_reason == "token_limit"
     assert [m["role"] for m in w.snapshot()] == ["system", "user"]
     _assert_consistent(w, fake)
-    w.reply_without_tools("weiter")
+    w.reply("weiter").finish()
     _assert_consistent(w, fake)
 
 
 def test_a_reply_cut_inside_a_thought_tag_keeps_none_of_it():
     w, fake = _reasoning(False, gen_text="<thou", gen_tokens=5)
-    stream = w.reply_without_tools_stream("hi", max_reply_tokens=3)
+    stream = w.reply("hi", max_reply_tokens=3)
     assert "".join(stream) == ""
     _assert_consistent(w, fake)
 
@@ -409,7 +409,7 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
         w.inject("hist", "user")
         w.inject("hist", "assistant")
     evictions = len(fake.evictions)
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     assert len(fake.evictions) > evictions
     # The last cache edit is the past reply's decode, after the eviction.
     assert fake.prefill_calls[-1][0] == w.snapshot()[-1]["pos_start"] + len(
@@ -423,11 +423,11 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     w, fake = _reasoning(reasoning, gen_text="ok", gen_tokens=2)
     fake.call_script.append("uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
-    for event in w.reply_until_tool("wie spät?"):
+    for event in w.reply("wie spät?", calls="yield"):
         call = event
     w.inject_tool_result(call, "12:00")
     before = len(fake.cache)
-    list(w.resume_until_tool())
+    list(w.reply(calls="yield"))
     assert fake.cache[before:before + 2] == fake.tokenize("ok")
     _assert_consistent(w, fake)
 
@@ -446,10 +446,10 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     live, fake = _tooling()
     fake.call_script.append("uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for event in live.reply_until_tool("wie spät?"):
+    for event in live.reply("wie spät?", calls="yield"):
         call = event
     live.inject_tool_result(call, {"zeit": "12:00"})
-    for _event in live.resume_until_tool():
+    for _event in live.reply(calls="yield"):
         pass
     generated = live._table.messages[-1]
 
@@ -480,7 +480,7 @@ def test_a_conversation_goes_on_after_a_past_tool_turn():
     w, fake = _tooling()
     w.begin("s", [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"),
                                            "Zwölf."))], tools=[ToolSpec("uhr", "", {})])
-    w.reply_without_tools("danke")
+    w.reply("danke").finish()
     _assert_consistent(w, fake)
 
 
@@ -497,10 +497,10 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     live, fake = _tooling()
     fake.call_script.append("uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for event in live.reply_until_tool("wie spät?"):
+    for event in live.reply("wie spät?", calls="yield"):
         call = event
     live.inject_tool_result(call, {"zeit": "12:00"})
-    for _event in live.resume_until_tool():
+    for _event in live.reply(calls="yield"):
         pass
 
     past, past_fake = _tooling()
@@ -510,7 +510,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
                tools=[ToolSpec("uhr", "", {})])
     *_, (_start, _n, want_logits) = past_fake.prefill_calls
     assert want_logits      # the reply is sampled straight from the read-in's end
-    for _event in past.resume_until_tool():
+    for _event in past.reply(calls="yield"):
         pass
     assert past._table.messages[-1].token_ids == live._table.messages[-1].token_ids
     _assert_consistent(past, past_fake)
@@ -520,7 +520,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
 def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
     thoughtful = "<thought>a\n\nb</thought>Antwort.\n\nRest"
     w, fake = _reasoning(gen_text=thoughtful, gen_tokens=len(thoughtful))
-    reply = w.reply_without_tools("hi", stop=["\n\n"])
+    reply = w.reply("hi", stop=["\n\n"]).finish()
     assert reply.text == "Antwort." and reply.stop_reason == "stop_string"
     assert w.snapshot()[-1]["text"] == "Antwort."
     _assert_consistent(w, fake)
@@ -542,7 +542,7 @@ def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     assert w._template.reasoning.past_keeps_thought
     w.begin("s", reasoning=True)
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     assert w.snapshot()[-1]["text"] == "Antwort."
     assert fake.tokenize(_THOUGHTFUL) == w._table.messages[-1].token_ids[
         len(fake.tokenize(w._formatter.generation_prompt())):][:len(_THOUGHTFUL)]
@@ -552,7 +552,7 @@ def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
 def test_a_reply_decoded_again_counts_what_was_decoded():
     w, fake = _reasoning()
     before = fake.total_prefilled()
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
     assert reply.n_prefilled_tokens == fake.total_prefilled() - before
 
 
@@ -594,7 +594,7 @@ def test_the_thought_count_never_exceeds_the_pieces_fed():
 # ----- the third review ------------------------------------------------------
 def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
     w, fake = _reasoning(can_shift=False)
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
 
     def refuse(state, pos):
         raise RuntimeError("the cache refused the saved state")
@@ -610,7 +610,7 @@ def test_a_cache_that_takes_a_cut_needs_no_saved_state():
     fake.can_cut_tail = True
     w.begin("s", reasoning=True)
     saved, rebuilds = fake.saved_states, fake.rebuilds
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     w.truncate_last_reply("Ant")
     assert fake.saved_states == saved and fake.rebuilds == rebuilds
     _assert_consistent(w, fake)
@@ -618,7 +618,7 @@ def test_a_cache_that_takes_a_cut_needs_no_saved_state():
 
 def test_a_cut_leaves_a_state_for_the_next_reply():
     w, fake = _reasoning(can_shift=False)
-    w.reply_without_tools("hi")
+    w.reply("hi").finish()
     w.truncate_last_reply("Ant")
     assert w._cache.rested_at == w._table.total
 
@@ -626,7 +626,7 @@ def test_a_cut_leaves_a_state_for_the_next_reply():
 def test_what_a_cache_that_cannot_shift_decodes_again_is_counted():
     w, fake = _reasoning(can_shift=False)
     before = fake.total_prefilled()
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
     assert reply.n_prefilled_tokens == fake.total_prefilled() - before
 
 
@@ -651,7 +651,7 @@ def test_a_result_answers_the_call_it_was_given_for():
     fake.call_script = ['[{"name":"wetter","arguments":{"city":"Berlin"}},'
                         '{"name":"wetter","arguments":{"city":"Paris"}}]']
     w.begin("s", tools=[ToolSpec("wetter", "", {})])
-    calls = [e for e in w.reply_until_tool("Wetter?") if isinstance(e, ToolCall)]
+    calls = [e for e in w.reply("Wetter?", calls="yield") if isinstance(e, ToolCall)]
     with pytest.raises(ValueError, match="waiting call"):
         w.inject_tool_result(calls[1], "Paris: Regen")
     w.inject_tool_result(calls[0], "Berlin: Sonne")
@@ -691,20 +691,20 @@ def _as_rendered(w, fake):
 
 def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_template_does():
     w, fake = _wrapper(user_join="<sep>", gen_tokens=0)
-    w.reply_without_tools("eins")
+    w.reply("eins").finish()
     assert [m["role"] for m in w.snapshot()] == ["system", "user"]
     fake._gen_tokens = 5
-    w.reply_without_tools("zwei")
+    w.reply("zwei").finish()
     _as_rendered(w, fake)
 
 
 def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer():
     w, fake = _wrapper(user_join=None, gen_tokens=0)
-    w.reply_without_tools("eins")
+    w.reply("eins").finish()
     rows = [(m["role"], m["text"]) for m in w.snapshot()]
     assert rows[1:] == [("user", "eins"), ("assistant", "")]
     fake._gen_tokens = 5
-    w.reply_without_tools("zwei")
+    w.reply("zwei").finish()
     _as_rendered(w, fake)
 
 
@@ -747,7 +747,7 @@ def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
 def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into():
     w, fake = _reasoning(keeps_thought=True, tokens_spell_text=False)
     assert w._template.reasoning.past_keeps_thought
-    reply = w.reply_without_tools("hi")
+    reply = w.reply("hi").finish()
     newest = w._table.messages[-1]
     assert reply.text == "Antwort."
     assert newest.token_ids == w._context.tokenize(
@@ -779,7 +779,7 @@ def test_declarations_move_on_with_the_newest_user_turn(can_shift):
     w.begin("s", tools=specs)
     _as_rendered_with(w, fake, specs)
     for text in ("eins", "zwei", "drei"):
-        w.reply_without_tools(text)
+        w.reply(text).finish()
         _as_rendered_with(w, fake, specs)
     w.inject("vier")
     _as_rendered_with(w, fake, specs)
@@ -791,18 +791,18 @@ def test_a_history_carries_its_declarations_on_its_last_user_turn():
     w.begin("s", [("user", "eins"), ("assistant", "zwei"), ("user", "drei"),
                   ("assistant", "vier")], tools=specs)
     _as_rendered_with(w, fake, specs)
-    w.reply_without_tools("fünf")
+    w.reply("fünf").finish()
     _as_rendered_with(w, fake, specs)
 
 
 def test_a_later_declaration_joins_the_newest_user_turn():
     w, fake = _moving()
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
-    w.reply_without_tools("eins")
+    w.reply("eins").finish()
     assert w.declare_unknown_tools([ToolSpec("wetter", "", {})]) == 0
     both = [ToolSpec("uhr", "", {}), ToolSpec("wetter", "", {})]
     _as_rendered_with(w, fake, both)
-    w.reply_without_tools("zwei")
+    w.reply("zwei").finish()
     _as_rendered_with(w, fake, both)
 
 
@@ -843,6 +843,6 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
         fake = _ClosingText(gen_tokens=3, can_shift=can_shift)
         w = ChatWrapper(Config(context_size=2000), context=fake)
         w.begin("s")
-        w.reply_without_tools("hi")
-        w.reply_without_tools("again")
+        w.reply("hi").finish()
+        w.reply("again").finish()
         assert fake.cache == [t for m in w._table.messages for t in m.token_ids]

@@ -5,27 +5,17 @@ The core actions, each prefilling as little as possible:
 * :meth:`ChatWrapper.begin`: reset and prefill the system prompt and history,
   with or without reasoning.
 * :meth:`ChatWrapper.inject`: prefill one message as context, no generation.
-* :meth:`ChatWrapper.reply_without_tools`: prefill the request text, then
-  generate.
-* :meth:`ChatWrapper.reply_without_tools_stream`: the same, yielding text
-  deltas.
+* :meth:`ChatWrapper.reply`: prefill the request text, then stream the reply,
+  refusing, handing over or running the tool calls the model makes.
 * :meth:`ChatWrapper.truncate_last_reply`: shorten the newest reply to what was
   read or heard of it.
+* :meth:`ChatWrapper.history`: the conversation the cache holds, tool turns
+  included, as :meth:`ChatWrapper.begin` takes it.
 
-Crossing either eviction limit removes the oldest non-system messages and shifts
-the survivors down, reusing their KV without re-prefilling.
-
-A model whose own template describes tool calls can use them, the tags and the
-argument spelling being recovered from that template:
-
-* :meth:`ChatWrapper.reply_with_tools`: the finished reply, tools run on the
-  way.
-* :meth:`ChatWrapper.reply_with_tools_stream`: the same loop, yielding text
-  deltas.
-* :meth:`ChatWrapper.reply_until_tool` and
-  :meth:`ChatWrapper.resume_until_tool`: the same exchange driven by the caller.
-* :meth:`ChatWrapper.declare_unknown_tools`: tell the model about a tool it has
-  not been told about yet.
+Crossing either eviction limit removes the oldest exchanges and shifts the
+survivors down, reusing their KV without re-prefilling. A model whose own
+template describes tool calls can use them, the tags and the argument spelling
+being recovered from that template.
 """
 
 from .config import Config, Sampling

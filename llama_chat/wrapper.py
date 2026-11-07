@@ -1,8 +1,8 @@
 """ChatWrapper: the public API, prefilling as little as possible.
 
 ``begin`` resets and prefills the system prompt plus what recent history fits;
-``inject`` prefills one message without generating; ``reply_without_tools``
-and ``reply_without_tools_stream`` prefill only the new request and then
+``inject`` prefills one message without generating; ``reply`` prefills only
+the new request and then
 generate, decoding the reply again only where the template writes a past reply
 otherwise. Crossing either eviction limit removes the oldest non-system
 messages and shifts the survivors down, reusing their KV.
@@ -123,6 +123,12 @@ class ReplyStream(Generic[_Delta]):
         """Stop reading and end the turn. Idempotent, as a generator's is."""
         self._deltas.close()
 
+    def finish(self) -> Reply:
+        """Read the stream to its end, and return its :class:`Reply`."""
+        for _ in self:
+            pass
+        return self.reply
+
     def __enter__(self) -> ReplyStream[_Delta]:
         return self
 
@@ -234,7 +240,7 @@ class ChatWrapper:
                 that called tools, written as this model's template writes one.
                 A history that ends on a tool turn's result leaves that turn
                 open, as a result written into a live turn does, for
-                :meth:`resume_until_tool` to go on with. Only the most recent
+                :meth:`reply` to go on with. Only the most recent
                 that fit alongside the system prompt are prefilled, under both
                 eviction limits, from a user turn on; older excess is dropped.
             tools: Tools to declare, rendered into the system turn where this
@@ -243,7 +249,7 @@ class ChatWrapper:
                 a whole :class:`~llama_chat.tools.ToolRegistry`, what it marks
                 for the system prompt; the rest waits for
                 :meth:`declare_unknown_tools`. A registry is also kept, so
-                :meth:`reply_with_tools` needs none of its own; a list of specs
+                :meth:`reply` running calls needs none of its own; a list of specs
                 is declared and not kept. Refused up front where this model
                 could not use them, rather than at the first call.
             reasoning: Whether the model reasons before each answer, as its
@@ -411,192 +417,98 @@ class ChatWrapper:
             self._cache.rest()
             return evicted
 
-    # ----- asking: without tools -----------------------------------------------
-    def reply_without_tools_stream(
-        self, text: str, *, max_reply_tokens: int | None = None,
-        stop: list[str] | None = None,
-        cancel: threading.Event | None = None,
-        sampling: Sampling | None = None,
-    ) -> ReplyStream[str]:
-        """Add a user request and stream the reply token by token.
+    # ----- asking ---------------------------------------------------------------
+    def reply(self, text: str | None = None, *,
+              calls: str | ToolRegistry = "refuse",
+              max_calls: int | None = None,
+              max_reply_tokens: int | None = None,
+              stop: list[str] | None = None,
+              cancel: threading.Event | None = None,
+              sampling: Sampling | None = None) -> ReplyStream:
+        """Generate the reply, streaming it as it is generated.
 
         Lazy: nothing happens, the headroom check included, until the first
-        iteration. Closing the stream early still terminates the turn and
-        records what was generated, as any reply is recorded, so the next
-        generation stays valid.
-
-        Runs no tool, ever, not even one :meth:`begin` was given. A call the
-        model makes anyway is kept out of the reply text, told that the call
-        failed and that no tool can be run, and the reply goes on from there, so
-        the model can say in words that it could not do the thing, a blank line
-        parting the text before the call from the text after it where the two
-        would join without whitespace. That costs one further generation and is
-        the only case where this is not a single one.
-
-        The stream must be driven from one thread at a time. To interrupt from
-        another, pass ``cancel``. An abandoned stream holds the wrapper's lock
-        until it is collected, so exhaust it, close it, or use it in a ``with``.
+        iteration. Closing the stream early still ends the turn and records what
+        was generated, so the next generation stays valid. The stream must be
+        driven from one thread at a time; to interrupt from another, pass
+        ``cancel``. An abandoned stream holds the wrapper's lock until it is
+        collected, so exhaust it, close it, use it in a ``with``, or call
+        :meth:`ReplyStream.finish`.
 
         Args:
-            text: The user request text, tokenized with special-token parsing
-                off. See the README, "Special tokens in message content".
+            text: The user request, tokenized with special-token parsing off.
+                See the README, "Special tokens in message content". ``None``
+                answers the newest message, a user message already written, or
+                goes on with a turn a call left open once every result is in.
+            calls: What becomes of a tool call the model makes.
+
+                * ``"refuse"``: nothing is run, not even a tool :meth:`begin`
+                  was given. The call is kept out of the text, the model is
+                  told no tool can be run, and the reply goes on, a blank line
+                  parting the text before the call from the text after it
+                  where they would join without whitespace.
+                * ``"yield"``: each call is handed over as a
+                  :class:`~llama_chat.tools.ToolCall` after the text, and the
+                  turn stays open. Answer each with :meth:`inject_tool_result`,
+                  in order, then call this again without ``text``.
+                * ``"run"``, or a :class:`~llama_chat.tools.ToolRegistry`:
+                  each call is run, against the registry :meth:`begin` was
+                  given or the one passed, its result written, and the reply
+                  goes on until the model answers. The last permitted round
+                  withholds the call tokens, so the turn always closes.
+            max_calls: Where calls are run, how many one turn may use. ``None``
+                sets no ceiling; a call past one is answered with an error
+                result rather than run.
             max_reply_tokens: Override for the per-generation cap.
-            stop: Extra stop strings for this request, added to the config's.
+            stop: Stop strings for this request, added to the config's,
+                matched against the answer only.
             cancel: Setting it, from any thread, stops generation within one
-                token and closes the turn with ``stop_reason == "interrupted"``.
+                token and ends the turn with ``stop_reason == "interrupted"``.
             sampling: This request's own sampling settings, in place of the
                 config's for the fields it sets.
 
         Returns:
-            A :class:`ReplyStream` of the text deltas, whose ``reply`` is the
-            :class:`Reply` once it has ended.
+            A :class:`ReplyStream` of the text deltas, and with ``"yield"`` the
+            calls after them; its ``reply`` is the :class:`Reply` once it has
+            ended, summing every generation where calls were run.
 
         Raises:
-            ValueError: If no conversation has been begun, or if a tool call
-                has left a reply open.
+            ValueError: If no conversation has been begun; if a tool call has
+                left a reply open and ``text`` is given, or a result is still
+                owed; if ``text`` is ``None`` with nothing to answer; or if a
+                registry holding tools is given to a model that could never
+                call one.
             ContextOverflowError: If too little room remains for the reply, or
-                if the error answering a call no longer fits. The turn is then
-                open and cannot be continued.
+                a result or the error answering a call no longer fits. The
+                turn is then open and cannot be continued.
         """
+        options = dict(max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+                       sampling=sampling)
+        if calls == "yield":
+            return self._until_call(text, allow_tools=True, **options)
+        if calls == "refuse":
+            registry = None
+        elif calls == "run":
+            registry = self._registry
+        elif isinstance(calls, ToolRegistry):
+            registry = calls
+        else:
+            raise ValueError(f"calls must be 'refuse', 'yield', 'run' or a ToolRegistry, "
+                             f"not {calls!r}")
         return ReplyStream(self._generate_until_answered(
-            text, registry=None, max_reply_tokens=max_reply_tokens,
-            stop=stop, cancel=cancel, sampling=sampling))
+            text, registry=registry, max_calls=max_calls, **options))
 
-    def reply_without_tools(
-        self, text: str, *, max_reply_tokens: int | None = None,
-        stop: list[str] | None = None,
-        cancel: threading.Event | None = None,
-        sampling: Sampling | None = None,
-    ) -> Reply:
-        """Add a user request and generate a reply, no tool of any kind run.
+    def _until_call(self, text: str | None, *, allow_tools: bool,
+                    **options) -> ReplyStream[str | ToolCall]:
+        """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
 
-        :meth:`reply_without_tools_stream`, drained.
+        ``allow_tools`` False withholds the call tokens, which is what makes
+        the last permitted round of an exchange certain to close the turn.
         """
-        stream = self.reply_without_tools_stream(
-            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            sampling=sampling)
-        for _ in stream:
-            pass
-        return stream.reply     # set, the stream having ended of its own accord
-
-    # ----- asking: with tools --------------------------------------------------
-    def reply_with_tools_stream(
-        self, text: str, registry: ToolRegistry | None = None, *,
-        max_calls: int | None = None, max_reply_tokens: int | None = None,
-        stop: list[str] | None = None,
-        cancel: threading.Event | None = None,
-        sampling: Sampling | None = None) -> ReplyStream[str]:
-        """Reply to ``text``, running whatever tools the model calls on the way.
-
-        Yields the reply's text deltas and nothing else; the stream's ``reply``
-        sums every generation. Where the text before a call and the text after
-        it would join without whitespace, a blank line goes between them. The
-        last permitted round withholds the call tokens, so the turn always
-        closes.
-
-        Args:
-            text: The request.
-            registry: What to run calls against. Defaults to the one
-                :meth:`begin` was given. Without either, a call the model
-                invented is answered saying so and the reply goes on.
-            max_calls: How many tools one turn may use. ``None``, the
-                default, sets no ceiling: the exchange runs until the model
-                stops calling, bounded only by the context. A call past a
-                ceiling is answered with an error result rather than run.
-            max_reply_tokens, stop, cancel, sampling: As
-                :meth:`reply_without_tools_stream`, and applied to every
-                generation of the exchange, so ``max_reply_tokens`` bounds each
-                one rather than the whole.
-
-        Raises:
-            ValueError: If no conversation has been begun, or if a registry
-                holding tools is given to a model that could never call one.
-                Driving the loop yourself with :meth:`reply_until_tool` is not
-                refused, because nothing there promises a tool will run.
-            ContextOverflowError: If a result no longer fits in what is left of
-                the context. The turn is then open and cannot be continued.
-        """
-        return ReplyStream(self._generate_until_answered(
-            text,
-            registry=registry if registry is not None else self._registry,
-            max_calls=max_calls, max_reply_tokens=max_reply_tokens, stop=stop,
-            cancel=cancel, sampling=sampling))
-
-    def reply_with_tools(self, text: str, registry: ToolRegistry | None = None,
-                         *, max_calls: int | None = None,
-                         max_reply_tokens: int | None = None,
-                         stop: list[str] | None = None,
-                         cancel: threading.Event | None = None,
-                         sampling: Sampling | None = None) -> Reply:
-        """Reply to ``text``, running whatever tools the model calls.
-
-        :meth:`reply_with_tools_stream`, drained. Arguments and failures are
-        its own.
-
-        Returns:
-            A :class:`Reply` summing every generation; the reply is its ``text``.
-        """
-        stream = self.reply_with_tools_stream(
-            text, registry, max_calls=max_calls,
-            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            sampling=sampling)
-        for _ in stream:
-            pass
-        return stream.reply     # set, the stream having ended of its own accord
-
-    # ----- tools: driving the loop yourself ------------------------------------
-    def reply_until_tool(self, text: str, *,
-                         max_reply_tokens: int | None = None,
-                         stop: list[str] | None = None,
-                         cancel: threading.Event | None = None,
-                         sampling: Sampling | None = None,
-                         ) -> ReplyStream[str | ToolCall]:
-        """Stream the reply, handing you each tool call as the model makes it.
-
-        Yields ``str`` deltas, then one
-        :class:`~llama_chat.tools.ToolCall` per call the model made. Answer each
-        with :meth:`inject_tool_result`, in order, then :meth:`resume_until_tool`.
-        Asking to see the calls is what holds the turn open for them, so this
-        and :meth:`resume_until_tool` are the only entry points that leave one
-        unfinished.
-
-        Raises:
-            ValueError: If no conversation has been begun, or if a tool call
-                has left a reply open.
-            ContextOverflowError: If too little room remains for the reply.
-        """
-        return ReplyStream(_deltas_then_calls(self._request_and_generate(
-            text, max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            sampling=sampling)))
-
-    def resume_until_tool(self, *, max_reply_tokens: int | None = None,
-                          stop: list[str] | None = None,
-                          cancel: threading.Event | None = None,
-                          sampling: Sampling | None = None,
-                          ) -> ReplyStream[str | ToolCall]:
-        """Resume the reply a tool call interrupted.
-
-        Yields what :meth:`reply_until_tool` yields. Every result must be in
-        first, and this generation may itself end on another call, leaving the
-        turn open again for the same treatment.
-
-        Raises:
-            ValueError: If no reply is open, or if a call is still owed a
-                result.
-        """
-        return self._resume_until_tool(
-            allow_tools=True, max_reply_tokens=max_reply_tokens, stop=stop,
-            cancel=cancel, sampling=sampling)
-
-    def _resume_until_tool(self, *, allow_tools: bool,
-                           **kwargs) -> ReplyStream[str | ToolCall]:
-        """Resume, with the call tokens withheld where ``allow_tools`` is False.
-
-        Withholding is the exchange loop's business, not a caller's: it is what
-        makes the last permitted round certain to close the turn.
-        """
-        return ReplyStream(_deltas_then_calls(
-            self._resume(allow_tools=allow_tools, **kwargs)))
+        if text is None and self._reply_open:
+            return ReplyStream(_deltas_then_calls(
+                self._resume(allow_tools=allow_tools, **options)))
+        return ReplyStream(_deltas_then_calls(self._request_and_generate(text, **options)))
 
     def inject_tool_result(self, call: ToolCall | str, result) -> int:
         """Hand the model what the tool it called returned.
@@ -878,8 +790,8 @@ class ChatWrapper:
         """Whether a reply is unfinished, so no new message may be added.
 
         Outlasts :attr:`awaiting_tool_result`: the last result empties the calls
-        while the turn stays open until :meth:`resume_until_tool` closes it. While
-        this is ``True``, :meth:`reply_without_tools`, :meth:`inject` and
+        while the turn stays open until :meth:`reply` closes it. While
+        this is ``True``, :meth:`reply` with a request, :meth:`inject` and
         :meth:`declare_unknown_tools` refuse.
         """
         return self._reply_open
@@ -918,7 +830,7 @@ class ChatWrapper:
             max_calls: How many tools one turn may use, ``None`` for no
                 ceiling. Nothing is run where ``registry`` is ``None``, so it
                 does not bind there.
-            text, **kwargs: As :meth:`reply_without_tools_stream`.
+            text, **kwargs: As :meth:`reply`.
 
         Raises:
             ValueError: If ``registry`` holds tools this model could never
@@ -931,7 +843,7 @@ class ChatWrapper:
         # starts, not after the model has asked for one.
         if registry is not None and len(registry) > 0:
             self._template.ensure_tools_usable()
-        stream = self.reply_until_tool(text, **kwargs)
+        stream = self._until_call(text, allow_tools=True, **kwargs)
         # An absent ceiling counts down without ever reaching zero, so the
         # three places that read it need no case of their own.
         calls_left = math.inf if max_calls is None else max_calls
@@ -953,8 +865,8 @@ class ChatWrapper:
                         any_call_asked = True
                         if registry is not None and calls_left > 0:
                             calls_left -= 1
-                        stream = self._resume_until_tool(
-                            allow_tools=registry is not None and calls_left > 0,
+                        stream = self._until_call(
+                            None, allow_tools=registry is not None and calls_left > 0,
                             **kwargs)
                         continue
                     # The ceiling binds only once a call has been asked for:
@@ -968,7 +880,7 @@ class ChatWrapper:
                 for call, result in settled:
                     self.inject_tool_result(
                         call, _explain_failure(result, may_call_again))
-                stream = self._resume_until_tool(allow_tools=may_call_again, **kwargs)
+                stream = self._until_call(None, allow_tools=may_call_again, **kwargs)
         finally:
             stream.close()   # the current generation holds the wrapper's lock
 
@@ -1028,22 +940,30 @@ class ChatWrapper:
         return settled, calls_left
 
     def _request_and_generate(
-        self, text: str, *, max_reply_tokens: int | None = None,
+        self, text: str | None, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None, cancel: threading.Event | None = None,
         sampling: Sampling | None = None,
     ) -> Generator[str, None, Reply]:
         """Add the user request, then generate one reply from the cache's end.
 
-        One generation, so a call it stops on leaves the turn open for a result.
-        Every public entry point reaches generation through here.
+        Without ``text``, the reply answers the newest message, which must be
+        a user message already written. One generation, so a call it stops on
+        leaves the turn open for a result.
         """
         with self._lock:
             self._ensure_open()
             self._ensure_begun("generate into")
             self._ensure_no_open_reply("start a request")
-            join_tokens = self._user_turn_join_tokens("user")
-            held, declares = self._moving_declaration(self._moving_specs, self._reasoning)
-            user_tokens = self._fragment_tokens("user", text)
+            if text is None:
+                newest = self._table.messages[-1]
+                if newest.role != "user":
+                    raise ValueError("there is nothing to answer: the newest message "
+                                     "is not a user message")
+                join_tokens, held, declares, user_tokens = [], [], (), []
+            else:
+                join_tokens = self._user_turn_join_tokens("user")
+                held, declares = self._moving_declaration(self._moving_specs, self._reasoning)
+                user_tokens = self._fragment_tokens("user", text)
             open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
             close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
 
@@ -1051,18 +971,22 @@ class ChatWrapper:
             # everything but the system prompt is evicted; checked before
             # anything is, so a refused request destroys no history.
             floor = self._table.messages[0].n_tokens if self._table.has_system else 0
-            user_tokens = self._fit_or_raise(
-                user_tokens,
-                budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
-                        - len(join_tokens) - len(held) - floor),
-                description="request", role="user",
-            )
-            user_tokens = held + user_tokens
+            if text is not None:
+                user_tokens = held + self._fit_or_raise(
+                    user_tokens,
+                    budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
+                            - len(join_tokens) - len(held) - floor),
+                    description="request", role="user",
+                )
             needed = (len(join_tokens) + len(user_tokens) + len(open_tokens)
                       + len(close_tokens) + self._config.min_reply_tokens)
             if self._cache.evict(
                     lambda: self._table.total + needed <= self._config.context_size):
-                join_tokens = self._user_turn_join_tokens("user")   # the turn it joined may be gone
+                if text is None and self._table.messages[-1].role != "user":
+                    raise ContextOverflowError("the message to answer does not fit "
+                                               "beside room for its reply")
+                if text is not None:    # the turn it joined may be gone
+                    join_tokens = self._user_turn_join_tokens("user")
             n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
 
             # Refused before the cache is mutated.
@@ -1076,16 +1000,18 @@ class ChatWrapper:
 
             # Reported after every check and before the cache changes, so a
             # callback that raises refuses the request with nothing written.
-            if self._on_message:
+            if self._on_message and text is not None:
                 self._on_message("user", text)
             # One decode for the request text and the assistant-open tag: the
             # backend flags logits on the final token only either way.
-            self._move_declaration_on()
+            if text is not None:
+                self._move_declaration_on()
             self._context.prefill(join_tokens + user_tokens + open_tokens,
-                              start_pos=self._table.total, want_logits=True)
+                                  start_pos=self._table.total, want_logits=True)
             if join_tokens:
                 self._table.extend_last(join_tokens)
-            self._table.append(Message("user", text, user_tokens, declares=declares))
+            if text is not None:
+                self._table.append(Message("user", text, user_tokens, declares=declares))
 
             return (yield from self._generate_into_reply(
                 open_tokens=open_tokens, close_tokens=close_tokens,
@@ -1105,7 +1031,7 @@ class ChatWrapper:
                 raise ValueError(f"{len(self._pending_calls)} call(s) still owe "
                                  f"a result")
             if not self._reply_open:
-                raise ValueError("no reply is open; start one with reply_until_tool()")
+                raise ValueError("no reply is open; start one with reply(text, calls='yield')")
             close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
             # The turn goes on from where the template's result wrapping ends it.
@@ -1183,7 +1109,7 @@ class ChatWrapper:
             close_tokens: The turn terminator, decoded once the turn closes.
             n_prefilled_tokens: What the caller decoded to get here, for the Reply.
             max_reply_tokens, stop, cancel, sampling: As
-                :meth:`reply_without_tools_stream`.
+                :meth:`reply`.
             allow_tools: ``False`` withholds the call tokens, so this generation
                 cannot end on a call and the turn is certain to close.
             decoded: The template text generation follows, which says whether
@@ -1419,7 +1345,7 @@ class ChatWrapper:
             raise ValueError(
                 f"cannot {action} while a reply is open: it stopped on a tool "
                 "call and its turn is unclosed. Finish it with "
-                "resume_until_tool(), or discard it with begin()."
+                "reply(), or discard it with begin()."
             )
 
     def _fits(self, arriving_tokens: int, arriving_messages: int = 0) -> bool:
