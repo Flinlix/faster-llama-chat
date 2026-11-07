@@ -620,7 +620,7 @@ def test_a_cut_leaves_a_state_for_the_next_reply():
     w, fake = _reasoning(can_shift=False)
     w.reply_without_tools("hi")
     w.truncate_last_reply("Ant")
-    assert w._rest_states[-1][0] == w._table.total
+    assert w._cache.rested_at == w._table.total
 
 
 def test_what_a_cache_that_cannot_shift_decodes_again_is_counted():

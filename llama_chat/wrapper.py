@@ -30,6 +30,7 @@ from .messages import Message, MessageTable, n_newest_that_fit
 from .reply_text import (AnswerOpening, AnswerStops, ThoughtFilter, begins_in_thought,
                          reply_header, turn_end_test)
 from .cache_context import CACHE_CONTEXT, ensure_answers
+from .cache_sync import CacheSync
 from .tokenizing import tokenize_message, tokenize_pieces
 from .resolved_template import ResolvedTemplate, written_between
 from .template import TemplateFragments, ToolCallFragments
@@ -203,13 +204,9 @@ class ChatWrapper:
         self._reasoning = False
         # The template text an open turn ends with, which a resumption opens on.
         self._turn_ends_with = ""
-        # For a cache that cannot shift: the last two states it rested in, each
-        # with how many tokens it held then, oldest first, so the newest reply
-        # can be changed without rebuilding the conversation: one from before
-        # it and one from after. See the README, "How eviction works".
-        self._rest_states = []
-        # Not read off the table: `declare_unknown_tools` appends a system-role message,
-        # so one stray call would make an unbegun table look begun.
+        self._cache = CacheSync(self._context, self._table)
+        # Not read off the table: a stray system message would make an unbegun
+        # table look begun.
         self._begun = False
         self._warmed = False
         self._closed = False
@@ -355,9 +352,9 @@ class ChatWrapper:
             self._reply_open = ends_open
             self._turn_ends_with = hist[-1][1] if ends_open else ""
             self._begun = True
-            self._rest_states = []
+            self._cache.forget()
             if not ends_open:
-                self._save_rest()
+                self._cache.rest()
             return len(kept_messages)
 
     # ----- adding context ------------------------------------------------------
@@ -397,7 +394,7 @@ class ChatWrapper:
                 description="injected message", role=role,
             )
             tokens = held + tokens
-            evicted = self._evict_until(
+            evicted = self._cache.evict(
                 lambda: self._fits(len(join_tokens) + len(tokens), arriving_messages=1))
             if evicted:             # the turn it would have closed may be gone
                 join_tokens = self._user_turn_join_tokens(role)
@@ -411,7 +408,7 @@ class ChatWrapper:
             if join_tokens:
                 self._table.extend_last(join_tokens)
             self._table.append(Message(role, text, tokens, declares=declares))
-            self._save_rest()
+            self._cache.rest()
             return evicted
 
     # ----- asking: without tools -----------------------------------------------
@@ -705,7 +702,7 @@ class ChatWrapper:
                 return
             self._rewrite_newest(msg, self._fragment_tokens("assistant", keep_text),
                                  keep_text)
-            self._save_rest()
+            self._cache.rest()
 
     def _newest_reply(self, action: str):
         """The newest message, refused unless it is an assistant reply that may change."""
@@ -738,7 +735,7 @@ class ChatWrapper:
     def _remove_newest(self, msg) -> None:
         """Drop the newest message from the table and the cache."""
         self._table.remove_last()
-        self._cut_back_to(msg.pos_start)
+        self._cache.cut_to(msg.pos_start)
 
     def _rewrite_newest(self, msg, tokens: list[int], text: str) -> int:
         """Give the newest message ``tokens``, decoding only where they differ.
@@ -748,31 +745,12 @@ class ChatWrapper:
         """
         shared = _shared_prefix_length(msg.token_ids, tokens)
         self._table.replace_last(tokens, text)
-        decoded = self._cut_back_to(msg.pos_start + shared)
+        decoded = self._cache.cut_to(msg.pos_start + shared)
         if decoded is None:             # rebuilt, the new tokens with the rest
             return self._table.total
         self._context.prefill(tokens[shared:], start_pos=msg.pos_start + shared,
                               want_logits=False)
         return decoded + len(tokens) - shared
-
-    def _cut_back_to(self, pos: int) -> int | None:
-        """Make the cache hold the table's first ``pos`` tokens and nothing after.
-
-        A cut where the cache takes one; else from a state it rested in, where
-        one at or before ``pos`` is saved; else a rebuild of the whole table.
-        See the README, "How eviction works".
-
-        Returns:
-            How many tokens were decoded to get there, or ``None`` where the
-            whole table was rebuilt.
-        """
-        if self._context.can_shift or self._context.can_cut_tail:
-            self._context.remove_from(pos)
-            return 0
-        decoded = self._back_to(pos)
-        if decoded is None:
-            self._rebuild_cache()
-        return decoded
 
     def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
@@ -822,10 +800,10 @@ class ChatWrapper:
                     f"the system turn with these declarations needs {len(tokens)} tokens "
                     f"but the eviction threshold is {self._config.evict_above_tokens}; "
                     "declare fewer tools or raise context_size/evict_above_fraction")
-            evicted = self._evict_until(lambda: self._fits(len(tokens) - system.n_tokens))
+            evicted = self._cache.evict(lambda: self._fits(len(tokens) - system.n_tokens))
             self._rewrite_from(0, tokens, tuple(spec.name for spec in declared))
             self._system_specs = declared
-            self._save_rest()
+            self._cache.rest()
             return evicted
 
     # ----- introspection -------------------------------------------------------
@@ -1082,7 +1060,7 @@ class ChatWrapper:
             user_tokens = held + user_tokens
             needed = (len(join_tokens) + len(user_tokens) + len(open_tokens)
                       + len(close_tokens) + self._config.min_reply_tokens)
-            if self._evict_until(
+            if self._cache.evict(
                     lambda: self._table.total + needed <= self._config.context_size):
                 join_tokens = self._user_turn_join_tokens("user")   # the turn it joined may be gone
             n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
@@ -1254,7 +1232,7 @@ class ChatWrapper:
                 generated, answer.text, open_tokens, close_tokens,
                 as_past=not kept_as_generated)
             if not self._reply_open:
-                self._save_rest()
+                self._cache.rest()
             if answered is not None and self._on_message:
                 self._on_message("assistant", answered)
 
@@ -1306,7 +1284,7 @@ class ChatWrapper:
             self._table.append(Message("assistant", answer, tokens))
         msg = self._table.messages[-1]
         if generated.cached_beyond:
-            self._cut_back_to(self._table.total)
+            self._cache.cut_to(self._table.total)
         self._pending_calls = self._read_calls(generated)
         self._batch = [call.name for call in self._pending_calls]
         if generated.stop_reason == "tool_call":
@@ -1329,7 +1307,7 @@ class ChatWrapper:
         holds_call = msg.holds_call
         if not msg.text and not holds_call and self._template.user_turn_join is not None:
             self._remove_newest(msg)
-            return self._evict_until(lambda: self._fits(0)), 0, None
+            return self._cache.evict(lambda: self._fits(0)), 0, None
         past = self._fragment_tokens("assistant", msg.text)
         fits = self._table.total - msg.n_tokens + len(past) <= self._config.context_size
         # A thought, what a generation prompt adds after the tag, the whitespace
@@ -1347,7 +1325,7 @@ class ChatWrapper:
         # Trim back after the reply, so the cache rests inside both eviction
         # limits for the next generation, an early close included. The closer
         # counts against the threshold even though it is decoded after the trim.
-        n_evicted_messages = self._evict_until(lambda: self._fits(len(close_tokens)))
+        n_evicted_messages = self._cache.evict(lambda: self._fits(len(close_tokens)))
         self._close_turn(msg, close_tokens)
         return n_evicted_messages, 0, msg.text
 
@@ -1364,9 +1342,9 @@ class ChatWrapper:
             _, evicted = self._table.evict_oldest_until(fits)
             if self._table.messages and self._table.messages[-1] is msg:
                 self._table.replace_last(past, msg.text)
-            self._rebuild_cache()
+            self._cache.rebuild()
             return evicted, self._table.total
-        evicted = self._evict_until(fits)
+        evicted = self._cache.evict(fits)
         if not (self._table.messages and self._table.messages[-1] is msg):
             return evicted, 0
         return evicted, self._rewrite_newest(msg, past, msg.text)
@@ -1457,25 +1435,6 @@ class ChatWrapper:
         limit = self._config.max_history_messages
         return limit is None or self._table.n_evictable + arriving_messages <= limit
 
-    def _evict_until(self, fits) -> int:
-        """Evict the oldest non-system messages until ``fits()`` or none remain.
-
-        Shifts the survivors in place where the cache allows it, and re-prefills
-        the whole surviving conversation where it does not. See the README,
-        "How eviction works".
-        """
-        if self._context.can_shift:
-            eviction, evicted = self._table.evict_oldest_until(fits)
-            if eviction is not None:
-                self._context.apply_eviction(eviction)  # one seq_rm + one seq_add
-            return evicted
-
-        # Survivors are decided first, then re-prefilled.
-        _, evicted = self._table.evict_oldest_until(fits)
-        if evicted:
-            self._rebuild_cache()
-        return evicted
-
     def _close_turn(self, msg: Message, close_tokens: list[int]) -> None:
         """Decode the assistant turn's closing tag.
 
@@ -1486,54 +1445,6 @@ class ChatWrapper:
             return
         self._context.prefill(close_tokens, start_pos=self._table.total, want_logits=False)
         self._table.extend_last(close_tokens)
-
-    def _rebuild_cache(self) -> None:
-        """Re-prefill the cache from the surviving messages (no in-place shift)."""
-        self._context.reset()
-        all_tokens: list[int] = []
-        for m in self._table.messages:
-            all_tokens.extend(m.token_ids)
-        self._context.prefill(all_tokens, start_pos=0, want_logits=False)
-        self._rest_states = []
-
-    def _save_rest(self) -> None:
-        """Save the state a cache that cannot shift rests in now, where it can be saved."""
-        if self._context.can_shift or self._context.can_cut_tail:
-            return                      # a cut needs no saved state
-        try:
-            state = self._context.save_state()
-        except RuntimeError:
-            state = None                # a rebuild stands in where none is saved
-        if state is None:
-            self._rest_states = []
-            return
-        self._rest_states = [s for s in self._rest_states
-                             if s[0] < self._table.total][-1:] + [(self._table.total, state)]
-
-    def _back_to(self, pos: int) -> int | None:
-        """Put a cache that cannot shift back to holding the table's first ``pos`` tokens.
-
-        From the latest state it rested in at or before ``pos``, decoding what
-        the table holds after it.
-
-        Returns:
-            How many tokens were decoded, or ``None`` where no state could be
-            restored, the cache then left for the caller to rebuild.
-        """
-        usable = [s for s in self._rest_states if s[0] <= pos]
-        self._rest_states = usable
-        if not usable:
-            return None
-        rested, state = usable[-1]
-        try:
-            self._context.restore_state(state, rested)
-        except RuntimeError:
-            self._rest_states = []
-            return None
-        between = [t for m in self._table.messages for t in m.token_ids][rested:pos]
-        if between:
-            self._context.prefill(between, start_pos=rested, want_logits=False)
-        return len(between)
 
     def _fit_or_raise(self, tokens: list[int], budget: int, description: str,
                       role: str) -> list[int]:
@@ -1593,14 +1504,14 @@ class ChatWrapper:
                 self._reasoning)
             new, declares = self._moving_declaration(self._moving_specs, self._reasoning)
             self._rewrite_from(index, new + msg.token_ids[len(old):], declares)
-        self._save_rest()
+        self._cache.rest()
         return 0
 
     def _rewrite_from(self, index: int, tokens: list[int], declares: tuple[str, ...]) -> None:
         """Give the message at ``index`` ``tokens``, decoding it and every later one again."""
         start = self._table.messages[index].pos_start
         self._table.replace_at(index, tokens, declares)
-        if self._cut_back_to(start) is None:
+        if self._cache.cut_to(start) is None:
             return                  # rebuilt from the table, the new tokens with it
         rest = [t for msg in self._table.messages[index:] for t in msg.token_ids]
         self._context.prefill(rest, start_pos=start, want_logits=False)
