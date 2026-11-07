@@ -14,6 +14,8 @@ from types import SimpleNamespace
 import llama_cpp
 import pytest
 
+from llama_chat.template import CallBoundary
+
 import llama_chat
 
 from llama_chat._backend import Backend
@@ -275,8 +277,7 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
         token_to_piece_bytes=lambda vocab, token: token.encode())
     out = GenerationAccumulator()
-    shown = "".join(context.generate(
-        0, 10, [], out=out, ends_turn=lambda token: token == "<response_end>"))
+    shown = "".join(context.generate(0, 10, out=out, ends_turn=lambda token: token == "<response_end>"))
     assert shown == out.text == "Paris"
     assert decoded == out.token_ids == ["Pa", "ris"]
     assert out.stop_reason == "end_of_turn"
@@ -365,7 +366,7 @@ def test_a_call_without_a_tag_of_its_own_is_read_by_its_texts():
         ["Gleich.", "<close>", "resp", "<sep>", "<open>", "tools", "<sep>", "<open>",
          'call tool="', "clock", '" index="1"', "<sep>", "<close>", "call", "<sep>", "x"])
     out = GenerationAccumulator()
-    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_CALL_TEXTS))
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS)))
     assert shown == out.text == "Gleich."
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock" index="1"'
     assert decoded == out.token_ids and decoded[-1] == "<sep>"
@@ -375,8 +376,7 @@ def test_a_reply_ends_where_its_closing_parts_from_a_call():
     context, decoded, removed = _sampling_context(
         ["Pa", "ris", "<close>", "resp", "<sep>", "<close>", "msg", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_CALL_TEXTS,
-                                     turn_end_text="<close>resp<sep><close>"))
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS, turn_end_text="<close>resp<sep><close>")))
     assert shown == out.text == "Paris"
     assert out.stop_reason == "end_of_turn" and out.token_ids == ["Pa", "ris"]
     # The closing's first tokens leave the reply; the caller cuts them from the
@@ -401,7 +401,7 @@ _PLAIN = ("assistant to=functions.", "<|call|>")
 def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
     context, decoded = _plain_context(sampled)
     out = GenerationAccumulator()
-    "".join(context.generate(0, 20, [], out=out, call_texts=_PLAIN, call_opens_as_text=True))
+    "".join(context.generate(0, 20, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
     assert decoded[-1] == "<|call|>"        # the end-of-generation token that closes it is kept
 
@@ -409,8 +409,7 @@ def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
 def test_a_plain_text_opening_inside_a_sentence_is_text():
     context, _ = _plain_context(["Say", " assistant", " to=", "functions.", "x", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(context.generate(0, 20, [], out=out, call_texts=_PLAIN,
-                                     call_opens_as_text=True))
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
     assert out.stop_reason == "end_of_turn" and shown == "Say assistant to=functions.x"
 
 
@@ -420,8 +419,7 @@ def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
     context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
     context.tokenize = lambda text, add_special=False, parse_special=True: [text]
     out = GenerationAccumulator()
-    "".join(context.generate(0, 20, [], out=out, call_texts=('{"name": "', "<|eot|>"),
-                             call_opens_as_text=True))
+    "".join(context.generate(0, 20, out=out, boundary=CallBoundary(call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock"}'
     assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded
 

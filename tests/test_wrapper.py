@@ -8,6 +8,8 @@ action, including across evictions.
 
 import pytest
 
+from llama_chat.template import CallBoundary
+
 import dataclasses
 import threading
 
@@ -253,33 +255,16 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     _assert_consistent(w, fake)
 
 
-def test_close_after_stop_hit_keeps_stop_reason():
-    # A stop string sets stop_reason="stop_string" before the final delta is yielded;
-    # a consumer that then closes the generator must not reclassify the
-    # completed reply as "interrupted". Drives the real KVContext.generate
-    # with a stubbed backend (no model needed).
-    from types import SimpleNamespace
-    from llama_chat.context import GenerationAccumulator, KVContext
-
-    pieces = {0: b"hello ", 1: b"STOP"}
-    toks = iter([0, 1])
-    ctx = object.__new__(KVContext)
-    ctx._backend = SimpleNamespace(
-        sample=lambda sampler, ctx: next(toks),
-        is_eog=lambda vocab, tok: False,
-        decode=lambda ctx_, ids, pos, seq, logits, batch: None,
-        token_to_piece_bytes=lambda vocab, tok: pieces[tok],
-        sampler_reset=lambda sampler: None,
-    )
-    ctx._sampler = ctx._vocab = ctx._llama_context = None
-    ctx._max_batch_tokens = 8
-
-    acc = GenerationAccumulator()
-    stream = ctx.generate(0, 10, ["STOP"], out=acc)
-    assert next(stream) == "hel"   # held back by the stop-string window
-    assert next(stream) == "lo "   # final delta; "stop_string" already recorded
-    stream.close()            # consumer closes after seeing the reply end
-    assert acc.stop_reason == "stop_string"  # not misreported as "interrupted"
+def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
+    fake = FakeContext(gen_tokens=10, gen_text="helloSTOPx")
+    w = ChatWrapper(_config(context_size=400), context=fake)
+    w.begin("s")
+    with w.reply_without_tools_stream("hi", stop=["STOP"]) as stream:
+        shown = "".join(stream)
+    assert shown == stream.reply.text == "hello"
+    assert stream.reply.stop_reason == "stop_string"   # not "interrupted"
+    # What reached the cache stays recorded, so the table describes it.
+    _assert_consistent(w, fake)
 
 
 def test_generator_close_marks_interrupted():
@@ -289,7 +274,7 @@ def test_generator_close_marks_interrupted():
 
     fake = FakeContext(gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
-    g = fake.generate(0, 5, [], out=acc)
+    g = fake.generate(0, 5, out=acc)
     next(g)
     g.close()
     assert acc.stop_reason == "interrupted"
@@ -867,23 +852,17 @@ def test_config_rejects_invalid_values(field, value):
 
 
 # ----- stop-string scanning ------------------------------------------------
-def test_stop_hit_finds_earliest_match():
-    from llama_chat.context import _stop_hit
+def test_the_earliest_of_several_needles_is_found():
+    from llama_chat.reply_text import earliest
 
-    assert _stop_hit("abcSTOPdef", ["STOP"]) == 3
-    assert _stop_hit("aXbYc", ["Y", "X"]) == 1          # earliest of several
-    assert _stop_hit("abc", ["STOP"]) is None
-    assert _stop_hit("abc", ["", "b"]) == 1             # empty strings ignored
-
-
-def test_stop_hit_respects_search_offset():
-    from llama_chat.context import _stop_hit
-
-    # A match strictly before the offset is skipped; one spanning or after the
-    # offset is found, which is the contract the emit cursor relies on.
-    assert _stop_hit("STOPxxSTOP", ["STOP"], search_from=1) == 6
-    assert _stop_hit("xxSTOP", ["STOP"], search_from=2) == 2
-    assert _stop_hit("xxSTOP", ["STOP"], search_from=3) is None
+    assert earliest("abcSTOPdef", ["STOP"]) == 3
+    assert earliest("aXbYc", ["Y", "X"]) == 1          # earliest of several
+    assert earliest("abc", ["STOP"]) is None
+    assert earliest("abc", ["", "b"]) == 1             # empty strings ignored
+    # A match strictly before the offset is skipped; one spanning or after it is found.
+    assert earliest("STOPxxSTOP", ["STOP"], search_from=1) == 6
+    assert earliest("xxSTOP", ["STOP"], search_from=2) == 2
+    assert earliest("xxSTOP", ["STOP"], search_from=3) is None
 
 
 # ----- public surface for callers that schedule around the lock ----------
@@ -1054,7 +1033,7 @@ def test_a_call_may_close_with_the_token_that_ends_a_turn():
     ctx._max_batch_tokens = 8
 
     acc = GenerationAccumulator()
-    list(ctx.generate(0, 10, [], out=acc, tool_tokens=(OPEN, END)))
+    list(ctx.generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=(OPEN, END))))
     assert acc.stop_reason == "tool_call" and acc.tool_call == "f{}"
     assert acc.token_ids == [OPEN, BODY, END]
 

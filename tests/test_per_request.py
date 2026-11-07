@@ -90,15 +90,14 @@ def _stub_context(chains):
 def test_a_generation_without_overrides_keeps_the_chain_built_at_load():
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    list(ctx.generate(0, 2, [], out=GenerationAccumulator(), sampling=Sampling()))
+    list(ctx.generate(0, 2, out=GenerationAccumulator(), sampling=Sampling()))
     assert set(chains["sampled"]) == {"loaded"} and chains["freed"] == []
 
 
 def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    stream = ctx.generate(0, 3, [], out=GenerationAccumulator(),
-                          sampling=Sampling(temperature=0.3))
+    stream = ctx.generate(0, 3, out=GenerationAccumulator(), sampling=Sampling(temperature=0.3))
     next(stream)
     stream.close()
     assert chains["sampled"] == [("own", 0.3)]
@@ -108,8 +107,8 @@ def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
 def test_every_generation_starts_its_penalties_and_its_seed_afresh():
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    list(ctx.generate(0, 1, [], out=GenerationAccumulator()))
-    list(ctx.generate(1, 1, [], out=GenerationAccumulator(), sampling=Sampling()))
+    list(ctx.generate(0, 1, out=GenerationAccumulator()))
+    list(ctx.generate(1, 1, out=GenerationAccumulator(), sampling=Sampling()))
     assert chains["reset"] == ["loaded", "loaded"]
 
 
@@ -579,7 +578,7 @@ def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
 
 def test_the_thought_count_never_exceeds_the_pieces_fed():
     import random
-    from llama_chat.reasoning import ThoughtFilter
+    from llama_chat.reply_text import ThoughtFilter
     tags = Reasoning("<thought>", "</thought>", "", "")
     text = "a<thought>x</thought>b<thought>y</thought>c<tho"
     rng = random.Random(7)
@@ -660,20 +659,20 @@ def test_a_result_answers_the_call_it_was_given_for():
 
 
 def test_a_channel_header_cut_short_is_not_answer():
-    from llama_chat.reasoning import AnswerOpening
+    from llama_chat.reply_text import AnswerOpening
     opening = AnswerOpening("<|channel|>final<|message|>")
     assert opening.feed("<|channel|>final") == "" and opening.flush(complete=False) == ""
 
 
 def test_whitespace_after_a_channel_header_is_not_answer():
-    from llama_chat.reasoning import AnswerOpening
+    from llama_chat.reply_text import AnswerOpening
     opening = AnswerOpening("</mm:think>")
     assert opening.feed("</mm:think>") + opening.feed("\n\n") + opening.feed("Antwort.") \
         == "Antwort."
 
 
 def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
-    from llama_chat.reasoning import ThoughtFilter
+    from llama_chat.reply_text import ThoughtFilter
     f = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
     assert f.feed(" ") + f.feed(" x") + f.flush() == "  x"
     g = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
@@ -808,7 +807,7 @@ def test_a_later_declaration_joins_the_newest_user_turn():
 
 
 def test_a_header_naming_another_reader_is_never_shown():
-    from llama_chat.reasoning import AnswerOpening, reply_header
+    from llama_chat.reply_text import AnswerOpening, reply_header
     from llama_chat.template import Reasoning
     tags = Reasoning(thought_open=" to=self<|message|>", thought_close="<|eom|>",
                      system_prefix="", generation_prompt="")
@@ -828,8 +827,8 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
     from .fake_context import FakeContext
 
     class _ClosingText(FakeContext):
-        def generate(self, start_pos, max_generated_tokens, stop, out=None, **kw):
-            generated = yield from super().generate(start_pos, max_generated_tokens, stop,
+        def generate(self, start_pos, max_generated_tokens, out=None, **kw):
+            generated = yield from super().generate(start_pos, max_generated_tokens,
                                                     out=out, **kw)
             # Two tokens of the closing were decoded and leave the reply again.
             self.cache += [ord("<"), ord("|")]

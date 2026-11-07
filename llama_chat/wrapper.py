@@ -25,10 +25,10 @@ from typing import Generic, TypeVar
 
 from .call_parsing import parse_calls
 from .config import Config, Sampling
-from .context import GenerationAccumulator, KVContext, _stop_hit
+from .context import GenerationAccumulator, KVContext
 from .messages import Message, MessageTable, n_newest_that_fit
-from .reasoning import (AnswerOpening, ThoughtFilter, begins_in_thought, reply_header,
-                        turn_end_test)
+from .reply_text import (AnswerOpening, AnswerStops, ThoughtFilter, begins_in_thought,
+                         reply_header, turn_end_test)
 from .cache_context import CACHE_CONTEXT, ensure_answers
 from .tokenizing import tokenize_message, tokenize_pieces
 from .resolved_template import ResolvedTemplate, written_between
@@ -1219,20 +1219,15 @@ class ChatWrapper:
         generated = GenerationAccumulator()
         tags = self._template.reasoning
         thought = ThoughtFilter(tags, begins_in_thought(tags, decoded)) if tags else None
-        # Where a thought is filtered out, stop strings are matched against the
-        # answer here rather than against the whole text by the context.
+        # Stop strings are matched against the answer only, after the thought
+        # and any header for another reader are taken out.
         opening = AnswerOpening(self._formatter.answer_opening(),
                                 reply_header(self._formatter.answer_opening(), tags))
-        answer_stops = stops if thought else []
-        answer = _AnswerStops(answer_stops)
+        answer = AnswerStops(stops)
         pieces = self._context.generate(
-            gen_start, max(0, min(cap, budget)), [] if thought else stops,
-            out=generated, cancel=cancel,
-            tool_tokens=self._template.tool_tokens if allow_tools else None,
+            gen_start, max(0, min(cap, budget)), out=generated, cancel=cancel,
             sampling=sampling, ends_turn=self._turn_end_test(thought),
-            call_texts=self._template.call_texts if allow_tools else None,
-            turn_end_text=self._template.turn_end_text,
-            call_opens_as_text=self._template.call_opens_as_text)
+            boundary=self._template.call_boundary(allow_tools))
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
@@ -1638,48 +1633,6 @@ class ChatWrapper:
 def _is_user(item) -> bool:
     """Whether a ``begin`` history item is a user turn."""
     return not isinstance(item, ToolTurn) and item[0] == "user"
-
-
-class _AnswerStops:
-    """Collects an answer as it streams, ending it at the earliest stop string.
-
-    Text that could still begin a stop string is held back until it is known
-    not to. Without stop strings everything passes at once.
-    """
-
-    def __init__(self, stops: list[str]) -> None:
-        self._stops = [s for s in stops if s]
-        self._hold = max((len(s) for s in self._stops), default=1) - 1
-        self._held = ""
-        self.text = ""
-        self.stopped = False
-
-    def feed(self, piece: str) -> str:
-        """The part of ``piece`` that is certainly answer, possibly empty."""
-        if not self._stops:
-            self.text += piece
-            return piece
-        self._held += piece
-        hit = _stop_hit(self._held, self._stops)
-        if hit is not None:
-            self.stopped = True
-            return self._pass(self._held[:hit], "")
-        cut = max(0, len(self._held) - self._hold)
-        return self._pass(self._held[:cut], self._held[cut:])
-
-    def flush(self, last: str = "") -> str:
-        """Everything still held, with ``last`` appended, once the answer has ended."""
-        if not self._stops:
-            return self.feed(last)
-        shown = self.feed(last)
-        if self.stopped:
-            return shown
-        return shown + self._pass(self._held, "")
-
-    def _pass(self, shown: str, held: str) -> str:
-        self._held = held
-        self.text += shown
-        return shown
 
 
 def _shared_prefix_length(a: list[int], b: list[int]) -> int:

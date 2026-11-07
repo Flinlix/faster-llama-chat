@@ -1,4 +1,4 @@
-"""Telling a reply's thought from its answer while the reply streams."""
+"""A reply's text as it streams: its thought, a header meant for another reader, and stop strings."""
 
 from __future__ import annotations
 
@@ -187,3 +187,60 @@ def turn_end_test(turn_end: int, turn_end_text: str, reasoning: Reasoning | None
 def begins_in_thought(reasoning: Reasoning, decoded: str) -> bool:
     """Whether generation after ``decoded`` starts inside a thought."""
     return decoded.rstrip().endswith(reasoning.thought_open.strip())
+
+
+def earliest(text: str, needles: list[str], search_from: int = 0) -> int | None:
+    """Where the earliest of ``needles`` begins in ``text``, or ``None``.
+
+    ``search_from`` skips text already known to begin none of them.
+    """
+    found: int | None = None
+    for needle in needles:
+        if not needle:
+            continue
+        at = text.find(needle, search_from)
+        if at != -1 and (found is None or at < found):
+            found = at
+    return found
+
+
+class AnswerStops:
+    """Collects an answer as it streams, ending it at the earliest stop string.
+
+    Text that could still begin a stop string is held back until it is known
+    not to. Without stop strings everything passes at once.
+    """
+
+    def __init__(self, stops: list[str]) -> None:
+        self._stops = [s for s in stops if s]
+        self._hold = max((len(s) for s in self._stops), default=1) - 1
+        self._held = ""
+        self.text = ""
+        self.stopped = False
+
+    def feed(self, piece: str) -> str:
+        """The part of ``piece`` that is certainly answer, possibly empty."""
+        if not self._stops:
+            self.text += piece
+            return piece
+        self._held += piece
+        hit = earliest(self._held, self._stops)
+        if hit is not None:
+            self.stopped = True
+            return self._pass(self._held[:hit], "")
+        cut = max(0, len(self._held) - self._hold)
+        return self._pass(self._held[:cut], self._held[cut:])
+
+    def flush(self, last: str = "") -> str:
+        """Everything still held, with ``last`` appended, once the answer has ended."""
+        if not self._stops:
+            return self.feed(last)
+        shown = self.feed(last)
+        if self.stopped:
+            return shown
+        return shown + self._pass(self._held, "")
+
+    def _pass(self, shown: str, held: str) -> str:
+        self._held = held
+        self.text += shown
+        return shown

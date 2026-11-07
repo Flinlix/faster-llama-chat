@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from .cache_context import MODEL_READER, ensure_answers
 from .tokenizing import tokenize_message
-from .template import (CallBody, Reasoning, TemplateFormatter,
+from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
 from .template_extract import (call_id, extract_call_body, extract_call_close_text,
                                extract_call_separator, extract_named_twice_opening,
@@ -712,6 +712,18 @@ class ResolvedTemplate:
     def call_opens_as_text(self) -> bool:
         """Whether a call opens with plain text, which counts only after a tag or at the start."""
         return self._call_opens_as_text
+
+    def call_boundary(self, allow_tools: bool = True) -> CallBoundary:
+        """Where a generated call opens and closes and where a reply ends, as generation reads it.
+
+        Without ``allow_tools`` no call is recognized, so the reply is certain
+        to close.
+        """
+        return CallBoundary(
+            tool_tokens=self._tool_tokens if allow_tools else None,
+            call_texts=self._call_texts if allow_tools else None,
+            opens_as_text=self._call_opens_as_text,
+            turn_end_text=self._turn_end_text)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
         """Whether a plain-text opening begins with text of a reply's own opening.

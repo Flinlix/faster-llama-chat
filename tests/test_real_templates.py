@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from llama_chat.call_parsing import parse_calls
-from llama_chat.reasoning import ThoughtFilter, begins_in_thought
+from llama_chat.reply_text import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
@@ -103,7 +103,7 @@ def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
 @pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer", "qwen-3.6"])
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     """gpt-oss closes a thought with the tag that also closes its turn."""
-    from llama_chat.reasoning import AnswerOpening, turn_end_test
+    from llama_chat.reply_text import AnswerOpening, turn_end_test
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
     context = TagTokenizingContext(fixture)
     template = ResolvedTemplate(context)
@@ -255,7 +255,7 @@ def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
 @pytest.mark.parametrize("path", [p for p in _TEMPLATES if p.stem in ("gpt-oss", "muse-glimmer")],
                          ids=lambda p: p.stem)
 def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
-    from llama_chat.reasoning import AnswerOpening
+    from llama_chat.reply_text import AnswerOpening
     _fixture, _context, template = _load(path)
     formatter = template.formatter()
     assert formatter.answer_opening()

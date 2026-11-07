@@ -6,6 +6,26 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class CallBoundary:
+    """Where a generated call opens and closes, and where a reply ends in text.
+
+    Attributes:
+        tool_tokens: The ``(open, close)`` tokens bracketing a call, where a
+            call has tags of its own.
+        call_texts: The ``(open, close)`` texts around a call, where it has none.
+        opens_as_text: Whether the opening of ``call_texts`` is plain text,
+            which opens a call only at the reply's start or right after a tag.
+        turn_end_text: Text that ends a reply where generated, removed from the
+            reply again and never yielded.
+    """
+
+    tool_tokens: tuple[int, int] | None = None
+    call_texts: tuple[str, str] | None = None
+    opens_as_text: bool = False
+    turn_end_text: str | None = None
+
+
+@dataclass(frozen=True)
 class CallBody:
     """How a model spells a function name and its arguments between the tags.
 

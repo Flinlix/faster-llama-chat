@@ -176,9 +176,8 @@ class ConversationContext(TagTokenizingContext):
         assert self.can_shift and len(self.cache) == ev.old_total
         del self.cache[ev.remove_start:ev.remove_end]
 
-    def generate(self, start_pos, max_generated_tokens, stop, out=None, cancel=None,
-                 tool_tokens=None, sampling=None, ends_turn=None, call_texts=None,
-                 turn_end_text=None, call_opens_as_text=False):
+    def generate(self, start_pos, max_generated_tokens, out=None, cancel=None,
+                 sampling=None, ends_turn=None, boundary=None):
         assert start_pos == len(self.cache)
         if self.before_reply is not None:
             self.before_reply(self.text_of(self.cache))

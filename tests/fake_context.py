@@ -26,7 +26,7 @@ from dataclasses import fields, replace
 
 from llama_chat.context import GenerationAccumulator
 from llama_chat.messages import Eviction
-from llama_chat.template import TemplateFragments
+from llama_chat.template import CallBoundary, TemplateFragments
 
 BOS = -1
 
@@ -272,11 +272,9 @@ class FakeContext:
                 out.append(EMPTY_THOUGHT)
         return "".join(out)
 
-    def generate(self, start_pos: int, max_generated_tokens: int, stop: list[str],
-                 out: GenerationAccumulator | None = None, cancel=None,
-                 tool_tokens: tuple[int, int] | None = None, sampling=None,
-                 ends_turn=None, call_texts=None, turn_end_text=None,
-                 call_opens_as_text=False):
+    def generate(self, start_pos: int, max_generated_tokens: int,
+                 out: GenerationAccumulator | None = None, cancel=None, sampling=None,
+                 ends_turn=None, boundary: CallBoundary = CallBoundary()):
         """Stream generated tokens, mirroring KVContext.generate's contract.
 
         Each token is appended to the cache *before* its text delta is yielded,
@@ -288,8 +286,8 @@ class FakeContext:
         assert start_pos == len(self.cache)
         self.samplings.append(sampling)
         generated = out if out is not None else GenerationAccumulator()
-        if tool_tokens is not None and self.call_script:
-            yield from self._generate_call(generated, tool_tokens)
+        if boundary.tool_tokens is not None and self.call_script:
+            yield from self._generate_call(generated, boundary.tool_tokens)
             return generated
         n = max(0, min(self._gen_tokens, max_generated_tokens))
         for i in range(n):
