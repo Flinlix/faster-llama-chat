@@ -892,9 +892,9 @@ thought of its own.
 
 A template that turns reasoning on through the variable chat templates share
 for it, `enable_thinking`, and that marks a thought in a reply, is read for
-both: what the system turn and the generation prompt are with reasoning on and
-off, and the tags around a thought. `ChatWrapper.can_reason` says whether that
-succeeded.
+both: what the system turn, its opening and its closing, and the generation
+prompt are with reasoning on and off, and the tags around a thought.
+`ChatWrapper.can_reason` says whether that succeeded.
 
 Reasoning belongs to the conversation, because a template may switch it in the
 system turn, so it is chosen per `begin`:

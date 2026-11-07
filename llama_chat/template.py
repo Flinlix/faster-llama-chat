@@ -128,8 +128,10 @@ class Reasoning:
         thought_open, thought_close: Around the thought a reply opens with.
         system_prefix: Opens the system turn of a conversation that reasons,
             in place of the fragments' own. ``None`` where the template's
-            switch changes more of the conversation than its openings, so
+            switch changes more of the conversation than its system turn, so
             reasoning cannot be turned on as the template does.
+        system_suffix: Closes that system turn, in place of the fragments'
+            own, where the switch changes it too. ``None`` where it does not.
         generation_prompt: The whole generation prompt of a reply that
             reasons, the assistant tag included.
         past_keeps_thought: Whether the template writes a past reply's thought
@@ -143,6 +145,7 @@ class Reasoning:
     thought_close: str
     system_prefix: str | None
     generation_prompt: str
+    system_suffix: str | None = None
     past_keeps_thought: bool = False
     assistant_prefix: str | None = None
 
@@ -167,7 +170,10 @@ class TemplateFormatter:
         Raises:
             ValueError: If ``role`` is not one this template has tags for.
         """
-        fragments = self._fragments
+        fragments, reasoning = self._fragments, self._reasoning
+        if role == "system" and reasoning:
+            return reasoning.system_prefix, (reasoning.system_suffix if reasoning.system_suffix
+                                             is not None else fragments.system_suffix)
         if role == "system":
             return fragments.system_prefix, fragments.system_suffix
         if role == "user":
@@ -184,8 +190,6 @@ class TemplateFormatter:
         tags with it on. See the README, "Special tokens in message content".
         """
         prefix, suffix = self._parts(role)
-        if role == "system" and self._reasoning:
-            prefix = self._reasoning.system_prefix
         if role == "assistant" and self._reasoning and self._reasoning.assistant_prefix is not None:
             prefix = self._reasoning.assistant_prefix
         return prefix, self._fragments.content(role, text), suffix
