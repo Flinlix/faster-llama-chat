@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from typing import Callable
 
 from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
@@ -176,7 +177,7 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         may, in every reply.
     """
     render = _refusing(render)
-    found = _thought_tags(render, fragments, tool_calls)
+    found = _thought_tags(render, fragments, tool_calls) or _empty_thought_tags(render)
     if found is None:
         return None
     tags, reply_with_thought = found
@@ -224,8 +225,25 @@ def _past_reply_opening(render: Render, fragments: TemplateFragments) -> str | N
     return None if prefix == fragments.assistant_prefix else prefix
 
 
-def _past_keeps_thought(render: Render, reply: dict) -> bool:
+def _empty_thought_tags(render: Render) -> tuple[tuple[str, str], None] | None:
+    """The tags of the empty thought only the generation prompt without reasoning ends in.
+
+    Read where a template writes no thought into a reply: two tags with nothing
+    but whitespace between them, which the prompt with reasoning lacks.
+    """
+    off, on = _prompt_added(render, False), _prompt_added(render, True)
+    if off is None or on is None or off == on:
+        return None
+    found = re.search(r"(<[^<>\s]+>)\s*(<[^<>\s]+>)\s*$", off)
+    if found is None or found.group(1) == found.group(2) or on.endswith(found.group(0)):
+        return None
+    return found.groups(), None
+
+
+def _past_keeps_thought(render: Render, reply: dict | None) -> bool:
     """Whether ``reply``, a reply holding a thought, keeps it once a later turn follows."""
+    if reply is None:
+        return False
     rendered = render([
         {"role": "user", "content": _USER},
         {key: value for key, value in reply.items() if key != "tool_calls"}

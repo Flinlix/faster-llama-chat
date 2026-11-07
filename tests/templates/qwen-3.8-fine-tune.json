@@ -1,0 +1,8 @@
+{
+ "source": "OBLITERATUS/Qwen3.8-27B-OBLITERATED",
+ "eos_token": "<|im_end|>",
+ "marks_thought": true,
+ "can_reason": true,
+ "calls_tools": false,
+ "chat_template": "{%- for message in messages %}\n{%- if message.role == \"system\" %}\n<|im_start|>system\n{{ message.content }}<|im_end|>\n{%- elif message.role == \"user\" %}\n<|im_start|>user\n{{ message.content }}<|im_end|>\n{%- elif message.role == \"assistant\" %}\n<|im_start|>assistant\n{{ message.content }}<|im_end|>\n{%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n<|im_start|>assistant\n{%- if enable_thinking is defined and enable_thinking is true %}\n<think>\n{%- else %}\n<think>\n\n</think>\n\n{%- endif %}\n{%- endif %}\n"
+}
