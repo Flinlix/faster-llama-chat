@@ -65,7 +65,8 @@ class FakeContext:
                  closes_turn_before_next: bool = False,
                  can_reason: bool = False,
                  user_join: str | None = "",
-                 keeps_thought: bool = False) -> None:
+                 keeps_thought: bool = False,
+                 declares_in_newest_turn: bool = False) -> None:
         self.cache: list[int] = []
         # Call bodies this fake model will produce, one per generation.
         self.call_script: list[str] = []
@@ -84,6 +85,9 @@ class FakeContext:
         # Whether a past reply keeps its thought, where one that called no tool
         # otherwise loses it.
         self._keeps_thought = keeps_thought
+        # Whether tools are declared right before the newest user turn rather
+        # than in the system turn.
+        self._declares_in_newest_turn = declares_in_newest_turn
         if can_reason:
             self._fragments = replace(
                 fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
@@ -192,7 +196,8 @@ class FakeContext:
             return None             # content blocks: a shape this template refuses
         renders_reasoning = self._can_reason and reasoning is not False
         out, turn_open, previous = [], False, None
-        for m in messages:
+        newest_user = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=None)
+        for index, m in enumerate(messages):
             role = "model" if m["role"] == "assistant" else m["role"]
             if role == previous == "user":
                 if self._user_join is None:
@@ -211,6 +216,9 @@ class FakeContext:
                 out.append("<turn|>\n")
                 turn_open = False
                 continue
+            if self._declares_in_newest_turn and index == newest_user:
+                for declared in tools or ():
+                    out.append(f"<decl>{declared['function']['name']}</decl>")
             out.append(f"<|turn>{role}\n")
             if role == "system" and renders_reasoning:
                 out.append(THINK_ON)
@@ -223,7 +231,7 @@ class FakeContext:
                     f"{k}:{_fake_value(v)}" for k, v in fn["arguments"].items())
                 out.append(f"<call>{CALL_LEAD_IN}{fn['name']}{{{body}}}</call>")
             out.append(m["content"].strip())   # these fragments trim
-            if role == "system":
+            if role == "system" and not self._declares_in_newest_turn:
                 for declared in tools or ():
                     out.append(f"<decl>{declared['function']['name']}</decl>")
             if calls:

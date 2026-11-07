@@ -229,8 +229,6 @@ _TOOLS_REFUSED = {
     "llama-3.2": "plain text",          # a call is bare JSON, without a tag
     "deepseek-v4.1": "plain text",      # its call tag is not one this stand-in pairs
     "minimax-m3.1": "call format",      # each key's name is in its own closing tag
-    "ministral-2410": "declares no tools",  # declared before the newest user turn only
-    "mistral-small-3.2": "declares no tools",  # declared before the newest user turn only
     "gpt-oss": "plain text",            # the call is named in the turn's header, before any tag
     "muse-glimmer": "plain text",       # the call is named in the turn's header, before any tag
     "minicpm-5": "plain text",          # a call is bare JSON, without a tag
@@ -260,12 +258,17 @@ def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
     template.ensure_tools_usable()
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", "sunny"), "It is sunny."))
-    head, tail = template.system_turn_declaring([_TOOL])
     formatter = template.formatter()
-    ours = (head + "Be brief." + tail + formatter.fragment("user", "Weather?")
+    prompt = "Be brief." if template.has_system_turn else ""
+    if template.declares_in_newest_turn:
+        head, _, tail = formatter.parts("system", "") if prompt else (template.preamble(), "", "")
+        moving = template.newest_turn_declaration([_TOOL])
+    else:
+        (head, tail), moving = template.system_turn_declaring([_TOOL]), ""
+    ours = (head + prompt + tail + formatter.fragment("user", "Weather?")
             + "".join(text for text, _ in template.past_tool_turn(turn))
-            + formatter.fragment("user", "Thanks.") + formatter.generation_prompt())
-    messages = [{"role": "system", "content": "Be brief."},
+            + moving + formatter.fragment("user", "Thanks.") + formatter.generation_prompt())
+    messages = [*([{"role": "system", "content": prompt}] if prompt else []),
                 {"role": "user", "content": "Weather?"},
                 {"role": "assistant", "content": "", "tool_calls": [
                     {"id": "call00000", "type": "function", "function": {
@@ -331,8 +334,11 @@ def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
     context = _TaggedContext(fixture)
     template = ResolvedTemplate(context)
     formatter = template.formatter()
-    ours = (template.preamble_declaring([_TOOL]) + formatter.fragment("user", "Weather?")
-            + formatter.generation_prompt())
+    if template.declares_in_newest_turn:
+        opening = template.preamble() + template.newest_turn_declaration([_TOOL])
+    else:
+        opening = template.preamble_declaring([_TOOL])
+    ours = opening + formatter.fragment("user", "Weather?") + formatter.generation_prompt()
     rendered = context.render_with_model_template(
         [{"role": "user", "content": "Weather?"}], tools=[_TOOL.as_declaration()],
         generation_prompt=True, reasoning=False)

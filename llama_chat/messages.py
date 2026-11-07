@@ -165,6 +165,20 @@ class MessageTable:
             msg.pos_end = msg.pos_start + msg.n_tokens
             self._assert_invariants()
 
+    def replace_at(self, index: int, token_ids: list[int],
+                   declares: tuple[str, ...]) -> None:
+        """Give the message at ``index`` other tokens and declarations; the later ones move.
+
+        Raises:
+            IndexError: If there is no message at ``index``.
+        """
+        with self._lock:
+            msg = self._messages[index]
+            msg.token_ids = list(token_ids)
+            msg.declares = declares
+            self._renumber()
+            self._assert_invariants()
+
     def remove_last(self) -> None:
         """Drop the newest message.
 

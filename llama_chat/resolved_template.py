@@ -128,6 +128,7 @@ class ResolvedTemplate:
         if self._turn_end_text is not None:
             self._turn_end_token = None
         self._call_body = self._resolve_call_body()
+        self._declares_in_newest_turn = self._resolve_declares_in_newest_turn()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
         self._reasoning = self._resolve_reasoning()
@@ -276,6 +277,44 @@ class ResolvedTemplate:
         if self._call_texts is not None:
             return self._call_texts[1]
         return self._context.token_text(self._tool_tokens[1])
+
+    @property
+    def declares_in_newest_turn(self) -> bool:
+        """Whether tools are declared right before the newest user turn, moving on with it."""
+        return self._declares_in_newest_turn
+
+    def newest_turn_declaration(self, specs: list[ToolSpec], reasoning: bool = False) -> str:
+        """What the template writes right before the newest user turn for ``specs``.
+
+        The same in a conversation's first turn as in a later one.
+
+        Raises:
+            ValueError: If the template does not declare them there.
+        """
+        tools = [spec.as_declaration() for spec in specs]
+        found = set()
+        for messages in ([{"role": "user", "content": _NEXT}],
+                         [{"role": "user", "content": _PROMPT}, *_EXCHANGE[:1],
+                          {"role": "user", "content": _NEXT}]):
+            rendered = self._context.render_with_model_template(
+                messages, tools=tools, reasoning=reasoning)
+            plain = self._context.render_with_model_template(messages, reasoning=reasoning)
+            newest = self._fragments.user_prefix + _NEXT
+            if rendered is None or plain is None or newest not in rendered \
+                    or newest not in plain:
+                raise ValueError("this model's template declares no tools before "
+                                 "the newest user turn")
+            declared_head, _, declared_tail = rendered.rpartition(newest)
+            plain_head, _, plain_tail = plain.rpartition(newest)
+            if declared_tail != plain_tail or not declared_head.startswith(plain_head) \
+                    or declared_head == plain_head:
+                raise ValueError("this model's template declares no tools before "
+                                 "the newest user turn")
+            found.add(declared_head[len(plain_head):])
+        if len(found) != 1:
+            raise ValueError("this model's template declares tools before the "
+                             "newest user turn differently in a later turn")
+        return found.pop()
 
     def system_turn_declaring(self, specs: list[ToolSpec],
                               reasoning: bool = False) -> tuple[str, str]:
@@ -717,8 +756,25 @@ class ResolvedTemplate:
         """
         if not self._calls_marked:
             return False
+        if self._declares_in_newest_turn:
+            return True
         try:
             self._declaration_turn([_PROBE_TOOL])
+            return True
+        except Exception:
+            return False
+
+    def _resolve_declares_in_newest_turn(self) -> bool:
+        """Whether the template declares tools right before the newest user turn alone."""
+        if not self._calls_marked:
+            return False
+        try:
+            self._declaration_turn([_PROBE_TOOL])
+            return False            # the system turn holds them
+        except Exception:
+            pass
+        try:
+            self.newest_turn_declaration([_PROBE_TOOL])
             return True
         except Exception:
             return False

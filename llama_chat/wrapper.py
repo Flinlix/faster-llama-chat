@@ -209,6 +209,7 @@ class ChatWrapper:
             raise
         self._table = MessageTable()
         self._registry = None
+        self._moving_specs: list[ToolSpec] = []   # declared before the newest user turn
         # An open turn and the calls owing a result are not the same thing: the
         # last result empties the list while the turn is still open.
         self._reply_open = False
@@ -287,7 +288,9 @@ class ChatWrapper:
             if specs:
                 self._template.ensure_tools_usable()
             formatter = self._template.formatter(reasoning)
-            sys_tokens = self._system_tokens(formatter, system_prompt, specs, reasoning)
+            moving = bool(specs) and self._template.declares_in_newest_turn
+            sys_tokens = self._system_tokens(formatter, system_prompt,
+                                             None if moving else specs, reasoning)
             if len(sys_tokens) > self._config.evict_above_tokens:
                 raise ValueError(
                     f"system prompt needs {len(sys_tokens)} tokens but the "
@@ -305,6 +308,11 @@ class ChatWrapper:
             for i in range(len(messages) - 1):
                 if _is_user(messages[i]) and _is_user(messages[i + 1]):
                     hist_tokens[i] = hist_tokens[i] + self._join_tokens()
+            carrier = next((i for i in range(len(messages) - 1, -1, -1)
+                            if _is_user(messages[i])), None) if moving else None
+            if carrier is not None:
+                held, _ = self._moving_declaration(specs, reasoning)
+                hist_tokens[carrier] = held + hist_tokens[carrier]
 
             kept = n_newest_that_fit(
                 [len(t) for t in hist_tokens], len(sys_tokens),
@@ -321,6 +329,7 @@ class ChatWrapper:
             self._reply_open = False
             self._pending_calls = []
             self._registry = registry
+            self._moving_specs = list(specs) if moving else []
             self._formatter, self._reasoning = formatter, reasoning
             if not self._warmed:
                 self._context.warmup()
@@ -337,10 +346,11 @@ class ChatWrapper:
             self._table.append(Message(
                 "system", system_prompt, sys_tokens,
                 declares=tuple(spec.name for spec in specs or [])))
-            for item, toks in zip(kept_messages, kept_tokens):
+            for i, (item, toks) in enumerate(zip(kept_messages, kept_tokens), keep_from):
                 role, text = (("assistant", item.text) if isinstance(item, ToolTurn)
                               else item)
-                self._table.append(Message(role, text, toks))
+                declares = (tuple(spec.name for spec in specs) if i == carrier else ())
+                self._table.append(Message(role, text, toks, declares=declares))
             self._reply_open = ends_open
             self._turn_ends_with = hist[-1][1] if ends_open else ""
             self._begun = True
@@ -374,24 +384,29 @@ class ChatWrapper:
                     prefix, self._template.fragments.content(role, text), suffix)
             else:
                 tokens = self._fragment_tokens(role, text)
+            held, declares = (self._moving_declaration(self._moving_specs, self._reasoning)
+                              if role == "user" else ([], ()))
             join_tokens = self._user_turn_join_tokens(role)
             # Checked against the best case before anything is evicted, so a
             # rejected message cannot destroy history it would never fit beside.
             floor = self._table.messages[0].n_tokens if self._table.has_system else 0
             tokens = self._fit_or_raise(
-                tokens, budget=self._config.evict_above_tokens - floor,
+                tokens, budget=self._config.evict_above_tokens - floor - len(held),
                 description="injected message", role=role,
             )
+            tokens = held + tokens
             evicted = self._evict_until(
                 lambda: self._fits(len(join_tokens) + len(tokens), arriving_messages=1))
             if evicted:             # the turn it would have closed may be gone
                 join_tokens = self._user_turn_join_tokens(role)
+            if held:
+                self._move_declaration_on()
 
             self._context.prefill(join_tokens + tokens, start_pos=self._table.total,
                                   want_logits=False)
             if join_tokens:
                 self._table.extend_last(join_tokens)
-            self._table.append(Message(role, text, tokens))
+            self._table.append(Message(role, text, tokens, declares=declares))
             if self._on_message:
                 self._on_message(role, text)
             self._save_rest()
@@ -765,6 +780,8 @@ class ChatWrapper:
 
         Costs one prefill, and writes an ordinary message, so this declaration
         can be evicted later. One that has to survive belongs in ``begin``.
+        Where the template declares tools right before the newest user turn,
+        they join what that turn carries instead, decoded again from there.
 
         Args:
             tools: What to declare: a whole
@@ -790,7 +807,7 @@ class ChatWrapper:
         """
         with self._lock:
             self._ensure_open()
-            known = self._declared_names()
+            known = self._declared_names() | {spec.name for spec in self._moving_specs}
             specs = [spec for spec in _all_specs(tools) or []
                      if spec.name not in known]
             if not specs:
@@ -798,6 +815,8 @@ class ChatWrapper:
             self._ensure_begun("declare into")
             self._ensure_no_open_reply("declare tools")
             self._template.ensure_tools_usable()
+            if self._template.declares_in_newest_turn:
+                return self._declare_in_newest_turn(specs)
             block = self._template.declaration_block(specs)
             prefix, suffix = self._later_system_tags()
             # The model's own tags, so it joins the suffix and tokenizes
@@ -1074,6 +1093,7 @@ class ChatWrapper:
             self._ensure_begun("generate into")
             self._ensure_no_open_reply("start a request")
             join_tokens = self._user_turn_join_tokens("user")
+            held, declares = self._moving_declaration(self._moving_specs, self._reasoning)
             user_tokens = self._fragment_tokens("user", text)
             open_tokens = self._context.tokenize(self._formatter.generation_prompt(), add_special=False)
             close_tokens = self._context.tokenize(self._formatter.assistant_close(), add_special=False)
@@ -1082,9 +1102,10 @@ class ChatWrapper:
             user_tokens = self._fit_or_raise(
                 user_tokens,
                 budget=(self._config.context_size - len(open_tokens) - len(close_tokens)
-                        - len(join_tokens) - self._table.total),
+                        - len(join_tokens) - len(held) - self._table.total),
                 description="request", role="user",
             )
+            user_tokens = held + user_tokens
             n_prompt = len(join_tokens) + len(user_tokens) + len(open_tokens)
 
             # Refused before the cache is mutated.
@@ -1098,11 +1119,12 @@ class ChatWrapper:
 
             # One decode for the request text and the assistant-open tag: the
             # backend flags logits on the final token only either way.
+            self._move_declaration_on()
             self._context.prefill(join_tokens + user_tokens + open_tokens,
                               start_pos=self._table.total, want_logits=True)
             if join_tokens:
                 self._table.extend_last(join_tokens)
-            self._table.append(Message("user", text, user_tokens))
+            self._table.append(Message("user", text, user_tokens, declares=declares))
             if self._on_message:
                 self._on_message("user", text)
 
@@ -1565,6 +1587,58 @@ class ChatWrapper:
             f"{description} needs {len(tokens)} tokens but only {budget} fit "
             f"(oversize_policy='{self._config.oversize_policy}')"
         )
+
+    def _moving_declaration(self, specs: list[ToolSpec],
+                            reasoning: bool) -> tuple[list[int], tuple[str, ...]]:
+        """The declarations of ``specs`` a user turn opens with, where they move with the newest."""
+        if not specs:
+            return [], ()
+        text = self._template.newest_turn_declaration(specs, reasoning)
+        return (self._context.tokenize(text, add_special=False),
+                tuple(spec.name for spec in specs))
+
+    def _declaration_carrier(self) -> int | None:
+        """Where the user turn that carries moving declarations sits in the table."""
+        return next((i for i, msg in enumerate(self._table.messages)
+                     if msg.role == "user" and msg.declares), None)
+
+    def _move_declaration_on(self) -> None:
+        """Take the declarations off the turn that carries them, for a newer turn to carry."""
+        index = self._declaration_carrier()
+        if index is None:
+            return
+        msg = self._table.messages[index]
+        held, _ = self._moving_declaration(
+            [spec for spec in self._moving_specs if spec.name in msg.declares], self._reasoning)
+        assert msg.token_ids[:len(held)] == held, "a carrier opens with its declarations"
+        self._rewrite_from(index, msg.token_ids[len(held):], ())
+
+    def _declare_in_newest_turn(self, specs: list[ToolSpec]) -> int:
+        """Add ``specs`` to the declarations the newest user turn carries.
+
+        Returns:
+            How many messages were evicted, which is none.
+        """
+        self._moving_specs += specs
+        index = self._declaration_carrier()
+        if index is not None:
+            msg = self._table.messages[index]
+            old, _ = self._moving_declaration(
+                [spec for spec in self._moving_specs if spec.name in msg.declares],
+                self._reasoning)
+            new, declares = self._moving_declaration(self._moving_specs, self._reasoning)
+            self._rewrite_from(index, new + msg.token_ids[len(old):], declares)
+        self._save_rest()
+        return 0
+
+    def _rewrite_from(self, index: int, tokens: list[int], declares: tuple[str, ...]) -> None:
+        """Give the message at ``index`` ``tokens``, decoding it and every later one again."""
+        start = self._table.messages[index].pos_start
+        self._table.replace_at(index, tokens, declares)
+        if self._cut_back_to(start) is None:
+            return                  # rebuilt from the table, the new tokens with it
+        rest = [t for msg in self._table.messages[index:] for t in msg.token_ids]
+        self._context.prefill(rest, start_pos=start, want_logits=False)
 
     def _user_turn_join_tokens(self, role: str) -> list[int]:
         """What the newest message gains before a ``role`` message is written after it.

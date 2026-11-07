@@ -515,10 +515,8 @@ for delta in chat.reply_with_tools_stream("What is the weather in Munich?"):
 `chat.can_call_tools` says whether the model can do this at all, and answers
 for the whole chain: the template has to describe a call, it has to render the
 declarations that tell the model a tool exists, the argument spelling has to
-have been recovered, and there has to be a block to answer a call in. A template
-that declares tools just before the newest user turn moves them with every
-turn, which a conversation kept as it grows cannot follow, so it counts as
-rendering none. A call the library writes itself, in a probe or in a past turn
+have been recovered, and there has to be a block to answer a call in. A call
+the library writes itself, in a probe or in a past turn
 rebuilt from its text, carries an id of nine letters and digits, a shape the
 templates that check an id's shape accept. All four
 are settled at construction, so the answer costs nothing to ask and is available
@@ -601,6 +599,14 @@ writes nothing at all. What counts as already declared is read off the messages
 carrying it, so once a declaration message is evicted its tools count as
 unknown again and the next `declare_unknown_tools` writes them back. The system
 turn is never evicted, so what `begin` declared is known for good.
+
+A template may instead declare tools right before the newest user turn, so that
+they move on with every turn. Then the newest user
+turn carries the declarations, and when a newer one comes, the turn that
+carried them is decoded again without them, together with everything after it;
+what lies before it stays in the cache. A history handed to `begin` carries them
+on its last user turn, and `declare_unknown_tools` adds to what the carrier
+holds, decoding again from there.
 
 Two consequences worth knowing. A declaration added later is an ordinary message
 and can be evicted from a long conversation, so one that has to survive belongs

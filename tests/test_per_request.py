@@ -752,3 +752,54 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
     assert newest.token_ids == w._context.tokenize(
         w._formatter.generation_prompt() + _THOUGHTFUL + w._formatter.assistant_close())
     _assert_consistent(w, fake)
+
+
+# ----- tools declared before the newest user turn ----------------------------
+def _moving(**fake_kw):
+    fake = FakeContext(calls_tools=True, declares_in_newest_turn=True, **fake_kw)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    return w, fake
+
+
+def _as_rendered_with(w, fake, specs):
+    """The cache equals the template's render of the conversation, ``specs`` declared."""
+    _assert_consistent(w, fake)
+    rendered = fake.render_with_model_template(
+        [{"role": r["role"], "content": r["text"]} for r in w.snapshot()],
+        tools=[spec.as_declaration() for spec in specs])
+    assert "".join(chr(t) for t in fake.cache if t >= 0) == rendered
+
+
+@pytest.mark.parametrize("can_shift", [True, False])
+def test_declarations_move_on_with_the_newest_user_turn(can_shift):
+    w, fake = _moving(can_shift=can_shift)
+    specs = [ToolSpec("uhr", "", {})]
+    assert w._template.declares_in_newest_turn and w.can_call_tools
+    w.begin("s", tools=specs)
+    _as_rendered_with(w, fake, specs)
+    for text in ("eins", "zwei", "drei"):
+        w.reply_without_tools(text)
+        _as_rendered_with(w, fake, specs)
+    w.inject("vier")
+    _as_rendered_with(w, fake, specs)
+
+
+def test_a_history_carries_its_declarations_on_its_last_user_turn():
+    w, fake = _moving()
+    specs = [ToolSpec("uhr", "", {})]
+    w.begin("s", [("user", "eins"), ("assistant", "zwei"), ("user", "drei"),
+                  ("assistant", "vier")], tools=specs)
+    _as_rendered_with(w, fake, specs)
+    w.reply_without_tools("fünf")
+    _as_rendered_with(w, fake, specs)
+
+
+def test_a_later_declaration_joins_the_newest_user_turn():
+    w, fake = _moving()
+    w.begin("s", tools=[ToolSpec("uhr", "", {})])
+    w.reply_without_tools("eins")
+    assert w.declare_unknown_tools([ToolSpec("wetter", "", {})]) == 0
+    both = [ToolSpec("uhr", "", {}), ToolSpec("wetter", "", {})]
+    _as_rendered_with(w, fake, both)
+    w.reply_without_tools("zwei")
+    _as_rendered_with(w, fake, both)
