@@ -436,12 +436,9 @@ class ResolvedTemplate:
             body = body.rpartition(frags.user_prefix + _NEXT)[0]
         pieces, at = [], 0
         for found in _FIELD_PATTERN.finditer(body):
-            text = fields[int(found.group(1))]
-            quoted = (body[found.start() - 1:found.start()] == '"'
-                      and body[found.end():found.end() + 1] == '"')
             pieces.append((body[at:found.start()], False))
-            pieces.append((json.dumps(text, ensure_ascii=False)[1:-1] if quoted else text,
-                           True))
+            pieces.append((written_between(fields[int(found.group(1))], body[:found.start()],
+                                           body[found.end():]), True))
             at = found.end()
         pieces.append((body[at:], False))
         return [(text, own) for text, own in pieces if text]
@@ -907,3 +904,13 @@ def _marked(value, field):
     if isinstance(value, list):
         return [_marked(v, field) for v in value]
     return value
+
+
+def written_between(text: str, before: str, after: str) -> str:
+    """``text`` as a template writes it between ``before`` and ``after``.
+
+    Between quotes it is a JSON string, so escaped as one; elsewhere as it is.
+    """
+    if before.endswith('"') and after.startswith('"'):
+        return json.dumps(text, ensure_ascii=False)[1:-1]
+    return text

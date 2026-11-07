@@ -356,3 +356,29 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
     shown = "".join(opening.feed(thought.feed(c)) for c in generated)
     shown += opening.feed(thought.flush()) + opening.flush()
     assert shown == "Antwort."
+
+
+_QUOTED_RESULT = '{"weather": "sunny"}\nsecond line'
+
+
+@pytest.mark.parametrize("path", [p for p in _tool_templates() if p.stem not in _TOOLS_REFUSED],
+                         ids=lambda p: p.stem)
+def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
+    from llama_chat.resolved_template import written_between
+    context = _TaggedContext(json.loads(path.read_text()))
+    template = ResolvedTemplate(context)
+    turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
+                     ToolResult("get_weather", _QUOTED_RESULT), "Sunny."))
+    past = "".join(text for text, _ in template.past_tool_turn(turn))
+    rendered = context.render_with_model_template(
+        [{"role": "user", "content": "Weather?"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": "call00000", "type": "function", "function": {
+                 "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
+         {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
+          "content": _QUOTED_RESULT},
+         {"role": "assistant", "content": "Sunny."}, {"role": "user", "content": "Thanks."}],
+        reasoning=False)
+    assert past in rendered
+    prefix, suffix = template.result_wrapping("get_weather")
+    assert prefix + written_between(_QUOTED_RESULT, prefix, suffix) in rendered

@@ -29,7 +29,7 @@ from .config import Config, Sampling
 from .context import GenerationAccumulator, KVContext, _stop_hit
 from .messages import Message, MessageTable, n_newest_that_fit
 from .reasoning import AnswerOpening, ThoughtFilter, begins_in_thought, turn_end_test
-from .resolved_template import ResolvedTemplate, ensure_context_answers
+from .resolved_template import ResolvedTemplate, written_between, ensure_context_answers
 from .template import TemplateFragments, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn, result_text
 
@@ -655,8 +655,7 @@ class ChatWrapper:
             name, self._reasoning, batch=batch, index=index)
         tags = self._context.tokenize(prefix, add_special=False, parse_special=True)
         closing = self._context.tokenize(suffix, add_special=False, parse_special=True)
-        body = self._context.tokenize(result_text(result), add_special=False,
-                                      parse_special=False)
+        text = written_between(result_text(result), prefix, suffix)
         # The body is clipped to fit; the tags never are. See the README,
         # "Tool calling".
         free = self._config.context_size - self._table.total
@@ -667,7 +666,11 @@ class ChatWrapper:
                 f"left in the context; this turn cannot be continued, "
                 f"start a new conversation with begin()")
         room = free - len(tags) - len(closing) - self._config.min_reply_tokens
-        tokens = tags + body[:max(0, room)] + closing
+        # Whole, as a render of the conversation tokenizes it; clipped where it must be.
+        tokens = self._context.tokenize_fragment(prefix, text, suffix)
+        if len(tokens) > room + len(tags) + len(closing):
+            body = self._context.tokenize(text, add_special=False, parse_special=False)
+            tokens = tags + body[:max(0, room)] + closing
         self._context.prefill(tokens, start_pos=self._table.total, want_logits=True)
         self._table.extend_last(tokens)
         self._turn_ends_with = suffix

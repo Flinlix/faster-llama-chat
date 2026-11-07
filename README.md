@@ -876,7 +876,8 @@ calls in one turn, the text that ends a call is what a call with an argument and
 one without both end with. A plain-text opening that begins with the words of a
 reply's own opening, such as a role name in its header, is refused: a model may
 write its header in another order than its template does, so the template
-cannot tell how a call it generates begins.
+cannot tell how a call it generates begins. A result the template writes between
+quotes is escaped as a JSON string, as the template escapes it.
 
 The argument spelling is recovered from four probes that differ only in their
 content, so each delimiter is found by comparing the results. A body that is
