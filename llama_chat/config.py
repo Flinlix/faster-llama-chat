@@ -107,8 +107,8 @@ class Config:
     kv_cache_on_gpu: bool = False
     decode_threads: int | None = None
     prefill_threads: int | None = None
-    max_batch_tokens: int = 512
-    flash_attention: bool = False
+    max_batch_tokens: int = 2048
+    flash_attention: bool = True
     kv_cache_type: str | None = None
 
     # Logging

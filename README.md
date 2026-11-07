@@ -443,8 +443,8 @@ one; passing both raises `TypeError`. Everything but `model_path` has a default.
 | `kv_cache_on_gpu` | `False` | `True` puts the KV cache in VRAM (llama.cpp's own default, fastest generation); `False` keeps it in host RAM, freeing a large amount of VRAM on long contexts. Ignored on a CPU-only build |
 | `decode_threads` | `None` | CPU threads for decode; `None` lets llama.cpp decide |
 | `prefill_threads` | `None` | CPU threads for prefill; `None` means as many as `decode_threads`. See the note under [Quick start](#quick-start) |
-| `max_batch_tokens` | `512` | Most tokens handed to one `llama_decode`; a longer prefill is chunked to this |
-| `flash_attention` | `False` | Set explicitly either way, so a build's own default never overrides the caller. Required by a quantized KV cache |
+| `max_batch_tokens` | `2048` | Most tokens handed to one `llama_decode`; a longer prefill is chunked to this |
+| `flash_attention` | `True` | Set explicitly either way, so a build's own default never overrides the caller. Required by a quantized KV cache |
 | `kv_cache_type` | `None` | KV-cache quantization: `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"` or `"q4_0"`, or `None` for llama.cpp's own default. Every one but `"f16"` is quantized and requires `flash_attention=True`; `"f16"` is the default type spelled out, and needs nothing |
 
 **Logging**

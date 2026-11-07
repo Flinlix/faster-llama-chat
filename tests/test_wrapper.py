@@ -747,7 +747,7 @@ def test_every_quantized_kv_cache_type_requires_flash_attention(quantized):
 
 def test_kv_cache_type_requires_flash_attn():
     with pytest.raises(ValueError, match="flash_attention"):
-        Config(kv_cache_type="q8_0")
+        Config(kv_cache_type="q8_0", flash_attention=False)
 
 
 def test_kv_cache_type_rejects_unknown_name():
