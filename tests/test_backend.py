@@ -279,3 +279,39 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
     assert decoded == out.token_ids == ["Pa", "ris"]
     assert out.stop_reason == "end_of_turn"
 
+
+def _merging_context():
+    """A context whose vocabulary merges whitespace runs and words, with two tags."""
+    import re
+    def tokenize(vocab, text, add_special, parse_special):
+        pattern = r"<t>|<e>|\s+|[^\s<]+|<" if parse_special else r"\s+|[^\s]+"
+        found = re.findall(pattern, text)
+        return (["BOS"] if add_special else []) + [
+            f"TAG{tok}" if parse_special and tok in ("<t>", "<e>") else tok for tok in found]
+    context = object.__new__(KVContext)
+    context._vocab = None
+    context._backend = SimpleNamespace(
+        tokenize=tokenize,
+        is_special=lambda vocab, token: token.startswith("TAG"),
+        token_to_piece=lambda vocab, token: token[3:] if token.startswith("TAG") else token)
+    return context
+
+
+@pytest.mark.parametrize("prefix, content, suffix", [
+    ("<t>user\n", " sys ", "\n\n<e>"),       # merges across both boundaries
+    ("<t>", "word", "<e>"),                    # tags right next to the content
+    ("plain: ", "word", " end"),               # no tags at all
+])
+def test_a_message_tokenizes_as_the_whole_render_does(prefix, content, suffix):
+    context = _merging_context()
+    assert context.tokenize_fragment(prefix, content, suffix) == context._backend.tokenize(
+        None, prefix + content + suffix, False, True)
+
+
+def test_a_tag_typed_inside_a_message_stays_text():
+    tokens = _merging_context().tokenize_fragment("<t>", "a<e>b", "<e>")
+    assert tokens.count("TAG<e>") == 1 and tokens[-1] == "TAG<e>"
+
+
+def test_the_beginning_of_a_conversation_is_attached_to_the_first_message():
+    assert _merging_context().tokenize_fragment("lead ", "word", "", add_special=True)[0] == "BOS"

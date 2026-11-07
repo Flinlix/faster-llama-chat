@@ -150,13 +150,42 @@ class KVContext:
                           add_special: bool = False) -> list[int]:
         """Tokenize one templated message: tags special-on, content special-off.
 
-        ``add_special`` attaches BOS to the leading ``prefix`` only. See the
-        README, "Special tokens in message content".
+        The plain text between the content and the nearest tag on either side
+        is tokenized with the content, as a render of the whole conversation
+        tokenizes it. ``add_special`` attaches BOS to the leading ``prefix``
+        only. See the README, "Special tokens in message content".
         """
-        toks = self.tokenize(prefix, add_special=add_special, parse_special=True)
-        toks += self.tokenize(content, add_special=False, parse_special=False)
-        toks += self.tokenize(suffix, add_special=False, parse_special=True)
+        lead_at, trail_at = self._last_tag_end(prefix), self._first_tag_start(suffix)
+        if lead_at is None or trail_at is None:
+            lead_at, trail_at = len(prefix), 0
+        toks = self.tokenize(prefix[:lead_at], add_special=add_special, parse_special=True)
+        toks += self.tokenize(prefix[lead_at:] + content + suffix[:trail_at],
+                              add_special=False, parse_special=False)
+        toks += self.tokenize(suffix[trail_at:], add_special=False, parse_special=True)
         return toks
+
+    def _tags_in(self, text: str) -> list[str]:
+        """The texts of the model's own tags in ``text``, in order."""
+        return [self.token_text(token) for token in self.tokenize(text, parse_special=True)
+                if self._backend.is_special(self._vocab, token)]
+
+    def _last_tag_end(self, text: str) -> int | None:
+        """Where the last tag in ``text`` ends: 0 without one, ``None`` where one is not found."""
+        end = 0
+        for tag in self._tags_in(text):
+            start = text.find(tag, end)
+            if not tag or start < 0:
+                return None
+            end = start + len(tag)
+        return end
+
+    def _first_tag_start(self, text: str) -> int | None:
+        """Where the first tag in ``text`` starts: its end without one, ``None`` where not found."""
+        tags = self._tags_in(text)
+        if not tags:
+            return len(text)
+        start = text.find(tags[0])
+        return start if tags[0] and start >= 0 else None
 
     def tokenizes_to_tags(self, text: str) -> bool:
         """Whether ``text`` tokenizes into the model's own tags and nothing else.

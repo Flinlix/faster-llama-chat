@@ -1069,6 +1069,12 @@ tokens. This closes token-level prompt injection (forging turn boundaries) at
 the source: it is robust even on models that mis-type a control-looking token
 in the GGUF or on llama.cpp builds lacking the `llama_vocab_is_control` symbol.
 
+The plain text a template writes between a tag and the content, such as a
+newline, is tokenized together with the content, also with special-token
+parsing off, because a tokenizer may merge across that boundary: a system
+prompt ending in a space followed by a blank line yields `' \n\n'` as one token
+in a render of the whole conversation, and the cache has to hold the same.
+
 ## Verify
 
 ```bash
