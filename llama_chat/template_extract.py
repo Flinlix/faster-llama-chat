@@ -225,6 +225,32 @@ def _past_reply_opening(render: Render, fragments: TemplateFragments) -> str | N
     return None if prefix == fragments.assistant_prefix else prefix
 
 
+def extract_removed_thought(render: Render, fragments: TemplateFragments,
+                            tags: tuple[str, ...]) -> Reasoning | None:
+    """The thought of a template that writes none but removes one from a past reply.
+
+    Tried with each of the model's tags: the closing tag is the one after which
+    a past reply keeps only its answer, and the opening tag the one of the same
+    name without the slash. Such a template has no switch, so the model may
+    reason in every reply.
+    """
+    render = _refusing(render)
+    known = set(tags)
+    for close in tags:
+        opening = "<" + close[2:]
+        if not close.startswith("</") or opening not in known:
+            continue
+        rendered = render([{"role": "user", "content": _USER},
+                           {"role": "assistant", "content": _THOUGHT + close + _ASSISTANT},
+                           {"role": "user", "content": _USER2}], reasoning=False)
+        if rendered is not None and _ASSISTANT in rendered and _THOUGHT not in rendered:
+            return Reasoning(thought_open=opening, thought_close=close,
+                             system_prefix=fragments.system_prefix,
+                             generation_prompt=fragments.generation_prompt
+                             or fragments.assistant_prefix)
+    return None
+
+
 def _empty_thought_tags(render: Render) -> tuple[tuple[str, str], None] | None:
     """The tags of the empty thought only the generation prompt without reasoning ends in.
 

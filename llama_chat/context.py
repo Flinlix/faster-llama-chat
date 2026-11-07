@@ -119,6 +119,7 @@ class KVContext:
             self._sampler = self._build_sampler(config)
             self._model_formatter = self._build_model_formatter()
             self._reasoning_switch = self._build_reasoning_switch()
+            self._tags = None
         except BaseException:
             # Free whatever was created before the failure.
             if self._sampler is not None:
@@ -197,6 +198,14 @@ class KVContext:
         """
         toks = self.tokenize(text, add_special=False)
         return bool(toks) and all(self._backend.is_special(self._vocab, t) for t in toks)
+
+    def tags(self) -> tuple[str, ...]:
+        """The texts of every one of the model's own tags, read once."""
+        if self._tags is None:
+            self._tags = tuple(self.token_text(token)
+                               for token in range(self._backend.n_tokens(self._vocab))
+                               if self._backend.is_special(self._vocab, token))
+        return self._tags
 
     def first_special_token(self, text: str) -> int | None:
         """The first of the model's own tags in ``text``, or ``None``.

@@ -119,9 +119,7 @@ class Backend:
         # Releases differ in whether the vocabulary size comes first; one that
         # asks for it must also say it.
         self._penalties_take_vocab_size = _parameter_count(self._init_penalties) == 5
-        self._vocab_n_tokens = (
-            _required_symbol("llama_vocab_n_tokens", "llama_n_vocab")
-            if self._penalties_take_vocab_size else None)
+        self._vocab_n_tokens = _required_symbol("llama_vocab_n_tokens", "llama_n_vocab")
         self._init_greedy = _required_symbol("llama_sampler_init_greedy")
         self._init_top_k = _required_symbol("llama_sampler_init_top_k")
         self._init_top_p = _required_symbol("llama_sampler_init_top_p")
@@ -298,6 +296,10 @@ class Backend:
     def token_eos(self, vocab) -> int:
         """The end-of-sequence token id, negative where the model has none."""
         return self._token_eos(vocab)
+
+    def n_tokens(self, vocab) -> int:
+        """How many tokens the vocabulary holds."""
+        return int(self._vocab_n_tokens(vocab))
 
     def is_special(self, vocab, token: int) -> bool:
         """Whether the tokenizer resolves ``token`` as a tag rather than as text."""

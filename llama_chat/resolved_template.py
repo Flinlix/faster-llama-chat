@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from .template import (CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments)
 from .template_extract import (call_id, extract_call_body, extract_call_separator,
-                               extract_reasoning, extract_tool_fragments)
+                               extract_reasoning, extract_removed_thought,
+                               extract_tool_fragments)
 from .tools import ToolCall, ToolResult, ToolSpec, ToolTurn, result_text
 
 # Where the prompt and a tool result go in a render. Neither contains the
@@ -554,8 +555,11 @@ class ResolvedTemplate:
         """What turns this model's reasoning on, recovered from its template."""
         if not hasattr(self._context, "render_with_model_template"):
             return None
-        return extract_reasoning(self._context.render_with_model_template,
-                                 self._fragments, self._tool_calls)
+        render = self._context.render_with_model_template
+        found = extract_reasoning(render, self._fragments, self._tool_calls)
+        if found is None and hasattr(self._context, "tags"):
+            found = extract_removed_thought(render, self._fragments, self._context.tags())
+        return found
 
     def _resolve_tool_tokens(self) -> tuple[tuple[int, int] | None, str]:
         """This model's call tags as tokens, and the text it writes before a name."""

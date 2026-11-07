@@ -28,6 +28,7 @@ class _TemplateContext:
 
     def __init__(self, fixture: dict) -> None:
         backend = Backend()
+        self._template = fixture["chat_template"]
         self._renderers = {prompted: backend.template_renderer(
             fixture["chat_template"], fixture["eos_token"], prompted)
             for prompted in (False, True)}
@@ -45,6 +46,11 @@ class _TemplateContext:
 
     def tokenize(self, text, add_special=False, parse_special=True):
         return [ord(c) for c in text]
+
+    def tags(self):
+        # As a vocabulary holds them: every tag-shaped text, and what each closer closes.
+        found = set(_TAG.findall(self._template))
+        return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
 
     def tokenize_fragment(self, prefix, content, suffix, add_special=False):
         return self.tokenize(prefix + content + suffix)
