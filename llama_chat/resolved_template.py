@@ -116,6 +116,10 @@ class ResolvedTemplate:
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
         self._reasoning = self._resolve_reasoning()
+        if self._reasoning is not None:
+            tags = (self._reasoning.thought_open.strip(), self._reasoning.thought_close.strip())
+            self._boundary = dataclasses.replace(self._boundary,
+                                                 thought_tags=tuple(t for t in tags if t))
         self._check_fragments_match_model()
         self._preambles = {reasoning: self._resolve_preamble(reasoning)
                            for reasoning in (False, True)}

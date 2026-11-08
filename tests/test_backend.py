@@ -426,6 +426,33 @@ def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
     assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded
 
 
+def test_a_tag_a_call_follows_is_the_calls_and_never_shown():
+    """Llama 3.2 writes a tag of its own before a call its template opens with plain text."""
+    context, decoded = _plain_context(["Sure.", "<|python_tag|>", '{"name": "', "clock", '"}', "<|eot|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(
+        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+    assert out.stop_reason == "tool_call" and shown == out.text == "Sure."
+
+
+def test_a_tag_no_call_follows_stays_the_replys():
+    context, _ = _plain_context(["<|python_tag|>", "hi", "<end>"])
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(
+        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+    assert out.stop_reason == "end_of_turn" and shown == "<|python_tag|>hi"
+
+
+def test_a_thoughts_closing_tag_a_call_follows_stays_the_replys():
+    context, _ = _plain_context(["Hm.", "<|/think|>", '{"name": "', "clock", '"}', "<|eot|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(
+        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True, thought_tags=("<|/think|>",))))
+    assert out.stop_reason == "tool_call" and shown == "Hm.<|/think|>"
+
+
 def test_with_calls_off_a_tag_in_a_reply_that_ends_in_text_is_shown():
     context, _ = _plain_context(["Hi", "<|start|>", "there", "<|end|>", "<end>"])
     out = GenerationAccumulator()

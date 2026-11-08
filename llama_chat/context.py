@@ -382,6 +382,7 @@ class KVContext:
         starts = []            # where each token's text begins in ``visible``
         ended_at_text = False
         marks_from = 0         # where the next search for a mark begins
+        held_tag = None        # where a tag a call may follow begins and ends, not shown yet
 
         for _ in range(max(0, max_generated_tokens)):
             if cancel is not None and cancel.is_set():
@@ -432,6 +433,9 @@ class KVContext:
             elif marks:
                 starts.append(len(visible))
                 visible.append(piece)
+                if call_opens_as_text and self._backend.is_special(self._vocab, tok) \
+                        and piece.strip() not in boundary.thought_tags:
+                    held_tag = (starts[-1], len(visible))
                 mark_at = earliest(visible.text, marks,
                                    search_from=max(visible.emitted, marks_from))
                 while (mark_at is not None and call_opens_as_text
@@ -443,6 +447,8 @@ class KVContext:
                     upto = mark_at
                     if open_text is not None and visible.text.startswith(open_text, mark_at):
                         call = [visible.text[mark_at + len(open_text):]]
+                        if held_tag is not None:
+                            upto = held_tag[0]          # the tag the call follows is the call's
                     else:
                         generated.stop_reason = "end_of_turn"
                         ended_at_text = True
@@ -455,6 +461,12 @@ class KVContext:
                             pos = start_pos + kept
                 else:
                     upto = len(visible) - (held_chars - 1)
+                if held_tag is not None and call is None:
+                    following = visible.text[held_tag[1]:].lstrip()
+                    if following and not open_text.startswith(following[:len(open_text)]):
+                        held_tag = None             # no call follows it: it is the reply's
+                    else:
+                        upto = min(upto, held_tag[0])
             else:
                 visible.append(piece)
                 upto = len(visible)

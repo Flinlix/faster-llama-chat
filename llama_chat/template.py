@@ -21,6 +21,8 @@ class CallBoundary:
             reply again and never yielded.
         withheld_tokens: Tokens never drawn, such as the one that opens a
             call where calls are withheld.
+        thought_tags: The tags around a thought, which stay the reply's where
+            a call follows them.
     """
 
     tool_tokens: tuple[int, int] | None = None
@@ -28,6 +30,7 @@ class CallBoundary:
     opens_as_text: bool = False
     turn_end_text: str | None = None
     withheld_tokens: tuple[int, ...] = ()
+    thought_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
