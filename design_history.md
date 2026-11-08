@@ -1034,13 +1034,13 @@ once with one of 3,517 tokens.
 | 3,517 | with the kept state | 2 | 5 | 27,463 |
 | 3,517 | new eviction target | 6 | 8 | 34,222 |
 
-The wait for the first word was 55 to 58 ms on every turn of every run,
-evicting turns included: before the first word only the question's 185 tokens
-are decoded, and the history kept by an eviction is decoded after the
+The median wait for the first word was 55 to 57 ms in every run, and 56 to
+58 ms on every turn that evicted: before the first word only the question's
+185 tokens are decoded, and the history kept by an eviction is decoded after the
 previous reply. The kept state cuts the total by 9% and 39%. The new target
 keeps more history, so evictions come sooner and the total rises by 13% and
 25% over the kept state alone. That cost falls after a reply, never before the
 first word, so the default `evict_to_fraction_without_shift` of 0.5 stays; 0.4
-would bring the short system turn back to the old total and history. Whether
-a question asked while that decode is still running waits for it was not
-measured.
+would, by calculation, bring the short system turn back to the old total and
+history. Whether a question asked while that decode is still running waits
+for it was not measured.
