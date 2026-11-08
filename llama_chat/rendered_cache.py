@@ -75,8 +75,6 @@ class _ConversationState:
     kept: list[_Kept] = field(default_factory=list)
     # Where each placed kept turn starts in the cache.
     kept_at: dict[_Kept, int] = field(default_factory=dict)
-    # The calls still to be answered, with their ids.
-    owed: list[tuple[ToolCall, str]] = field(default_factory=list)
     n_calls: int = 0
     splices: bool = False
     windows: bool = False                 # whether windows of the conversation stand for its render
@@ -155,12 +153,12 @@ class RenderedCache:
     @property
     def reply_open(self) -> bool:
         """Whether the newest turn called tools and is not closed: a call is owed a result, or a result waits for the reply after it."""
-        return bool(self._state.owed) or self._ends_on_result()
+        return bool(self.owed_calls) or self._ends_on_result()
 
     @property
     def owed_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first."""
-        return [call for call, _ in self._state.owed]
+        return [call for call, _ in _unanswered(self._state.messages)]
 
     @property
     def total_tokens(self) -> int:
@@ -194,7 +192,7 @@ class RenderedCache:
             self._renders.clear()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history)
-            self._state.kept, self._state.kept_at, self._state.owed = [], {}, []
+            self._state.kept, self._state.kept_at = [], {}
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
@@ -204,8 +202,8 @@ class RenderedCache:
                 raise self._refused_history(self._state.messages)
             self._state.splices = splices(self._render, system)
             ensure_history_stays_written(self._render, system)
-            self._state.windows = self._state.splices and windows_are_exact(self._render, system,
-                                                                self._tag_from)
+            self._state.windows = self._state.splices and windows_are_exact(
+                self._render, system, self._tag_from)
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
                          or self._length(self._state.messages, False) > limit):
                 raise ContextOverflowError(
@@ -214,7 +212,6 @@ class RenderedCache:
                     "context_size/evict_above_fraction")
             self._drop_while_over(limit, generation_prompt=False)
             self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
-            self._state.owed = _unanswered(self._state.messages)
             self._state.begun = False
             self._memory.reset()
             self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
@@ -222,7 +219,7 @@ class RenderedCache:
             self._memory.pin(self._opening_length())
             if self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 self._sync(self._prompted())
-            elif self._state.owed:
+            elif self.owed_calls:
                 self._sync(self._tokens(self._state.messages, generation_prompt=False))
             else:
                 self._render_ahead()
@@ -419,8 +416,8 @@ class RenderedCache:
         """
         if not self._state.begun:
             raise ValueError("no conversation to generate into; call begin() first")
-        if self._state.owed:
-            raise ValueError(f"{len(self._state.owed)} call(s) still owe a result")
+        if owed := self.owed_calls:
+            raise ValueError(f"{len(owed)} call(s) still owe a result")
         asked, self._state.asked = self._state.asked, None
         if asked and self._state.messages[-1] is not asked[0]:
             asked = None
@@ -473,9 +470,7 @@ class RenderedCache:
         if thought:
             message["reasoning_content"] = thought
         if asked:
-            ids = [c["id"] for c in message["tool_calls"]]
             self._state.n_calls += len(asked)
-            self._state.owed = list(zip(asked, ids))
         # A reply with neither text nor call has nothing to place its end by: a turn
         # kept so far stays kept up to its call, and the rest is the template's.
         if (called or resumed) and (answer or asked):
@@ -485,7 +480,7 @@ class RenderedCache:
                 self._state.kept.remove(open_turn)
                 start, first = min(start, self._state.kept_at.pop(open_turn)), open_turn.first
             self._state.kept.append(_Kept(tuple(self._memory.tokens[start:]), first, message,
-                                    bool(asked)))
+                                          bool(asked)))
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
         self._publish()
@@ -535,9 +530,8 @@ class RenderedCache:
         newest = {k: v for k, v in self._state.messages[-1].items() if k != "tool_calls"}
         old = self._state.messages[-1]
         self._state.messages[-1] = newest
-        self._state.owed = []
         self._state.kept = [_Kept(k.tokens, newest if k.first is old else k.first, newest, False)
-                      if k.last is old else k for k in self._state.kept]
+                            if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
         self._publish()
 
@@ -555,9 +549,10 @@ class RenderedCache:
             if not self._state.begun:
                 raise ValueError("no conversation to answer a call in; call begin() first")
             name = call.name if isinstance(call, ToolCall) else call
-            if not self._state.owed:
+            waiting = _unanswered(self._state.messages)
+            if not waiting:
                 raise ValueError("no tool call is waiting for a result")
-            owed, owed_id = self._state.owed[0]
+            owed, owed_id = waiting[0]
             if name != owed.name or (isinstance(call, ToolCall) and call != owed):
                 raise ValueError(
                     f"the waiting call is {owed.name!r}, not {name!r}; results "
@@ -568,7 +563,6 @@ class RenderedCache:
                     None, self._render(self._state.messages, False)):
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
-            self._state.owed.pop(0)
             room = self._max_prompt_tokens
             self._state.messages.append({**message, "content": ""})
             if len(self._prompted()) > room:
@@ -577,7 +571,7 @@ class RenderedCache:
                     "of the context; this turn cannot be continued, start a new conversation "
                     "with begin()")
             self._state.messages[-1] = {**message, "content": self._clipped(message, text, room)}
-            if not self._state.owed:
+            if not self.owed_calls:
                 self._sync(self._fitting_prompt())
 
     def _clipped(self, message: dict, text: str, room: int) -> str:
@@ -776,8 +770,8 @@ class RenderedCache:
             if len(before) <= self._config.context_size:
                 self._sync(before, logits=False, dropped=dropped)
                 self._state.ahead = _Ahead(rest=split.pieces(run),
-                                     after_question=split.text[split.contents[-1][1]:],
-                                     n_messages=len(self._state.messages))
+                                           after_question=split.text[split.contents[-1][1]:],
+                                           n_messages=len(self._state.messages))
                 return
         # The next question will be rendered when it comes.
         if self._state.messages and self._split(self._state.messages, False) is None:
@@ -886,7 +880,7 @@ class RenderedCache:
             return False
         self._memory.remove(same, end)
         self._state.kept_at = {k: at - (end - same) if at >= end else at
-                         for k, at in self._state.kept_at.items()}
+                               for k, at in self._state.kept_at.items()}
         return list(self._memory.tokens[:len(wanted)]) == wanted
 
     def _head(self, through: int) -> list[int] | None:
@@ -1162,7 +1156,7 @@ class RenderedCache:
         gone = self._state.messages[first:following]
         del self._state.messages[first:following]
         self._state.kept = [k for k in self._state.kept
-                      if not any(k.first is m or k.last is m for m in gone)]
+                            if not any(k.first is m or k.last is m for m in gone)]
         return True
 
     # ----- one action at a time --------------------------------------------------------
