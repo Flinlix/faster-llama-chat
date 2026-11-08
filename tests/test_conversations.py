@@ -153,7 +153,7 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
         run.chat.reply().finish()
     else:
         run.chat.reply(QUESTIONS[3]).finish()
-    assert run.chat._conversation._splices
+    assert run.chat._conversation._state.splices
     # The question, the run of template text it joins, and what the template writes after it.
     assert run.decoded[-1] - waited <= (len(QUESTIONS[3]) + len(run.chat._conversation.prompt_text)
                                         + 40)
@@ -337,7 +337,7 @@ def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):
     run = _Run(stem, context_size=int((len(probe.context.cache) + 4 * exchange) / 0.75),
                can_shift=can_shift)
     run.begin()
-    assert run.chat._conversation._windows
+    assert run.chat._conversation._state.windows
     window = (1 if run.system else 0) + 5         # the system turn, two exchanges, the stand-in
     whole = 0
     for question in QUESTIONS:
@@ -454,7 +454,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
 def test_a_template_whose_windows_differ_from_its_whole_render_is_rendered_whole():
     run = _Run("fallback")
     run.begin()
-    assert not run.chat._conversation._windows
+    assert not run.chat._conversation._state.windows
 
 
 def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so():

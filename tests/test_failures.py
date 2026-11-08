@@ -160,7 +160,7 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
     cancel = threading.Event()
     cancel.set()
     assert w.reply(cancel=cancel).finish().text == ""
-    assert not w.reply_open and w._conversation._kept
+    assert not w.reply_open and w._conversation._state.kept
     assert "fn:clock{}" in held_text(w)
     w.reply("und jetzt?").finish()
     assert "fn:clock{}" in held_text(w)

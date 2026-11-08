@@ -31,15 +31,15 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
         messages, text_of = conversation.messages, wrapper._context.text_of
         tools = [spec.as_declaration() for spec in conversation.tools] or None
         renders = held_renders(wrapper._template, messages, tools,
-                               reasoning=conversation._reasoning)
+                               reasoning=conversation._state.reasoning)
         held = text_of(wrapper._context.cache)
-        kept = [text_of(k.tokens) for k in conversation._kept]
+        kept = [text_of(k.tokens) for k in conversation._state.kept]
         assert any(_reads_as(held, render, kept) for render in renders), \
             "the cache does not read as the template renders the conversation"
         for render in (False, True):
             split = conversation._split(messages, render)
             if split is not None:
-                for kept_turn in conversation._kept:
+                for kept_turn in conversation._state.kept:
                     placed = conversation._place(kept_turn, messages, split)
                     assert placed is not None, "a turn kept as generated was lost"
                     assert placed[0] < placed[1], \

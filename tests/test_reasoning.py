@@ -64,7 +64,7 @@ def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     assert rendered_prompt(fake, reasoning=False).endswith(EMPTY_THOUGHT)
     # Generated after the empty thought, kept without it, as a past reply is.
     assert held[0].endswith(EMPTY_THOUGHT)
-    assert rendered_reply(fake, "Antwort.", w._conversation._reasoning) in held_text(w)
+    assert rendered_reply(fake, "Antwort.", w._conversation._state.reasoning) in held_text(w)
     assert EMPTY_THOUGHT not in held_text(w)
     assert_consistent(w, fake)
 
@@ -76,7 +76,7 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     assert stream.reply.text == "Antwort."
     assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
     assert rows(w)[-1]["text"] == "Antwort."
-    assert rendered_reply(fake, "Antwort.", w._conversation._reasoning) in held_text(w)
+    assert rendered_reply(fake, "Antwort.", w._conversation._state.reasoning) in held_text(w)
     assert "Denken" not in held_text(w)
     assert_consistent(w, fake)
     w.reply("weiter").finish()
@@ -119,7 +119,7 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w, fake = reasoning_wrapper()
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
-    assert rendered_reply(fake, "Ant", w._conversation._reasoning) in held_text(w)
+    assert rendered_reply(fake, "Ant", w._conversation._state.reasoning) in held_text(w)
     assert "Antwort" not in held_text(w)
     assert_consistent(w, fake)
 
