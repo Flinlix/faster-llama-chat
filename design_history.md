@@ -992,3 +992,25 @@ Found while testing it: where the system turn takes most of
 `evict_to_fraction_without_shift` of the threshold, an eviction on such a
 cache drops the whole history. Measuring the fraction from the room after the
 system turn instead is offered as a decision.
+
+## 2026-11-08: Where an eviction stops on a cache that cannot shift (218A)
+
+`evict_to_fraction_without_shift` was a fraction of the whole threshold. Where
+the system prompt and its declarations took more than that fraction, an
+eviction on such a cache dropped the whole history: on the model-free
+templates that render whole, a system turn of about two thirds of the
+threshold left no exchange after the first eviction. The fraction is now of the
+room after the system turn: an eviction stops at the system turn plus that
+fraction of what is left, so some history is kept however long the system
+turn. Where declarations move with the newest question, as Mistral's do, they
+are not counted in the system turn, so a declaration block larger than half
+that room can still take the history with it.
+
+Found while doing so: where a template refuses a system message alone, the
+system turn was measured as what a system message adds to a render of a
+question. Mistral Small 3.2 writes a long system prompt of its own where none
+is given, so a shorter one given measured negative (about -2,000 tokens with
+tools declared), and in the test of the kept state an eviction dropped all
+history. The measure is now at
+least the tokens before the oldest question, the same count the state kept on
+such a cache is saved at.

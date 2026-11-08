@@ -62,9 +62,10 @@ class Config:
             oldest messages are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
         evict_to_fraction_without_shift: Where the cache cannot shift, the
-            fraction of ``evict_above_tokens`` an eviction brings the
-            conversation down to, so that the cache is decoded again only
-            every few turns rather than every turn. Must be in ``(0, 1]``.
+            fraction of the room under ``evict_above_tokens`` after the
+            system turn that an eviction brings the history down to, so that
+            the cache is decoded again only every few turns rather than every
+            turn. Must be in ``(0, 1]``.
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.

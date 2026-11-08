@@ -268,6 +268,27 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
 
 
 @pytest.mark.parametrize("stem", _EVERY)
+def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the_system_turn(stem):
+    probe = _Run(stem)
+    probe.system = probe.system and "Be brief. " + "Keep to the facts and leave out what was not asked. " * 12
+    probe.begin()
+    system = probe.chat._conversation._system_length()
+    exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
+    # A threshold the system turn takes more than half of, with room for six exchanges.
+    run = _Run(stem, context_size=int((system + 6 * exchange) / 0.75), can_shift=False)
+    run.system = probe.system
+    run.begin()
+    questions = [f"{q} Round {n}." for n in range(3) for q in QUESTIONS]
+    run.answers = ANSWERS * 3
+    run.context._replies = _as_generated(run.chat, run.answers, False)
+    evicted = 0
+    for question in questions:
+        evicted += run.chat.reply(question).finish().n_evicted_messages
+        assert any(role == "user" for role, _ in run.chat.history())
+    assert evicted
+
+
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)
     run.begin()

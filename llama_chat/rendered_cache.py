@@ -1047,8 +1047,9 @@ class RenderedCache:
                          tokens_only: bool = False) -> bool:
         """Drop the oldest exchanges once the conversation renders longer than ``limit`` or holds too many; whether any went.
 
-        Where the cache cannot shift, they go until it is well below ``limit``,
-        so that the cache is decoded again only every few turns.
+        Where the cache cannot shift, they go until the history is well below
+        its room under ``limit``, so that the cache is decoded again only every
+        few turns.
 
         Args:
             tokens_only: Leave ``max_history_messages`` out, which may keep
@@ -1066,10 +1067,15 @@ class RenderedCache:
         return dropped
 
     def _drop_bound(self, limit: int) -> int:
-        """How far an eviction brings the conversation down once it is over ``limit``."""
+        """How far an eviction brings the conversation down once it is over ``limit``.
+
+        Where the cache cannot shift, the system turn and that fraction of the
+        room after it, so that history is kept however long the system turn.
+        """
         if self._context.can_shift:
             return limit
-        return int(limit * self._config.evict_to_fraction_without_shift)
+        system = min(self._system_length(), limit)
+        return system + int((limit - system) * self._config.evict_to_fraction_without_shift)
 
     def _too_many(self) -> bool:
         """Whether the history holds more items than ``max_history_messages``."""

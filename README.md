@@ -314,7 +314,7 @@ that request.
 |------|------|------|
 | `context_size` | `4096` | the hard limit in tokens |
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
-| `evict_to_fraction_without_shift` | `0.5` | where the cache cannot shift, the fraction of the eviction threshold an eviction brings the conversation down to, in `(0, 1]`, so that the cache is decoded again only every few turns |
+| `evict_to_fraction_without_shift` | `0.5` | where the cache cannot shift, the fraction of the room under the eviction threshold after the system prompt and its tools that an eviction brings the history down to, in `(0, 1]`, so that the cache is decoded again only every few turns, and some history is kept however long the system turn |
 | `max_history_messages` | `None` | a second eviction trigger: the most non-system messages kept; whole exchanges go, so fewer may stay |
 | `max_reply_tokens` | `1024` | cap per generation |
 | `min_reply_tokens` | `32` | refuse a request with `ContextOverflowError` when fewer would be left for the reply; `0` disables |
