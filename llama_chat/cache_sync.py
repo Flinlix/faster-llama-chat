@@ -5,6 +5,9 @@ from __future__ import annotations
 from .cache_context import CacheContext, Eviction, GenerationAccumulator
 from .template import common_prefix_length
 
+# Maps a token id to one character, so token lists search as strings.
+_TOKEN_OFFSET = 0x10000
+
 
 class CacheSync:
     """The tokens a cache should hold, and that cache brought to hold them.
@@ -136,8 +139,31 @@ class CacheSync:
                 raise
             self._end = pos
 
+    def hold(self, target: list[int], *, want_logits: bool = False,
+             find_dropped_stretch: bool = False, rest_at_cut: bool = False) -> None:
+        """Make the cache hold ``target``: a stretch it no longer holds removed, everything from the first difference decoded.
+
+        Args:
+            want_logits: A generation follows the decode at once.
+            find_dropped_stretch: The target may go on as the cache does after
+                a stretch it no longer holds; that stretch is searched for and
+                removed, the rest shifted, instead of decoded again.
+            rest_at_cut: Rest where the cache is cut, before the rest is
+                decoded, so that a cache that cannot cut can go back there.
+        """
+        same = common_prefix_length(self._tokens, target)
+        if find_dropped_stretch and same < len(self._tokens):
+            found = _dropped_stretch_end(self._tokens, target, same)
+            if found is not None:
+                self.remove(same, found)
+                same = common_prefix_length(self._tokens, target)
+        self.cut_to(same)
+        if rest_at_cut:
+            self.rest()
+        self.decode(target[same:], want_logits=want_logits)
+
     def replace(self, tokens: list[int]) -> None:
-        """Hold ``tokens`` instead, the cache brought to them before it is next used."""
+        """Hold ``tokens`` instead, as :meth:`hold` does without touching the cache, which is brought to them before it is next used."""
         if list(tokens) == self._tokens:
             return                      # nothing changed, the logits of the last decode included
         same = common_prefix_length(self._tokens, tokens)
@@ -261,3 +287,24 @@ class CacheSync:
         self._rest_states = [s for s in self._rest_states if s[0] <= pos]
         if self._pinned is not None and self._pinned[0] > pos:
             self._pinned = None
+
+
+def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int | None:
+    """Where ``held`` goes on as ``target`` does from ``start``, the stretch before it dropped; ``None`` where nowhere.
+
+    The longest run of at least eight tokens wins. A wrong one costs decoding
+    only: what differs after it is decoded again.
+    """
+    memory, wanted = _as_text(held), _as_text(target)
+    probe = wanted[start:start + 8]
+    best, best_length, at = None, len(probe) - 1, memory.find(probe, start + 1) if probe else -1
+    while at >= 0:
+        length = common_prefix_length(memory[at:], wanted[start:])
+        if length > best_length:
+            best, best_length = at, length
+        at = memory.find(probe, at + 1)
+    return best
+
+
+def _as_text(tokens) -> str:
+    return "".join(chr(token + _TOKEN_OFFSET) for token in tokens)

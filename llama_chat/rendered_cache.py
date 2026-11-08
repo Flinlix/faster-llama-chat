@@ -42,8 +42,6 @@ _UNREADABLE_RESULT = {"error": "unreadable_call",
                       "message": "the tool call failed: the call could not be read"}
 # Returned where a window cannot stand for the whole render.
 _WHOLE = object()
-# Maps a token id to one character, so token lists compare and search as strings.
-_TOKEN_OFFSET = 0x10000
 
 
 @dataclass(frozen=True, eq=False)
@@ -876,7 +874,7 @@ class RenderedCache:
         wanted = self._head(through=0)
         if wanted is None:
             return False
-        same = common_prefix_length(_as_text(held), _as_text(wanted))
+        same = common_prefix_length(held, wanted)
         end = len(held) - (len(wanted) - same)
         if end <= same or end > bound or held[end:] != wanted[same:]:
             return False
@@ -951,26 +949,18 @@ class RenderedCache:
 
     # ----- the cache against the target -----------------------------------------
     def _sync(self, target: list[int], *, logits: bool = True, dropped: bool = False) -> None:
-        """Make the cache hold ``target``: a stretch it no longer holds removed, everything from the first difference decoded.
+        """Make the cache hold ``target``.
 
         Args:
             logits: A generation follows the decode at once.
             dropped: Exchanges were dropped, so that the target may go on as
                 the cache does after a stretch.
         """
-        memory, wanted = _as_text(self._memory.tokens), _as_text(target)
-        same = common_prefix_length(memory, wanted)
-        if same < len(memory) and (dropped or self._moves_declarations()):
-            found = _dropped_stretch_end(memory, wanted, same)
-            if found is not None:
-                self._memory.remove(same, found)
-                same = common_prefix_length(_as_text(self._memory.tokens), wanted)
-        self._memory.cut_to(same)
-        if self._moves_declarations():
-            # The next question's declarations move back to here or past it: a cache
-            # that cannot cut goes back to a state saved here, not to its start.
-            self._memory.rest()
-        self._memory.decode(target[same:], want_logits=logits)
+        # Declarations that move with the newest question leave a stretch behind, and the
+        # next question's move back to where this cut is made, or past it.
+        moves = self._moves_declarations()
+        self._memory.hold(target, want_logits=logits, find_dropped_stretch=dropped or moves,
+                          rest_at_cut=moves)
 
     def _moves_declarations(self) -> bool:
         """Whether the declarations move with the newest question, leaving a stretch behind."""
@@ -1245,23 +1235,3 @@ def _is_plain(text: str, reader) -> bool:
         return False
     split = reader.split_at_tags(text)
     return split is not None and not any(is_tag for _, is_tag in split)
-
-
-def _dropped_stretch_end(memory: str, wanted: str, start: int) -> int | None:
-    """Where the cache goes on as ``wanted`` does from ``start``, the stretch before it dropped; ``None`` where nowhere.
-
-    The longest run of at least eight tokens wins. A wrong one costs decoding
-    only: what differs after it is decoded again.
-    """
-    probe = wanted[start:start + 8]
-    best, best_length, at = None, len(probe) - 1, memory.find(probe, start + 1) if probe else -1
-    while at >= 0:
-        length = common_prefix_length(memory[at:], wanted[start:])
-        if length > best_length:
-            best, best_length = at, length
-        at = memory.find(probe, at + 1)
-    return best
-
-
-def _as_text(tokens) -> str:
-    return "".join(chr(token + _TOKEN_OFFSET) for token in tokens)

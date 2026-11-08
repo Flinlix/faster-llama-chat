@@ -433,7 +433,7 @@ tag; real token boundaries are checked by the load check and by
 | `llama_chat/cache_context.py` | the two protocols a cache context answers, and the types they take |
 | `llama_chat/context.py` | `KVContext`: the model loaded, its tokenizer, prefill, generation and cache edits |
 | `llama_chat/_backend.py` | the adapter over llama-cpp-python; the only module that names it |
-| `llama_chat/cache_sync.py` | the tokens the cache should hold, and the one place that decodes into it: evictions, cuts, saved states, and repair after a failed decode |
+| `llama_chat/cache_sync.py` | the tokens the cache should hold, and the one place that decodes into it: the comparison with a target, evictions, cuts, saved states, and repair after a failed decode |
 | `llama_chat/messages.py` | a history as `begin` takes it, and as the messages a template is given |
 | `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it |
 | `llama_chat/model_template.py` | a model's chat template, rendered with its reasoning switch |
