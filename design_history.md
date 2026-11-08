@@ -1044,3 +1044,58 @@ first word, so the default `evict_to_fraction_without_shift` of 0.5 stays; 0.4
 would, by calculation, bring the short system turn back to the old total and
 history. Whether a question asked while that decode is still running waits
 for it was not measured.
+
+## 2026-11-08: Bugs found by the rethink (224A)
+
+**The system turn's length (B1).** Two measures were kept: the render of the
+system message alone, for the limits, and the tokens before the oldest
+question's run, for the saved state. On templates that write their
+declarations and settings only once a question follows, the first measure
+missed them: mistral-large-4 with one tool counted 26 tokens where the
+conversation opens with 256 or more. `begin` then accepted a system turn with
+declarations of 1,260 tokens against a 600-token threshold, and the first
+question was refused; on a cache that cannot shift, an eviction aimed too low.
+Now:
+
+- `_opening_length` is the tokens two renders share that differ only in the
+  oldest question. It places the saved state. Over every test template it is
+  at least either old measure. A saved state is only used where it still
+  matches the cache, so an opening measured one token too long costs a decode,
+  never a wrong cache.
+- `_with_a_short_question` is what the conversation takes with no history and
+  a one-character question. It is what no eviction makes smaller, wherever the
+  template writes declarations. `begin` and a later declaration refuse a system
+  turn that leaves no room for it, and the eviction target where the cache
+  cannot shift is measured from it. That also closes the case 218A left open:
+  where declarations move with the newest question (ministral-2410), the
+  history is no longer dropped whole.
+
+**Beginning from a long history (B2).** `begin` dropped one exchange at a time
+and rendered the whole conversation after each: 800 messages took 716 renders
+and 5.4 s without a model. It now keeps the newest exchanges that fit with the
+system turn in half the context, the user's choice, and renders only those:
+twice as many exchanges each time until they no longer fit, then the count
+between is halved. The same history takes 40 renders and 0.03 s. Half rather
+than the eviction threshold leaves room for some turns before the first
+eviction. The newest exchange is kept even where it alone takes more than
+half, and `max_history_messages` still applies after. A history refused by the
+template is now refused only for what would be kept.
+
+**Smaller ones.**
+
+- B3: the last round under `max_calls` does not withhold the call tokens; a
+  call written there is not recognized and stays text, as the second
+  structure review decided. The texts said otherwise and now say this; the
+  internal switch is `recognizes_calls`.
+- B4: `ChatWrapper.config` was the configuration as given, while the context
+  it loads runs with the model's own sampling filled in. It is now that
+  configuration where the wrapper loads the model.
+- B5: a call that cannot be read counts as no call; any other fault while
+  reading one was also swallowed and reported as an unreadable call. Only
+  `ValueError` and `RecursionError` are now. A fault that escapes leaves the
+  cache consistent and the question without its reply; the test that required
+  the turn to close on any fault is replaced by one that requires the fault to
+  be raised and the conversation to stay whole.
+- B6: a `ToolTurn` whose result answers no call made before it in the turn is
+  refused when it is built, where it used to be written with an invented call
+  id.
