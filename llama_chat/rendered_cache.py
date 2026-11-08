@@ -167,7 +167,7 @@ class RenderedCache:
 
     # ----- beginning ------------------------------------------------------------------
     def start(self, system_prompt: str, history, tools: list[ToolSpec], reasoning: bool) -> int:
-        """Begin again from ``system_prompt`` and as much of ``history`` as fits; how many items were kept.
+        """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context; how many items were kept.
 
         A history that ends on a call keeps it owed a result.
 
@@ -184,20 +184,17 @@ class RenderedCache:
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._messages = system + as_messages(history)
             self._kept, self._kept_at, self._owed = [], {}, []
-            if any(m["role"] != "system" for m in self._messages) \
-                    and self._split(self._messages, self._ends_on_result()) is None:
-                roles = [m["role"] for m in self._messages]
-                raise ValueError(self._refusal("user") if ["user", "user"] in [
-                    roles[i:i + 2] for i in range(len(roles) - 1)]
-                    else "this model's template refuses to write this conversation")
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._messages)
+            self._keep_newest_history(min(limit, self._config.context_size // 2))
+            if any(m["role"] != "system" for m in self._messages) \
+                    and self._split(self._messages, self._ends_on_result()) is None:
+                raise self._refused_history()
             self._splices = splices(self._render, system)
             ensure_history_stays_written(self._render, system)
             self._windows = self._splices and windows_are_exact(self._render, system,
                                                                 self._tag_from)
-            self._drop_while_over(limit, generation_prompt=False, tokens_only=True)
             if asks and (not any(m["role"] == "user" for m in self._messages)
                          or self._length(self._messages, False) > limit):
                 raise ContextOverflowError(
@@ -221,6 +218,47 @@ class RenderedCache:
             self._memory.rest()
             self._begun = True
             return len(as_history(self._messages))
+
+    def _keep_newest_history(self, bound: int) -> None:
+        """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.
+
+        Only the newest messages are rendered: twice as many exchanges each
+        time until they no longer fit, then the count between is halved, so a
+        history far longer than the context costs a few renders of about
+        ``bound`` each.
+
+        Raises:
+            ValueError: If the template refuses to write what would be kept.
+        """
+        first = len(self._system_part())
+        if len(self._messages) == first:
+            return
+        opens = [first] + [i for i in exchange_starts(self._messages) if i > first]
+
+        def fits(count: int) -> bool:
+            kept = self._messages[:first] + self._messages[opens[-count]:]
+            if self._split(kept, kept[-1]["role"] == "tool") is None:
+                raise self._refused_history()
+            return self._length(kept, generation_prompt=False) <= bound
+
+        kept, more = 1, 2
+        while more < len(opens) and fits(more):
+            kept, more = more, more * 2
+        if more >= len(opens):
+            if fits(len(opens)):
+                return
+            more = len(opens)
+        while kept < more - 1:
+            middle = (kept + more) // 2
+            kept, more = (middle, more) if fits(middle) else (kept, middle)
+        self._messages = self._messages[:first] + self._messages[opens[-kept]:]
+
+    def _refused_history(self) -> ValueError:
+        """The refusal of a history this model's template will not write."""
+        roles = [m["role"] for m in self._messages]
+        return ValueError(self._refusal("user") if ["user", "user"] in [
+            roles[i:i + 2] for i in range(len(roles) - 1)]
+            else "this model's template refuses to write this conversation")
 
     def _ends_on_result(self) -> bool:
         return bool(self._messages) and self._messages[-1]["role"] == "tool"

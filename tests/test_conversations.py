@@ -267,6 +267,24 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     assert not run.chat._conversation.begun
 
 
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_long_history_is_kept_from_its_newest_end_within_half_the_context_unrendered_beyond(stem):
+    run = _Run(stem, context_size=8192)
+    history = [item for n in range(600)
+               for item in (("user", f"Question {n}, short."), ("assistant", f"Reply {n}, short."))]
+    before = len(run.context.rendered)
+    kept = run.begin(history)
+    assert 0 < kept < len(history)
+    assert run.chat.history() == history[-kept:]
+    # No render is given much more than twice what is kept, never the whole history.
+    assert max(run.context.rendered[before:]) <= 2 * kept + 4
+    tokens = lambda items: len(run.context.tokenize(run.render(   # noqa: E731
+        [{"role": role, "content": text} for role, text in items])))
+    exchange = _exchange_length(run, "Question 1, short.", "Reply 1, short.")
+    assert tokens(history[-kept:]) <= 4096 + exchange
+    assert tokens(history[-kept - 4:]) > 4096
+
+
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_declarations_longer_than_the_threshold_are_refused_at_begin(stem):
     run = _Run(stem, context_size=600)

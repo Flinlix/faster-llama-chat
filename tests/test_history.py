@@ -12,7 +12,7 @@ from tests.wrappers import (assert_consistent, begun_wrapper, tool_wrapper, unbe
 # ----- beginning again from history() --------------------------------------
 def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     registry = weather_registry()
-    live, fake = tool_wrapper()
+    live, fake = tool_wrapper(context_size=2048)
     live.begin("persona", tools=registry)
     live.reply("hallo").finish()
     fake.call_script = ["weather{city:'Bonn'}"]
@@ -24,7 +24,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     turn = history[3]
     assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
 
-    again, fake_again = tool_wrapper()
+    again, fake_again = tool_wrapper(context_size=2048)
     again.begin("persona", history, tools=registry)
     assert fake_again.cache == fake.cache
     assert again.history() == history

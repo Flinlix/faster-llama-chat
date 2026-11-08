@@ -15,9 +15,9 @@ FAKE_CALL_BODY = CallBody(name_close="{", key_open="", key_close=":", pair_sep="
                           body_close="}", empty_close="}", quote_open="'", quote_close="'")
 
 
-def tool_wrapper(**kw):
+def tool_wrapper(context_size=512, **kw):
     fake = FakeContext(calls_tools=True, **kw)
-    return ChatWrapper(Config(context_size=512, evict_above_fraction=0.9),
+    return ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.9),
                        context=fake), fake
 
 

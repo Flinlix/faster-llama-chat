@@ -122,9 +122,11 @@ class ChatWrapper:
                 that called tools, written as this model's template writes one.
                 A history that ends on a tool turn's result leaves that turn
                 open, as a result written into a live turn does, for
-                :meth:`reply` to go on with. Only the most recent that fit
-                alongside the system prompt are kept, under both eviction
-                limits, from a user turn on; older excess is dropped.
+                :meth:`reply` to go on with. Only the most recent are kept,
+                from a user turn on: those that fit with the system prompt in
+                half the context, at least the newest exchange, and no more
+                than ``max_history_messages``. Older ones are dropped
+                unrendered.
             tools: Tools to declare, written where this model's template
                 declares them. From a whole
                 :class:`~llama_chat.tools.ToolRegistry`, what it marks to be
