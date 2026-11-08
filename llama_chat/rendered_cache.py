@@ -46,13 +46,24 @@ _WHOLE = object()
 _TOKEN_OFFSET = 0x10000
 
 
+@dataclass(frozen=True, eq=False)
+class _MadeFor:
+    """The conversation and the cache a record made ahead was made for, which it is used with only while they stay."""
+
+    messages: tuple[dict, ...]
+    tools: tuple[ToolSpec, ...]
+    reasoning: bool
+    opening: str | None
+    cache_version: int
+
+
 @dataclass
 class _Ahead:
     """The render for the next question, decoded up to the run of text the question joins."""
 
     rest: list[tuple[str, bool]]          # from that run on, the stand-in as the caller's own
     after_question: str                   # the template's text after the question
-    n_messages: int                       # the conversation it was rendered for
+    made_for: _MadeFor
 
 
 @dataclass(frozen=True, eq=False)
@@ -81,10 +92,12 @@ class _ConversationState:
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
     prompt_start: int = 0                 # where in the cache the generation prompt begins
-    # Where a spliced question's run begins, the question, and the tokens decoded there.
-    spliced_at: tuple[int, dict, list[int]] | None = None
-    # The question the newest ask added and the tokens before it, until a generation follows.
-    asked: tuple[dict, list[int]] | None = None
+    # Where a spliced question's run begins, the tokens decoded there, and what they were
+    # decoded for: the conversation with the question newest, and the cache after them.
+    spliced_at: tuple[int, list[int], _MadeFor] | None = None
+    # The tokens before the question the newest ask added, and the conversation and the
+    # cache that ask left, until a generation follows.
+    asked: tuple[list[int], _MadeFor] | None = None
     begun: bool = False
     opening: str | None = None            # how the conversation opens, to see a clock move on
 
@@ -214,6 +227,7 @@ class RenderedCache:
             self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
             self._state.begun = False
             self._memory.reset()
+            # The records made ahead for the conversation before, freed with it.
             self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
             self._state.opening = self._opening_render()
             self._memory.pin(self._opening_length())
@@ -309,15 +323,14 @@ class RenderedCache:
                     f"only {free} tokens free for the reply "
                     f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
                     "the request or lower evict_above_fraction")
-            self._state.asked = question, before
+            self._state.asked = before, self._made_for_now()
             return n_before + 1 - len(as_history(self._state.messages))
 
     def _splice(self, question: dict, room: int) -> bool:
         """Add ``question``, decoded in the stand-in's place in the render made ahead, where that is exact; whether it was."""
-        ahead, self._state.ahead, self._state.spliced_at = self._state.ahead, None, None
+        ahead = self._state.ahead
         text = question["content"]
-        if (ahead is None or not self._state.splices
-                or ahead.n_messages != len(self._state.messages)
+        if (ahead is None or not self._state.splices or not self._is_current(ahead.made_for)
                 or not _is_plain(text, self._context)
                 or not question_splices(self._render, self._system_part(), text)):
             return False
@@ -327,7 +340,8 @@ class RenderedCache:
             return False
         self._state.messages.append(question)
         self._memory.decode(tokens, want_logits=True)
-        self._state.spliced_at = (len(self._memory.tokens) - len(tokens), question, tokens)
+        self._state.spliced_at = (len(self._memory.tokens) - len(tokens), tokens,
+                                  self._made_for_now())
         self._note_prompt(ahead.after_question, self._memory.tokens)
         return True
 
@@ -367,7 +381,6 @@ class RenderedCache:
             if role != "user" or not fits or not self._splice(message, room):
                 self._state.messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
-                self._state.ahead, self._state.spliced_at = None, None
                 self._sync(self._tokens(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
@@ -388,7 +401,7 @@ class RenderedCache:
                 raise ValueError("there is nothing to answer: the newest message "
                                  "is not a user message")
             spliced_at = self._state.spliced_at
-            if spliced_at is not None and spliced_at[1] is self._state.messages[-1]:
+            if spliced_at is not None and self._is_current(spliced_at[2]):
                 return          # spliced with the generation prompt after it, within the room
             self._sync(self._fitting_prompt())
 
@@ -418,11 +431,10 @@ class RenderedCache:
             raise ValueError("no conversation to generate into; call begin() first")
         if owed := self.owed_calls:
             raise ValueError(f"{len(owed)} call(s) still owe a result")
-        asked, self._state.asked = self._state.asked, None
-        if asked and self._state.messages[-1] is not asked[0]:
-            asked = None
+        asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
+        before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
-                            self.reply_open, asked[1] if asked else None)
+                            self.reply_open, before_question)
         return self._memory.generate(max_tokens, generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
@@ -454,8 +466,6 @@ class RenderedCache:
             How many history items were dropped.
         """
         start, resumed, before_question = self._generation
-        if not self._memory.is_known:
-            self._state.ahead, self._state.spliced_at = None, None
         if not self._memory.is_known and not answer and not called:
             # It failed before it said anything: the request is taken back whole.
             if before_question is not None:
@@ -610,7 +620,6 @@ class RenderedCache:
             if keep_text == newest["content"]:
                 return
             self._state.messages[-1] = {**newest, "content": keep_text}
-            self._state.spliced_at = None
             self._render_ahead()
             self._memory.rest()
 
@@ -639,7 +648,6 @@ class RenderedCache:
             self._memory.pin(self._opening_length())
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
-            self._state.spliced_at = None
             self._render_ahead(dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
@@ -721,7 +729,6 @@ class RenderedCache:
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
-            self._state.ahead, self._state.spliced_at = None, None
             self._sync(self._tokens(self._state.messages, generation_prompt=False), logits=False,
                        dropped=dropped)
             self._memory.rest()
@@ -736,7 +743,7 @@ class RenderedCache:
             plan = self._window_ahead() if self._state.windows else _WHOLE
             if plan is not _WHOLE:
                 # Dropped first, so the cache shifts before the decode ahead, not before the next question's.
-                at, before, length, ahead = plan
+                at, before, length, split, run = plan
                 held = len(self._memory.tokens)
                 kept_until = lambda: at - (held - len(self._memory.tokens))   # noqa: E731
                 done = self._drop_in_windows(kept_until, length)
@@ -746,15 +753,13 @@ class RenderedCache:
                                      or kept_until() + len(before) > self._config.context_size)
                 if done:
                     self._sync(list(self._memory.tokens[:kept_until()]) + before, logits=False)
-                    ahead.n_messages = len(self._state.messages)
-                    self._state.ahead = ahead
+                    self._note_ahead(split, run)
                 else:
                     self._drop_while_over(limit, generation_prompt=False, newest_too=True)
                     self._render_ahead(dropped=True)
             else:
                 dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
                 self._render_ahead(dropped=dropped)
-            self._state.spliced_at = None
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
 
@@ -762,16 +767,13 @@ class RenderedCache:
         """Decode the render for the next question up to where the question goes."""
         messages = self._state.messages + [{"role": "user", "content": STAND_IN}]
         split = self._split(messages, generation_prompt=True)
-        self._state.ahead = None
         run = (self._run_start(split, len(messages) - 1, 0)
                if split is not None and split.text.count(STAND_IN) == 1 else None)
         if run is not None:
             before = self._tokens(messages, generation_prompt=True, upto=run)
             if len(before) <= self._config.context_size:
                 self._sync(before, logits=False, dropped=dropped)
-                self._state.ahead = _Ahead(rest=split.pieces(run),
-                                           after_question=split.text[split.contents[-1][1]:],
-                                           n_messages=len(self._state.messages))
+                self._note_ahead(split, run)
                 return
         # The next question will be rendered when it comes.
         if self._state.messages and self._split(self._state.messages, False) is None:
@@ -792,12 +794,14 @@ class RenderedCache:
         Returns:
             Where in the cache that tag sits, the tokens from it up to where the
             next question goes, how many of the conversation's own follow the
-            tag, and the render ahead from there; or ``_WHOLE`` where the
-            window cannot stand for the whole render.
+            tag, and the window's render with where the next question's run
+            begins in it; or ``_WHOLE`` where the window cannot stand for the
+            whole render.
         """
         starts = exchange_starts(self._state.messages)
-        if self._state.spliced_at is None or len(starts) < 2 \
-                or self._state.messages[starts[-1]] is not self._state.spliced_at[1] or [
+        spliced_at = self._state.spliced_at
+        if spliced_at is None or len(starts) < 2 or not self._goes_on_from(spliced_at[2]) \
+                or self._state.messages[starts[-1]] is not spliced_at[2].messages[-1] or [
                 m["role"] for m in self._state.messages[starts[-2]:]] != ["user", "assistant"] * 2 \
                 or not self._template_writes(self._state.messages[starts[-2]:]):
             return _WHOLE
@@ -815,7 +819,7 @@ class RenderedCache:
             return _WHOLE
         to_question = self._tokenize(split.pieces(anchor, run))
         before = self._tokenize(split.pieces(anchor, ahead_run))
-        question_at, _, spliced = self._state.spliced_at
+        question_at, spliced, _ = spliced_at
         at = question_at - len(to_question)
         if at < 0 or list(self._memory.tokens[at:question_at]) != to_question \
                 or list(self._memory.tokens[question_at:question_at + len(spliced)]) != spliced \
@@ -826,9 +830,7 @@ class RenderedCache:
         if plain is None or plain.text[:anchor] != split.text[:anchor]:
             return _WHOLE
         length = len(self._tokenize(plain.pieces(anchor)))
-        return at, before, length, _Ahead(
-            rest=split.pieces(ahead_run), after_question=split.text[split.contents[-1][1]:],
-            n_messages=len(self._state.messages))
+        return at, before, length, split, ahead_run
 
     def _drop_in_windows(self, kept_until, after: int) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
@@ -1159,6 +1161,33 @@ class RenderedCache:
                             if not any(k.first is m or k.last is m for m in gone)]
         return True
 
+    # ----- what a record made ahead was made for ----------------------------------------
+    def _note_ahead(self, split: SplitRender, run: int) -> None:
+        """Note ``split``, decoded up to ``run``, as the render made ahead for the conversation and the cache as they are now."""
+        self._state.ahead = _Ahead(rest=split.pieces(run),
+                                   after_question=split.text[split.contents[-1][1]:],
+                                   made_for=self._made_for_now())
+
+    def _made_for_now(self) -> _MadeFor:
+        """The conversation and the cache as they are now, for a record made of them."""
+        state = self._state
+        return _MadeFor(tuple(state.messages), tuple(state.tools), state.reasoning,
+                        state.opening, self._memory.version)
+
+    def _is_current(self, made_for: _MadeFor) -> bool:
+        """Whether the conversation and the cache are still those ``made_for`` was made for."""
+        return (made_for.cache_version == self._memory.version
+                and len(made_for.messages) == len(self._state.messages)
+                and self._goes_on_from(made_for))
+
+    def _goes_on_from(self, made_for: _MadeFor) -> bool:
+        """Whether the conversation goes on from the one ``made_for`` was made for: its messages first, the same declarations, reasoning and opening."""
+        state = self._state
+        return (len(made_for.messages) <= len(state.messages)
+                and all(a is b for a, b in zip(made_for.messages, state.messages))
+                and made_for.tools == tuple(state.tools)
+                and (made_for.reasoning, made_for.opening) == (state.reasoning, state.opening))
+
     # ----- one action at a time --------------------------------------------------------
     @contextlib.contextmanager
     def _action(self):
@@ -1169,7 +1198,7 @@ class RenderedCache:
             opening = self._opening_render()
             if opening != self._state.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
-                self._state.opening, self._state.ahead, self._state.spliced_at = opening, None, None
+                self._state.opening = opening
                 self._memory.pin(self._opening_length())
         saved = self._state.copied()
         held = list(self._memory.tokens)

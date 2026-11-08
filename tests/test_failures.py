@@ -366,3 +366,47 @@ def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_
     assert memory.tokens == list(range(1, 11))
     memory.repair()
     assert fake.cache == list(range(1, 11))
+
+
+@pytest.mark.parametrize("can_shift, can_cut_tail", [(True, False), (False, True), (False, False)],
+                         ids=["shifts", "cuts", "neither"])
+def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(can_shift,
+                                                                             can_cut_tail):
+    import random
+
+    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.cache_sync import CacheSync
+    fake = _Flaky(gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
+    memory, draw = CacheSync(fake), random.Random(0)
+
+    def some_tokens():
+        return [draw.randrange(1, 5) for _ in range(draw.randrange(4))]
+
+    def generate(closed_early):
+        pieces = memory.generate(draw.randrange(3), GenerationAccumulator())
+        if closed_early:
+            next(pieces, None)
+            pieces.close()
+        else:
+            list(pieces)
+
+    actions = {
+        "decode": lambda: memory.decode(some_tokens(), want_logits=draw.random() < 0.5),
+        "remove": lambda: memory.remove(*sorted(draw.choices(range(len(memory.tokens) + 1), k=2))),
+        "cut_to": lambda: memory.cut_to(draw.randrange(len(memory.tokens) + 1)),
+        "replace": lambda: memory.replace(
+            draw.choice([memory.tokens, memory.tokens[:-1] + some_tokens()])),
+        "generate": lambda: memory.tokens and generate(closed_early=False),
+        "generate closed early": lambda: memory.tokens and generate(closed_early=True),
+        "pin": lambda: memory.pin(draw.randrange(len(memory.tokens) + 2)),
+        "reset": memory.reset, "rest": memory.rest, "repair": memory.repair,
+    }
+    for _ in range(3000):
+        name = draw.choice(sorted(actions))
+        fake.fail = draw.choice([None] * 8 + ["decode", "cut", "generate"])
+        tokens, version = list(memory.tokens), memory.version
+        try:
+            actions[name]()
+        except RuntimeError:
+            pass
+        assert memory.tokens == tokens or memory.version != version, name

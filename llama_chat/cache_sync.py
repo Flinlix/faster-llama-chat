@@ -27,6 +27,7 @@ class CacheSync:
         self._end: int | None = 0       # how many it holds in all; None where unknown
         self._logits = False            # whether the newest decode left logits for its last token
         self.decoded = 0                # every token decoded so far, for what a request cost
+        self.version = 0                # changes whenever the tokens do
         # (tokens held, state): at most the two newest a cache rested in.
         self._rest_states: list[tuple[int, object]] = []
         self._pin: int | None = None    # where a state is kept, besides those
@@ -51,6 +52,7 @@ class CacheSync:
         """Empty the cache and forget every saved state, as a new conversation does."""
         self._context.reset()
         self._tokens, self._valid, self._end = [], 0, 0
+        self.version += 1
         self._rest_states, self._logits = [], False
         self._pin, self._pinned = None, None
 
@@ -63,6 +65,7 @@ class CacheSync:
         """Append ``tokens``, decoded at once where the cache holds everything before them."""
         if not tokens:
             return
+        self.version += 1
         if not self.is_current:
             self._tokens += tokens      # decoded with the rest when the cache is brought up
             return
@@ -84,6 +87,8 @@ class CacheSync:
             raise
         finally:
             pieces.close()
+            if out.token_ids:
+                self.version += 1
             if self._end is not None:
                 self._tokens += out.token_ids
                 self._end = self._valid = len(self._tokens)
@@ -100,6 +105,7 @@ class CacheSync:
             return
         eviction = Eviction(start, end, len(self._tokens))
         del self._tokens[start:end]
+        self.version += 1
         self._forget_states_after(start)
         self._logits = False
         if self._end == self._valid == eviction.old_total and self._context.can_shift:
@@ -116,6 +122,8 @@ class CacheSync:
         """Keep the first ``pos`` tokens and nothing after."""
         if pos >= len(self._tokens) and self._end == len(self._tokens):
             return
+        if pos < len(self._tokens):
+            self.version += 1
         del self._tokens[pos:]
         self._forget_states_after(pos)
         self._logits = False
@@ -134,6 +142,7 @@ class CacheSync:
             return                      # nothing changed, the logits of the last decode included
         same = common_prefix_length(self._tokens, tokens)
         self._tokens = list(tokens)
+        self.version += 1
         self._valid = min(self._valid, same)
         self._forget_states_after(same)
         self._logits = False
