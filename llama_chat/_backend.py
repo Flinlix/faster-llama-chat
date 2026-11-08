@@ -41,6 +41,18 @@ def set_log_level(level: str) -> None:
     logging.getLogger("llama-cpp-python").setLevel(_LOG_LEVELS[level])
 
 
+def template_renderer(template: str, eos_token: str, generation_prompt: bool = False):
+    """A renderer for one GGUF chat template, called with messages and tools.
+
+    BOS is left out: the sequence opener is the tokenizer's to add.
+    Template variables pass through as keywords.
+    """
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+    return Jinja2ChatFormatter(template=template, eos_token=eos_token,
+                               bos_token="",
+                               add_generation_prompt=generation_prompt)
+
+
 def _optional_symbol(*names: str):
     """Return the first of ``names`` this build defines, or ``None``."""
     for name in names:
@@ -215,18 +227,6 @@ class Backend:
             AttributeError: If this build defines no quantization of that name.
         """
         return int(_required_symbol(f"GGML_TYPE_{name.upper()}"))
-
-    def template_renderer(self, template: str, eos_token: str,
-                          generation_prompt: bool = False):
-        """A renderer for one GGUF chat template, called with messages and tools.
-
-        BOS is left out: the sequence opener is the tokenizer's to add.
-        Template variables pass through as keywords.
-        """
-        from llama_cpp.llama_chat_format import Jinja2ChatFormatter
-        return Jinja2ChatFormatter(template=template, eos_token=eos_token,
-                                   bos_token="",
-                                   add_generation_prompt=generation_prompt)
 
     def metadata_value(self, model, key: str) -> str | None:
         """Return the GGUF metadata string for ``key``, or ``None`` if absent."""

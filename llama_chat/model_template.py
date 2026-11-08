@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._backend import Backend
+from ._backend import template_renderer
 from .template_extract import reasoning_switch
 
 
@@ -16,8 +16,7 @@ class ModelTemplate:
 
     def __init__(self, text: str, eos_text: str) -> None:
         self.text = text
-        backend = Backend()
-        self._renderers = {prompted: backend.template_renderer(text, eos_text, prompted)
+        self._renderers = {prompted: template_renderer(text, eos_text, prompted)
                            for prompted in (False, True)}
         self._switch = reasoning_switch(lambda messages, generation_prompt=False, **variables:
                                         self._renderers[generation_prompt](
