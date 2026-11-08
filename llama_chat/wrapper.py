@@ -79,7 +79,7 @@ class ChatWrapper:
             KVContext(config, on_load_progress=on_load_progress)
             if owns_context else context
         )
-        self._config = config
+        self._config = self._context.config if owns_context else config
         # Everything that can be settled about this model is settled here, so
         # that what fails, fails while the wrapper is being built.
         try:
@@ -410,7 +410,12 @@ class ChatWrapper:
 
     @property
     def config(self) -> Config:
-        """The configuration this wrapper runs with, its limits included."""
+        """The configuration this wrapper runs with, its limits included.
+
+        Where the wrapper loaded the model itself, a sampling setting left
+        unset holds the value the model supplies; with a cache context of your
+        own, it is the configuration as given.
+        """
         return self._config
 
     @property

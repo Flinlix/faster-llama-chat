@@ -790,3 +790,17 @@ def test_the_message_log_holds_only_what_was_recorded_an_early_closed_reply_incl
     stream.close()                               # closed early: recorded, so reported
     assert seen == [("user", "hi"), ("assistant", "r")]
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
+
+
+def test_config_holds_the_sampling_the_model_supplies_where_the_wrapper_loads_it(monkeypatch):
+    given = Config(context_size=512)
+    in_use = dataclasses.replace(given, temperature=0.6, top_p=0.9)
+
+    class _Loaded(FakeContext):
+        def __init__(self, config, on_load_progress=None):
+            super().__init__()
+            self.config = in_use
+
+    monkeypatch.setattr("llama_chat.wrapper.KVContext", _Loaded)
+    assert ChatWrapper(given).config == in_use
+    assert ChatWrapper(given, context=FakeContext()).config == given

@@ -115,6 +115,11 @@ class KVContext:
         self._closed = False
 
     @property
+    def config(self) -> Config:
+        """The configuration this context runs with, the sampling the model supplies filled in."""
+        return self._config
+
+    @property
     def context_size(self) -> int:
         """How many tokens the cache was built to hold."""
         return self._config.context_size

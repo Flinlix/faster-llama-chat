@@ -284,7 +284,8 @@ anything is taken back, its question with it, and no reply is reported for it.
 
 `Config` holds every setting except what an add-on file gives and what one
 request passes. It validates itself on construction and cannot be changed
-afterwards; `ChatWrapper.config` is the one the wrapper runs with.
+afterwards; `ChatWrapper.config` is the one the wrapper runs with, a sampling
+setting left unset holding the value the model supplies.
 
 **Model and sampling**
 
