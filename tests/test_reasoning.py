@@ -229,3 +229,13 @@ def test_a_header_naming_another_reader_is_never_shown():
     assert opening.feed(" to=user<|message|>Hallo") == "Hallo"
     opening = AnswerOpening(" to=user<|message|>", header)
     assert opening.feed(" to=notes<|message|>Text") == "Text"
+
+
+def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_shared_ends():
+    from llama_chat.reply_text import reply_header
+    from llama_chat.template import Reasoning
+    def tags(thought_open):
+        return Reasoning(thought_open=thought_open, thought_close="<|eom|>", generation_prompt="")
+    assert reply_header("<|a|>user<|a|>", tags("<|a|>")) is None
+    assert reply_header("<|a|>", tags("<|a|>self<|a|>")) is None
+    assert reply_header("<|a|>user<|b|>", tags("<|a|>self<|b|>")) == ("<|a|>", "<|b|>")

@@ -247,6 +247,11 @@ def common_prefix_length(one: Sequence, other: Sequence) -> int:
     return low
 
 
+def common_suffix_length(one: Sequence, other: Sequence) -> int:
+    """How long an ending two sequences of the same type share."""
+    return common_prefix_length(one[::-1], other[::-1])
+
+
 def shared_tags_length(text: str, other: str) -> int:
     """How long a beginning the two share, ending where a tag or a word ends.
 

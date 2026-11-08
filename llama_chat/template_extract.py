@@ -23,7 +23,7 @@ from typing import Callable
 
 from .messages import calling_message
 from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
-                       common_prefix_length, shared_tags_length)
+                       common_prefix_length, common_suffix_length, shared_tags_length)
 from .tools import ToolCall
 
 # Plain alphanumerics: they survive Jinja `| trim` and are never HTML-escaped.
@@ -520,11 +520,7 @@ def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
 
 def _common_suffix(one: str, other: str) -> str:
     """The longest ending the two share."""
-    kept = 0
-    while (kept < len(one) and kept < len(other)
-           and one[-1 - kept] == other[-1 - kept]):
-        kept += 1
-    return one[len(one) - kept:]
+    return one[len(one) - common_suffix_length(one, other):]
 
 
 def _render_call(render: Render, arguments: dict) -> str | None:
