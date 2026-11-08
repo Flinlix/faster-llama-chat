@@ -24,7 +24,7 @@ from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.cache_context import GenerationAccumulator
-from llama_chat.context import SEQ, KVContext
+from llama_chat.context import KVContext
 from llama_chat.config import Config, Sampling
 
 
@@ -72,28 +72,19 @@ def test_without_either_symbol_nothing_is_a_tag():
 
 
 # ----- the cache edits eviction rests on ---------------------------------
-def test_every_cache_edit_is_performed_while_loading():
+@pytest.mark.parametrize("reports_shift", (True, False))
+def test_every_cache_edit_is_performed_while_loading(reports_shift):
     """A build missing one of them says so at load, not at the first eviction.
 
     Removal and the shift that closes the gap are reached only once history
     crosses the threshold, a whole conversation after the model was loaded.
-    Each is performed empty, so proving it costs nothing and changes nothing.
+    Each is proven before the conversation begins and leaves the cache empty.
     """
-    for can_shift in (True, False):
-        performed = []
-        context = object.__new__(KVContext)
-        context._engine_context = "the context"
-        context._can_shift = can_shift
-        context._backend = SimpleNamespace(
-            kv_seq_rm=lambda *args: performed.append(("seq_rm",) + args),
-            kv_seq_add=lambda *args: performed.append(("seq_add",) + args),
-            kv_clear=lambda *args: performed.append(("clear",) + args),
-        )
-
-        context._verify_cache_edits()
-
-        # A cache that cannot shift is never shifted, and is not asked to.
-        assert performed == ([("seq_add", "the context", SEQ, 0, 0, 0)] if can_shift else [])
+    _context, performed = _probed_context(reports_shift, cuts_tail=True)
+    assert ("seq_rm", 1, -1) in performed
+    # A cache that cannot shift is never shifted, and is not asked to.
+    assert [edit for edit in performed if edit[0] == "seq_add"] == (
+        [("seq_add", 0, 0, 0)] if reports_shift else [])
 
 
 def _probed_context(reports_shift, cuts_tail):

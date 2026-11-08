@@ -61,7 +61,7 @@ class ResolvedTemplate:
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
         self._tool_calls = (tool_calls if tool_calls is not None
-                            else self._resolve_tool_calls())
+                            else extract_tool_fragments(self._render, self._fragments))
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
@@ -297,11 +297,6 @@ class ResolvedTemplate:
                     "after a reply otherwise than as its own probes read them, so a "
                     "reply's start and end could not be told; the model cannot be used")
 
-    def _resolve_tool_calls(self) -> ToolCallFragments | None:
-        """What this model's template wraps a generated call in, if anything."""
-        return extract_tool_fragments(self._render,
-                                      self._fragments)
-
     def _resolve_reasoning(self) -> Reasoning | None:
         """What turns this model's reasoning on, recovered from its template."""
         render = self._render
@@ -512,13 +507,13 @@ class ResolvedTemplate:
         return {}
 
     def _resolve_declares_in_newest_turn(self) -> bool:
-        """Whether the template declares tools right before the newest user turn alone."""
+        """Whether the template declares tools right before the newest user turn alone.
+
+        Probed with a stand-in tool's declaration, which must read the same in a
+        first turn as in a later one.
+        """
         if not self._calls_marked or self._declares_in_system_turn():
             return False
-        return self._declares_before_newest_turn()
-
-    def _declares_before_newest_turn(self) -> bool:
-        """Whether the template writes a stand-in tool's declaration right before the newest user turn, the same in a first turn as in a later one."""
         tools = [_PROBE_TOOL.as_declaration()]
         found = set()
         for messages in ([{"role": "user", "content": _NEXT}],

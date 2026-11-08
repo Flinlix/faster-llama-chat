@@ -144,7 +144,7 @@ class RenderedCache:
     @property
     def reply_open(self) -> bool:
         """Whether the newest turn called tools and is not closed: a call is owed a result, or a result waits for the reply after it."""
-        return bool(self._owed) or bool(self._messages) and self._messages[-1]["role"] == "tool"
+        return bool(self._owed) or self._ends_on_result()
 
     @property
     def owed_calls(self) -> list[ToolCall]:
@@ -208,7 +208,7 @@ class RenderedCache:
             self._memory.reset()
             self._ahead, self._spliced_at, self._asked = None, None, None
             self._opening = self._opening_render()
-            self._pin_opening()
+            self._memory.pin(self._opening_length())
             if self._messages and self._messages[-1]["role"] in ("user", "tool"):
                 self._sync(self._prompted())
             elif self._owed:
@@ -280,13 +280,13 @@ class RenderedCache:
         """
         with self._action():
             self._ensure_ready("start a request", "generate into")
-            room = self._config.context_size - self._config.min_reply_tokens
+            room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
             alone = self._length(self._system_part() + [question], generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
                     f"request needs {alone} tokens but only {room} fit beside room for the reply")
-            self.ensure_writes("user", text, generation_prompt=True)
+            self._ensure_writes("user", text, generation_prompt=True)
             if accept is not None:
                 accept()
             before = list(self._memory.tokens)
@@ -294,10 +294,7 @@ class RenderedCache:
             if not self._splice(question, room):
                 self._messages.append(question)
                 self._drop_while_over(room, generation_prompt=True)
-                target = self._prompted()
-                if len(target) > room:
-                    raise ContextOverflowError("the question does not fit beside room for its reply")
-                self._sync(target)
+                self._sync(self._fitting_prompt())
             free = self._config.context_size - len(self._memory.tokens)
             if free < self._config.min_reply_tokens:
                 raise ContextOverflowError(
@@ -351,11 +348,11 @@ class RenderedCache:
                 raise ContextOverflowError(
                     f"injected message needs {alone} tokens but only {limit} fit beside the "
                     "system prompt")
-            self.ensure_writes(role, text, generation_prompt=False)
+            self._ensure_writes(role, text, generation_prompt=False)
             if accept is not None:
                 accept()
             n_before = len(as_history(self._messages))
-            room = self._config.context_size - self._config.min_reply_tokens
+            room = self._max_prompt_tokens
             fits = (self._config.max_history_messages is None
                     or n_before < self._config.max_history_messages)
             if role != "user" or not fits or not self._splice(message, room):
@@ -392,7 +389,7 @@ class RenderedCache:
             ContextOverflowError: If it leaves too little room for a reply.
         """
         target = self._prompted()
-        room = self._config.context_size - self._config.min_reply_tokens
+        room = self._max_prompt_tokens
         if len(target) > room:
             raise ContextOverflowError(
                 f"the conversation needs {len(target)} tokens but only {room} leave room "
@@ -558,7 +555,7 @@ class RenderedCache:
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             self._owed.pop(0)
-            room = self._config.context_size - self._config.min_reply_tokens
+            room = self._max_prompt_tokens
             self._messages.append({**message, "content": ""})
             if len(self._prompted()) > room:
                 raise ContextOverflowError(
@@ -631,7 +628,7 @@ class RenderedCache:
             self._windows = self._splices and windows_are_exact(
                 self._render, self._system_part(), self._tag_from)
             self._opening = self._opening_render()
-            self._pin_opening()
+            self._memory.pin(self._opening_length())
             n_before = len(as_history(self._messages))
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._spliced_at = None
@@ -639,7 +636,7 @@ class RenderedCache:
             self._memory.rest()
             return n_before - len(as_history(self._messages))
 
-    def ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
+    def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.
 
         Raises:
@@ -1025,8 +1022,7 @@ class RenderedCache:
                         and found[1] <= end)
         tokens, at, kept_at = [], 0, {}
         for start, stop, n in placed:
-            if start < at:
-                continue                # within a turn placed already
+            assert start >= at, "two kept turns overlap"
             tokens += self._tokenize(split.pieces(at, start), add_special=not tokens and at == 0)
             kept_at[self._kept[n]] = len(tokens)
             tokens += self._kept[n].tokens
@@ -1068,15 +1064,16 @@ class RenderedCache:
         return tokenize_pieces(self._reader, pieces, add_special=add_special,
                                tag_tokens=self._tag_tokens)
 
-    def _pin_opening(self) -> None:
-        """Keep a saved state where the conversation's fixed opening ends, which no eviction removes, where the cache goes back to saved states."""
-        self._memory.pin(self._opening_length())
-
     def _opening_render(self) -> str | None:
         """How the template opens this conversation, which changes where it writes the date, say."""
         return self._render(self._system_part() + [{"role": "user", "content": STAND_IN}], True)
 
     # ----- limits -------------------------------------------------------------------
+    @property
+    def _max_prompt_tokens(self) -> int:
+        """The most tokens the cache may hold when a reply starts, ``min_reply_tokens`` left free."""
+        return self._config.context_size - self._config.min_reply_tokens
+
     def _drop_while_over(self, limit: int, generation_prompt: bool, newest_too: bool = False,
                          tokens_only: bool = False) -> bool:
         """Drop the oldest exchanges once the conversation renders longer than ``limit`` or holds too many; whether any went.
@@ -1162,7 +1159,7 @@ class RenderedCache:
             if opening != self._opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._opening, self._ahead, self._spliced_at = opening, None, None
-                self._pin_opening()
+                self._memory.pin(self._opening_length())
         saved = {name: _copied(getattr(self, name)) for name in _ROLLED_BACK}
         held = list(self._memory.tokens)
         try:

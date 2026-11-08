@@ -465,28 +465,14 @@ class KVContext:
         self._backend.free_model(self._model)
 
     # ----- internals -----------------------------------------------------
-    def _verify_cache_edits(self) -> None:
-        """Shift the empty cache by nothing, so a build missing the shift fails here.
-
-        The cut probe has already removed and cleared. Which function performs
-        an edit is settled per build and per context, so an edit that works
-        here works for the rest of the conversation; left to the first
-        eviction, a missing one would surface deep into a conversation. A
-        cache that cannot shift is never shifted, and some abort the process
-        when asked to, so it is not asked here either.
-
-        Raises:
-            RuntimeError: If this build offers no function for the shift.
-        """
-        if self._can_shift:
-            self._backend.kv_seq_add(self._engine_context, SEQ, 0, 0, 0)
-
     def _settle_cache_edits(self) -> None:
         """Which edits this cache takes, each proven on it while it is empty."""
         self._can_cut_tail = self._probe_tail_cut()
         # A running state refuses the cut, and is not shifted whatever the cache reports.
         self._can_shift = self._can_cut_tail and self._backend.can_shift(self._engine_context)
-        self._verify_cache_edits()
+        # Shifted by nothing, so a build missing the shift fails at load, not at an eviction.
+        if self._can_shift:
+            self._backend.kv_seq_add(self._engine_context, SEQ, 0, 0, 0)
 
     def _probe_tail_cut(self) -> bool:
         """Whether three decoded tokens can be cut back to one, cleared either way."""

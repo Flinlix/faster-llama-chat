@@ -55,10 +55,6 @@ class SplitRender:
         return [(text, own) for text, own in pieces if text]
 
 
-class TextNotPlaced(ValueError):
-    """The template writes a message's text otherwise than as text in its place."""
-
-
 def split_render(render: Callable[[list[dict]], str | None], messages: list[dict],
                  written: Callable[[str, str], str]) -> SplitRender | None:
     """``messages`` rendered and split; ``None`` where the template refuses them.
@@ -70,8 +66,8 @@ def split_render(render: Callable[[list[dict]], str | None], messages: list[dict
             the text itself.
 
     Raises:
-        TextNotPlaced: If the render is not the marked render with each
-            marker replaced by its text.
+        ValueError: If the render is not the marked render with each marker
+            replaced by its text.
     """
     for attempt in range(2):
         rendered = render(messages)
@@ -84,9 +80,9 @@ def split_render(render: Callable[[list[dict]], str | None], messages: list[dict
         if split is not None:
             return split
         # Once more, for a render that read the clock as it moved on between the two.
-    raise TextNotPlaced("this model's template writes a message's text otherwise than as "
-                        "text in its place, so it could not be kept apart from the "
-                        "template's own tags; the conversation cannot be written")
+    raise ValueError("this model's template writes a message's text otherwise than as "
+                     "text in its place, so it could not be kept apart from the "
+                     "template's own tags; the conversation cannot be written")
 
 
 @dataclass(frozen=True)
