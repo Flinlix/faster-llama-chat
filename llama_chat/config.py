@@ -15,6 +15,19 @@ UNQUANTIZED_KV_CACHE_TYPE = "f16"
 LOG_LEVELS = ("debug", "info", "warn", "error", "none")
 
 
+class InvalidSettingError(ValueError):
+    """A setting the configuration refuses.
+
+    Attributes:
+        field: The name of the setting, as :class:`Config` and
+            :class:`Sampling` spell it.
+    """
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 @dataclass(frozen=True)
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`.
@@ -48,14 +61,15 @@ class Config:
         evict_above_fraction: Fraction of ``context_size`` above which the
             oldest messages are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
+        evict_to_fraction_without_shift: Where the cache cannot shift, the
+            fraction of ``evict_above_tokens`` an eviction brings the
+            conversation down to, so that the cache is decoded again only
+            every few turns rather than every turn. Must be in ``(0, 1]``.
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.
         max_reply_tokens: Cap on tokens per generation, capped again so the
             total stays inside ``context_size``.
-        oversize_policy: What happens to a message that cannot fit even with
-            everything but the system prompt evicted: ``"reject"`` raises,
-            ``"truncate"`` clips the content and keeps the turn-terminator tag.
         min_reply_tokens: Refuse a request with
             :class:`~llama_chat.reply.ContextOverflowError` when fewer than
             this many tokens would be left for the reply. ``0`` disables it,
@@ -97,9 +111,9 @@ class Config:
 
     context_size: int = 4096
     evict_above_fraction: float = 0.75
+    evict_to_fraction_without_shift: float = 0.5
     max_history_messages: int | None = None
     max_reply_tokens: int = 1024
-    oversize_policy: str = "reject"
     min_reply_tokens: int = 32
 
     # Generation
@@ -122,55 +136,57 @@ class Config:
 
     def __post_init__(self) -> None:
         if not 0.0 < self.evict_above_fraction <= 1.0:
-            raise ValueError("evict_above_fraction must be in (0, 1]")
+            raise InvalidSettingError("evict_above_fraction",
+                                      "evict_above_fraction must be in (0, 1]")
+        if not 0.0 < self.evict_to_fraction_without_shift <= 1.0:
+            raise InvalidSettingError("evict_to_fraction_without_shift",
+                                      "evict_to_fraction_without_shift must be in (0, 1]")
         if self.context_size <= 0:
-            raise ValueError("context_size must be positive")
+            raise InvalidSettingError("context_size", "context_size must be positive")
         if self.evict_above_tokens < 1:
-            raise ValueError(
+            raise InvalidSettingError(
+                "evict_above_fraction",
                 f"evict_above_fraction ({self.evict_above_fraction}) of "
                 f"context_size ({self.context_size}) rounds down to no tokens, "
-                "so not even a system prompt would ever fit"
-            )
+                "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
-            raise ValueError("max_batch_tokens must be positive")
+            raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
         if self.max_reply_tokens <= 0:
-            raise ValueError("max_reply_tokens must be positive")
+            raise InvalidSettingError("max_reply_tokens", "max_reply_tokens must be positive")
         if self.min_reply_tokens < 0:
-            raise ValueError("min_reply_tokens must be >= 0")
+            raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")
         if self.min_reply_tokens >= self.context_size:
-            raise ValueError(
+            raise InvalidSettingError(
+                "min_reply_tokens",
                 f"min_reply_tokens ({self.min_reply_tokens}) must be below "
                 f"context_size ({self.context_size}); no request could leave "
-                "that many tokens free, so every one of them would be refused"
-            )
+                "that many tokens free, so every one of them would be refused")
         if self.max_history_messages is not None and self.max_history_messages < 1:
-            raise ValueError(
-                "max_history_messages must be None or >= 1 "
-                "(use None for no message limit)"
-            )
+            raise InvalidSettingError(
+                "max_history_messages",
+                "max_history_messages must be None or >= 1 (use None for no message limit)")
         if self.repetition_penalty is not None and self.repetition_penalty <= 0:
-            raise ValueError("repetition_penalty must be > 0 (1.0 disables)")
+            raise InvalidSettingError("repetition_penalty",
+                                      "repetition_penalty must be > 0 (1.0 disables)")
         if self.top_p is not None and not 0.0 < self.top_p <= 1.0:
-            raise ValueError("top_p must be in (0, 1]")
+            raise InvalidSettingError("top_p", "top_p must be in (0, 1]")
         if self.min_p is not None and not 0.0 <= self.min_p <= 1.0:
-            raise ValueError("min_p must be in [0, 1]")
+            raise InvalidSettingError("min_p", "min_p must be in [0, 1]")
         _check_seed(self.seed)
-        if self.oversize_policy not in ("reject", "truncate"):
-            raise ValueError("oversize_policy must be 'reject' or 'truncate'")
         if self.log_level not in LOG_LEVELS:
-            raise ValueError(f"log_level must be one of {list(LOG_LEVELS)}")
+            raise InvalidSettingError("log_level",
+                                      f"log_level must be one of {list(LOG_LEVELS)}")
         if self.kv_cache_type is not None:
             if self.kv_cache_type not in KV_CACHE_TYPES:
-                raise ValueError(
-                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_TYPES)}"
-                )
+                raise InvalidSettingError(
+                    "kv_cache_type",
+                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_TYPES)}")
             if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE \
                     and not self.flash_attention:
-                raise ValueError(
-                    f"kv_cache_type={self.kv_cache_type!r} is quantized and "
-                    f"requires flash_attention=True "
-                    f"(only {UNQUANTIZED_KV_CACHE_TYPE!r} works without it)"
-                )
+                raise InvalidSettingError(
+                    "kv_cache_type",
+                    f"kv_cache_type={self.kv_cache_type!r} is quantized and requires "
+                    f"flash_attention=True (only {UNQUANTIZED_KV_CACHE_TYPE!r} works without it)")
 
     @property
     def evict_above_tokens(self) -> int:
@@ -202,7 +218,7 @@ class Sampling:
 
     def __post_init__(self) -> None:
         if self.top_p is not None and not 0.0 < self.top_p <= 1.0:
-            raise ValueError("top_p must be in (0, 1]")
+            raise InvalidSettingError("top_p", "top_p must be in (0, 1]")
         _check_seed(self.seed)
 
     @property
@@ -215,8 +231,8 @@ class Sampling:
         """``config`` with this request's settings in place of its own.
 
         Raises:
-            ValueError: If a setting is one :class:`Config` refuses, such as a
-                seed outside its range.
+            InvalidSettingError: If a setting is one :class:`Config` refuses,
+                such as a seed outside its range.
         """
         return replace(config, **self.overrides)
 
@@ -224,7 +240,5 @@ class Sampling:
 def _check_seed(seed: int | None) -> None:
     """Refuse a seed the sampler cannot take; ``None`` asks for a fresh one."""
     if seed is not None and not 0 <= seed <= 0xFFFFFFFE:
-        raise ValueError(
-            "seed must be None or an int in [0, 2**32 - 2] "
-            "(use None for a random seed)"
-        )
+        raise InvalidSettingError(
+            "seed", "seed must be None or an int in [0, 2**32 - 2] (use None for a random seed)")

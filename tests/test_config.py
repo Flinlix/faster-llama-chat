@@ -87,3 +87,14 @@ def test_a_sampling_replaces_exactly_the_fields_it_sets():
 def test_an_impossible_top_p_is_refused_where_it_is_built(bad):
     with pytest.raises(ValueError):
         Sampling(**bad)
+
+
+@pytest.mark.parametrize("settings, field", [
+    (dict(top_p=2.0), "top_p"), (dict(seed=-1), "seed"),
+    (dict(evict_to_fraction_without_shift=0.0), "evict_to_fraction_without_shift"),
+    (dict(min_reply_tokens=5000), "min_reply_tokens")])
+def test_a_refused_setting_names_its_field_as_data(settings, field):
+    from llama_chat import InvalidSettingError
+    with pytest.raises(InvalidSettingError) as refused:
+        Config(**settings)
+    assert refused.value.field == field and isinstance(refused.value, ValueError)

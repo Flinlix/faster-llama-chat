@@ -14,8 +14,30 @@ from collections.abc import Callable
 from typing import Iterator, Protocol
 
 from .config import Sampling
-from .messages import Eviction
-from .template import CallBoundary, TemplateFragments
+from .template import CallBoundary
+
+
+@dataclass
+class Eviction:
+    """One physical cache edit: remove a token range, then close the gap.
+
+    Remove ``[remove_start, remove_end)``, then shift every surviving token in
+    ``[remove_end, old_total)`` down by ``shift_delta``.
+
+    Attributes:
+        remove_start: Inclusive start of the removed token range.
+        remove_end: Exclusive end of the removed token range.
+        old_total: Total tokens in the cache before removal; marks the right
+            boundary of the shift range.
+    """
+
+    remove_start: int
+    remove_end: int
+    old_total: int
+
+    @property
+    def shift_delta(self) -> int:
+        return self.remove_end - self.remove_start
 
 
 @dataclass
@@ -51,13 +73,9 @@ class ModelReader(Protocol):
     def tokenize(self, text: str, add_special: bool = False,
                  parse_special: bool = True) -> list[int]: ...
 
-    def retokenized(self, tokens: list[int]) -> list[int]: ...
-
     def tags(self) -> tuple[str, ...]: ...
 
     def split_at_tags(self, text: str) -> list[tuple[str, bool]] | None: ...
-
-    def tokenizes_to_tags(self, text: str) -> bool: ...
 
     def first_special_token(self, text: str) -> int | None: ...
 
@@ -70,8 +88,6 @@ class ModelReader(Protocol):
         """``None`` where the model ships no template or it refuses the shape."""
 
     def chat_template_text(self) -> str | None: ...
-
-    def extract_fragments(self) -> TemplateFragments | None: ...
 
     def addon_call(self) -> dict: ...
 

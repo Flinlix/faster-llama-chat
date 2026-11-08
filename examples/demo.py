@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from llama_chat import ChatWrapper, Config
+from llama_chat import ChatWrapper, Config, ToolTurn
 from llama_chat.context import KVContext
 
 
@@ -49,10 +49,11 @@ def load_bar(frac: float, width: int = 40) -> None:
 
 
 def show(w: ChatWrapper) -> None:
-    rows = w.snapshot()
-    print(f"  cache: {w.total_tokens} tokens across {len(rows)} messages")
-    for r in rows:
-        print(f"    [{r['pos_start']:>5},{r['pos_end']:>5})  {r['role']:<10} ({r['n_tokens']} tok)")
+    history = w.history()
+    print(f"  cache: {w.total_tokens} tokens across {len(history)} messages after the system prompt")
+    for item in history:
+        role, text = ("assistant", item.text) if isinstance(item, ToolTurn) else item
+        print(f"    {role:<10} ({len(text)} chars)")
 
 
 def main() -> None:
@@ -113,8 +114,8 @@ def main() -> None:
     begin(sw, "You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
-        roles = [r["role"] for r in sw.snapshot()]
-        assert roles[0] == "system", "system message was evicted"
+        roles = [item[0] if isinstance(item, tuple) else "assistant" for item in sw.history()]
+        assert sw.system_prompt or not sw.can_take_system_prompt, "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
@@ -127,12 +128,7 @@ def main() -> None:
 
 def begin(chat, system_prompt, history=None):
     """Begin with ``system_prompt``, or without one where the model's template has no system turn."""
-    try:
-        return chat.begin(system_prompt, history)
-    except ValueError as refused:
-        if "no system turn" not in str(refused):
-            raise
-        return chat.begin("", history)
+    return chat.begin(system_prompt if chat.can_take_system_prompt else "", history)
 
 
 if __name__ == "__main__":

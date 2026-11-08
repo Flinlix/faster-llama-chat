@@ -56,9 +56,9 @@ def test_the_flag_says_where_a_declaration_lands_not_whether():
     """Every registered tool is meant to be told; the flag picks where."""
     registry = ToolRegistry()
     registry.register(lambda: {}, "gleich", name="early")
-    registry.register(lambda: {}, "später", name="late", in_system_prompt=False)
+    registry.register(lambda: {}, "später", name="late", declare_at_begin=False)
 
-    assert [s.name for s in registry.specs_for_system_prompt()] == ["early"]
+    assert [s.name for s in registry.specs_declared_at_begin()] == ["early"]
     assert sorted(s.name for s in registry.specs()) == ["early", "late"]
     assert [s.description for s in registry.specs() if s.name == "late"] == ["später"]
     # Runnable from the moment it is registered, wherever it is declared.
@@ -147,14 +147,14 @@ def test_register_takes_the_parameters_from_the_signature():
 def test_registering_a_name_again_replaces_it_and_where_it_is_declared():
     registry = ToolRegistry()
     registry.register(lambda: "first", "Erste.", name="clock",
-                      in_system_prompt=False)
+                      declare_at_begin=False)
     assert registry.specs()[0].description == "Erste."
-    assert registry.specs_for_system_prompt() == []
+    assert registry.specs_declared_at_begin() == []
 
     registry.register(lambda: "second", "Zweite.", name="clock")
     assert len(registry) == 1
     # The placement was replaced along with the rest of it.
-    assert [s.name for s in registry.specs_for_system_prompt()] == ["clock"]
+    assert [s.name for s in registry.specs_declared_at_begin()] == ["clock"]
     assert registry.call(ToolCall("clock", {})) == "second"
 
 

@@ -192,48 +192,16 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
     if found is None:
         return None
     tags, reply_with_thought = found
-    plain_prompt = fragments.generation_prompt or fragments.assistant_prefix
+    prompt = fragments.generation_prompt or fragments.assistant_prefix
     messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
     on = render(messages, generation_prompt=True, reasoning=True)
     off = render(messages, generation_prompt=True, reasoning=False)
-    system_prefix, system_suffix, prompt = fragments.system_prefix, None, plain_prompt
     if on is not None and off is not None and on != off:
-        system_prefix, prompt = None, _prompt_added(render, True)
-        if _SYS in on and _SYS in off:
-            (on_head, on_rest), off_rest = on.split(_SYS, 1), off.split(_SYS, 1)[1]
-            on_between, off_between = on_rest.split(_USER, 1)[0], off_rest.split(_USER, 1)[0]
-            # Only a switch in the system turn itself is decoded where it belongs.
-            first_user = off_between[len(fragments.system_suffix):]
-            if on_between == off_between:
-                system_prefix = on_head
-            elif (off_between.startswith(fragments.system_suffix)
-                  and on_between.endswith(first_user)):
-                system_prefix = on_head
-                system_suffix = on_between[:len(on_between) - len(first_user)]
+        prompt = _prompt_added(render, True)
         if prompt is None:
             return None
-    return Reasoning(thought_open=tags[0], thought_close=tags[1],
-                     system_prefix=system_prefix, system_suffix=system_suffix,
-                     generation_prompt=prompt,
-                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought),
-                     assistant_prefix=_past_reply_opening(render, fragments))
-
-
-def _past_reply_opening(render: Render, fragments: TemplateFragments) -> str | None:
-    """How a past reply opens in a conversation that reasons, where unlike the fragments' tag."""
-    rendered = render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": _ASSISTANT},
-        {"role": "user", "content": _USER2},
-    ], reasoning=True)
-    opened = _USER + fragments.user_suffix
-    if rendered is None or opened not in rendered:
-        return None
-    exchange = rendered.split(opened, 1)[1]
-    if _ASSISTANT not in exchange:
-        return None
-    prefix = exchange.partition(_ASSISTANT)[0]
-    return None if prefix == fragments.assistant_prefix else prefix
+    return Reasoning(thought_open=tags[0], thought_close=tags[1], generation_prompt=prompt,
+                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought))
 
 
 def extract_removed_thought(render: Render, fragments: TemplateFragments,
@@ -256,7 +224,6 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
                            {"role": "user", "content": _USER2}], reasoning=False)
         if rendered is not None and _ASSISTANT in rendered and _THOUGHT not in rendered:
             return Reasoning(thought_open=opening, thought_close=close,
-                             system_prefix=fragments.system_prefix,
                              generation_prompt=fragments.generation_prompt
                              or fragments.assistant_prefix)
     return None

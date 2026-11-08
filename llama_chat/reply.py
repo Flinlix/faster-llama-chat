@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar, get_args
 
 from .tools import ToolCall
+
+
+# Why a generation ended, the same list wherever a reply says it.
+StopReason = Literal["end_of_turn", "stop_string", "token_limit", "interrupted", "tool_call",
+                     "unreadable_tool_call"]
+STOP_REASONS: tuple[str, ...] = get_args(StopReason)
 
 
 class ContextOverflowError(ValueError):
@@ -28,9 +34,9 @@ class Reply:
         n_generated_tokens: Tokens sampled.
         n_evicted_messages: Messages evicted to bring the cache back inside both
             eviction limits.
-        stop_reason: One of ``"end_of_turn"``, ``"stop_string"``,
-            ``"token_limit"``, ``"interrupted"``, ``"tool_call"`` or
-            ``"unreadable_tool_call"``.
+        stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
+            a stop string was met, the token cap was reached, ``cancel`` was
+            set, a call was made, or a call was made that could not be read.
         tool_calls: The calls the model made, in the order it made them.
             Reported whatever became of them, so a call that was refused rather
             than run still says what the model asked for.
@@ -45,7 +51,7 @@ class Reply:
     n_prefilled_tokens: int
     n_generated_tokens: int
     n_evicted_messages: int
-    stop_reason: str
+    stop_reason: StopReason
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_limit_reached: bool = False
     n_reasoning_tokens: int = 0

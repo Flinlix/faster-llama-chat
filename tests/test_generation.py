@@ -4,7 +4,7 @@ from llama_chat.config import Config
 from llama_chat.template import CallBoundary
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
-from tests.wrappers import cache_tokens
+from tests.wrappers import cache_tokens, rows
 
 
 # These drive the real KVContext.generate over a stubbed backend, because
@@ -154,16 +154,17 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", calls="yield"))
-    assert wrapper.snapshot()[-1]["text"] == ""     # nothing visible yet
+    assert rows(wrapper)[-1]["text"] == ""     # nothing visible yet
 
     wrapper.inject_tool_result("clock", {"time": "09:00"})
     fake.call_script = []
     resumed = "".join(e for e in wrapper.reply(calls="yield") if isinstance(e, str))
 
-    row = wrapper.snapshot()[-1]
+    row = rows(wrapper)[-1]
     assert resumed and row["text"] == resumed       # every visible delta, once
     assert "clock" not in row["text"]               # the call is not reply text
     assert "09:00" not in row["text"]               # nor is the result
-    assert row["n_tokens"] > len(row["text"])       # yet both reached the cache
+    held = fake.text_of(fake.cache)
+    assert "clock" in held and "09:00" in held      # yet both reached the cache
     assert ("assistant", resumed) in seen           # and that is what is handed on
     assert fake.cache == cache_tokens(wrapper)

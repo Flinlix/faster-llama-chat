@@ -71,8 +71,23 @@ def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
     return tokens
 
 
-def tokenize_message(reader: ModelReader, prefix: str, content: str, suffix: str,
-                     add_special: bool = False) -> list[int]:
-    """One templated message: the template's ``prefix`` and ``suffix`` around the caller's ``content``."""
-    return tokenize_pieces(reader, [(prefix, False), (content, True), (suffix, False)],
-                           add_special=add_special)
+class MemoTokenizer:
+    """A model's tokenizer that remembers, up to a bound, what it tokenized."""
+
+    _BOUND = 20000                  # entries kept before the memory starts over
+
+    def __init__(self, reader: ModelReader) -> None:
+        self._reader = reader
+        self._known: dict = {}
+
+    def tokenize(self, text, add_special=False, parse_special=True):
+        key = (text, add_special, parse_special)
+        if key not in self._known:
+            if len(self._known) > self._BOUND:
+                self._known.clear()
+            self._known[key] = self._reader.tokenize(text, add_special=add_special,
+                                                     parse_special=parse_special)
+        return self._known[key]
+
+    def split_at_tags(self, text):
+        return self._reader.split_at_tags(text)

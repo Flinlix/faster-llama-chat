@@ -18,29 +18,35 @@ template describes tool calls can use them, the tags and the argument spelling
 being recovered from that template.
 """
 
-from .config import Config, Sampling
-from .messages import Eviction
-from .template import CallBody, TemplateFragments, ToolCallFragments
+from .cache_context import CacheContext, Eviction, GenerationAccumulator, ModelReader
+from .config import Config, InvalidSettingError, Sampling
+from .template import CallBody, CallBoundary, ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from .reply import ContextOverflowError, Reply, ReplyStream
+from .reply import STOP_REASONS, ContextOverflowError, Reply, ReplyStream, StopReason
 from .wrapper import ChatWrapper
 
 __all__ = [
     "Config",
+    "InvalidSettingError",
     "Sampling",
     "ChatWrapper",
     "ContextOverflowError",
     "Reply",
     "ReplyStream",
+    "StopReason",
+    "STOP_REASONS",
     "ToolCall",
     "ToolResult",
     "ToolTurn",
     "ToolSpec",
     "ToolRegistry",
     # For a cache context of one's own, ``ChatWrapper(context=...)``, and a
-    # model whose template describes too little, ``fragments=`` and ``tool_calls=``.
+    # model whose template writes no call it can be read from, ``tool_calls=``.
+    "CacheContext",
+    "ModelReader",
     "Eviction",
-    "TemplateFragments",
+    "GenerationAccumulator",
+    "CallBoundary",
     "ToolCallFragments",
     "CallBody",
 ]

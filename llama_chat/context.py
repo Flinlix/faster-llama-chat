@@ -1,7 +1,7 @@
 """KV-cache operations: tokenize, prefill, generate, evict and shift.
 
-Owns the model, context and sampler. Which messages to keep is not decided
-here; that policy lives in the wrapper.
+Owns the model, context and sampler. What the cache should hold is decided by
+the caller.
 """
 
 from __future__ import annotations
@@ -13,10 +13,9 @@ from collections.abc import Callable
 
 from ._backend import Backend, set_log_level
 from .config import Config, Sampling
-from .cache_context import GenerationAccumulator
-from .messages import Eviction
+from .cache_context import Eviction, GenerationAccumulator
 from .reply_text import earliest
-from .template import CallBoundary, TemplateFragments
+from .template import CallBoundary
 from .addon_files import addon_file
 from .model_sampling import with_model_sampling
 from .model_template import ModelTemplate
@@ -162,36 +161,6 @@ class KVContext:
             pieces.append((text[at:], False))
         return pieces
 
-    def tokenizes_to_tags(self, text: str) -> bool:
-        """Whether ``text`` tokenizes into the model's own tags and nothing else.
-
-        A tag is a control token or one a fine-tune added. See
-        design_history.md, "How a call's format is recovered".
-        """
-        toks = self.tokenize(text, add_special=False)
-        return bool(toks) and all(self._backend.is_special(self._vocab, t) for t in toks)
-
-    def retokenized(self, tokens: list[int]) -> list[int]:
-        """``tokens`` as their text tokenizes: the tags kept, the text between tokenized again."""
-        out, run = [], []
-        for token in tokens:
-            if self._backend.is_special(self._vocab, token):
-                out += self._tokenized_text(run)
-                out.append(token)
-                run = []
-            else:
-                run.append(token)
-        return out + self._tokenized_text(run)
-
-    def _tokenized_text(self, run: list[int]) -> list[int]:
-        """Plain tokens as their text tokenizes, or as they are where it is not whole UTF-8."""
-        try:
-            text = b"".join(self._backend.token_to_piece_bytes(self._vocab, token)
-                            for token in run).decode("utf-8")
-        except UnicodeDecodeError:
-            return run          # a reply cut inside a character
-        return self.tokenize(text, add_special=False, parse_special=False) if text else []
-
     def tags(self) -> tuple[str, ...]:
         """The texts of every one of the model's own tags, read once."""
         if self._tags is None:
@@ -223,17 +192,13 @@ class KVContext:
         """Render ``messages`` with the model's own chat template; see :meth:`ModelTemplate.render`.
 
         ``None`` where the model ships no template or the template rejects
-        this message shape. BOS is suppressed, so the render aligns with a
-        fragment prefill.
+        this message shape. BOS is left out: the sequence opener is the
+        tokenizer's to add.
         """
         if self._model_template is None:
             return None
         return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
                                            reasoning=reasoning, **variables)
-
-    def extract_fragments(self) -> TemplateFragments | None:
-        """The per-role fragments of the model's own template, ``None`` where it ships none."""
-        return None if self._model_template is None else self._model_template.extract_fragments()
 
     def addon_call(self) -> dict:
         """How the model's add-on file says a generated call is written, if it says."""

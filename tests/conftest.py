@@ -1,58 +1,63 @@
-"""Every wrapper a test builds on the model-free cache ends the test with that cache equal to its message table, and, where nothing is kept otherwise, to the template's render."""
+"""Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it."""
 
 import pytest
 
-from llama_chat.tools import ToolTurn
 from llama_chat.wrapper import ChatWrapper
 
-from .fake_context import FakeContext
+from .wrappers import held_renders
 
 
 @pytest.fixture(autouse=True)
-def _the_cache_holds_the_table_and_reads_as_the_template_renders_it(monkeypatch):
+def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
     built = []
     build = ChatWrapper.__init__
 
     def recording(self, *args, **kwargs):
         build(self, *args, **kwargs)
-        if isinstance(self._context, FakeContext):
+        if hasattr(self._context, "cache") and hasattr(self._context, "text_of"):
             built.append(self)
 
     monkeypatch.setattr(ChatWrapper, "__init__", recording)
     yield
     for wrapper in built:
-        tokens = [t for m in wrapper._table.messages for t in m.token_ids]
-        assert wrapper._context.cache == tokens, "the cache no longer holds the message table"
-        if _rendered_as_kept(wrapper):
-            rendered = _render(wrapper)
-            if rendered is not None:
-                assert wrapper._context.text_of(wrapper._context.cache) == rendered, \
-                    "the cache does not read as the template renders the conversation"
+        if wrapper._closed:
+            continue
+        conversation = wrapper._conversation
+        conversation._memory.repair()
+        assert wrapper._context.cache == conversation._memory.tokens, \
+            "the cache no longer holds what the wrapper holds it to be"
+        if not conversation.begun:
+            continue
+        messages, text_of = conversation.messages, wrapper._context.text_of
+        tools = [spec.as_declaration() for spec in conversation.tools] or None
+        renders = held_renders(wrapper._template, messages, tools,
+                               reasoning=conversation._reasoning)
+        held = text_of(wrapper._context.cache)
+        kept = [text_of(k.tokens) for k in conversation._kept]
+        assert any(_reads_as(held, render, kept) for render in renders), \
+            "the cache does not read as the template renders the conversation"
+        for render in (False, True):
+            split = conversation._split(messages, render)
+            if split is not None:
+                for kept_turn in conversation._kept:
+                    placed = conversation._place(kept_turn, messages, split)
+                    assert placed is not None, "a turn kept as generated was lost"
+                    assert placed[0] < placed[1], \
+                        "a turn kept as generated stands in for none of the template's text"
 
 
-def _rendered_as_kept(wrapper) -> bool:
-    """Whether the cache must read as the template renders the conversation's history.
-
-    Not where a turn keeps what it was generated as, a tool turn or a thought
-    the template keeps, nor where a message was cut to fit, nor where the
-    fragments were handed in rather than read from the template.
-    """
-    reasoning = wrapper._template.reasoning
-    return (wrapper._begun and not wrapper.reply_open and not wrapper._closed
-            and not any(wrapper._template_given.values())
-            and not (wrapper._reasoning and reasoning and reasoning.past_keeps_thought)
-            and wrapper.config.oversize_policy != "truncate"
-            and not any(m.holds_call for m in wrapper._table.messages))
-
-
-def _render(wrapper) -> str | None:
-    """The fake template's render of the system prompt and ``history()``, as ``begin`` would read them in."""
-    messages = [{"role": "system", "content": wrapper.system_prompt}] if wrapper.system_prompt else []
-    for item in wrapper.history():
-        if isinstance(item, ToolTurn):
-            return None             # covered above: such a turn keeps its tokens
-        messages.append({"role": item[0], "content": item[1]})
-    specs = [spec.as_declaration() for spec in wrapper._system_specs + wrapper._moving_specs]
-    return wrapper._context.render_with_model_template(messages, specs or None,
-                                                       reasoning=wrapper._reasoning)
-
+def _reads_as(held: str, render: str, kept: list[str]) -> bool:
+    """Whether ``held`` is ``render`` with a stretch in place of each kept turn, in order: what the cache holds around them reads as the template writes it."""
+    pieces = [held]
+    for turn in kept:
+        if turn not in pieces[-1]:
+            return False
+        before, after = pieces[-1].split(turn, 1)
+        pieces[-1:] = [before, after]
+    at = 0
+    for n, piece in enumerate(pieces):
+        found = render.find(piece, at) if n else (0 if render.startswith(piece) else -1)
+        if found < 0:
+            return False
+        at = found + len(piece)
+    return render.endswith(pieces[-1]) or held == render

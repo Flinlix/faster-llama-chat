@@ -11,12 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from llama_chat import ChatWrapper, Config
 from llama_chat.call_parsing import parse_calls
 from llama_chat.reply_text import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
-from .template_contexts import TaggedContext, TagTokenizingContext, TemplateContext
+from .template_contexts import (ConversationContext, TaggedContext, TagTokenizingContext,
+                                TemplateContext)
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
 _CONVERSATION = [("user", " ping "), ("assistant", " pong "), ("user", " again ")]
@@ -38,41 +40,46 @@ def test_the_template_loads_and_supports_what_it_is_known_to(path):
     assert (template._tool_calls is not None) == fixture["calls_tools"]
 
 
+def _held_before_the_reply(path, history, question, system=None, tools=None, reasoning=False):
+    """What a wrapper on ``path``'s template holds when it starts the reply to ``question``."""
+    context = ConversationContext(json.loads(path.read_text()), ["Fine."])
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
+    seen = []
+    context.before_reply = seen.append
+    if system is None:
+        system = "Be brief." if chat._template.has_system_turn else ""
+    chat.begin(system, history, tools=tools, reasoning=reasoning)
+    chat.reply(question).finish()
+    return seen[0], context, chat
+
+
+def _render(context, chat, messages, tools=None, reasoning=False):
+    system = [{"role": "system", "content": chat.system_prompt}] if chat.system_prompt else []
+    return chat._template.render(
+        system + messages, [spec.as_declaration() for spec in tools] if tools else None,
+        generation_prompt=True, reasoning=reasoning)
+
+
 @pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
 def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(path):
-    _fixture, context, template = _load(path)
-    messages = [{"role": "user", "content": " ping "}, {"role": "user", "content": " again "}]
-    rendered = context.render_with_model_template(messages, generation_prompt=True,
-                                                  reasoning=False)
-    formatter = template.formatter()
-    ours = (template.preamble() + formatter.fragment("user", " ping ")
-            + (template.user_turn_join or "") + formatter.fragment("user", " again ")
-            + formatter.generation_prompt())
-    if template.user_turn_join is None:
-        assert rendered != ours
-    else:
-        assert rendered == ours
-
-
-@pytest.mark.parametrize("stem, join", [("deepseek-r1-qwen3", "<｜Assistant｜>"), ("qwen-3.6", ""),
-                                        ("mistral-3", None), ("deepseek-v4.1", None)])
-def test_the_join_of_two_user_turns_is_read_from_the_template(stem, join):
-    _fixture, _context, template = _load(Path(__file__).parent / "templates" / f"{stem}.json")
-    assert template.user_turn_join == join
+    try:
+        held, context, chat = _held_before_the_reply(path, [("user", " ping ")], " again ")
+    except ValueError as refused:
+        assert "two user turns" in str(refused)
+        return
+    assert held == _render(context, chat, [{"role": "user", "content": " ping "},
+                                           {"role": "user", "content": " again "}])
 
 
 @pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
 def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(path):
-    _fixture, context, template = _load(path)
+    _fixture, _context, template = _load(path)
     for reasoning in (False, True) if template.can_reason else (False,):
-        formatter = template.formatter(reasoning)
+        history = _CONVERSATION[:2]
+        held, context, chat = _held_before_the_reply(path, history, _CONVERSATION[2][1],
+                                                     system="", reasoning=reasoning)
         messages = [{"role": r, "content": t} for r, t in _CONVERSATION]
-        rendered = context.render_with_model_template(
-            messages, generation_prompt=True, reasoning=reasoning)
-        ours = (template.preamble(reasoning)
-                + "".join(formatter.fragment(r, t) for r, t in _CONVERSATION)
-                + formatter.generation_prompt())
-        assert ours == rendered
+        assert held == _render(context, chat, messages, reasoning=reasoning), reasoning
 
 
 @pytest.mark.parametrize("path", [p for p in _TEMPLATES
@@ -142,38 +149,25 @@ def _reasoning_modes(template):
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
 def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
-    fixture = json.loads(path.read_text())
-    context = TaggedContext(fixture)
-    template = ResolvedTemplate(context)
-    template.ensure_tools_usable()
+    _fixture, _context, template = _load(path)
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", "sunny"), "It is sunny."))
-    prompt = "Be brief." if template.has_system_turn else ""
     for reasoning in _reasoning_modes(template):
-        formatter = template.formatter(reasoning)
-        if template.declares_in_newest_turn:
-            head, _, tail = (formatter.parts("system", "") if prompt
-                             else (template.preamble(reasoning), "", ""))
-            moving = template.newest_turn_declaration([_TOOL], reasoning)
-        else:
-            (head, tail), moving = template.system_turn_declaring([_TOOL], reasoning), ""
-        past = template.past_tool_turn(turn, reasoning=reasoning, specs=[_TOOL])
-        ours = (head + prompt + tail + formatter.fragment("user", "Weather?")
-                + "".join(text for text, _ in past)
-                + moving + formatter.fragment("user", "Thanks.") + formatter.generation_prompt())
-        messages = [*([{"role": "system", "content": prompt}] if prompt else []),
-                    {"role": "user", "content": "Weather?"},
-                    {"role": "assistant", "content": "", "tool_calls": [
-                        {"id": "call00000", "type": "function", "function": {
-                            "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
-                    {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
-                     "content": "sunny"},
-                    {"role": "assistant", "content": "It is sunny."},
-                    {"role": "user", "content": "Thanks."}]
-        rendered = context.render_with_model_template(
-            messages, tools=[_TOOL.as_declaration()], generation_prompt=True,
-            reasoning=reasoning, **template.template_variables)
-        assert ours == rendered, reasoning
+        held, context, chat = _held_before_the_reply(path, [("user", "Weather?"), turn],
+                                                     "Thanks.", tools=[_TOOL],
+                                                     reasoning=reasoning)
+        assert held == _render(context, chat, _past_turn_messages("sunny") + [
+            {"role": "user", "content": "Thanks."}], [_TOOL], reasoning), reasoning
+
+
+def _past_turn_messages(result: str) -> list[dict]:
+    return [{"role": "user", "content": "Weather?"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call00000", "type": "function", "function": {
+                    "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
+            {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
+             "content": result},
+            {"role": "assistant", "content": "It is sunny." if result == "sunny" else "Sunny."}]
 
 
 @pytest.mark.parametrize("path", list(_tool_templates()),
@@ -229,19 +223,8 @@ def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
 @pytest.mark.parametrize("path", list(_tool_templates()),
                          ids=lambda p: p.stem)
 def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
-    fixture = json.loads(path.read_text())
-    context = TaggedContext(fixture)
-    template = ResolvedTemplate(context)
-    formatter = template.formatter()
-    if template.declares_in_newest_turn:
-        opening = template.preamble() + template.newest_turn_declaration([_TOOL])
-    else:
-        opening = template.preamble_declaring([_TOOL])
-    ours = opening + formatter.fragment("user", "Weather?") + formatter.generation_prompt()
-    rendered = context.render_with_model_template(
-        [{"role": "user", "content": "Weather?"}], tools=[_TOOL.as_declaration()],
-        generation_prompt=True, reasoning=False, **template.template_variables)
-    assert ours == rendered
+    held, context, chat = _held_before_the_reply(path, [], "Weather?", system="", tools=[_TOOL])
+    assert held == _render(context, chat, [{"role": "user", "content": "Weather?"}], [_TOOL])
 
 
 @pytest.mark.parametrize("path", [p for p in _TEMPLATES if p.stem in ("gpt-oss", "muse-glimmer")],
@@ -264,24 +247,12 @@ _QUOTED_RESULT = '{"weather": "sunny"}\nsecond line'
 @pytest.mark.parametrize("path", list(_tool_templates()),
                          ids=lambda p: p.stem)
 def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
-    from llama_chat.resolved_template import written_between
-    context = TaggedContext(json.loads(path.read_text()))
-    template = ResolvedTemplate(context)
     turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
                      ToolResult("get_weather", _QUOTED_RESULT), "Sunny."))
-    past = "".join(text for text, _ in template.past_tool_turn(turn))
-    rendered = context.render_with_model_template(
-        [{"role": "user", "content": "Weather?"},
-         {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function", "function": {
-                 "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
-         {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
-          "content": _QUOTED_RESULT},
-         {"role": "assistant", "content": "Sunny."}, {"role": "user", "content": "Thanks."}],
-        reasoning=False, **template.template_variables)
-    assert past in rendered
-    prefix, suffix = template.result_wrapping("get_weather")
-    assert prefix + written_between(_QUOTED_RESULT, prefix, suffix) in rendered
+    held, context, chat = _held_before_the_reply(path, [("user", "Weather?"), turn], "Thanks.",
+                                                 tools=[_TOOL])
+    assert held == _render(context, chat, _past_turn_messages(_QUOTED_RESULT) + [
+        {"role": "user", "content": "Thanks."}], [_TOOL])
 
 
 def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():

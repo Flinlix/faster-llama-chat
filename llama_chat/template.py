@@ -1,4 +1,4 @@
-"""Per-message chat-template formatting, separate from tokenizing it."""
+"""What a chat template is read for: where a call and a reply end, the tags around a turn and a thought."""
 
 from __future__ import annotations
 
@@ -115,11 +115,12 @@ class ToolCallFragments:
 
 @dataclass(frozen=True)
 class TemplateFragments:
-    """The per-role template tags a turn is wrapped in.
+    """The template tags a turn is wrapped in.
 
     A turn renders as ``prefix + content + suffix``. Recovered from the model's
-    own GGUF chat template, or supplied via ``ChatWrapper(fragments=...)``. What
-    a tool call is wrapped in is :class:`ToolCallFragments`, its own argument.
+    own GGUF chat template, and read for what a generation holds: a thought,
+    the end of a reply. What a tool call is wrapped in is
+    :class:`ToolCallFragments`, its own argument.
 
     Attributes:
         system_prefix, system_suffix: Wrap a system turn.
@@ -181,44 +182,30 @@ _STRIPS = {"both": str.strip, "end": str.rstrip, "start": str.lstrip,
 
 @dataclass(frozen=True)
 class Reasoning:
-    """How a model's template marks a thought, and what turns reasoning on.
+    """How a model's template marks a thought, and what reasoning opens a reply with.
 
     A template without a switch writes the same conversation either way, so
     its forms with reasoning are its forms without.
 
     Attributes:
         thought_open, thought_close: Around the thought a reply opens with.
-        system_prefix: Opens the system turn of a conversation that reasons,
-            in place of the fragments' own. ``None`` where the template's
-            switch changes more of the conversation than its system turn, so
-            reasoning cannot be turned on as the template does.
-        system_suffix: Closes that system turn, in place of the fragments'
-            own, where the switch changes it too. ``None`` where it does not.
         generation_prompt: The whole generation prompt of a reply that
             reasons, the assistant tag included.
         past_keeps_thought: Whether the template writes a past reply's thought
             into the conversation, rather than leaving it out.
-        assistant_prefix: Opens a past reply of a conversation that reasons,
-            in place of the fragments' own, where the template writes it
-            otherwise, such as with an empty thought. ``None`` where it does not.
     """
 
     thought_open: str
     thought_close: str
-    system_prefix: str | None
     generation_prompt: str
-    system_suffix: str | None = None
     past_keeps_thought: bool = False
-    assistant_prefix: str | None = None
 
 
 class TemplateFormatter:
-    """Renders one message as ``prefix + text + suffix`` from its role's tags.
+    """What is read around sampling: the generation prompt, the closing after a reply, a reply's own opening.
 
-    A conversation is the concatenation of its per-message fragments, so
-    prefilling message by message yields the same tokens as prefilling the
-    whole conversation at once. What is decoded around sampling follows the
-    conversation's reasoning: ``reasoning`` is set for one that reasons.
+    It follows the conversation's reasoning: ``reasoning`` is set for one that
+    reasons.
     """
 
     def __init__(self, fragments: TemplateFragments,
@@ -226,53 +213,14 @@ class TemplateFormatter:
         self._fragments = fragments
         self._reasoning = reasoning
 
-    def _parts(self, role: str) -> tuple[str, str]:
-        """Return the ``(prefix, suffix)`` tags for ``role``.
-
-        Raises:
-            ValueError: If ``role`` is not one this template has tags for.
-        """
-        fragments, reasoning = self._fragments, self._reasoning
-        if role == "system" and reasoning:
-            return reasoning.system_prefix, (reasoning.system_suffix if reasoning.system_suffix
-                                             is not None else fragments.system_suffix)
-        if role == "system":
-            return fragments.system_prefix, fragments.system_suffix
-        if role == "user":
-            return fragments.user_prefix, fragments.user_suffix
-        if role == "assistant":
-            return fragments.assistant_prefix, fragments.assistant_suffix
-        raise ValueError(
-            f"unknown role: {role!r}; expected 'system', 'user' or 'assistant'")
-
-    def parts(self, role: str, text: str) -> tuple[str, str, str]:
-        """Return ``(prefix, content, suffix)`` for a complete message.
-
-        Callers tokenize ``content`` with special-token parsing off and the
-        tags with it on. See the README, "Special tokens in message content".
-        """
-        prefix, suffix = self._parts(role)
-        if role == "assistant" and self._reasoning and self._reasoning.assistant_prefix is not None:
-            prefix = self._reasoning.assistant_prefix
-        return prefix, self._fragments.content(role, text), suffix
-
-    def fragment(self, role: str, text: str) -> str:
-        """Return the templated fragment string for a complete message."""
-        prefix, content, suffix = self.parts(role, text)
-        return f"{prefix}{content}{suffix}"
-
-    def suffix(self, role: str) -> str:
-        """Return the turn-terminator tag for ``role`` (kept when truncating)."""
-        return self._parts(role)[1]
-
     def generation_prompt(self) -> str:
-        """Generation prompt decoded immediately before sampling begins."""
+        """The generation prompt a reply is sampled after."""
         if self._reasoning:
             return self._reasoning.generation_prompt
         return self._fragments.generation_prompt or self._fragments.assistant_prefix
 
     def assistant_close(self) -> str:
-        """Tokens decoded after generation to terminate the assistant turn."""
+        """What the template writes after a reply's text to close its turn."""
         return self._fragments.assistant_suffix
 
     def answer_opening(self) -> str:

@@ -10,6 +10,14 @@ import re
 from llama_chat.addon_files import addon_file
 from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.model_template import ModelTemplate
+from llama_chat.tools import ToolSpec
+
+# What the template-wide tests ask, answer and call, the same in every file.
+QUESTIONS = ["How are you?", "Name a colour.", "And a number?", "Why that one?",
+             "Tell me more.", "Shorter, please.", "Thanks!", "One more thing?"]
+ANSWERS = [f"Answer number {i}, kept short." for i in range(len(QUESTIONS) + 2)]
+WEATHER = ToolSpec(name="get_weather", description="Weather for a city",
+                   parameters={"type": "object", "properties": {"city": {"type": "string"}}})
 
 
 class TemplateContext:
@@ -39,12 +47,6 @@ class TemplateContext:
         found = set(TAG.findall(self._template))
         return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
 
-    def extract_fragments(self):
-        return self._model.extract_fragments()
-
-    def retokenized(self, tokens):
-        return list(tokens)
-
     def split_at_tags(self, text):
         pieces, at = [], 0
         for found in TAG.finditer(text):
@@ -53,10 +55,6 @@ class TemplateContext:
             pieces.append((found.group(), True))
             at = found.end()
         return pieces + ([(text[at:], False)] if at < len(text) else [])
-
-    def tokenizes_to_tags(self, text):
-        pieces = self.split_at_tags(text.strip())
-        return bool(pieces) and all(is_tag for _, is_tag in pieces)
 
     def first_special_token(self, text):
         return None             # no vocabulary, so no call tag resolves
@@ -127,6 +125,9 @@ class ConversationContext(TagTokenizingContext):
     Each generation writes the next reply of ``replies``, one token per
     character, and first hands ``before_reply`` the cache's text, so a test can
     compare it with the template's render of the conversation at that moment.
+    A tag is tokenized as its token only where special-token parsing is on, so
+    a tag typed into a message, which is tokenized with it off, stays its
+    characters and cannot become the model's own.
     """
 
     def __init__(self, fixture: dict, replies: list[str], can_shift: bool = True) -> None:
@@ -136,9 +137,24 @@ class ConversationContext(TagTokenizingContext):
         self.can_cut_tail = can_shift
         self.context_size = 1 << 20
         self.resets = 0             # how often the whole cache was emptied
-        self.edits: list[tuple[str, int]] = []   # ("cut", position) and ("shift", tokens), in order
+        self.decoded = 0            # every token prefilled
+        # ("cut", position), ("shift", start, tokens) and ("restore", position), in order.
+        self.edits: list[tuple] = []
+        self.rendered: list[int] = []            # how many messages each render was given
         self._replies = list(replies)
         self.before_reply = None
+
+    def tokenize(self, text, add_special=False, parse_special=True):
+        if not parse_special:
+            return [ord(c) for c in text]
+        return super().tokenize(text, add_special, parse_special)
+
+    def render_with_model_template(self, messages, tools=None, *,
+                                   generation_prompt=False, reasoning=None, **variables):
+        self.rendered.append(len(messages))
+        return super().render_with_model_template(messages, tools,
+                                                  generation_prompt=generation_prompt,
+                                                  reasoning=reasoning, **variables)
 
     def text_of(self, tokens) -> str:
         return "".join(self.token_text(token) for token in tokens)
@@ -153,6 +169,7 @@ class ConversationContext(TagTokenizingContext):
     def prefill(self, token_ids, start_pos, want_logits):
         assert start_pos == len(self.cache), (start_pos, len(self.cache))
         self.cache.extend(token_ids)
+        self.decoded += len(token_ids)
 
     def save_state(self):
         return list(self.cache)
@@ -160,6 +177,7 @@ class ConversationContext(TagTokenizingContext):
     def restore_state(self, state, pos):
         assert len(state) == pos
         self.cache = list(state)
+        self.edits.append(("restore", pos))
 
     def remove_from(self, pos):
         assert self.can_cut_tail and 0 <= pos <= len(self.cache)
@@ -168,7 +186,7 @@ class ConversationContext(TagTokenizingContext):
 
     def apply_eviction(self, ev):
         assert self.can_shift and len(self.cache) == ev.old_total
-        self.edits.append(("shift", ev.shift_delta))
+        self.edits.append(("shift", ev.remove_start, ev.shift_delta))
         del self.cache[ev.remove_start:ev.remove_end]
 
     def generate(self, start_pos, max_generated_tokens, out=None, cancel=None,
@@ -197,33 +215,24 @@ class ConversationContext(TagTokenizingContext):
             opening, closing = ([token] for token in boundary.tool_tokens)
         else:
             opening, closing = ([ord(c) for c in text] for text in boundary.call_texts)
+        for ch in call.before:
+            self.cache.append(ord(ch))
+            generated.token_ids.append(ord(ch))
+            generated.text += ch
+            yield ch
         for token in opening + [ord(c) for c in call.body] + closing:
             self.cache.append(token)
             generated.token_ids.append(token)
         generated.stop_reason, generated.tool_call = "tool_call", call.body
         return generated
-        yield
 
     def close(self):
         pass
 
 
 class ScriptedCall:
-    """A call the conversation context writes in place of a reply, ``body`` between its tags."""
+    """A call the conversation context writes in place of a reply, ``body`` between its tags, ``before`` it as reply text."""
 
-    def __init__(self, body: str) -> None:
+    def __init__(self, body: str, before: str = "") -> None:
         self.body = body
-
-
-class HonestTagContext(ConversationContext):
-    """The same, tokenizing a tag as its token only where special-token parsing is on.
-
-    Text tokenized with parsing off, as a caller's own is, keeps a tag it
-    contains as its characters, so a tag typed into a message cannot become
-    the model's own.
-    """
-
-    def tokenize(self, text, add_special=False, parse_special=True):
-        if not parse_special:
-            return [ord(c) for c in text]
-        return super().tokenize(text, add_special, parse_special)
+        self.before = before

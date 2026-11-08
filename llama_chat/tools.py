@@ -92,15 +92,15 @@ class ToolTurn:
 
 @dataclass
 class _RegisteredTool:
-    """One registered tool, and where its declaration belongs.
+    """One registered tool, and when the model is to be told about it.
 
-    ``in_system_prompt`` is an intent about placement, not a record of what the
-    model has been told.
+    ``declare_at_begin`` is an intent, not a record of what the model has been
+    told.
     """
 
     spec: ToolSpec
     function: Callable
-    in_system_prompt: bool
+    declare_at_begin: bool
 
 
 class ToolRegistry:
@@ -117,10 +117,10 @@ class ToolRegistry:
 
     def register(self, function: Callable, description: str, *,
                  name: str | None = None, parameters: dict | None = None,
-                 in_system_prompt: bool = True) -> str:
+                 declare_at_begin: bool = True) -> str:
         """Make ``function`` callable by the model, and return the name it uses.
 
-        A name already registered is replaced, its placement included.
+        A name already registered is replaced, when it is declared included.
 
         Args:
             function: What runs. Called by keyword with the model's arguments.
@@ -128,13 +128,13 @@ class ToolRegistry:
             name: The name the model calls, where that is not the function's own.
             parameters: An explicit JSON Schema object, for a signature whose
                 annotations cannot be described. Derived from them when omitted.
-            in_system_prompt: Where the model is told about it. ``True`` puts
-                the declaration in the system turn, which
-                :meth:`~llama_chat.wrapper.ChatWrapper.begin` writes at no extra
-                prefill and no eviction can take back. ``False`` leaves it for
-                :meth:`~llama_chat.wrapper.ChatWrapper.declare_unknown_tools`, a message
-                of its own that costs a prefill and can be evicted later. It is
-                runnable either way, from the moment it is registered.
+            declare_at_begin: When the model is told about it. ``True``
+                declares it as :meth:`~llama_chat.wrapper.ChatWrapper.begin`
+                writes the conversation; ``False`` leaves it for
+                :meth:`~llama_chat.wrapper.ChatWrapper.declare_unknown_tools`.
+                Either way the declaration goes where the template writes
+                declarations. It is runnable either way, from the moment it is
+                registered.
 
         Returns:
             The name the model calls it by, which is also how :meth:`call`
@@ -148,18 +148,18 @@ class ToolRegistry:
         spec = ToolSpec(name=name or _callable_name(function), description=description,
                         parameters=(parameters if parameters is not None
                                     else _parameters_of(function)))
-        self._entries[spec.name] = _RegisteredTool(spec, function, in_system_prompt)
+        self._entries[spec.name] = _RegisteredTool(spec, function, declare_at_begin)
         return spec.name
 
     def tool(self, description: str, *, name: str | None = None,
              parameters: dict | None = None,
-             in_system_prompt: bool = True) -> Callable:
+             declare_at_begin: bool = True) -> Callable:
         """Register the function this decorates, and return it unchanged.
 
         :meth:`register` in the form the function is written in.
 
         Args:
-            description, name, parameters, in_system_prompt: As
+            description, name, parameters, declare_at_begin: As
                 :meth:`register`.
 
         Raises:
@@ -168,17 +168,13 @@ class ToolRegistry:
         def attach(function: Callable) -> Callable:
             self.register(function, description, name=name,
                           parameters=parameters,
-                          in_system_prompt=in_system_prompt)
+                          declare_at_begin=declare_at_begin)
             return function
         return attach
 
-    def specs_for_system_prompt(self) -> list[ToolSpec]:
-        """The declarations that belong in the system turn.
-
-        What :meth:`~llama_chat.wrapper.ChatWrapper.begin` writes when it is
-        handed this registry.
-        """
-        return [e.spec for e in self._entries.values() if e.in_system_prompt]
+    def specs_declared_at_begin(self) -> list[ToolSpec]:
+        """The declarations :meth:`~llama_chat.wrapper.ChatWrapper.begin` writes when it is handed this registry."""
+        return [e.spec for e in self._entries.values() if e.declare_at_begin]
 
     def specs(self) -> list[ToolSpec]:
         """Every declaration, wherever it belongs.
@@ -209,9 +205,10 @@ class ToolRegistry:
         except ValueError:
             pass        # some builtins have no signature to check against
         try:
-            return entry.function(**call.arguments)
+            returned = entry.function(**call.arguments)
         except Exception as e:
             return {"error": "tool_raised", "message": f"{type(e).__name__}: {e}"}
+        return returned
 
     def __contains__(self, name: object) -> bool:
         return name in self._entries

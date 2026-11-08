@@ -1,103 +1,36 @@
-"""Pure bookkeeping tests for the message table (no model required)."""
+"""A history as begin takes it, and as the messages a template is given."""
 
-from llama_chat.messages import Message, MessageTable, n_newest_that_fit
-
-
-def _msg(role, n):
-    return Message(role, role[0] * n, list(range(n)))
+from llama_chat.cache_context import Eviction
+from llama_chat.messages import as_history, as_messages, exchange_starts
+from llama_chat.tools import ToolCall, ToolResult, ToolTurn
 
 
-def test_append_assigns_contiguous_positions():
-    t = MessageTable()
-    t.append(_msg("system", 3))
-    t.append(_msg("user", 4))
-    t.append(_msg("assistant", 5))
-    assert [(m.pos_start, m.pos_end) for m in t.messages] == [(0, 3), (3, 7), (7, 12)]
-    assert t.total == 12
+def test_an_eviction_shifts_what_follows_by_what_it_removes():
+    assert Eviction(remove_start=4, remove_end=10, old_total=30).shift_delta == 6
 
 
-def test_evicting_removes_whole_exchanges_so_the_survivors_open_on_a_user_turn():
-    t = MessageTable()
-    t.append(_msg("system", 3))
-    t.append(_msg("user", 4))       # positions [3, 7)
-    t.append(_msg("assistant", 5))  # positions [7, 12)
-    t.append(_msg("user", 2))       # positions [12, 14)
-
-    ev, count = t.evict_oldest_until(lambda: t.total <= 12)
-    # The user turn alone would fit; its reply goes with it.
-    assert count == 2
-    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 12, 14)
-    assert ev.shift_delta == 9
-    roles = [(m.role, m.pos_start, m.pos_end) for m in t.messages]
-    assert roles == [("system", 0, 3), ("user", 3, 5)]
-    assert t.total == 5
+def test_kept_history_opens_on_each_user_turn():
+    messages = [{"role": r, "content": ""} for r in
+                ("system", "user", "assistant", "user", "assistant")]
+    assert exchange_starts(messages) == [1, 3]
 
 
-def test_evict_oldest_until_coalesces():
-    t = MessageTable()
-    t.append(_msg("system", 3))
-    t.append(_msg("user", 4))       # positions [3, 7)
-    t.append(_msg("assistant", 5))  # positions [7, 12)
-    t.append(_msg("user", 6))       # positions [12, 18)
-
-    # Force dropping the two oldest evictable messages (4 + 5 tokens).
-    ev, count = t.evict_oldest_until(lambda: t.total <= 9)
-    assert count == 2
-    # One combined edit spanning exactly the dropped block [3, 12).
-    assert (ev.remove_start, ev.remove_end, ev.old_total) == (3, 12, 18)
-    assert ev.shift_delta == 9
-    # System preserved, survivor shifted down to close the gap.
-    roles = [(m.role, m.pos_start, m.pos_end) for m in t.messages]
-    assert roles == [("system", 0, 3), ("user", 3, 9)]
-    assert t.total == 9
+def test_every_history_comes_back_as_it_went_in():
+    histories = [
+        [("user", "q"), ("assistant", "a")],
+        [("user", "q"), ToolTurn(("Let me look.", ToolCall("a", {"x": 1}), ToolResult("a", "1"), "ok"))],
+        [("user", "q"), ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
+                                  ToolResult("b", "2"), "ok"))],
+        [("user", "q"), ToolTurn((ToolCall("a", {}),))],                  # still owed a result
+        [("user", "q"), ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
+    ]
+    for history in histories:
+        assert as_history(as_messages(history)) == history
 
 
-def test_evict_oldest_until_noop_when_already_fits():
-    t = MessageTable()
-    t.append(_msg("system", 3))
-    t.append(_msg("user", 4))
-    ev, count = t.evict_oldest_until(lambda: True)
-    assert ev is None and count == 0
-    assert t.total == 7
-
-
-def test_evict_oldest_until_stops_when_only_system_remains():
-    t = MessageTable()
-    t.append(_msg("system", 3))
-    ev, count = t.evict_oldest_until(lambda: False)  # can never fit
-    assert ev is None and count == 0
-    assert [m.role for m in t.messages] == ["system"]
-
-
-def test_n_evictable():
-    t = MessageTable()
-    assert t.n_evictable == 0
-    t.append(_msg("system", 1))
-    assert t.n_evictable == 0
-    t.append(_msg("user", 1))
-    t.append(_msg("assistant", 1))
-    assert t.n_evictable == 2
-
-
-def test_fit_newest_first():
-    # system=2, budget=10 -> 8 left. messages oldest..newest: [5,4,3]
-    # newest-first: 3 (->5 used 3), 4 (->9), 5 would exceed -> stop. keep 2.
-    assert n_newest_that_fit([5, 4, 3], system_tokens=2, budget=10) == 2
-    # everything fits
-    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10) == 3
-    # nothing fits
-    assert n_newest_that_fit([20], system_tokens=2, budget=10) == 0
-    # empty history
-    assert n_newest_that_fit([], system_tokens=2, budget=10) == 0
-
-
-def test_fit_newest_first_stops_at_the_message_limit():
-    # Budget alone would keep all three; the limit is what binds here.
-    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10,
-                            max_messages=2) == 2
-    # Whichever limit is reached first stops the walk, so the tighter one wins.
-    assert n_newest_that_fit([5, 4, 3], system_tokens=2, budget=10,
-                            max_messages=3) == 2
-    # None leaves the budget as the only limit.
-    assert n_newest_that_fit([1, 1, 1], system_tokens=2, budget=10,
-                            max_messages=None) == 3
+def test_each_result_of_a_batch_answers_its_own_call():
+    turn = ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
+                     ToolResult("b", "2"), "ok"))
+    messages = as_messages([("user", "q"), turn])
+    calls = [call["id"] for m in messages for call in m.get("tool_calls", [])]
+    assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == calls

@@ -1,18 +1,16 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
-import dataclasses
 
 import pytest
 
 from llama_chat.config import Config
 from llama_chat.template import Reasoning
-from llama_chat.tokenizing import tokenize_message
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import EMPTY_THOUGHT, FakeContext, THINK_ON
 
-from tests.wrappers import (THOUGHTFUL, assert_consistent, reasoning_wrapper, rendered_close,
-                            rendered_prompt, rendered_reply)
+from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
+                            rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
 class _KeepsThought(FakeContext):
     """A template that writes a past reply's thought into the conversation."""
 
@@ -29,17 +27,8 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     assert w.can_reason
     assert w._template.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
-        system_prefix="<[turn>system\n" + THINK_ON,
         generation_prompt="<[turn>model\n")
     assert w._template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
-
-
-def test_a_model_whose_thought_is_marked_but_cannot_be_switched_on_does_not_offer_reasoning():
-    w, _fake = reasoning_wrapper(reasoning=False)
-    w._template._reasoning = dataclasses.replace(w._template.reasoning, system_prefix=None)
-    assert not w.can_reason
-    with pytest.raises(ValueError, match="reasoning"):
-        w.begin("t", reasoning=True)
 
 
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
@@ -49,42 +38,34 @@ def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation()
     assert not w.can_reason
     with pytest.raises(ValueError, match="reasoning"):
         w.begin("t", reasoning=True)
-    assert [m["text"] for m in w.snapshot()] == ["s", "hi"]
+    assert [m["text"] for m in rows(w)] == ["s", "hi"]
 
 
 def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
     for reasoning in (True, False):
         w, fake = reasoning_wrapper(reasoning)
-        prefix, content, suffix = w._formatter.parts("system", "s")
-        assert prefix.endswith(THINK_ON) == reasoning
-        assert w._table.messages[0].token_ids == tokenize_message(fake, 
-            prefix, content, suffix, add_special=True)
+        assert system_turn(w).startswith("<[turn>system\n" + THINK_ON) == reasoning
+        assert system_turn(w).endswith("s<turn]>")
 
 
 def test_with_tools_declared_the_switch_is_rendered_with_them():
     w, fake = reasoning_wrapper()
     specs = [ToolSpec("uhr", "", {})]
     w.begin("s", tools=specs, reasoning=True)
-    head, tail = w._template.system_turn_declaring(specs, reasoning=True)
-    assert THINK_ON in head
-    assert w._table.messages[0].token_ids == tokenize_message(fake, 
-        head, "s", tail, add_special=True)
+    assert THINK_ON in system_turn(w) and "<decl>uhr</decl>" in system_turn(w)
 
 
 def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     w, fake = reasoning_wrapper(False, gen_text="Antwort.", gen_tokens=8)
-    before = len(fake.cache)
+    held = []
+    generate = fake.generate
+    fake.generate = lambda *a, **k: (held.append(held_text(w)), (yield from generate(*a, **k)))[1]
     w.reply("hi").finish()
-    user = fake.tokenize(fake.render_with_model_template(
-        [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}], reasoning=False)
-        [len(fake.render_with_model_template([{"role": "system", "content": "s"}],
-                                              reasoning=False)):])
-    opening = fake.tokenize(rendered_prompt(fake, reasoning=False))
     assert rendered_prompt(fake, reasoning=False).endswith(EMPTY_THOUGHT)
     # Generated after the empty thought, kept without it, as a past reply is.
-    assert (before, len(user) + len(opening)) in [(start, n) for start, n, _
-                                                  in fake.prefill_calls]
-    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Antwort.", w._reasoning))
+    assert held[0].endswith(EMPTY_THOUGHT)
+    assert rendered_reply(fake, "Antwort.", w._conversation._reasoning) in held_text(w)
+    assert EMPTY_THOUGHT not in held_text(w)
     assert_consistent(w, fake)
 
 
@@ -94,8 +75,9 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     assert "".join(stream) == "Antwort."
     assert stream.reply.text == "Antwort."
     assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
-    assert w.snapshot()[-1]["text"] == "Antwort."
-    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Antwort.", w._reasoning))
+    assert rows(w)[-1]["text"] == "Antwort."
+    assert rendered_reply(fake, "Antwort.", w._conversation._reasoning) in held_text(w)
+    assert "Denken" not in held_text(w)
     assert_consistent(w, fake)
     w.reply("weiter").finish()
     assert_consistent(w, fake)
@@ -115,7 +97,7 @@ def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
     w.inject("hist", "assistant")
     w.reply("hi").finish()
     assert_consistent(w, fake)
-    assert [m["text"] for m in w.snapshot()].count("hist") == 2
+    assert [m["text"] for m in rows(w)].count("hist") == 2
 
 
 def test_a_reply_that_called_a_tool_is_kept_as_generated():
@@ -125,11 +107,11 @@ def test_a_reply_that_called_a_tool_is_kept_as_generated():
     for event in w.reply("wie spät?", calls="yield"):
         call = event
     w.inject_tool_result(call, {"zeit": "12:00"})
-    generated = list(w._table.messages[-1].token_ids)
+    generated = list(fake.cache)
     for _event in w.reply(calls="yield"):
         pass
-    assert w._table.messages[-1].token_ids[:len(generated)] == generated
-    assert w.snapshot()[-1]["text"] == "Antwort."
+    assert fake.cache[:len(generated)] == generated          # the turn as it was generated
+    assert rows(w)[-1]["text"] == "Antwort."
     assert_consistent(w, fake)
 
 
@@ -137,7 +119,8 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w, fake = reasoning_wrapper()
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
-    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Ant", w._reasoning))
+    assert rendered_reply(fake, "Ant", w._conversation._reasoning) in held_text(w)
+    assert "Antwort" not in held_text(w)
     assert_consistent(w, fake)
 
 
@@ -145,7 +128,7 @@ def test_a_reply_that_is_all_thought_is_removed():
     w, fake = reasoning_wrapper()
     reply = w.reply("hi", max_reply_tokens=12).finish()   # cut inside the thought
     assert reply.text == "" and reply.stop_reason == "token_limit"
-    assert [m["role"] for m in w.snapshot()] == ["system", "user"]
+    assert [m["role"] for m in rows(w)] == ["system", "user"]
     assert_consistent(w, fake)
     w.reply("weiter").finish()
     assert_consistent(w, fake)
@@ -165,12 +148,13 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
     for _ in range(3):
         w.inject("hist", "user")
         w.inject("hist", "assistant")
-    evictions = len(fake.evictions)
+    evictions, at_eviction = len(fake.evictions), []
+    evict = fake.apply_eviction
+    fake.apply_eviction = lambda ev: (at_eviction.append(len(fake.prefill_calls)), evict(ev))
     w.reply("hi").finish()
     assert len(fake.evictions) > evictions
-    # The last cache edit is the past reply's decode, after the eviction.
-    assert fake.prefill_calls[-1][0] == w.snapshot()[-1]["pos_start"] + len(
-        fake.tokenize("<[turn>model\n"))
+    # The last cache edit is a decode after the eviction, which carries its shift.
+    assert at_eviction[-1] < len(fake.prefill_calls)
     assert_consistent(w, fake)
 
 
@@ -195,7 +179,7 @@ def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
     w, fake = reasoning_wrapper(gen_text=thoughtful, gen_tokens=len(thoughtful))
     reply = w.reply("hi", stop=["\n\n"]).finish()
     assert reply.text == "Antwort." and reply.stop_reason == "stop_string"
-    assert w.snapshot()[-1]["text"] == "Antwort."
+    assert rows(w)[-1]["text"] == "Antwort."
     assert_consistent(w, fake)
 
 
@@ -206,9 +190,8 @@ def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
     assert w._template.reasoning.past_keeps_thought
     w.begin("s", reasoning=True)
     w.reply("hi").finish()
-    assert w.snapshot()[-1]["text"] == "Antwort."
-    assert fake.tokenize(THOUGHTFUL) == w._table.messages[-1].token_ids[
-        len(fake.tokenize(rendered_prompt(fake, reasoning=True))):][:len(THOUGHTFUL)]
+    assert rows(w)[-1]["text"] == "Antwort."
+    assert rendered_prompt(fake, reasoning=True) + THOUGHTFUL in held_text(w)
     assert_consistent(w, fake)
 
 
@@ -224,10 +207,10 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
     w, fake = reasoning_wrapper(keeps_thought=True, tokens_spell_text=False)
     assert w._template.reasoning.past_keeps_thought
     reply = w.reply("hi").finish()
-    newest = w._table.messages[-1]
     assert reply.text == "Antwort."
-    assert newest.token_ids == w._context.tokenize(
-        rendered_prompt(fake, reasoning=True) + THOUGHTFUL + rendered_close(fake, reasoning=True))
+    assert (rendered_prompt(fake, reasoning=True) + THOUGHTFUL
+            + rendered_close(fake, reasoning=True)) in held_text(w)
+    assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
     assert_consistent(w, fake)
 
 
@@ -236,7 +219,7 @@ def test_a_header_naming_another_reader_is_never_shown():
     from llama_chat.reply_text import AnswerOpening, reply_header
     from llama_chat.template import Reasoning
     tags = Reasoning(thought_open=" to=self<|message|>", thought_close="<|eom|>",
-                     system_prefix="", generation_prompt="")
+                     generation_prompt="")
     header = reply_header(" to=user<|message|>", tags)
     assert header == ("to=", "<|message|>")
     opening = AnswerOpening(" to=user<|message|>", header)

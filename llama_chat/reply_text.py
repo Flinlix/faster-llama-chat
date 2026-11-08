@@ -33,6 +33,7 @@ class ThoughtFilter:
         self._strips_answer_start = False   # set after a thought
         self._started = inside      # whether an answer or a thought has begun
         self._leading_space = ""    # whitespace at the reply's start, held
+        self._thought: list[str] = []
         self.thought_pieces = 0
 
     def feed(self, text: str) -> str:
@@ -44,8 +45,11 @@ class ThoughtFilter:
             if self._in_thought:
                 end = self._held.find(self._close)
                 if end < 0:
-                    self._held = self._held[-len(self._close):]  # a close it may begin
+                    keep = len(self._close)                      # a close it may begin
+                    self._thought.append(self._held[:-keep])
+                    self._held = self._held[-keep:]
                     break
+                self._thought.append(self._held[:end])
                 self._held = self._held[end + len(self._close):]
                 self._in_thought, self._strips_answer_start = False, True
                 continue
@@ -69,6 +73,11 @@ class ThoughtFilter:
         return "".join(shown)
 
     @property
+    def thought(self) -> str:
+        """The thought text fed so far, its tags and surrounding whitespace left out."""
+        return "".join(self._thought).strip()
+
+    @property
     def in_thought(self) -> bool:
         """Whether the text fed so far ends inside a thought, its closing included."""
         return self._in_thought
@@ -80,6 +89,8 @@ class ThoughtFilter:
             complete: Whether the reply ended of its own accord. One that was
                 cut keeps none of it, the held text being the start of a tag.
         """
+        if self._in_thought:
+            self._thought.append(self._held)
         held, self._held = ("" if self._in_thought or not complete else self._held), ""
         return self._answer(held) + (self._leading_space if complete else "")
 

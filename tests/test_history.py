@@ -6,7 +6,7 @@ from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 from tests.fake_context import TOOL_CLOSE, TOOL_OPEN
 
 from tests.wrappers import (assert_consistent, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
-                            weather_registry)
+                            weather_registry, rows)
 
 
 # ----- beginning again from history() --------------------------------------
@@ -40,17 +40,15 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     live.inject_tool_result(call, {"zeit": "12:00"})
     for _event in live.reply(calls="yield"):
         pass
-    generated = live._table.messages[-1]
 
-    past, _ = unbegun_tool_wrapper()
+    past, past_fake = unbegun_tool_wrapper()
     past.begin("s", [("user", "wie spät?"), ToolTurn((
         ToolCall("uhr", {}), ToolResult("uhr", {"zeit": "12:00"}), "Gleich."))],
         tools=[ToolSpec("uhr", "", {})])
-    read_in = past._table.messages[-1]
-    assert (read_in.role, read_in.text) == ("assistant", "Gleich.")
+    assert past.history()[-1].text == "Gleich."
     # The live turn opens with the generation prompt, a past one as the template
-    # writes it; this formatter makes the two the same.
-    assert read_in.token_ids == generated.token_ids
+    # writes it; this template makes the two the same.
+    assert past_fake.cache == fake.cache
 
 
 def test_the_turns_own_text_is_never_read_as_a_tag():
@@ -61,8 +59,7 @@ def test_the_turns_own_text_is_never_read_as_a_tag():
     own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
     # Each is tokenized with special-token parsing off, joined to the plain text around it.
     assert all(any(text in run for run in own) for text in ("<call>", "</call>", "<turn]>"))
-    tokens = w._table.messages[-1].token_ids
-    assert tokens.count(TOOL_OPEN) == 1 and tokens.count(TOOL_CLOSE) == 1
+    assert fake.cache.count(TOOL_OPEN) == 1 and fake.cache.count(TOOL_CLOSE) == 1
 
 
 def test_a_conversation_goes_on_after_a_past_tool_turn():
@@ -77,7 +74,7 @@ def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
     w, _fake = begun_wrapper()
     with pytest.raises(ValueError):
         w.begin("s", [ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12")))])
-    assert [m["role"] for m in w.snapshot()] == ["system"]     # left as it was
+    assert [m["role"] for m in rows(w)] == ["system"]     # left as it was
 
 
 @pytest.mark.parametrize("closes_turn_before_next", [False, True])
@@ -101,7 +98,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     assert want_logits      # the reply is sampled straight from the read-in's end
     for _event in past.reply(calls="yield"):
         pass
-    assert past._table.messages[-1].token_ids == live._table.messages[-1].token_ids
+    assert past_fake.cache == fake.cache
     assert_consistent(past, past_fake)
 
 
@@ -113,3 +110,18 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
     again.begin(live.system_prompt, live.history(), tools=weather_registry())
     assert live.system_prompt == "persona"
     assert fake_again.cache == fake.cache
+
+
+# ----- what a caller is handed ---------------------------------------------
+def test_the_history_and_a_yielded_call_are_the_callers_to_change():
+    w, fake = tool_wrapper()
+    w.begin("persona", tools=weather_registry())
+    fake.call_script = ["weather{city:'Bonn'}"]
+    call, = [e for e in w.reply("wetter?", calls="yield") if isinstance(e, ToolCall)]
+    call.arguments["city"] = "Paris"
+    w.history()[-1].steps[-1].arguments["city"] = "Rom"
+    assert w.history()[-1].steps[-1].arguments == {"city": "Bonn"}
+    again, _ = tool_wrapper()
+    again.begin("persona", w.history(), tools=weather_registry())
+    again._conversation.owed_calls[0].arguments["city"] = "Rom"
+    assert again.history()[-1].steps[-1].arguments == {"city": "Bonn"}

@@ -14,6 +14,10 @@ declaration joins the system turn.
 
 ### How eviction works
 
+Superseded in part on 2026-11-08: the message table is gone, and what the cache
+should hold is the template's render, "Every text placed by a marker render".
+The triggers and the cache operations below still hold.
+
 Eviction has two triggers, and they are OR'd: the cache is trimmed when it
 crosses `evict_above_fraction × context_size`, and again when it holds more than
 `max_history_messages` non-system messages. Whichever binds first evicts, so a
@@ -83,6 +87,11 @@ Decode is often faster with fewer threads than prefill, because filling the
 pool oversubscribes llama.cpp's spin-waiting workers; measure on the host.
 
 ### How the template is read
+
+Superseded in part on 2026-11-08: the fragments are read from the template's
+renders alone and only for what a generation reads; the check that they
+round-trip is replaced by the narrower one in "Every text placed by a marker
+render".
 
 **The fragments are derived from the model automatically.** At construction the
 wrapper reads the model's own chat template from the GGUF
@@ -588,3 +597,326 @@ against `ChatWrapper`:
 
 What remains after a reply is the shift after the eviction and decoding the
 newest reply again as the template writes it, which `ChatWrapper` does too.
+
+## 2026-11-08: The render is the conversation's encoding
+
+The user chose to make the prototype the replacement (195A), under the name
+`ChatWrapper` with the same calls (198A), to refuse a model that ships no chat
+template (199A), and to refuse a message that does not fit instead of cutting it
+(200A).
+
+What changed:
+
+- `ChatWrapper` keeps its calls, its refusals and its tool loop, and holds the
+  conversation as the messages a template is given (`llama_chat/rendered_cache.py`).
+  The cache is the template's render of them, decoded only where it differs
+  from what the cache holds, with the windows of "Rendering windows". The
+  message table, the per-role building of each message, the moving
+  declarations, the join of two user turns, the later system turn, the
+  result wrapping and the past tool turn built from pieces are gone: the
+  template writes each of them where it writes them.
+- The pieces are still read from the template at load, for what a generation
+  holds: a thought, the end of a reply, a call and its format, and what a
+  template does to message text. They are no longer handed in;
+  `ChatWrapper(fragments=...)` is removed, and a model without a template is
+  refused at load. `oversize_policy` is removed with the cutting it chose.
+- A turn that called tools keeps the tokens it was generated as, from its
+  generation prompt through its calls, results and final reply. Each kept turn
+  records where it sits in the cache, moves with every removal before it, and
+  is dropped by a cut into it. Where the template writes the turn otherwise,
+  the cache goes on after it from where the template's version ends: after as
+  many call closings as the template writes for the turn's calls, or at the
+  closing it writes after the turn's last reply. Matching on the tokens after
+  the turn failed where rounds repeat, as nine identical calls do.
+- A call's tags are tokenized as the single tokens a generated call holds, so
+  a history read in is token for token the live turn it came from. A call's
+  arguments that hold a tag's characters are the caller's own text, never
+  read as tags, as message contents are.
+- A reply's thought is given to the template as `reasoning_content` only where
+  the template keeps a past reply's thought. Granite writes a past reply
+  otherwise when it is handed one, even though it drops it.
+- A reply without an answer is taken out again where the template writes two
+  user turns in a row, as before, and the limits are applied after it.
+- The limits count the conversation as the template renders it, without the
+  stand-in question. Counting the stand-in made a conversation seem longer
+  than it is and dropped exchanges that fitted. The window path counts the
+  same way, from a render of the window without the stand-in.
+- Exchanges are dropped before the decode ahead, so the shift lands on that
+  decode and not on the next question's. Where the window's own older
+  exchange must go too, or what would be decoded ahead does not fit the
+  context, the rest is rendered whole; the conversation is then down to one
+  exchange.
+- `Reply.n_prefilled_tokens` counts every token decoded for a request, the
+  decode ahead after the reply and a return to a saved state included.
+  `snapshot()` rows hold a message's role and text; the cache positions they
+  held came from the table.
+
+Tests that read the table were moved to what the cache reads as. The check
+every test on the model-free cache ends with now accepts the cache as the
+template's render of the conversation, with its generation prompt, without it,
+or decoded ahead up to where the next question goes. The fake template writes
+several rounds of calls in one turn, as real templates do.
+
+## 2026-11-08: Every text placed by a marker render, and the review's fixes
+
+The structure review of the replacement found nineteen faults it brought in,
+four the old code had, eight holes in the tests and a set of restructures. The
+user chose to fix all of them (201A, 202A), close every test hole and merge the
+two template-wide test files (203A), give the turn state one owner (204A),
+replace the searches with a marker render and split the engine file (205A),
+narrow the load check and stop a cache context from handing in template pieces
+(206A), make the public calls one way each (207A), rename the tool flag
+(208A), let a conversation follow the clock (209B), drop well below the limit
+where the cache cannot shift (210A), and commit without pushing (211A); the
+language-model image is not rebuilt yet (212B).
+
+### Every text placed by a marker render
+
+The cache must hold the render with each text of the caller's own (a content,
+a thought, a call's name and string arguments) tokenized as plain text, and
+each kept tool turn as it was generated. Both need to know where a text sits
+in the render. The replacement searched for each content with `find`, which
+took the first match: a message whose whole text was a stretch of template
+text, such as `<|im_end|>`, made the template's own tag plain text and the
+typed one a real turn end, on 49 of 52 templates. Kept turns were placed by
+counting closings, which found nothing on templates without a reply closing
+(GLM 4.7, GLM 5.3, Flint) and lost the turn.
+
+Now each render is made twice: as it is, and with a marker (`QQ<n>MQQ`,
+letters and digits, which trimming, escaping and quoting leave whole) in place
+of every text (`llama_chat/split_render.py`). The marked render says where each
+text goes; the real render must be the marked one with each marker replaced by
+its text as the template writes it: the text itself, as a content of its role
+is written (its strip and escapes), trimmed, or inside a JSON string. Where none
+of those fits, the text is what lies before the template's next text, placed
+only where exactly one place leaves the rest of the render matching; MiniCPM 5
+wraps an argument holding a tag in CDATA this way, and the text inside stays
+the caller's. A template that writes anything else of a text, its length or a
+branch on a word in it outside the text's place, makes the two renders differ
+elsewhere, and the conversation is refused there, rather than encoded with a
+guess. Empty replies carry no marker, because a template may write a reply
+only where it has text; empty user and tool contents carry one.
+
+A call's end is anchored after its last string argument, else after its name
+where the template first writes it: Gemma 4 and gpt-oss write the name again
+in the result block.
+
+Two renders per render cost one more template render each; the renders of one
+action are kept and reused within it.
+
+### The target, built without the cache
+
+What the cache should hold is now built from the render alone: the render
+tokenized, each kept turn's tokens in place of the template's version of it.
+A kept turn is placed by its messages: from the first tag after the text of
+the message before it (the question), to the end of its last call's closing
+after that call's own text, or to the end of its final reply's text, or, for a
+reply without text, to where the template's closing after a reply begins. A
+reply that ends a resumed turn with neither text nor call has nothing to place
+its end by; the turn stays kept up to its call, and the template writes the
+rest. Because the target no longer depends on the cache, the limits count what
+the cache holds, a kept turn longer than the template's version included, and
+a rebuild decodes kept turns as generated.
+
+The cache is then compared with the target token by token. A stretch the
+target no longer holds is still found by a search over the cache's tokens
+(`_dropped_stretch_end`), now tried after a drop and wherever the declarations
+move with the newest question (Mistral Small 3.2, Ministral), whose old block is
+removed in place instead of decoding the exchange after it again. A wrong match
+costs decoding only: what differs after it is decoded again, and the target is
+not taken from the cache. Taking the stretch from a recorded map of the cache
+instead was weighed and left out: it needs every cache edit to keep the map in
+step, for a search that is a decoding shortcut, not a placement.
+
+### One owner of the turn, of the tokens, and of a failed action
+
+- The conversation alone owns whether a reply is open and which calls are owed
+  a result (`RenderedCache.reply_open`, `owed_calls`); the wrapper keeps no
+  copy. A history that ends on a call restores it as owed.
+- `CacheSync` owns the token list the cache should hold. A cache that shifts
+  or cuts takes each change at once; one that cannot is brought up once before
+  the next generation or rest, from the newest saved state that still holds a
+  beginning of the tokens, else by decoding them again. So one turn that drops
+  twice is brought back once, nothing is decoded into a cache whose decode
+  failed, and a cut the cache refuses leaves it unknown and repaired by the
+  next action. A generation that follows a decode without logits decodes the
+  last token again with them.
+- Every action saves the conversation's state and the tokens first and puts
+  both back where it raises; the cache is brought back to them by the next
+  action. A refused or failed `begin`, a question whose decode fails, a result
+  that leaves no room for the reply: each leaves the conversation as it was.
+  A generation that fails keeps what it said, or, where it said nothing, the
+  question its own request asked is taken back; its cache is left to the next
+  action, so a second engine error cannot replace the first.
+- The history and the system prompt are published as a copy after each
+  change, so a reader on another thread never sees one half-built.
+- The wrapper uses the conversation's calls only: it no longer reaches into
+  the cache layer, renders through `ResolvedTemplate.render` alone, and takes
+  a reply's thought from `ThoughtFilter`, which collects it as it filters.
+
+### The clock, and a cache that cannot shift
+
+A template that writes the date follows the clock (209B). Each action renders
+how the conversation opens and compares it with the last; where it moved, the
+render made ahead and the window are set aside and the conversation is
+rendered whole, so the cache is decoded again once from the date on. Freezing
+the date per conversation was the other option, exact without the decode, but
+the model would read yesterday's date until the next `begin`. The template is
+no longer read again at `begin` for this, since nothing it is read for holds
+the date.
+
+Where the cache cannot shift, an eviction drops the oldest exchanges until the
+conversation holds at most `evict_to_fraction_without_shift` (0.5 by default)
+of the threshold, so the cache is decoded again from a saved state, or whole,
+only every few turns rather than every turn once full (210A). Refusing such
+models was the other option; it would have kept the rule's wording and lost
+Qwen 3.5.
+
+### What a template is read for, and refused for
+
+The load check no longer rebuilds a conversation from per-role pieces and
+compares it with the render, since the cache is the render. It checks what
+generation reads from the pieces: that the generation prompt ends the render
+of a question and that the closing after a reply follows a past reply's text,
+in each reasoning mode. `can_reason` now means the template marks a thought;
+the switch is the template's wherever it writes it, so a model whose switch
+changes more than its system turn reasons as its template does. The pieces
+are always read from the template's own render: `ModelReader.extract_fragments`
+is gone, and `TemplateFragments` is no longer exported. The `Reasoning` fields
+for the system turn and a past reply's opening, `TemplateFormatter.parts`,
+`fragment` and `tokenize_message` served only the old check and are removed.
+
+The check that older history stays written now refuses a template that refuses
+its probe, instead of passing it.
+
+### The public calls
+
+- `snapshot()` is removed; `history()` and `system_prompt` are safe from any
+  thread, and a caller's record keeps tool calls and results.
+- `can_take_system_prompt` says whether `begin` takes a system prompt.
+- `inject(text)` puts a question where the render made ahead left room for
+  it, as `reply(text)` does, generation prompt included.
+- `awaiting_tool_result` is removed: `reply_open` is the one state property.
+- `STOP_REASONS` and `StopReason` list the stop reasons; a refused setting is
+  an `InvalidSettingError` whose `field` names it.
+- `ToolRegistry.register(in_system_prompt=)` is `declare_at_begin=`, and
+  `specs_for_system_prompt()` is `specs_declared_at_begin()`: the template, not
+  the flag, decides where a declaration goes.
+
+### Faults the old code had
+
+- Llama 3.2 writes `<|python_tag|>` before a call its template opens with
+  plain text. A tag right before such a call is now held back while a call may
+  still follow, and is the call's where one does, so it is never shown.
+- The README promised `"interrupted"` for a stream closed early, which has no
+  reply to carry it.
+
+### Tests
+
+The two template-wide files are one, `tests/test_conversations.py`. Its checks
+take the expected render from what the test sent, not from the library's
+record; bound what one reply decodes by about four exchanges; drive a template
+of the file's own whose windows differ from its whole render; space a live
+call unlike the template writes it, on every tool template, add-on ones
+included; put a typed tag into the system prompt, a past message, an injected
+one, a tool result and a call argument and compare tokens with an expectation
+worked out in the test; and give every template replies with text, a thought
+closed where the generation prompt opens one. Measured against two deliberate
+breakages: recording every reply as empty failed 90 of the render checks, and
+switching off the removal in place failed the eviction check on all 53
+templates. `tests/conftest.py` now also covers the real-template contexts and
+checks the cache around each kept turn, and that no kept turn was lost.
+`tests/test_failures.py` drives each refused or failed action. The faults were
+found by the probes of the review; their tests were written after the fixes,
+not run against the code before them.
+
+### A fresh review of the change, and its fixes
+
+A reviewer who had not seen the work read the diff and probed it with fault
+injection over every template. What it found, and what changed:
+
+- **A question decoded at a stale position.** The render made ahead noted
+  where a spliced question's run began, and a later question that was not
+  spliced, a failed generation or a rolled-back settle left that note in
+  place. The window check compared only the template's text before the
+  question, which is the same before every question, so the cache could lose a
+  whole exchange that the conversation still held (48 of 52 templates after a
+  generation that failed part-way). The note now holds the question it was
+  taken for, is cleared by every new question and every failed generation,
+  and the window checks that the cache still holds what the splice decoded
+  there. (A render's tokens of the question cannot be compared instead: where
+  the template's text between a question and its reply holds no tag, as in
+  Mistral's, the question shares its plain run with the reply.)
+- **Declarations that move with each question, on a cache that cannot cut.**
+  Mistral Small 3.2 and Ministral 2410 declare tools before the newest
+  question. On a cache that can neither shift nor cut, both saved states lay
+  past the block the next move cuts back to, so every reply decoded the whole
+  conversation again, against invariant 2. Where declarations move, each sync
+  now saves a state where it cuts, which is where the next move cuts back to.
+  A reply then decodes the previous exchange and the declarations again, about
+  one exchange more than on a cache that shifts. The cost is one saved state
+  more per action on such a template. Pinning a state after the system turn,
+  so that an eviction on such a cache also skips decoding the system turn
+  again, is offered as a decision, not built.
+- **A failed generation took back a message it had not added.** Only the
+  question the request itself asked is taken back now, the tokens put back as
+  they were before it, and `on_message` is not told of a reply that was never
+  recorded.
+- **A turn nobody could close.** Where the decode of the error result for an
+  unreadable call failed, the turn stayed open and owed a call the caller was
+  never handed. It now closes as a reply without the call before the error is
+  raised.
+- **A kept reply without text placed at zero width.** Its end was searched
+  from the first tag after the question, which found the question's own
+  closing where the two closings are the same text, so the cache held the
+  reply's opening twice. Its end is now the last closing before the next text
+  of the caller's own. The window and the oldest-exchange renders also refuse
+  an exchange that holds a kept turn, which a reply whose call was dropped
+  still does. `tests/conftest.py` now requires every kept turn to stand in for
+  template text of its own.
+- **Exchanges that repeat word for word.** Removing the oldest exchange
+  searched for where the cache goes on as the new head render does; where two
+  exchanges read the same, the search found nothing to remove and the loop
+  dropped everything down to two exchanges. The stretch is now located by
+  known positions: before the drop, the cache up to the tag after the second
+  oldest exchange's reply is checked against a render of the oldest two; after
+  it, the render of the oldest two up to the tag after the first one's reply
+  replaces it, which the window check guarantees reads as the whole render.
+- **A refused action cost a cache that cannot cut a whole decode.** Putting
+  back unchanged tokens dropped the note that the last decode left logits, so
+  the next generation decoded the last token again, which on such a cache
+  means going back to an older state or decoding everything (503 tokens
+  instead of 15 in the probe). Unchanged tokens now change nothing.
+- **Shared argument dicts.** `history()`, an owed call and a yielded call each
+  hand the caller its own copy.
+- **Kept turns by object, not by `id()`.** A removed turn's position could have
+  been read for a new turn given the same id.
+- **Shortening a kept reply** is refused like shortening one that holds a
+  call: its tokens are kept as generated.
+- **A thought's closing tag held back as a call's.** Only a tag that is not
+  the thought's own is held back where a plain-text call may follow it.
+
+Found while fixing the last one: with calls turned off on a template whose
+call opens as plain text and whose reply can end in text, the generation loop
+called `startswith(None)` on the first special token. A plain-text opening is
+now only looked for where there is one.
+
+Not a defect: while a call is open, Mistral Small 3.2's cache keeps the
+declarations before the question, where its template's render of a
+conversation ending on a call writes none; the render with the result written
+puts them back, and that is what the cache serves next.
+
+Not changed: `history()` and `system_prompt` are two reads, so a reader on
+another thread can pair them across a `begin`. One call returning both would
+reopen the decision above to remove `snapshot()`; it is offered as a decision.
+
+### Measured before this round's changes
+
+On Gemma 4 26B on the GPU, about 7,350 tokens kept in an 8k context, the
+replacement as it stood before this entry: the wait for the first word was
+196 ms for an 8-word question (the old code 195 ms) and 202 ms for a 20-word
+one (202 ms), and the work after each reply 416 ms (406 ms). Plain chat on 8
+real models, 12 replies each in a small context, held the template's render
+before every reply. This round's changes are not measured on a real model yet:
+the language-model image still runs the code before them (212B).
+

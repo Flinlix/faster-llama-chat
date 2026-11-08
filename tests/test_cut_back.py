@@ -6,8 +6,8 @@ from llama_chat.config import Config
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
-from tests.wrappers import (assert_consistent, begun_wrapper, reasoning_wrapper, rendered_close,
-                            rendered_reply)
+from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
+                            reasoning_wrapper, rendered_reply, rows)
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -22,7 +22,7 @@ def test_a_cut_keeps_the_prefix_and_the_cache_agrees():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply("hi").finish()
     w.truncate_last_reply("Eins.")
-    assert w.snapshot()[-1]["text"] == "Eins."
+    assert rows(w)[-1]["text"] == "Eins."
     assert_consistent(w, fake)
 
 
@@ -38,27 +38,19 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     """Same text, other tokens: the template's past reply is the text, tokenized."""
     w, fake = begun_wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
     reply = w.reply("hi").finish()
-    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "ok!!"))
+    assert rendered_reply(fake, "ok!!") in held_text(w)
+    assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
     assert reply.text == "ok!!"
     assert_consistent(w, fake)
 
 
-def test_a_reply_after_an_empty_assistant_tag_is_kept_as_its_text_too():
-    """A template may open a reply with nothing at all, as Mistral's does."""
-    from dataclasses import replace
-    from tests.fake_context import DEFAULT_FRAGMENTS
+def test_a_model_that_ships_no_chat_template_is_refused_at_load():
+    class _NoTemplate(FakeContext):
+        def render_with_model_template(self, messages, tools=None, **options):
+            return None
 
-    class _TagsOnly(FakeContext):
-        def render_with_model_template(self, *args, **kwargs):
-            return None             # no template: the tags are the ones supplied
-
-    fake = _TagsOnly(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
-                    fragments=replace(DEFAULT_FRAGMENTS, assistant_prefix=""))
-    w.begin("s")
-    w.reply("hi").finish()
-    assert w._table.messages[-1].token_ids == fake.tokenize("ok!!" + DEFAULT_FRAGMENTS.assistant_suffix)
-    assert_consistent(w, fake)
+    with pytest.raises(ValueError, match="no chat template"):
+        ChatWrapper(Config(context_size=500), context=_NoTemplate())
 
 
 def test_the_tokens_that_stay_are_not_decoded_again():
@@ -67,9 +59,9 @@ def test_the_tokens_that_stay_are_not_decoded_again():
     before = list(fake.prefill_calls)
     w.truncate_last_reply("Eins.")
     (start, n, _logits), = fake.prefill_calls[len(before):]
-    closing = fake.tokenize(rendered_close(fake))
-    assert n == len(closing)
-    assert start == w.snapshot()[-1]["pos_start"] + w.snapshot()[-1]["n_tokens"] - n
+    # From the end of what stays: the closing and the next question's opening.
+    assert fake.text_of(fake.cache[:start]).endswith("Eins.")
+    assert n == len("<turn]>\n<[turn>")
 
 
 def test_keeping_the_whole_text_changes_nothing():
@@ -100,7 +92,8 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     w, fake = begun_wrapper()
     w.inject("Eins. Zwei.", "assistant")
     w.truncate_last_reply("Eins.")
-    assert w._table.messages[-1].token_ids == fake.tokenize(rendered_reply(fake, "Eins."))
+    assert held_text(w).endswith(rendered_reply(fake, "Eins.").rstrip("\n") + "\n<[turn>")
+    assert "Zwei" not in held_text(w)
     assert_consistent(w, fake)
 
 
@@ -125,7 +118,7 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     w.truncate_last_reply("Eins.")
     # From the state saved before the reply where there is one, else rebuilt.
     assert fake.rebuilds == rebuilds + (not saves_state)
-    assert w.snapshot()[-1]["text"] == "Eins."
+    assert rows(w)[-1]["text"] == "Eins."
     assert_consistent(w, fake)
 
 
@@ -137,8 +130,7 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
     w.reply("hi").finish()
     # No rebuild: the request and the past reply are all that is decoded again.
     assert fake.rebuilds == rebuilds
-    assert fake.total_prefilled() - prefilled < 2 * (
-        len(w._table.messages[-1].token_ids) + len(w._table.messages[-2].token_ids)) + 20
+    assert fake.total_prefilled() - prefilled < 2 * len(newest_turn(w)) + 20
     assert_consistent(w, fake)
     w.truncate_last_reply("Ant")
     assert fake.rebuilds == rebuilds
@@ -225,4 +217,4 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
         w.begin("s")
         w.reply("hi").finish()
         w.reply("again").finish()
-        assert fake.cache == [t for m in w._table.messages for t in m.token_ids]
+        assert_consistent(w, fake)

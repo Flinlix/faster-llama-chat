@@ -22,10 +22,43 @@ def tool_wrapper(**kw):
 
 
 def cache_tokens(wrapper):
-    toks = []
-    for m in wrapper._table.messages:
-        toks.extend(m.token_ids)
-    return toks
+    """What the wrapper holds the cache to be, token by token."""
+    return list(wrapper._conversation._memory.tokens)
+
+
+def held_text(wrapper) -> str:
+    """What the fake cache spells: the characters, the call tags and the generated text."""
+    return wrapper._context.text_of(wrapper._context.cache)
+
+
+def newest_turn(wrapper) -> str:
+    """The cache's text from the newest user turn on."""
+    text = held_text(wrapper)
+    return text[text.rfind("<[turn>user"):]
+
+
+def system_turn(wrapper) -> str:
+    """The cache's text up to the end of the system turn."""
+    text = held_text(wrapper)
+    return text[:text.find("<turn]>") + len("<turn]>")]
+
+
+def held_renders(template, messages, tools=None, **options) -> list[str]:
+    """What a cache holding ``messages`` may read as: their render with the generation prompt or without, or decoded ahead of the next question up to where it goes."""
+    from llama_chat.render_checks import STAND_IN as _STAND_IN
+    render = lambda m, prompt: template.render(       # noqa: E731
+        m, tools, generation_prompt=prompt, **options)
+    found = [render(messages, False), render(messages, True)]
+    ahead = render(messages + [{"role": "user", "content": _STAND_IN}], True)
+    if ahead is not None and _STAND_IN in ahead:
+        before = ahead[:ahead.index(_STAND_IN)]
+        cut = len(before)
+        for piece, is_tag in reversed(template._context.split_at_tags(before) or []):
+            if is_tag:
+                break
+            cut -= len(piece)
+        found.append(before[:cut])
+    return [text for text in found if text is not None]
 
 
 def weather_registry():
@@ -50,11 +83,9 @@ def begun_wrapper(**fake_kw):
 
 
 def assert_consistent(wrapper, fake):
-    """The physical cache equals the concatenation of the message table."""
+    """The physical cache holds what the wrapper holds it to be."""
     assert fake.cache == cache_tokens(wrapper)
-    snap = wrapper.snapshot()
-    if snap:
-        assert snap[-1]["pos_end"] == wrapper.total_tokens == len(fake.cache)
+    assert wrapper.total_tokens == len(fake.cache)
 
 
 THOUGHTFUL = "<thought>Denken</thought>Antwort."
@@ -96,3 +127,13 @@ def rendered_reply(fake, text, reasoning=None) -> str:
 def rendered_close(fake, reasoning=None) -> str:
     """What the fake template writes after a reply's text to close its turn."""
     return rendered_reply(fake, "TEXT", reasoning).split("TEXT", 1)[1]
+
+
+def rows(wrapper) -> list[dict]:
+    """The conversation as ``{"role", "text"}`` rows, the system prompt first, read from what the wrapper publishes."""
+    from llama_chat.tools import ToolTurn
+    found = [{"role": "system", "text": wrapper.system_prompt}] if wrapper.system_prompt else []
+    for item in wrapper.history():
+        role, text = ("assistant", item.text) if isinstance(item, ToolTurn) else item
+        found.append({"role": role, "text": text})
+    return found

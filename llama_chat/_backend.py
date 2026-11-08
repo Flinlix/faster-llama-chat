@@ -221,7 +221,7 @@ class Backend:
                           generation_prompt: bool = False):
         """A renderer for one GGUF chat template, called with messages and tools.
 
-        BOS is suppressed, so what it returns aligns with a fragment prefill.
+        BOS is left out: the sequence opener is the tokenizer's to add.
         Template variables pass through as keywords.
         """
         from llama_cpp.llama_chat_format import Jinja2ChatFormatter

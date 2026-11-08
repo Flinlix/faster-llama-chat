@@ -21,7 +21,7 @@ import llama_chat
 
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
-from llama_chat.tokenizing import tokenize_message
+from llama_chat.tokenizing import tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.context import SEQ, KVContext
@@ -248,23 +248,6 @@ def test_a_removal_reports_the_caches_answer_and_takes_none_for_yes(answer, take
     assert backend.kv_seq_rm("the context", 0, 3, -1) is taken
 
 
-def _tag_context(tags):
-    """A context whose vocabulary splits text on spaces and holds ``tags`` as tags."""
-    context = object.__new__(KVContext)
-    context._vocab = None
-    context._backend = SimpleNamespace(
-        tokenize=lambda vocab, text, add_special, parse_special: text.split(),
-        is_special=lambda vocab, token: token in tags)
-    return context
-
-
-@pytest.mark.parametrize("text, made_of_tags", [
-    ("<end>", True), ("<response_end> <end>", True), ("<end> plain", False),
-    ("plain", False), ("", False)])
-def test_a_text_is_made_of_tags_where_every_token_is_one(text, made_of_tags):
-    assert _tag_context({"<end>", "<response_end>"}).tokenizes_to_tags(text) is made_of_tags
-
-
 def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
     """A model whose closing takes two tags writes the first itself, as text would be."""
     sampled = iter(["Pa", "ris", "<response_end>", "<end>"])
@@ -309,39 +292,17 @@ def _merging_context():
 ])
 def test_a_message_tokenizes_as_the_whole_render_does(prefix, content, suffix):
     context = _merging_context()
-    assert tokenize_message(context, prefix, content, suffix) == context._backend.tokenize(
+    assert tokenize_pieces(context, [(prefix, False), (content, True), (suffix, False)]) == context._backend.tokenize(
         None, prefix + content + suffix, False, True)
 
 
 def test_a_tag_typed_inside_a_message_stays_text():
-    tokens = tokenize_message(_merging_context(), "<t>", "a<e>b", "<e>")
+    tokens = tokenize_pieces(_merging_context(), [("<t>", False), ("a<e>b", True), ("<e>", False)])
     assert tokens.count("TAG<e>") == 1 and tokens[-1] == "TAG<e>"
 
 
 def test_the_beginning_of_a_conversation_is_attached_to_the_first_message():
-    assert tokenize_message(_merging_context(), "lead ", "word", "", add_special=True)[0] == "BOS"
-
-
-def test_tokens_generated_in_other_pieces_come_back_as_their_text_tokenizes():
-    """A word the model wrote as "Nut" + "zer" holds the one token its text gives."""
-    context = object.__new__(KVContext)
-    context._vocab = None
-    context._backend = SimpleNamespace(
-        is_special=lambda vocab, token: token.startswith("TAG"),
-        token_to_piece_bytes=lambda vocab, token: token.encode(),
-        tokenize=lambda vocab, text, add_special, parse_special: text.split(" "))
-    retokenized = context.retokenized(["Nut", "zer", "TAG<e>", "a", " b"])
-    assert retokenized == ["Nutzer", "TAG<e>", "a", "b"]
-
-
-def test_text_cut_inside_a_character_keeps_the_tokens_it_was_generated_as():
-    context = object.__new__(KVContext)
-    context._vocab = None
-    context._backend = SimpleNamespace(
-        is_special=lambda vocab, token: False,
-        token_to_piece_bytes=lambda vocab, token: token,
-        tokenize=lambda vocab, text, add_special, parse_special: [text.encode()])
-    assert context.retokenized([b"a", "ä".encode()[:1]]) == [b"a", "ä".encode()[:1]]
+    assert tokenize_pieces(_merging_context(), [("lead ", False), ("word", True)], add_special=True)[0] == "BOS"
 
 
 def _sampling_context(sampled):
@@ -488,7 +449,7 @@ def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache
 
 
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
-    assert tokenize_message(_merging_context(), "", "", "", add_special=True) == ["BOS"]
+    assert tokenize_pieces(_merging_context(), [], add_special=True) == ["BOS"]
 
 
 def test_every_method_takes_the_arguments_the_written_boundary_lists():

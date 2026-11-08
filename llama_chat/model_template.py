@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from ._backend import Backend
-from .template import TemplateFragments
-from .template_extract import extract_fragments, reasoning_switch
+from .template_extract import reasoning_switch
 
 
 class ModelTemplate:
@@ -41,7 +40,3 @@ class ModelTemplate:
                 messages=messages, tools=tools, **self._switch(reasoning), **variables).prompt
         except Exception:
             return None
-
-    def extract_fragments(self) -> TemplateFragments | None:
-        """The per-role fragments recovered from this template."""
-        return extract_fragments(self.render)

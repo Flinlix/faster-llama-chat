@@ -1,16 +1,12 @@
 """A model-free stand-in for :class:`~llama_chat.context.KVContext`.
 
 It implements the surface :class:`~llama_chat.wrapper.ChatWrapper` and its
-resolved template call on a cache context, and maintains a *physical cache* (a
-plain list of token ids) so tests can assert the cache stays in lockstep with
-the message table.
+resolved template call on a cache context: a template of its own, rendered
+from its fragments, and a *physical cache* (a plain list of token ids) so tests
+can assert the cache holds what the wrapper holds it to be.
 
-Two correctness guarantees fall out of this fake:
-
-* ``prefill`` asserts ``start_pos == len(cache)``: every decode lands at the
-  cache's end, after whatever cut, restore or rebuild put it there.
-* After eviction the physical cache equals the concatenation of the surviving
-  messages' tokens, proving remove-and-shift closes the gap correctly.
+``prefill`` asserts ``start_pos == len(cache)``: every decode lands at the
+cache's end, after whatever cut, restore or rebuild put it there.
 
 Each cache edit asserts the ability it needs, so a wrapper that cuts a cache
 which cannot cut, or shifts one which cannot shift, fails here.
@@ -24,8 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import fields, replace
 
-from llama_chat.cache_context import GenerationAccumulator
-from llama_chat.messages import Eviction
+from llama_chat.cache_context import Eviction, GenerationAccumulator
 from llama_chat.template import CallBoundary, TemplateFragments
 
 BOS = -1
@@ -60,6 +55,16 @@ EMPTY_THOUGHT = THOUGHT_OPEN + THOUGHT_CLOSE
 def _fake_value(value):
     """This fake model quotes a string and emits anything else bare."""
     return f"'{value}'" if isinstance(value, str) else str(value)
+
+
+def _call_blocks(calls) -> list[str]:
+    """This fake model's calls, one block each."""
+    blocks = []
+    for call in calls:
+        fn = call["function"]
+        body = ",".join(f"{k}:{_fake_value(v)}" for k, v in fn["arguments"].items())
+        blocks.append(f"<call>{CALL_LEAD_IN}{fn['name']}{{{body}}}</call>")
+    return blocks
 
 
 class FakeContext:
@@ -105,6 +110,7 @@ class FakeContext:
         self.can_shift = can_shift
         self.context_size = 1 << 20      # no limit of its own: the config's is the one tested
         self.rebuilds = 0  # how many times the cache was rebuilt (no-shift path)
+        self.restores = 0  # how many times a saved state was gone back to
         self.saved_states = 0
         self.warmups = 0  # how many times warmup() was called
         self._gen_tokens = gen_tokens
@@ -127,14 +133,6 @@ class FakeContext:
         toks = [ord(c) for c in text]
         return [BOS] + toks if add_special else toks
 
-    def retokenized(self, tokens: list[int]) -> list[int]:
-        # As the text tokenizes: one token per character, the tags kept.
-        return [ord(self._generated_chars[t]) if t in self._generated_chars else t
-                for t in tokens]
-
-    def extract_fragments(self) -> TemplateFragments:
-        return self._fragments
-
     def tags(self) -> tuple[str, ...]:
         return tuple(sorted(set(_TAG.findall("".join(
             getattr(self._fragments, field.name) for field in fields(self._fragments)
@@ -148,10 +146,6 @@ class FakeContext:
             pieces.append((found.group(), True))
             at = found.end()
         return pieces + ([(text[at:], False)] if at < len(text) else [])
-
-    def tokenizes_to_tags(self, text: str) -> bool:
-        pieces = self.split_at_tags(text.strip())
-        return bool(pieces) and all(is_tag for _, is_tag in pieces)
 
     def chat_template_text(self) -> str | None:
         return None                 # the renders below stand in for one
@@ -184,6 +178,7 @@ class FakeContext:
     def restore_state(self, state, pos: int) -> None:
         assert len(state) == pos
         self.cache = list(state)
+        self.restores += 1
 
     def remove_from(self, pos: int) -> None:
         assert self.can_shift or self.can_cut_tail, "a cache that cannot cut was cut"
@@ -229,6 +224,11 @@ class FakeContext:
         if any(not isinstance(m.get("content", ""), str) for m in messages):
             return None             # content blocks: a shape this template refuses
         renders_reasoning = self._can_reason and reasoning is not False
+        frags = self._fragments
+        opening = {"system": frags.system_prefix, "user": frags.user_prefix,
+                   "model": frags.assistant_prefix}
+        closing = {"system": frags.system_suffix, "user": frags.user_suffix,
+                   "model": frags.assistant_suffix}
         out, turn_open, previous = [], False, None
         newest_user = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=None)
         for index, m in enumerate(messages):
@@ -245,35 +245,34 @@ class FakeContext:
             if role == "tool":
                 out.append(f"<result>{m['name']}({m['content']})</result>")
                 continue
+            calls = m.get("tool_calls", ()) if self._calls_tools else ()
             if role == "model" and turn_open:
-                out.append(m["content"].strip())
-                out.append("<turn]>\n")
-                turn_open = False
+                # Text after a result, and another round of calls, go on in the same turn.
+                out.append(frags.content("assistant", m["content"]))
+                out.extend(_call_blocks(calls))
+                if not calls:
+                    out.append(closing["model"])
+                    turn_open = False
                 continue
             if self._declares_in_newest_turn and index == newest_user:
                 for declared in tools or ():
                     out.append(f"<decl>{declared['function']['name']}</decl>")
-            out.append(f"<[turn>{role}\n")
+            out.append(opening[role])
             if role == "system" and renders_reasoning:
                 out.append(THINK_ON)
-            calls = m.get("tool_calls", ()) if self._calls_tools else ()
             if (calls or self._keeps_thought) and self._can_reason and m.get("reasoning_content"):
                 out.append(THOUGHT_OPEN + m["reasoning_content"] + THOUGHT_CLOSE)
-            for call in calls:
-                fn = call["function"]
-                body = ",".join(
-                    f"{k}:{_fake_value(v)}" for k, v in fn["arguments"].items())
-                out.append(f"<call>{CALL_LEAD_IN}{fn['name']}{{{body}}}</call>")
-            out.append(m["content"].strip())   # these fragments trim
+            out.extend(_call_blocks(calls))
+            out.append(frags.content(m["role"], m["content"]))
             if role == "system" and not self._declares_in_newest_turn:
                 for declared in tools or ():
                     out.append(f"<decl>{declared['function']['name']}</decl>")
             if calls:
                 turn_open = True               # the result belongs in this turn
             else:
-                out.append("<turn]>\n")
+                out.append(closing[role])
         if generation_prompt and not turn_open:
-            out.append("<[turn>model\n")
+            out.append(opening["model"])
             if self._can_reason and not renders_reasoning:
                 out.append(EMPTY_THOUGHT)
         return "".join(out)
