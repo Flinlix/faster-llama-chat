@@ -132,7 +132,7 @@ model and makes later actions raise.
 | `"end_of_turn"` | the model ended its turn |
 | `"stop_string"` | a stop string matched the answer; the reply ends just before it |
 | `"token_limit"` | `max_reply_tokens` ran out, or the context did |
-| `"interrupted"` | `cancel` was set, or the stream was closed early |
+| `"interrupted"` | `cancel` was set |
 | `"tool_call"` | the reply stopped on a call, and the turn is open for its result |
 | `"unreadable_tool_call"` | it stopped on a call whose body could not be read; the model is told, and this is the final reason only where calls are handed to you, or where the template has no result block |
 
