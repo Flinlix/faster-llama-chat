@@ -1014,3 +1014,33 @@ tools declared), and in the test of the kept state an eviction dropped all
 history. The measure is now at
 least the tokens before the oldest question, the same count the state kept on
 such a cache is saved at.
+
+## 2026-11-08: Measured on a cache that cannot shift
+
+Qwen 3.5 9B (Q4_K_M) on an RTX 3090, an 8,192-token context, the default
+eviction settings, six tools declared. A conversation of 70 questions of about
+185 tokens each, with replies capped at 40 tokens, was run on three versions:
+before the state kept before the oldest question (254080c), with it
+(ce18915), and with the eviction target measured from the room after the
+system turn (780c5b7). It was run once with a system turn of 987 tokens and
+once with one of 3,517 tokens.
+
+| System turn | Version | Questions kept after an eviction | Evictions | Tokens decoded in total |
+|---|---|---|---|---|
+| 987 | before the kept state | 10 | 3 | 34,677 |
+| 987 | with the kept state | 10 | 3 | 31,716 |
+| 987 | new eviction target | 13 | 4 | 35,780 |
+| 3,517 | before the kept state | 2 | 5 | 45,039 |
+| 3,517 | with the kept state | 2 | 5 | 27,463 |
+| 3,517 | new eviction target | 6 | 8 | 34,222 |
+
+The wait for the first word was 55 to 58 ms on every turn of every run,
+evicting turns included: before the first word only the question's 185 tokens
+are decoded, and the history kept by an eviction is decoded after the
+previous reply. The kept state cuts the total by 9% and 39%. The new target
+keeps more history, so evictions come sooner and the total rises by 13% and
+25% over the kept state alone. That cost falls after a reply, never before the
+first word, so the default `evict_to_fraction_without_shift` of 0.5 stays; 0.4
+would bring the short system turn back to the old total and history. Whether
+a question asked while that decode is still running waits for it was not
+measured.
