@@ -22,7 +22,7 @@ import re
 from typing import Callable
 
 from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
-                       shared_tags_length)
+                       common_prefix_length, shared_tags_length)
 
 # Plain alphanumerics: they survive Jinja `| trim` and are never HTML-escaped.
 
@@ -385,7 +385,7 @@ def extract_call_body(render: Render, call_open: str,
     # agree. Past that they diverge into the first argument and into the end.
     opens_args = text.split(_TOOL, 1)[1].split(_KEY, 1)[0]
     no_arguments = empty.split(_TOOL, 1)[1]
-    name_close = _common_prefix(opens_args, no_arguments)
+    name_close = opens_args[:common_prefix_length(opens_args, no_arguments)]
     # Nothing between the name and the arguments is readable only where the
     # first key's own tag marks where they begin, and nothing follows a name
     # without them.
@@ -400,7 +400,7 @@ def extract_call_body(render: Render, call_open: str,
     type_close = string_type = ""
     if not before_value.startswith(bare_before):
         type_close = _common_suffix(before_value, bare_before)
-        key_close = _common_prefix(before_value, bare_before)
+        key_close = before_value[:common_prefix_length(before_value, bare_before)]
         string_type = before_value[len(key_close):len(before_value) - len(type_close)]
         number_type = bare_before[len(key_close):len(bare_before) - len(type_close)]
         if not (type_close and string_type and number_type):
@@ -518,14 +518,6 @@ def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
     if not after.startswith(_TOOL) or _TOOL not in after[len(_TOOL):]:
         return None
     return after[len(_TOOL):after.index(_TOOL, len(_TOOL))]
-
-
-def _common_prefix(one: str, other: str) -> str:
-    """The longest beginning the two share."""
-    kept = 0
-    while kept < len(one) and kept < len(other) and one[kept] == other[kept]:
-        kept += 1
-    return one[:kept]
 
 
 def _common_suffix(one: str, other: str) -> str:

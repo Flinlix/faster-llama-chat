@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .cache_context import CacheContext, Eviction, GenerationAccumulator
+from .template import common_prefix_length
 
 
 class CacheSync:
@@ -131,11 +132,7 @@ class CacheSync:
         """Hold ``tokens`` instead, the cache brought to them before it is next used."""
         if list(tokens) == self._tokens:
             return                      # nothing changed, the logits of the last decode included
-        same = 0
-        for held, wanted in zip(self._tokens, tokens):
-            if held != wanted:
-                break
-            same += 1
+        same = common_prefix_length(self._tokens, tokens)
         self._tokens = list(tokens)
         self._valid = min(self._valid, same)
         self._forget_states_after(same)

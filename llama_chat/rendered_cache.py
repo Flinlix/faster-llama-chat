@@ -30,6 +30,7 @@ from .render_checks import (STAND_IN, ensure_history_stays_written, question_spl
 from .reply import ContextOverflowError
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
+from .template import common_prefix_length
 from .tokenizing import MemoTokenizer, tokenize_pieces
 from .tools import ToolCall, ToolSpec, result_text
 
@@ -704,7 +705,7 @@ class RenderedCache:
             {"role": "user", "content": question}, {"role": "assistant", "content": "A reply."},
             {"role": "user", "content": "Another question?"}], generation_prompt=True)
             for question in ("Alpha one?", "Zulu two?"))
-        return _common_prefix(first, second)
+        return common_prefix_length(first, second)
 
     def _remove_newest(self) -> int:
         """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
@@ -865,7 +866,7 @@ class RenderedCache:
         wanted = self._head(through=0)
         if wanted is None:
             return False
-        same = _common_prefix(_as_text(held), _as_text(wanted))
+        same = common_prefix_length(_as_text(held), _as_text(wanted))
         end = len(held) - (len(wanted) - same)
         if end <= same or end > bound or held[end:] != wanted[same:]:
             return False
@@ -948,12 +949,12 @@ class RenderedCache:
                 the cache does after a stretch.
         """
         memory, wanted = _as_text(self._memory.tokens), _as_text(target)
-        same = _common_prefix(memory, wanted)
+        same = common_prefix_length(memory, wanted)
         if same < len(memory) and (dropped or self._moves_declarations()):
             found = _dropped_stretch_end(memory, wanted, same)
             if found is not None:
                 self._memory.remove(same, found)
-                same = _common_prefix(_as_text(self._memory.tokens), wanted)
+                same = common_prefix_length(_as_text(self._memory.tokens), wanted)
         self._memory.cut_to(same)
         if self._moves_declarations():
             # The next question's declarations move back to here or past it: a cache
@@ -1217,7 +1218,7 @@ def _dropped_stretch_end(memory: str, wanted: str, start: int) -> int | None:
     probe = wanted[start:start + 8]
     best, best_length, at = None, len(probe) - 1, memory.find(probe, start + 1) if probe else -1
     while at >= 0:
-        length = _common_prefix(memory[at:], wanted[start:])
+        length = common_prefix_length(memory[at:], wanted[start:])
         if length > best_length:
             best, best_length = at, length
         at = memory.find(probe, at + 1)
@@ -1226,15 +1227,3 @@ def _dropped_stretch_end(memory: str, wanted: str, start: int) -> int | None:
 
 def _as_text(tokens) -> str:
     return "".join(chr(token + _TOKEN_OFFSET) for token in tokens)
-
-
-def _common_prefix(one: str, other: str) -> int:
-    """How long a beginning the two share, found by halving."""
-    low, high = 0, min(len(one), len(other))
-    while low < high:
-        middle = (low + high + 1) // 2
-        if one[:middle] == other[:middle]:
-            low = middle
-        else:
-            high = middle - 1
-    return low

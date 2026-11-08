@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from dataclasses import dataclass
 
@@ -234,15 +235,25 @@ class TemplateFormatter:
         return tag[len(prompt):] if tag.startswith(prompt) else ""
 
 
+def common_prefix_length(one: Sequence, other: Sequence) -> int:
+    """How long a beginning two sequences of the same type share."""
+    low, high = 0, min(len(one), len(other))
+    while low < high:
+        middle = (low + high + 1) // 2
+        if one[:middle] == other[:middle]:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
 def shared_tags_length(text: str, other: str) -> int:
     """How long a beginning the two share, ending where a tag or a word ends.
 
     A tag ends at ``>`` or ``]`` and a word at whitespace, so the shared part
     never stops inside a tag the two spell differently.
     """
-    shared = 0
-    while shared < min(len(text), len(other)) and text[shared] == other[shared]:
-        shared += 1
+    shared = common_prefix_length(text, other)
     while shared and not (text[shared - 1].isspace() or text[shared - 1] in ">]"):
         shared -= 1
     return shared

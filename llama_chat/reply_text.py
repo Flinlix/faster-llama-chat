@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .template import Reasoning
+from .template import Reasoning, common_prefix_length
 
 
 class ThoughtFilter:
@@ -174,8 +174,7 @@ def reply_header(answer_opening: str, reasoning: Reasoning | None) -> tuple[str,
     if reasoning is None or not answer_opening.strip():
         return None
     answer, thought = answer_opening.strip(), reasoning.thought_open.strip()
-    start = answer[:next((i for i, (a, b) in enumerate(zip(answer, thought)) if a != b),
-                         min(len(answer), len(thought)))]
+    start = answer[:common_prefix_length(answer, thought)]
     end = answer[len(answer) - next((i for i, (a, b) in enumerate(zip(answer[::-1], thought[::-1]))
                                      if a != b), 0):]
     if not start or not end or len(start) + len(end) >= len(answer):
