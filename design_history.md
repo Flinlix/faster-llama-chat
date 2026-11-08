@@ -924,3 +924,71 @@ real models, 12 replies each in a small context, held the template's render
 before every reply. This round's changes are not measured on a real model yet:
 the language-model image still runs the code before them (212B).
 
+
+## 2026-11-08: Measured through the stack, an injected question made fast, one read of the conversation, a state kept before the oldest question
+
+### Measured through the stack (213A)
+
+The language-model image was rebuilt on the committed library and driven
+through the running stack's Chat Completions endpoint: 36 questions of about
+280 tokens each into Gemma 4 26B's 8k context, so that the conversation
+evicted, then a tool call, its result and a question after it.
+
+| library | first word, first turns | first word, context full |
+|---|---|---|
+| before the replacement | 90 to 93 ms | 99 ms |
+| as committed | 92 to 93 ms | 182 to 184 ms |
+| with the fix below | 91 to 93 ms | 97 to 98 ms |
+
+Replies, the call and the answers after it read the same in all three. On
+Llama 3.2 3B, after a past tool turn, the next call shows no
+`<|python_tag|>` and raises nothing (N1, O1); with calls run it answers from
+the result. Its odd reply `"}"` to "Thanks." follows the template, which writes
+a tool result as a quoted JSON string.
+
+### An injected question waits only for itself
+
+The server injects each question as it arrives and then asks for a reply
+without text. That path was slow in two ways, both measured on the GPU with
+the stack's settings (224 ms against 84 ms for `reply(text)` once full):
+
+- An injected question was spliced into the render made ahead only below
+  `evict_above_tokens`, so once the conversation was full it was rendered
+  whole. It is now spliced within the room left for a reply, as a question
+  asked with `reply(text)` is, and the eviction follows its reply. Only a full
+  `max_history_messages` still evicts first, since its count is held after
+  every action (`tests/test_wrapper.py`).
+- `reply()` after it rendered the whole conversation again, though the splice
+  had decoded the generation prompt already. It now goes straight to the
+  generation where the newest message is the question spliced there.
+
+The test that a question waits only for its own tokens had missed both: its
+conversation was short enough that a whole render stayed under its bound, and
+it read only the first renders of the request. It now runs three exchanges
+first, counts every render up to the reply's start, and drives the injected
+path too; a second test puts an injected question over the threshold.
+
+### One read of the system prompt and the history (215A)
+
+`conversation()` returns both from the same published copy, so a reader on
+another thread never pairs the system prompt of one `begin` with the history
+of another. `system_prompt` and `history()` stay for a caller that needs one.
+
+### A state kept where the oldest question begins (216A)
+
+On a cache that can neither shift nor cut, an eviction removes a stretch after
+the system turn, and both states the cache rested in lie past it, so it was
+emptied and decoded again from the start, system prompt and declarations
+included. `CacheSync.pin` now keeps a third state where the oldest question's
+run begins, read from a render of two exchanges so that nothing that moves
+with the newest question, such as Mistral's declarations, stands before it.
+The state goes once anything before it changes. Measured on the model-free
+templates with tools and a long system prompt over 16 replies: Gemma 4 from
+5,213 tokens decoded to 1,694, Qwen 3.5 from 3,059 to 1,762, Llama 3.2 from
+1,739 to 766. The cost is one saved state more, about the size of the cache
+up to the oldest question.
+
+Found while testing it: where the system turn takes most of
+`evict_to_fraction_without_shift` of the threshold, an eviction on such a
+cache drops the whole history. Measuring the fraction from the room after the
+system turn instead is offered as a decision.
