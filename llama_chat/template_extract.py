@@ -169,8 +169,7 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
         trim_content=_trims_content(render),
         reply_strip=_reply_strip(render, user_suffix, assistant_prefix),
         system_strip=_system_strip(render),
-        generation_prompt=_whole_prompt(render, assistant_prefix),
-        **_extract_system(render, user_prefix, user_suffix))
+        generation_prompt=_whole_prompt(render, assistant_prefix))
 
 
 def extract_reasoning(render: Render, fragments: TemplateFragments,
@@ -721,29 +720,6 @@ def _last_tag(text: str) -> str:
     run = stripped.rsplit(None, 1)[-1]
     start = len(stripped) - len(run) + max(run.rfind("<"), 0)
     return text[start:]
-
-
-def _extract_system(render: Render, user_prefix: str, user_suffix: str) -> dict:
-    """Split off the system fragment, or fall back to the user tags.
-
-    There is no portable ground truth for a system role, so a sentinel that does
-    not survive verbatim ahead of the user turn means the user tags are reused.
-    """
-    rendered = render([
-        {"role": "system", "content": _SYS},
-        {"role": "user", "content": _USER},
-    ], reasoning=False)
-    if rendered is None or _SYS not in rendered or _USER not in rendered:
-        return {"system_prefix": user_prefix, "system_suffix": user_suffix}
-    # The system fragment is everything before the user turn begins. Templates
-    # that fold the system message *into* the first user turn have no standalone
-    # user turn to split on; ``head`` then still contains the user sentinel, so
-    # no clean system fragment exists, so fall back to the user tags.
-    head = rendered.split(user_prefix + _USER, 1)[0]
-    if _USER in head:
-        return {"system_prefix": user_prefix, "system_suffix": user_suffix}
-    sys_prefix, _, sys_suffix = head.partition(_SYS)
-    return {"system_prefix": sys_prefix, "system_suffix": sys_suffix}
 
 
 # Characters a template may write otherwise in content, as an escaping filter does.

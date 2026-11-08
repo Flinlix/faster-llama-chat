@@ -13,7 +13,8 @@ import dataclasses
 from .cache_context import MODEL_READER, ensure_answers
 from .messages import call_id, calling_message, result_message
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
-                       TemplateFragments, ToolCallFragments, shared_tags_length)
+                       TemplateFragments, ToolCallFragments, common_prefix_length,
+                       shared_tags_length)
 from .template_extract import (ESCAPABLE, extract_call_body, extract_call_close_text,
                                extract_content_rewrites,
                                extract_call_separator, extract_fragments,
@@ -26,6 +27,7 @@ from .tools import ToolCall, ToolSpec
 _PROMPT = "PROMPTMSG"
 _RESULT = "RESULTMSG"
 _NEXT = "NEXTMSG"
+_SYSTEM = "SYSTEMMSG"
 # A reply and a user turn after the first, so a template that declares tools
 # before the newest user turn shows it after the first turn, not ahead of it.
 _EXCHANGE = ({"role": "assistant", "content": "REPLYMSG"},
@@ -59,6 +61,7 @@ class ResolvedTemplate:
         self._probe_render = refusing(context.render_with_model_template)
         self._variables: dict = {}      # template variables every render passes
         self._fragments = self._resolve_fragments()
+        self._has_system_turn = self._resolve_has_system_turn()
         self._validate_template()
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
@@ -116,10 +119,20 @@ class ResolvedTemplate:
 
     @property
     def has_system_turn(self) -> bool:
-        """Whether a system prompt has a turn of its own, rather than the user tags'."""
-        frags = self._fragments
-        return (frags.system_prefix, frags.system_suffix) != \
-            (frags.user_prefix, frags.user_suffix)
+        """Whether a system prompt can be kept: no later question moves where the template writes it."""
+        return self._has_system_turn
+
+    def _resolve_has_system_turn(self) -> bool:
+        """Whether a system prompt lies in the opening of two renders that differ only in the oldest question."""
+        def render(oldest):
+            return self._render([{"role": "system", "content": _SYSTEM},
+                                 {"role": "user", "content": oldest}, *_EXCHANGE[:1],
+                                 {"role": "user", "content": _NEXT}],
+                                generation_prompt=True, reasoning=False)
+        first, second = render(_PROMPT), render(_RESULT)
+        if first is None or second is None:
+            return False
+        return _SYSTEM in first[:common_prefix_length(first, second)]
 
     def formatter(self, reasoning: bool = False) -> TemplateFormatter:
         """What renders one message, and what is decoded around sampling.

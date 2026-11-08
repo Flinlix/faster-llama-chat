@@ -124,7 +124,6 @@ class TemplateFragments:
     :class:`ToolCallFragments`, its own argument.
 
     Attributes:
-        system_prefix, system_suffix: Wrap a system turn.
         user_prefix, user_suffix: Wrap a user turn.
         assistant_prefix, assistant_suffix: Wrap an assistant turn of the
             history, as the template writes a past reply.
@@ -143,8 +142,6 @@ class TemplateFragments:
             a character it escapes.
     """
 
-    system_prefix: str
-    system_suffix: str
     user_prefix: str
     user_suffix: str
     assistant_prefix: str

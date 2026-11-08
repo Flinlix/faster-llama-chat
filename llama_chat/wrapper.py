@@ -167,9 +167,9 @@ class ChatWrapper:
             formatter = self._template.formatter(reasoning)
             if system_prompt and not self._template.has_system_turn:
                 raise ValueError(
-                    "this model's template has no system turn of its own: it writes a "
-                    "system prompt into the first user turn, which a system prompt "
-                    "kept for the whole conversation cannot be")
+                    "this model's template does not keep a system prompt in place: it "
+                    "writes one where the questions after it change it, so a system "
+                    "prompt kept for the whole conversation cannot be")
             if not self._warmed:
                 self._context.warmup()
                 self._warmed = True
@@ -492,7 +492,7 @@ class ChatWrapper:
 
     @property
     def can_take_system_prompt(self) -> bool:
-        """Whether :meth:`begin` accepts a system prompt: the template has a system turn of its own."""
+        """Whether :meth:`begin` accepts a system prompt: the template writes one where no later question moves it."""
         return self._template.has_system_turn
 
     @property

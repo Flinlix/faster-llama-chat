@@ -671,16 +671,6 @@ def test_a_seed_out_of_range_is_refused_before_anything_is_prefilled():
 
 
 # ----- a system turn where the template has one or none --------------------
-def test_a_system_prompt_is_refused_where_the_template_has_no_system_turn():
-    from tests.fake_context import DEFAULT_FRAGMENTS
-    import dataclasses
-    folded = dataclasses.replace(DEFAULT_FRAGMENTS, system_prefix="<[turn>user\n")
-    w = ChatWrapper(Config(context_size=500), context=FakeContext(fragments=folded))
-    with pytest.raises(ValueError, match="no system turn of its own"):
-        w.begin("persona")
-    w.begin("")                         # no system prompt is still fine
-
-
 def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
                     context=FakeContext())

@@ -36,8 +36,8 @@ CALL_LEAD_IN = "fn:"
 
 # The default fragments for tests. The tags are invented, not any real
 # model's, so nothing can pass by matching a format hard-coded somewhere.
+SYSTEM_PREFIX, SYSTEM_SUFFIX = "<[turn>system\n", "<turn]>\n"
 DEFAULT_FRAGMENTS = TemplateFragments(
-    system_prefix="<[turn>system\n", system_suffix="<turn]>\n",
     user_prefix="<[turn>user\n", user_suffix="<turn]>\n",
     assistant_prefix="<[turn>model\n", assistant_suffix="<turn]>\n",
     trim_content=True,
@@ -225,9 +225,9 @@ class FakeContext:
             return None             # content blocks: a shape this template refuses
         renders_reasoning = self._can_reason and reasoning is not False
         frags = self._fragments
-        opening = {"system": frags.system_prefix, "user": frags.user_prefix,
+        opening = {"system": SYSTEM_PREFIX, "user": frags.user_prefix,
                    "model": frags.assistant_prefix}
-        closing = {"system": frags.system_suffix, "user": frags.user_suffix,
+        closing = {"system": SYSTEM_SUFFIX, "user": frags.user_suffix,
                    "model": frags.assistant_suffix}
         out, turn_open, previous = [], False, None
         newest_user = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=None)

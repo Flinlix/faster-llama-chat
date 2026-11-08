@@ -95,8 +95,8 @@ def test_a_module_writes_no_tag_of_a_real_template(module):
 
 
 def test_the_test_doubles_tags_are_no_real_templates():
-    from .fake_context import DEFAULT_FRAGMENTS, EMPTY_THOUGHT, THINK_ON
+    from .fake_context import DEFAULT_FRAGMENTS, EMPTY_THOUGHT, SYSTEM_PREFIX, SYSTEM_SUFFIX, THINK_ON
     invented = set(re.findall(r"<[^<>\s]+>", "".join(
-        [DEFAULT_FRAGMENTS.system_prefix, DEFAULT_FRAGMENTS.system_suffix,
+        [SYSTEM_PREFIX, SYSTEM_SUFFIX,
          DEFAULT_FRAGMENTS.assistant_prefix, EMPTY_THOUGHT, THINK_ON])))
     assert invented and not invented & _template_tags()

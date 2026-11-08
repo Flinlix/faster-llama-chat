@@ -258,6 +258,15 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
         _assert_each_reply_followed_what_was_sent(run, asked)
 
 
+def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_where_one_does():
+    assert _Run("gemma-3").chat.can_take_system_prompt      # written into the first user turn
+    moves = _Run("ministral-2410")                           # written before the newest question
+    assert not moves.chat.can_take_system_prompt
+    with pytest.raises(ValueError, match="does not keep a system prompt in place"):
+        moves.chat.begin("persona")
+    moves.chat.begin("")
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     run = _Run(stem, context_size=600)

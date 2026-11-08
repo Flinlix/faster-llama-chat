@@ -88,8 +88,8 @@ chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192
                           gpu_layers=-1))
 
 # begin: reset, and prefill the system prompt and as much recent history as fits.
-# A template with no system turn of its own refuses a system prompt
-# (can_take_system_prompt is False); pass "" there.
+# A template that writes a system prompt where later questions move it refuses
+# one (can_take_system_prompt is False); pass "" there.
 chat.begin("You are a helpful assistant.", [("user", "Hi"), ("assistant", "Hello!")])
 
 # inject: prefill one message as context, without generating
@@ -120,7 +120,7 @@ model and makes later actions raise.
 
 | doing what | call |
 |------|------|
-| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_messages`, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template has no system turn of its own for a system prompt; a refused or failed `begin` leaves the conversation it would have replaced as it was |
+| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_messages`, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
 | adding context | `inject(text, role="user")`: prefilled, no reply; returns how many messages went. A question is put where the next question was prepared for, as `reply(text)` puts one, and is evicted for after its reply, so `inject(text)` then `reply()` waits no longer than `reply(text)`. Any other message, or a question where `max_history_messages` is reached, evicts first |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open |
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |

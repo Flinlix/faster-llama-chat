@@ -52,16 +52,8 @@ def test_gemma_trims_content():
     assert extract_fragments(_gemma_render).trim_content is True
 
 
-def test_gemma_system_falls_back_to_user_tags():
-    f = extract_fragments(_gemma_render)
-    assert f.system_prefix == f.user_prefix
-    assert f.system_suffix == f.user_suffix
-
-
-def test_chatml_extracts_explicit_system():
+def test_chatml_extracts_its_tags():
     f = extract_fragments(_chatml_render)
-    assert f.system_prefix == "<|im_start|>system\n"
-    assert f.system_suffix == "<|im_end|>\n"
     assert f.user_prefix == "<|im_start|>user\n"
     assert f.assistant_prefix == "<|im_start|>assistant\n"
 
@@ -72,30 +64,6 @@ def test_chatml_does_not_trim_content():
 
 def test_no_template_returns_none():
     assert extract_fragments(lambda messages, **_options: None) is None
-
-
-def _folding_render(messages, **_options):
-    """Llama-2-style template: folds the system message into the first user turn."""
-    out = []
-    sys_text = ""
-    for m in messages:
-        if m["role"] == "system":
-            sys_text = m["content"] + "\n\n"
-        elif m["role"] == "user":
-            out.append(f"<u>{sys_text}{m['content']}</u>")
-            sys_text = ""
-        else:
-            out.append(f"<a>{m['content']}</a>")
-    return "".join(out)
-
-
-def test_folded_system_falls_back_to_user_tags():
-    # No standalone system turn exists, so there is no clean fragment to
-    # recover, so the extractor must fall back instead of capturing the user
-    # sentinel inside the system suffix.
-    f = extract_fragments(_folding_render)
-    assert f.system_prefix == f.user_prefix == "<u>"
-    assert f.system_suffix == f.user_suffix == "</u>"
 
 
 def _inconsistent_render(messages, **_options):
@@ -129,8 +97,6 @@ def test_empty_suffix_template_extracts_without_crashing():
     assert f.user_suffix == ""
     assert f.assistant_prefix == "<assistant>"
     assert f.assistant_suffix == ""
-    assert f.system_prefix == "<system>"
-    assert f.system_suffix == ""
 
 
 def _quoted_value(value):
@@ -178,7 +144,6 @@ def test_tool_extraction_does_not_disturb_the_role_fragments():
     assert f.user_prefix == "<[turn>user\n"
     assert f.user_suffix == "<turn]>\n"
     assert f.assistant_prefix == "<[turn>model\n"
-    assert f.system_prefix == "<[turn>system\n"
 
 
 def _untagged_call_render(messages, **_options):

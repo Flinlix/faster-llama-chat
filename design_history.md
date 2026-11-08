@@ -1099,3 +1099,30 @@ template is now refused only for what would be kept.
 - B6: a `ToolTurn` whose result answers no call made before it in the turn is
   refused when it is built, where it used to be written with an invented call
   id.
+
+## 2026-11-08: A system prompt is kept wherever no later question moves it (228A)
+
+Supersedes the refusal in "How the template is read" of a template that writes
+the system prompt into the first user turn. Whether a template has a system
+turn of its own was read from extracted fragments: a system prompt was refused
+wherever its tags equalled the user tags. That refused Gemma 3, which writes
+the system text at the head of the first user turn. After an eviction the
+render puts it at the head of the new oldest question, so it never moves
+relative to the start of the conversation, and the cache, which is the render,
+holds it correctly.
+
+The test is now a render probe: two renders that differ only in the oldest
+question, and the system prompt is kept where its text lies in the opening
+they share. Ministral 2410 writes it before the newest question, so it moves
+every turn and stays refused; every other test template answers as before.
+`system_prefix`, `system_suffix` and their extraction went, as nothing else
+read them.
+
+Measured before the change, with the refusal patched off: Gemma 3 1B (Q4_K_M)
+on the CPU, context 2,048 (threshold 1,536), a 16-word system prompt, 30
+questions of about 45 tokens and replies capped at 30 tokens. The cache can
+shift; ten evictions each decoded 64 tokens up to the next question, the same
+as the median turn without an eviction. The dropped stretch is found and
+shifted at the new seam between the system text and the next question, so the
+real tokenizer keeps the memory rolling. Without a model, all of Gemma 3's
+conversation tests now run with a system prompt and pass.
