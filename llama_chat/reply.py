@@ -41,7 +41,7 @@ class Reply:
             Reported whatever became of them, so a call that was refused rather
             than run still says what the model asked for.
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
-            generation ran with the call tokens withheld. Always ``False``
+            generation ran with a call it wrote left as text. Always ``False``
             where no call was asked for.
         n_reasoning_tokens: Of the tokens sampled, about how many were thought:
             the streamed pieces that held any.

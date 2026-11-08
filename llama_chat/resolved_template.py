@@ -394,15 +394,15 @@ class ResolvedTemplate:
         """Whether a call opens with plain text, which counts only after a tag or at the start."""
         return self._boundary.opens_as_text
 
-    def call_boundary(self, allow_tools: bool = True, withhold: bool = False) -> CallBoundary:
+    def call_boundary(self, recognizes_calls: bool = True, withhold: bool = False) -> CallBoundary:
         """Where a generated call opens and closes and where a reply ends, as generation reads it.
 
-        Without ``allow_tools`` no call is recognized, so the reply is certain
+        Without ``recognizes_calls`` no call is recognized, so the reply is certain
         to close. With ``withhold`` a call's opening token is also never
         drawn; a call that opens with plain text cannot be kept from the model
         that way, and stays text.
         """
-        if allow_tools:
+        if recognizes_calls:
             return self._boundary
         tokens = self._boundary.tool_tokens
         return CallBoundary(opens_as_text=self._boundary.opens_as_text,

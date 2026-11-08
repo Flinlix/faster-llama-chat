@@ -243,8 +243,9 @@ class ChatWrapper:
                 * ``"run"``, or a :class:`~llama_chat.tools.ToolRegistry`:
                   each call is run, against the registry :meth:`begin` was
                   given or the one passed, its result written, and the reply
-                  goes on until the model answers. The last permitted round
-                  withholds the call tokens, so the turn always closes.
+                  goes on until the model answers. In the last permitted round
+                  a call the model writes is not recognized and stays text,
+                  so the turn always closes.
             max_calls: Where calls are run, how many one turn may use. ``None``
                 sets no ceiling; a call past one is answered with an error
                 result rather than run. Only where calls are run.
@@ -282,9 +283,9 @@ class ChatWrapper:
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and calls={calls!r} runs none")
         if calls == "yield":
-            return self._until_call(text, allow_tools=True, **options)
+            return self._until_call(text, recognizes_calls=True, **options)
         if calls == "withhold":
-            return self._until_call(text, allow_tools=False, withhold=True, **options)
+            return self._until_call(text, recognizes_calls=False, withhold=True, **options)
         if calls == "refuse":
             registry = None
         elif calls == "run":
@@ -297,26 +298,27 @@ class ChatWrapper:
         return ReplyStream(self._generate_until_answered(
             text, registry=registry, max_calls=max_calls, **options))
 
-    def _until_call(self, text: str | None, *, allow_tools: bool, held: bool = False,
+    def _until_call(self, text: str | None, *, recognizes_calls: bool, held: bool = False,
                     withhold: bool = False, **options) -> ReplyStream[str | ToolCall]:
         """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
 
-        ``allow_tools`` False withholds the call tokens, which is what makes
-        the last permitted round of an exchange certain to close the turn.
+        ``recognizes_calls`` False leaves a call the model writes as text,
+        which is what makes the last permitted round of an exchange certain to
+        close the turn.
         ``held`` says the caller holds the lock already, for a whole exchange.
         """
         return ReplyStream(_deltas_then_calls(
-            self._one_generation(text, allow_tools, held, withhold, **options)))
+            self._one_generation(text, recognizes_calls, held, withhold, **options)))
 
-    def _one_generation(self, text, allow_tools: bool, held: bool, withhold: bool = False,
+    def _one_generation(self, text, recognizes_calls: bool, held: bool, withhold: bool = False,
                         **options):
         """Resume the open turn or start a request, decided under the lock."""
         with contextlib.nullcontext() if held else self._lock:
             self._ensure_open()
             if text is None and self._conversation.reply_open:
-                return (yield from self._resume(allow_tools=allow_tools, withhold=withhold,
+                return (yield from self._resume(recognizes_calls=recognizes_calls, withhold=withhold,
                                                 **options))
-            return (yield from self._request_and_generate(text, allow_tools=allow_tools,
+            return (yield from self._request_and_generate(text, recognizes_calls=recognizes_calls,
                                                           withhold=withhold, **options))
 
     def inject_tool_result(self, call: ToolCall | str, result) -> None:
@@ -550,7 +552,7 @@ class ChatWrapper:
             # starts, not after the model has asked for one.
             if registry is not None and len(registry) > 0:
                 self._template.ensure_tools_usable()
-            stream = self._until_call(text, allow_tools=True, held=True, **kwargs)
+            stream = self._until_call(text, recognizes_calls=True, held=True, **kwargs)
             # An absent ceiling counts down without ever reaching zero, so the
             # three places that read it need no case of their own.
             calls_left = math.inf if max_calls is None else max_calls
@@ -573,7 +575,7 @@ class ChatWrapper:
                             if registry is not None and calls_left > 0:
                                 calls_left -= 1
                             stream = self._until_call(
-                                None, allow_tools=registry is not None and calls_left > 0,
+                                None, recognizes_calls=registry is not None and calls_left > 0,
                                 held=True, **kwargs)
                             continue
                         # The ceiling binds only once a call has been asked for:
@@ -586,7 +588,7 @@ class ChatWrapper:
                     may_call_again = registry is not None and calls_left > 0
                     for call, result in settled:
                         self._conversation.add_result(call, _explain_failure(result, may_call_again))
-                    stream = self._until_call(None, allow_tools=may_call_again, held=True,
+                    stream = self._until_call(None, recognizes_calls=may_call_again, held=True,
                                               **kwargs)
             finally:
                 stream.close()
@@ -649,7 +651,7 @@ class ChatWrapper:
     def _request_and_generate(
         self, text: str | None, *, max_reply_tokens: int | None = None,
         stop: list[str] | None = None, cancel: threading.Event | None = None,
-        sampling: Sampling | None = None, allow_tools: bool = True, withhold: bool = False,
+        sampling: Sampling | None = None, recognizes_calls: bool = True, withhold: bool = False,
     ) -> Generator[str, None, Reply]:
         """Add the user request, then generate one reply from the cache's end.
 
@@ -668,12 +670,12 @@ class ChatWrapper:
         return (yield from self._generate_into_reply(
             decoded_from=decoded_from, n_evicted_messages=n_evicted,
             max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            allow_tools=allow_tools, withhold=withhold, sampling=sampling))
+            recognizes_calls=recognizes_calls, withhold=withhold, sampling=sampling))
 
     def _resume(self, *, max_reply_tokens: int | None = None,
                 stop: list[str] | None = None,
                 cancel: threading.Event | None = None,
-                allow_tools: bool = True, withhold: bool = False,
+                recognizes_calls: bool = True, withhold: bool = False,
                 sampling: Sampling | None = None):
         """Generate on into the open reply, adding no message of its own. The lock must be held."""
         self._ensure_open()
@@ -683,13 +685,13 @@ class ChatWrapper:
         return (yield from self._generate_into_reply(
             decoded_from=self._conversation.decoded, n_evicted_messages=0,
             max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            allow_tools=allow_tools, withhold=withhold, sampling=sampling))
+            recognizes_calls=recognizes_calls, withhold=withhold, sampling=sampling))
 
     def _generate_into_reply(self, *, decoded_from: int, n_evicted_messages: int,
                              max_reply_tokens: int | None,
                              stop: list[str] | None,
                              cancel: threading.Event | None,
-                             allow_tools: bool,
+                             recognizes_calls: bool,
                              sampling: Sampling | None = None,
                              withhold: bool = False,
                              ) -> Generator[str, None, Reply]:
@@ -700,8 +702,9 @@ class ChatWrapper:
                 so the Reply counts every token decoded for it.
             n_evicted_messages: What the caller evicted to get here.
             max_reply_tokens, stop, cancel, sampling: As :meth:`reply`.
-            allow_tools: ``False`` withholds the call tokens, so this generation
-                cannot end on a call and the turn is certain to close.
+            recognizes_calls: ``False`` leaves a call the model writes as text,
+                so this generation cannot end on a call and the turn is certain
+                to close.
             withhold: Also keep a call's opening token from ever being drawn.
         """
         conversation = self._conversation
@@ -723,7 +726,7 @@ class ChatWrapper:
         pieces = conversation.generate(
             max(0, min(cap, budget)), generated, cancel=cancel,
             sampling=sampling, ends_turn=self._turn_end_test(thought),
-            boundary=self._template.call_boundary(allow_tools, withhold))
+            boundary=self._template.call_boundary(recognizes_calls, withhold))
         try:
             for piece in pieces:
                 shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
