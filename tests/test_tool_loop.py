@@ -927,36 +927,6 @@ def test_a_model_needing_nothing_extra_gets_nothing():
 
 
 # ----- a parser that fails, and a later declaration ------------------------
-def test_a_parser_that_fails_unexpectedly_still_closes_the_turn(monkeypatch):
-    """A reply that stopped on a call must finish, whatever reading it does.
-
-    ``_read_calls`` runs with the turn still open. A failure escaping it would
-    skip the closing tag while leaving ``_reply_open`` False, so nothing would
-    ever close the turn and no guard could see that it was open.
-    """
-    import llama_chat.wrapper as wrapper_module
-
-    def explode(*_a, **_k):
-        raise IndexError("string index out of range")
-
-    monkeypatch.setattr(wrapper_module, "parse_calls", explode)
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")
-    fake.call_script = ["fn:clock{}"]
-
-    reply = wrapper.reply("wie spät?").finish()
-    assert reply.tool_calls == []
-    assert not wrapper.reply_open               # the turn finished either way
-    assert not bool(wrapper._conversation.owed_calls)
-
-    # The turn really closed: an ordinary request follows it, and the cache
-    # still equals what the conversation holds.
-    wrapper.reply("etwas anderes").finish()
-    assert [m["role"] for m in rows(wrapper)] == [
-        "system", "user", "assistant", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
-
-
 def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction():
     def clock(city: str) -> str:
         return "09:00"
@@ -1583,3 +1553,19 @@ def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
     assert (reply.text, reply.stop_reason, reply.tool_calls) == ("Sonnig", "end_of_turn", [])
     assert fake.call_script == ["weather{city:'Bonn'}"]    # never offered the call tokens
     assert not wrapper.reply_open
+
+
+def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whole(monkeypatch):
+    """Only what a written call can cause counts as an unreadable call; a fault in the library is raised."""
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ['<function=clock>{}</function>']
+
+    def faulty(*args, **kwargs):
+        raise TypeError("a fault in the library")
+
+    monkeypatch.setattr("llama_chat.wrapper.parse_calls", faulty)
+    with pytest.raises(TypeError):
+        wrapper.reply("wie spät?", calls="yield").finish()
+    monkeypatch.undo()
+    assert wrapper.reply("noch einmal?").finish().text

@@ -792,8 +792,7 @@ class ChatWrapper:
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
 
-        Every failure counts as "not a call": this runs with the turn still
-        open, so one that got out would leave nothing to close it.
+        A call the parser cannot read counts as no call; any other fault is raised.
         """
         if generated.stop_reason != "tool_call":
             return []
@@ -802,7 +801,7 @@ class ChatWrapper:
             body = self._template.call_lead_in + body   # the opening holds its start
         try:
             return parse_calls(body, self._template.call_body, self._template.call_lead_in)
-        except Exception:
+        except (ValueError, RecursionError):
             return []
 
     def _ensure_open(self) -> None:
