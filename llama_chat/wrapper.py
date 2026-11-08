@@ -448,6 +448,16 @@ class ChatWrapper:
         """
         return self._conversation.history()
 
+    def conversation(self) -> tuple[str, list[tuple[str, str] | ToolTurn]]:
+        """The system prompt and the history, read together as one change left them.
+
+        ``begin(*chat.conversation())``, with the same tools, begins again as it
+        was. Safe from any thread, where :attr:`system_prompt` and
+        :meth:`history` read one after the other could each see another
+        :meth:`begin`.
+        """
+        return self._conversation.conversation()
+
     @property
     def can_call_tools(self) -> bool:
         """Whether tools can be used with this model, every step of the way.

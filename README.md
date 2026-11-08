@@ -126,7 +126,7 @@ model and makes later actions raise.
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_unknown_tools(registry_or_specs)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
-| reading the conversation back | `system_prompt` and `history()`: what `begin` takes, tool turns included, so `begin(chat.system_prompt, chat.history())` begins again as it was. Safe from any thread, while a reply runs too: each reads the conversation as the newest finished change left it |
+| reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. `system_prompt` and `history()` read each alone. Safe from any thread, while a reply runs too: each reads the conversation as the newest finished change left it, and `conversation()` reads both from the same one |
 | where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 
@@ -263,14 +263,14 @@ is read. A turn that called tools keeps the tokens it was generated as.
 
 ## Keeping a conversation
 
-The cache holds only the recent window that fits; `history()` returns what it
-holds as `begin` takes it, tool turns included, so a conversation saved from it
-and begun again from it reads in as it was:
+The cache holds only the recent window that fits; `conversation()` returns what
+it holds as `begin` takes it, the system prompt and tool turns included, so a
+conversation saved from it and begun again from it reads in as it was:
 
 ```python
-saved = chat.history()
+saved = chat.conversation()
 ...
-chat.begin(system_prompt, saved, tools=registry)
+chat.begin(*saved, tools=registry)
 ```
 
 To keep everything, older turns included, record messages as they are written:
