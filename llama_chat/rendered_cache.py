@@ -172,8 +172,9 @@ class RenderedCache:
         A history that ends on a call keeps it owed a result.
 
         Raises:
-            ContextOverflowError: If the system prompt alone, or the newest
-                exchange beside it, exceeds ``evict_above_tokens``.
+            ContextOverflowError: If the system prompt and its declarations leave
+                no room under ``evict_above_tokens`` for a short question, or the
+                newest exchange beside them exceeds it.
             ValueError: If the template refuses to write the conversation, or
                 writes an older exchange otherwise once another follows.
         """
@@ -190,11 +191,7 @@ class RenderedCache:
                     roles[i:i + 2] for i in range(len(roles) - 1)]
                     else "this model's template refuses to write this conversation")
             limit = self._config.evict_above_tokens
-            alone = self._system_length()
-            if alone > limit:
-                raise ContextOverflowError(
-                    f"system prompt needs {alone} tokens but the eviction threshold is "
-                    f"{limit}; shorten the prompt or raise context_size/evict_above_fraction")
+            self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._messages)
             self._splices = splices(self._render, system)
             ensure_history_stays_written(self._render, system)
@@ -582,7 +579,8 @@ class RenderedCache:
 
         Raises:
             ValueError: If no conversation was begun or a reply is open.
-            ContextOverflowError: If the system prompt with them exceeds ``evict_above_tokens``.
+            ContextOverflowError: If the system prompt with them leaves no room
+                under ``evict_above_tokens`` for a short question.
         """
         with self._action():
             self._ensure_ready("declare tools", "declare into")
@@ -590,13 +588,8 @@ class RenderedCache:
                 accept()
             self._tools = self._tools + list(specs)
             self._renders.clear()
+            self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
-            alone = self._system_length()
-            if alone > limit:
-                raise ContextOverflowError(
-                    f"the system turn with these declarations needs {alone} tokens but the "
-                    f"eviction threshold is {limit}; declare fewer tools or raise "
-                    "context_size/evict_above_fraction")
             self._windows = self._splices and windows_are_exact(
                 self._render, self._system_part(), self._tag_from)
             self._opening = self._opening_render()
@@ -646,21 +639,37 @@ class RenderedCache:
                 "call and its turn is unclosed. Finish it with "
                 "reply(), or discard it with begin().")
 
-    def _system_length(self) -> int:
-        """How many tokens the system turn takes, its declarations and the sequence opener included.
+    def _ensure_room_for_a_question(self, remedy: str) -> None:
+        """Refuse a system turn and declarations that leave no room under ``evict_above_tokens`` for a short question.
 
-        Where the template writes no system message alone, it is what the
-        system message adds to a render of a question, or what comes before the
-        oldest question where that is more, as where a template writes a system
-        prompt of its own in place of a missing one.
+        Raises:
+            ContextOverflowError: With ``remedy`` as what to do instead.
+        """
+        limit, needed = self._config.evict_above_tokens, self._with_a_short_question()
+        if needed > limit:
+            raise ContextOverflowError(
+                f"the system prompt and its declarations need {needed} tokens with a short "
+                f"question but the eviction threshold is {limit}; {remedy}, or raise "
+                "context_size/evict_above_fraction")
+
+    def _with_a_short_question(self) -> int:
+        """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
+        return self._length(self._system_part() + [{"role": "user", "content": "?"}],
+                            generation_prompt=True)
+
+    def _opening_length(self) -> int:
+        """How many tokens open the conversation whatever its oldest exchange: the system turn, its declarations and the sequence opener.
+
+        The tokens two renders share that differ only in the oldest question,
+        so that what a template writes there only once a question follows is
+        counted, and nothing that moves with the newest question is.
         """
         system = self._system_part()
-        if self._render(system, False) is not None:
-            return len(self._tokens(system, generation_prompt=False))
-        question = [{"role": "user", "content": STAND_IN}]
-        added = (len(self._tokens(system + question, generation_prompt=True))
-                 - len(self._tokens(question, generation_prompt=True)) + 1)
-        return max(added, self._before_oldest_question() or 0)
+        first, second = (self._tokens(system + [
+            {"role": "user", "content": question}, {"role": "assistant", "content": "A reply."},
+            {"role": "user", "content": "Another question?"}], generation_prompt=True)
+            for question in ("Alpha one?", "Zulu two?"))
+        return _common_prefix(first, second)
 
     def _remove_newest(self) -> int:
         """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
@@ -1022,21 +1031,8 @@ class RenderedCache:
                                tag_tokens=self._tag_tokens)
 
     def _pin_opening(self) -> None:
-        """Keep a saved state where the oldest question's run begins, which no eviction removes, where the cache goes back to saved states."""
-        self._memory.pin(self._before_oldest_question())
-
-    def _before_oldest_question(self) -> int | None:
-        """How many tokens come before the run of the oldest question; ``None`` where no tag begins one.
-
-        Read from a render of two exchanges, so that nothing that moves with
-        the newest question, such as declarations, stands before it.
-        """
-        system = self._system_part()
-        two = [{"role": "user", "content": STAND_IN}, {"role": "assistant", "content": "A reply."},
-               {"role": "user", "content": "Another question?"}]
-        split = self._split(system + two, generation_prompt=True)
-        run = self._run_start(split, len(system), 0)
-        return None if run is None else len(self._tokenize(split.pieces(0, run), add_special=True))
+        """Keep a saved state where the conversation's fixed opening ends, which no eviction removes, where the cache goes back to saved states."""
+        self._memory.pin(self._opening_length())
 
     def _opening_render(self) -> str | None:
         """How the template opens this conversation, which changes where it writes the date, say."""
@@ -1069,12 +1065,13 @@ class RenderedCache:
     def _drop_bound(self, limit: int) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.
 
-        Where the cache cannot shift, the system turn and that fraction of the
-        room after it, so that history is kept however long the system turn.
+        Where the cache cannot shift, what a short question alone takes and
+        that fraction of the room after it, so that history is kept however
+        long the system turn and wherever the template writes declarations.
         """
         if self._context.can_shift:
             return limit
-        system = min(self._system_length(), limit)
+        system = min(self._with_a_short_question(), limit)
         return system + int((limit - system) * self._config.evict_to_fraction_without_shift)
 
     def _too_many(self) -> bool:

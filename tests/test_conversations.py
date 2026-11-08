@@ -267,17 +267,28 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     assert not run.chat._conversation.begun
 
 
-@pytest.mark.parametrize("stem", _EVERY)
-def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the_system_turn(stem):
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_declarations_longer_than_the_threshold_are_refused_at_begin(stem):
+    run = _Run(stem, context_size=600)
+    long = ToolSpec(name="lookup", description="Looks things up. " * 60,
+                    parameters={"type": "object", "properties": {"q": {"type": "string"}}})
+    with pytest.raises(ContextOverflowError):
+        run.begin(tools=[long])
+    assert not run.chat._conversation.begun
+
+
+@pytest.mark.parametrize("stem,tools", [(stem, None) for stem in _EVERY]
+                         + [(stem, [WEATHER]) for stem in _TOOL_TEMPLATES])
+def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the_system_turn(stem, tools):
     probe = _Run(stem)
     probe.system = probe.system and "Be brief. " + "Keep to the facts and leave out what was not asked. " * 12
-    probe.begin()
-    system = probe.chat._conversation._system_length()
+    probe.begin(tools=tools)
+    fixed = len(probe.context.tokenize(probe.render([{"role": "user", "content": QUESTIONS[0]}], tools)))
     exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
     # A threshold the system turn takes more than half of, with room for six exchanges.
-    run = _Run(stem, context_size=int((system + 6 * exchange) / 0.75), can_shift=False)
+    run = _Run(stem, context_size=int((fixed + 6 * exchange) / 0.75), can_shift=False)
     run.system = probe.system
-    run.begin()
+    run.begin(tools=tools)
     questions = [f"{q} Round {n}." for n in range(3) for q in QUESTIONS]
     run.answers = ANSWERS * 3
     run.context._replies = _as_generated(run.chat, run.answers, False)

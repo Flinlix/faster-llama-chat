@@ -495,14 +495,6 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     assert fake.rebuilds + fake.restores > rebuilds_after_begin   # brought back instead
 
 
-def test_oversize_reject():
-    fake = FakeContext()
-    w = ChatWrapper(Config(context_size=80, evict_above_fraction=0.5), context=fake)
-    w.begin("s")
-    with pytest.raises(ValueError):
-        w.inject("x" * 100)
-
-
 def test_oversize_reject_leaves_history_intact():
     # Rejecting an unfittable message must not evict the history first.
     fake = FakeContext(gen_tokens=2)
@@ -525,8 +517,8 @@ def test_the_config_cannot_be_changed_once_a_wrapper_runs_with_it():
 
 def test_begin_rejects_system_prompt_over_threshold():
     fake = FakeContext()
-    # threshold = 50 tokens; a 100-char system prompt can never fit.
-    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.05), context=fake)
+    # threshold = 100 tokens; a 100-char system prompt with its tags can never fit.
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.1), context=fake)
     with pytest.raises(ValueError, match="system prompt"):
         w.begin("x" * 100)
     # Nothing was prefilled by the refused begin; a fitting one then works.
@@ -537,7 +529,7 @@ def test_begin_rejects_system_prompt_over_threshold():
 
 def test_failed_begin_keeps_previous_conversation():
     fake = FakeContext(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.05), context=fake)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.1), context=fake)
     w.begin("s", [("user", "hi")])
     before = rows(w)
     with pytest.raises(ValueError):

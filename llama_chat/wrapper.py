@@ -142,9 +142,10 @@ class ChatWrapper:
             How many items of ``messages`` were kept.
 
         Raises:
-            ContextOverflowError: If the system prompt alone exceeds
-                ``evict_above_tokens``, or the newest exchange of ``messages``,
-                from its user message on, cannot fit beside it.
+            ContextOverflowError: If the system prompt and its declarations
+                leave no room under ``evict_above_tokens`` for a short question,
+                or the newest exchange of ``messages``, from its user message
+                on, cannot fit beside them.
             ValueError: If ``tools`` names anything or the history holds a
                 tool turn and this model cannot call tools; if ``reasoning`` is
                 asked of a model that cannot reason; if the template has no
@@ -386,7 +387,8 @@ class ChatWrapper:
                 left a reply open, or if this model cannot call tools at all
                 (see :meth:`begin`).
             ContextOverflowError: If the system turn with the declarations
-                would exceed ``evict_above_tokens``.
+                would leave no room under ``evict_above_tokens`` for a short
+                question.
         """
         with self._lock:
             self._ensure_open()
