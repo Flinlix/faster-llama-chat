@@ -259,6 +259,15 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
 
 
 @pytest.mark.parametrize("stem", _EVERY)
+def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
+    run = _Run(stem, context_size=600)
+    refusal = ContextOverflowError if run.chat.can_take_system_prompt else ValueError
+    with pytest.raises(refusal):
+        run.chat.begin("Keep it short. " * 80)
+    assert not run.chat._conversation.begun
+
+
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)
     run.begin()

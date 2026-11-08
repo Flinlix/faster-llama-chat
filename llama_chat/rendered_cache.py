@@ -650,14 +650,17 @@ class RenderedCache:
         """How many tokens the system turn takes, its declarations and the sequence opener included.
 
         Where the template writes no system message alone, it is what the
-        system message adds to a render of a question.
+        system message adds to a render of a question, or what comes before the
+        oldest question where that is more, as where a template writes a system
+        prompt of its own in place of a missing one.
         """
         system = self._system_part()
         if self._render(system, False) is not None:
             return len(self._tokens(system, generation_prompt=False))
         question = [{"role": "user", "content": STAND_IN}]
-        return (len(self._tokens(system + question, generation_prompt=True))
-                - len(self._tokens(question, generation_prompt=True)) + 1)
+        added = (len(self._tokens(system + question, generation_prompt=True))
+                 - len(self._tokens(question, generation_prompt=True)) + 1)
+        return max(added, self._before_oldest_question() or 0)
 
     def _remove_newest(self) -> int:
         """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
@@ -1019,7 +1022,11 @@ class RenderedCache:
                                tag_tokens=self._tag_tokens)
 
     def _pin_opening(self) -> None:
-        """Keep a saved state where the oldest question's run begins, which no eviction removes, where the cache goes back to saved states.
+        """Keep a saved state where the oldest question's run begins, which no eviction removes, where the cache goes back to saved states."""
+        self._memory.pin(self._before_oldest_question())
+
+    def _before_oldest_question(self) -> int | None:
+        """How many tokens come before the run of the oldest question; ``None`` where no tag begins one.
 
         Read from a render of two exchanges, so that nothing that moves with
         the newest question, such as declarations, stands before it.
@@ -1029,8 +1036,7 @@ class RenderedCache:
                {"role": "user", "content": "Another question?"}]
         split = self._split(system + two, generation_prompt=True)
         run = self._run_start(split, len(system), 0)
-        self._memory.pin(None if run is None
-                         else len(self._tokenize(split.pieces(0, run), add_special=True)))
+        return None if run is None else len(self._tokenize(split.pieces(0, run), add_special=True))
 
     def _opening_render(self) -> str | None:
         """How the template opens this conversation, which changes where it writes the date, say."""
