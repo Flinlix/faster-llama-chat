@@ -134,3 +134,12 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     again, _ = tool_wrapper()
     again.begin(*w.conversation())
     assert again.conversation() == w.conversation()
+
+
+def test_a_tool_turn_whose_result_answers_no_call_is_refused():
+    call = ToolCall("clock", {})
+    with pytest.raises(ValueError):
+        ToolTurn((ToolResult("clock", "12:00"),))
+    with pytest.raises(ValueError):
+        ToolTurn((call, ToolResult("clock", "12:00"), ToolResult("clock", "12:01")))
+    ToolTurn(("Let me look.", call, ToolResult("clock", "12:00"), "It is noon."))

@@ -88,10 +88,24 @@ class ToolTurn:
     Attributes:
         steps: The turn in the order it was written: the model's text as a
             ``str``, each call as a :class:`ToolCall`, and each result as a
-            :class:`ToolResult`.
+            :class:`ToolResult`, each result after the call it answers.
+
+    Raises:
+        ValueError: If a result answers no call made before it in the turn.
     """
 
     steps: tuple
+
+    def __post_init__(self) -> None:
+        owed = 0
+        for step in self.steps:
+            if isinstance(step, ToolCall):
+                owed += 1
+            elif isinstance(step, ToolResult):
+                if not owed:
+                    raise ValueError(f"the result for {step.name!r} answers no call made "
+                                     "before it in its ToolTurn")
+                owed -= 1
 
     @property
     def text(self) -> str:
