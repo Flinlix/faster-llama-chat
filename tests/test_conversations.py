@@ -228,6 +228,36 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
         assert len(over) <= math.ceil(len(questions) / 3)
 
 
+@pytest.mark.parametrize("stem, tools", [(stem, None) for stem in _EVERY]
+                         + [(stem, [WEATHER]) for stem in _TOOL_TEMPLATES])
+def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest_question(stem, tools):
+    long_system = "Be brief. " + "Keep to the facts and leave out what was not asked. " * 6
+    probe = _Run(stem)
+    probe.system = long_system if probe.system else ""
+    probe.begin(tools=tools)
+    exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
+    # Room for the system turn twice over and a dozen exchanges, so that half the
+    # threshold, where an eviction on such a cache stops, still holds some.
+    run = _Run(stem, context_size=int((2 * len(probe.context.cache) + 12 * exchange) / 0.75),
+               can_shift=False)
+    run.system = probe.system
+    run.begin(tools=tools)
+    resets = run.context.resets
+    questions = [f"{q} Round {n}." for n in range(12) for q in QUESTIONS]
+    run.answers = ANSWERS * 12
+    run.context._replies = _as_generated(run.chat, run.answers, False)
+    evictions, asked = 0, []
+    for question in questions:          # until two evictions are seen
+        asked.append(question)
+        evictions += bool(run.chat.reply(question).finish().n_evicted_messages)
+        if evictions == 2:
+            break
+    assert evictions == 2
+    assert run.context.resets == resets
+    if tools is None:
+        _assert_each_reply_followed_what_was_sent(run, asked)
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)

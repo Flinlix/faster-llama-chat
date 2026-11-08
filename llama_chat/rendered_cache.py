@@ -214,6 +214,7 @@ class RenderedCache:
             self._memory.reset()
             self._ahead, self._spliced_at, self._asked = None, None, None
             self._opening = self._opening_render()
+            self._pin_opening()
             if self._messages and self._messages[-1]["role"] in ("user", "tool"):
                 self._sync(self._prompted())
             elif self._owed:
@@ -599,6 +600,7 @@ class RenderedCache:
             self._windows = self._splices and windows_are_exact(
                 self._render, self._system_part(), self._tag_from)
             self._opening = self._opening_render()
+            self._pin_opening()
             n_before = len(as_history(self._messages))
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._spliced_at = None
@@ -1016,6 +1018,20 @@ class RenderedCache:
         return tokenize_pieces(self._reader, pieces, add_special=add_special,
                                tag_tokens=self._tag_tokens)
 
+    def _pin_opening(self) -> None:
+        """Keep a saved state where the oldest question's run begins, which no eviction removes, where the cache goes back to saved states.
+
+        Read from a render of two exchanges, so that nothing that moves with
+        the newest question, such as declarations, stands before it.
+        """
+        system = self._system_part()
+        two = [{"role": "user", "content": STAND_IN}, {"role": "assistant", "content": "A reply."},
+               {"role": "user", "content": "Another question?"}]
+        split = self._split(system + two, generation_prompt=True)
+        run = self._run_start(split, len(system), 0)
+        self._memory.pin(None if run is None
+                         else len(self._tokenize(split.pieces(0, run), add_special=True)))
+
     def _opening_render(self) -> str | None:
         """How the template opens this conversation, which changes where it writes the date, say."""
         return self._render(self._system_part() + [{"role": "user", "content": STAND_IN}], True)
@@ -1099,6 +1115,7 @@ class RenderedCache:
             if opening != self._opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._opening, self._ahead, self._spliced_at = opening, None, None
+                self._pin_opening()
         saved = {name: _copied(getattr(self, name)) for name in _ROLLED_BACK}
         held = list(self._memory.tokens)
         try:

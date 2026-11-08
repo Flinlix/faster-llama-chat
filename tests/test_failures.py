@@ -353,3 +353,16 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
     rebuilds, decoded = fake.rebuilds, fake.total_prefilled()
     w.reply().finish()
     assert fake.rebuilds == rebuilds and fake.total_prefilled() - decoded < 100
+
+
+def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_tokens():
+    from llama_chat.cache_sync import CacheSync
+    fake = _Flaky(can_shift=False, can_cut_tail=False)
+    memory = CacheSync(fake)
+    memory.pin(3)
+    fake.fail = "decode"            # the first half, up to the pin
+    with pytest.raises(RuntimeError):
+        memory.decode(list(range(1, 11)))
+    assert memory.tokens == list(range(1, 11))
+    memory.repair()
+    assert fake.cache == list(range(1, 11))
