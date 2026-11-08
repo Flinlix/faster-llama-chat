@@ -600,6 +600,20 @@ def test_a_withheld_token_gets_a_chain_of_its_own_that_never_draws_it():
     assert chains["freed"] == [chains["sampled"][0]]
 
 
+def test_a_chain_a_stage_fails_to_join_is_freed():
+    def refuse(*args):
+        raise RuntimeError("the stage was refused")
+
+    freed = []
+    ctx = object.__new__(KVContext)
+    ctx._vocab = None
+    ctx._backend = SimpleNamespace(sampler_chain=lambda: "chain", add_withheld=refuse,
+                                   free_sampler=freed.append)
+    with pytest.raises(RuntimeError, match="refused"):
+        ctx._build_sampler(Config(), withheld=(42,))
+    assert freed == ["chain"]
+
+
 def test_the_withheld_stage_biases_each_token_to_never():
     added = []
     backend = Backend.__new__(Backend)

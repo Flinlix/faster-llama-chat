@@ -503,25 +503,29 @@ class KVContext:
         """Assemble the sampler chain ``config`` asks for, in sampling order, ``withheld`` never drawn."""
         backend = self._backend
         chain = backend.sampler_chain()
-        if withheld:
-            backend.add_withheld(chain, self._vocab, withheld)
-        if config.repetition_penalty != 1.0 \
-                or config.presence_penalty or config.frequency_penalty:
-            backend.add_penalties(chain, self._vocab, config.penalty_window_tokens,
-                                  config.repetition_penalty,
-                                  config.frequency_penalty,
-                                  config.presence_penalty)
-        if config.temperature <= 0.0:
-            backend.add_greedy(chain)
+        try:
+            if withheld:
+                backend.add_withheld(chain, self._vocab, withheld)
+            if config.repetition_penalty != 1.0 \
+                    or config.presence_penalty or config.frequency_penalty:
+                backend.add_penalties(chain, self._vocab, config.penalty_window_tokens,
+                                      config.repetition_penalty,
+                                      config.frequency_penalty,
+                                      config.presence_penalty)
+            if config.temperature <= 0.0:
+                backend.add_greedy(chain)
+                return chain
+            if config.top_k > 0:
+                backend.add_top_k(chain, config.top_k)
+            backend.add_top_p(chain, config.top_p)
+            if config.min_p > 0.0:
+                backend.add_min_p(chain, config.min_p)
+            backend.add_temperature(chain, config.temperature)
+            # An unset seed asks for a fresh random one on every run.
+            seed = config.seed if config.seed is not None else backend.fresh_seed_per_run
+            backend.add_distribution(chain, seed)
             return chain
-        if config.top_k > 0:
-            backend.add_top_k(chain, config.top_k)
-        backend.add_top_p(chain, config.top_p)
-        if config.min_p > 0.0:
-            backend.add_min_p(chain, config.min_p)
-        backend.add_temperature(chain, config.temperature)
-        # An unset seed asks for a fresh random one on every run.
-        seed = config.seed if config.seed is not None else backend.fresh_seed_per_run
-        backend.add_distribution(chain, seed)
-        return chain
+        except BaseException:
+            backend.free_sampler(chain)
+            raise
 
