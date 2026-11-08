@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from llama_chat import ChatWrapper, Config, ContextOverflowError
-from llama_chat.tools import ToolCall
+from llama_chat.tools import ToolCall, ToolRegistry
 from tests.fake_context import FakeContext
 from tests.wrappers import (assert_consistent, held_text, newest_turn, rows, tool_wrapper,
                             weather_registry)
@@ -126,6 +126,29 @@ def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stay
             return
         fake.call_script = ["fn:clock{}"]
     pytest.fail("no question length left the result without room")
+
+
+def test_a_result_that_cannot_be_written_as_text_is_refused_and_the_call_stays_owed():
+    w, fake = tool_wrapper()
+    w.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    call, = [e for e in w.reply("wie spät?", calls="yield") if isinstance(e, ToolCall)]
+    with pytest.raises(ValueError, match="what JSON can write"):
+        w.inject_tool_result(call, {"when": real_datetime.date(2026, 11, 8)})
+    w.inject_tool_result(call, "12:00")
+    w.reply().finish()
+
+
+def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
+    registry = ToolRegistry()
+    registry.register(lambda: real_datetime.date(2026, 11, 8), "Das Datum.", name="clock",
+                      parameters={"type": "object", "properties": {}})
+    w, fake = tool_wrapper()
+    w.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    reply = w.reply("welcher Tag?", calls="run").finish()
+    assert reply.stop_reason == "end_of_turn" and not w.reply_open
+    assert "unwritable_result" in held_text(w)
 
 
 def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():

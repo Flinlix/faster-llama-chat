@@ -55,8 +55,17 @@ class ToolCall:
 
 
 def result_text(result) -> str:
-    """One tool's return value as the text the model is handed."""
-    return result if isinstance(result, str) else json.dumps(result)
+    """One tool's return value as the text the model is handed.
+
+    Raises:
+        ValueError: If it is neither text nor anything JSON can write.
+    """
+    if isinstance(result, str):
+        return result
+    try:
+        return json.dumps(result)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"a tool result must be text or what JSON can write: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -191,8 +200,8 @@ class ToolRegistry:
         ``TypeError`` raised inside a tool is not reported as a bad call.
 
         Returns:
-            Whatever the tool returned, or a dict carrying ``error`` and
-            ``message``.
+            Whatever the tool returned, where it is text or what JSON can write,
+            or a dict carrying ``error`` and ``message``.
         """
         entry = self._entries.get(call.name)
         if entry is None:
@@ -208,6 +217,10 @@ class ToolRegistry:
             returned = entry.function(**call.arguments)
         except Exception as e:
             return {"error": "tool_raised", "message": f"{type(e).__name__}: {e}"}
+        try:
+            result_text(returned)
+        except ValueError as e:
+            return {"error": "unwritable_result", "message": str(e)}
         return returned
 
     def __contains__(self, name: object) -> bool:

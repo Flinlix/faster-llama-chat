@@ -488,8 +488,9 @@ class RenderedCache:
         """Record what the oldest owed call returned, clipped where it cannot fit; after the last one, decode the prompt for the reply.
 
         Raises:
-            ValueError: If no call is waiting, this is not the one owed, or the
-                template writes no result.
+            ValueError: If no call is waiting, this is not the one owed, the
+                result cannot be written as text, or the template writes no
+                result.
             ContextOverflowError: If not even an empty result leaves room for
                 the reply.
         """

@@ -808,6 +808,8 @@ its probe, instead of passing it.
 - Llama 3.2 writes `<|python_tag|>` before a call its template opens with
   plain text. A tag right before such a call is now held back while a call may
   still follow, and is the call's where one does, so it is never shown.
+- A tool result JSON cannot write is an error result where a registry runs the
+  tool, and refused where it is handed to `inject_tool_result`.
 - The README promised `"interrupted"` for a stream closed early, which has no
   reply to carry it.
 

@@ -323,8 +323,9 @@ class ChatWrapper:
             result: What it returned. Anything but a string is sent as JSON.
 
         Raises:
-            ValueError: If no call is waiting, or this is not the one owed. The
-                call stays owed.
+            ValueError: If no call is waiting, this is not the one owed, or the
+                result is neither text nor anything JSON can write. The call
+                stays owed.
             ContextOverflowError: If not even an empty result leaves room for
                 the reply in what is left of the context.
         """
