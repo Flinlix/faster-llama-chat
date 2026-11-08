@@ -426,6 +426,14 @@ def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
     assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded
 
 
+def test_with_calls_off_a_tag_in_a_reply_that_ends_in_text_is_shown():
+    context, _ = _plain_context(["Hi", "<|start|>", "there", "<|end|>", "<end>"])
+    out = GenerationAccumulator()
+    shown = "".join(context.generate(0, 20, out=out, boundary=CallBoundary(
+        opens_as_text=True, turn_end_text="<|end|>")))
+    assert out.stop_reason == "end_of_turn" and shown == "Hi<|start|>there"
+
+
 def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
     context = _merging_context()
     assert context.split_at_tags("a <t>b c<e>") == [

@@ -376,7 +376,7 @@ class KVContext:
         call_open, call_close = boundary.tool_tokens or (None, None)
         call = None            # pieces of the call being generated, once one is
         open_text, close_text = boundary.call_texts or (None, None)
-        call_opens_as_text = boundary.opens_as_text
+        call_opens_as_text = boundary.opens_as_text and open_text is not None
         marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
         held_chars = max([0] + [len(mark) for mark in marks])
         starts = []            # where each token's text begins in ``visible``
