@@ -190,7 +190,7 @@ class RenderedCache:
             self._keep_newest_history(min(limit, self._config.context_size // 2))
             if any(m["role"] != "system" for m in self._messages) \
                     and self._split(self._messages, self._ends_on_result()) is None:
-                raise self._refused_history()
+                raise self._refused_history(self._messages)
             self._splices = splices(self._render, system)
             ensure_history_stays_written(self._render, system)
             self._windows = self._splices and windows_are_exact(self._render, system,
@@ -238,7 +238,7 @@ class RenderedCache:
         def fits(count: int) -> bool:
             kept = self._messages[:first] + self._messages[opens[-count]:]
             if self._split(kept, kept[-1]["role"] == "tool") is None:
-                raise self._refused_history()
+                raise self._refused_history(kept)
             return self._length(kept, generation_prompt=False) <= bound
 
         kept, more = 1, 2
@@ -253,9 +253,9 @@ class RenderedCache:
             kept, more = (middle, more) if fits(middle) else (kept, middle)
         self._messages = self._messages[:first] + self._messages[opens[-kept]:]
 
-    def _refused_history(self) -> ValueError:
-        """The refusal of a history this model's template will not write."""
-        roles = [m["role"] for m in self._messages]
+    def _refused_history(self, messages: list[dict]) -> ValueError:
+        """The refusal of ``messages``, a history this model's template will not write."""
+        roles = [m["role"] for m in messages]
         return ValueError(self._refusal("user") if ["user", "user"] in [
             roles[i:i + 2] for i in range(len(roles) - 1)]
             else "this model's template refuses to write this conversation")

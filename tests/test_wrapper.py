@@ -735,6 +735,21 @@ def test_a_history_with_two_user_turns_in_a_row_is_joined_or_refused():
         w.begin("s", [("user", "eins"), ("user", "zwei")])
 
 
+def test_a_refused_history_is_explained_by_what_would_be_kept_of_it():
+    """Two user turns in a row that would be dropped are not why the rest is refused."""
+    class _RefusesOneText(FakeContext):
+        def render_with_model_template(self, messages, tools=None, **options):
+            if any(m.get("content") == "refused" for m in messages):
+                return None
+            return super().render_with_model_template(messages, tools, **options)
+
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                    context=_RefusesOneText(user_join=None))
+    with pytest.raises(ValueError, match="refuses to write this conversation"):
+        w.begin("s", [("user", "eins"), ("user", "zwei"), ("assistant", "drei"),
+                      ("user", "refused"), ("assistant", "vier")])
+
+
 def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
     fake = FakeContext(user_join="<sep>")
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, max_history_messages=1),
