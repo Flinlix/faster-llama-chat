@@ -1,7 +1,7 @@
 """KV-cache operations: tokenize, prefill, generate, evict and shift.
 
-Owns the model, context and sampler. What the cache should hold is decided by
-the caller.
+Owns the model and the context, and builds each generation's sampler. What
+the cache should hold is decided by the caller.
 """
 
 from __future__ import annotations
@@ -83,7 +83,6 @@ class KVContext:
         self._model = self._backend.load_model(
             config.model_path, config.gpu_layers, progress=on_load_progress)
         self._engine_context = None
-        self._sampler = None
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
             addon = addon_file(config.model_path, template)      # read once, for both uses
@@ -100,14 +99,11 @@ class KVContext:
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
-            self._sampler = self._build_sampler(config)
             self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
                                     if template else None)
             self._tags = None
         except BaseException:
             # Free whatever was created before the failure.
-            if self._sampler is not None:
-                self._backend.free_sampler(self._sampler)
             if self._engine_context is not None:
                 self._backend.free_context(self._engine_context)
             self._backend.free_model(self._model)
@@ -301,9 +297,8 @@ class KVContext:
                 after abandoning the stream; a fresh one is used otherwise.
             cancel: Checked once per token. Setting it, from any thread, ends
                 the generation with ``stop_reason == "interrupted"``.
-            sampling: This generation's own settings. One that overrides
-                anything gets a sampler chain of its own, freed when the
-                generation ends; without one the chain built at load is used.
+            sampling: This generation's own settings, in place of the
+                configuration's.
             ends_turn: Whether a sampled token ends the reply as an
                 end-of-generation token does, neither cached nor yielded: the
                 first of a closing the model writes in several tags.
@@ -316,24 +311,15 @@ class KVContext:
         Yields:
             Visible reply text deltas; their concatenation equals ``out.text``.
         """
-        own_sampler = None
-        if boundary.withheld_tokens:
-            own_sampler = self._build_sampler(
-                sampling.applied_to(self._config) if sampling is not None else self._config,
-                boundary.withheld_tokens)
-        elif sampling is not None and sampling.overrides:
-            own_sampler = self._build_sampler(sampling.applied_to(self._config))
-        else:
-            # Penalties count this generation's tokens only, and a seed
-            # starts over, as in a chain built for this generation alone.
-            self._backend.sampler_reset(self._sampler)
+        # A chain of its own: penalties count this generation's tokens only, and a seed starts over.
+        sampler = self._build_sampler(
+            sampling.applied_to(self._config) if sampling is not None else self._config,
+            boundary.withheld_tokens)
         try:
             yield from self._sample_into(
-                own_sampler if own_sampler is not None else self._sampler,
-                start_pos, max_generated_tokens, out, cancel, ends_turn, boundary)
+                sampler, start_pos, max_generated_tokens, out, cancel, ends_turn, boundary)
         finally:
-            if own_sampler is not None:
-                self._backend.free_sampler(own_sampler)
+            self._backend.free_sampler(sampler)
 
     def _sample_into(self, sampler, start_pos: int, max_generated_tokens: int,
                      out: GenerationAccumulator | None, cancel: threading.Event | None,
@@ -472,15 +458,12 @@ class KVContext:
 
     # ----- lifecycle -----------------------------------------------------
     def close(self) -> None:
-        """Free the sampler, context and model. Safe to call more than once."""
+        """Free the context and model. Safe to call more than once."""
         if self._closed:
             return
         self._closed = True
-        try:
-            self._backend.free_sampler(self._sampler)
-        finally:
-            self._backend.free_context(self._engine_context)
-            self._backend.free_model(self._model)
+        self._backend.free_context(self._engine_context)
+        self._backend.free_model(self._model)
 
     # ----- internals -----------------------------------------------------
     def _verify_cache_edits(self) -> None:

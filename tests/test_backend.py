@@ -254,9 +254,10 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
     decoded = []
     context = object.__new__(KVContext)
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
-    context._sampler = "sampler"
+    context._config = Config()
+    context._build_sampler = lambda config, withheld=(): "sampler"
     context._backend = SimpleNamespace(
-        sampler_reset=lambda sampler: None,
+        free_sampler=lambda sampler: None,
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == "<end>",
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
@@ -310,9 +311,10 @@ def _sampling_context(sampled):
     sampled, decoded, removed = iter(sampled), [], []
     context = object.__new__(KVContext)
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
-    context._sampler = "sampler"
+    context._config = Config()
+    context._build_sampler = lambda config, withheld=(): "sampler"
     context._backend = SimpleNamespace(
-        sampler_reset=lambda sampler: None,
+        free_sampler=lambda sampler: None,
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == "<end>",
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
@@ -492,9 +494,8 @@ def _stub_context(chains):
         decode=lambda *args: None,
         token_to_piece_bytes=lambda vocab, tok: b"x",
         free_sampler=lambda sampler: chains["freed"].append(sampler),
-        sampler_reset=lambda sampler: chains.setdefault("reset", []).append(sampler),
     )
-    ctx._sampler, ctx._vocab, ctx._engine_context = "loaded", None, None
+    ctx._vocab, ctx._engine_context = None, None
     ctx._max_batch_tokens = 8
     ctx._config = Config()
     ctx._build_sampler = lambda config, withheld=(): ("own", config.temperature) + withheld
@@ -568,12 +569,16 @@ def test_set_offload_kqv_disable_on_unsupported_build_raises():
         _set_offload(SimpleNamespace(), False)
 
 
-# ----- the sampler chain per request ---------------------------------------
-def test_a_generation_without_overrides_keeps_the_chain_built_at_load():
+# ----- the sampler chain per generation ------------------------------------
+def test_every_generation_draws_from_a_chain_of_its_own_freed_when_it_ends():
+    """No chain outlives its generation, so penalties and a seed start afresh in each."""
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    list(ctx.generate(0, 2, out=GenerationAccumulator(), sampling=Sampling()))
-    assert set(chains["sampled"]) == {"loaded"} and chains["freed"] == []
+    own = ("own", Config().temperature)
+    list(ctx.generate(0, 1, out=GenerationAccumulator()))
+    assert chains["sampled"] == chains["freed"] == [own]
+    list(ctx.generate(1, 1, out=GenerationAccumulator(), sampling=Sampling()))
+    assert chains["sampled"] == chains["freed"] == [own, own]
 
 
 def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
@@ -584,14 +589,6 @@ def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
     stream.close()
     assert chains["sampled"] == [("own", 0.3)]
     assert chains["freed"] == [("own", 0.3)]
-
-
-def test_every_generation_starts_its_penalties_and_its_seed_afresh():
-    chains = {"sampled": [], "freed": []}
-    ctx = _stub_context(chains)
-    list(ctx.generate(0, 1, out=GenerationAccumulator()))
-    list(ctx.generate(1, 1, out=GenerationAccumulator(), sampling=Sampling()))
-    assert chains["reset"] == ["loaded", "loaded"]
 
 
 def test_a_withheld_token_gets_a_chain_of_its_own_that_never_draws_it():

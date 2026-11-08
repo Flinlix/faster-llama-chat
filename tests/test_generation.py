@@ -22,8 +22,10 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
         is_eog=lambda vocab, token: token == eog,
         decode=lambda *_a: None,
         token_to_piece_bytes=lambda vocab, token: pieces[token],
-        sampler_reset=lambda sampler: None)
-    ctx._sampler = ctx._vocab = ctx._engine_context = None
+        free_sampler=lambda sampler: None)
+    ctx._vocab = ctx._engine_context = None
+    ctx._config = Config()
+    ctx._build_sampler = lambda config, withheld=(): None
     ctx._max_batch_tokens = 8
     return ctx
 

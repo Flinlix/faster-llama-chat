@@ -129,7 +129,6 @@ class Backend:
         self._init_logit_bias = _required_symbol("llama_sampler_init_logit_bias")
         self._sampler_sample = _required_symbol("llama_sampler_sample")
         self._sampler_free = _required_symbol("llama_sampler_free")
-        self._sampler_reset = _required_symbol("llama_sampler_reset")
 
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int,
@@ -379,10 +378,6 @@ class Backend:
 
     def free_sampler(self, sampler) -> None:
         self._sampler_free(sampler)
-
-    def sampler_reset(self, sampler) -> None:
-        """Reset sampler-chain state: the penalty window, and the seed it draws from."""
-        self._sampler_reset(sampler)
 
     # ----- KV / memory edits --------------------------------------------
     def _mem(self, ctx):
