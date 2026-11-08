@@ -246,12 +246,7 @@ class KVContext:
             )
 
     def save_state(self):
-        """What a cache that cannot shift needs to be put back to where it rests now.
-
-        ``None`` where this build cannot save it, a rebuild then standing in.
-        """
-        if not self._backend.can_save_state:
-            return None
+        """What a cache that cannot shift needs to be put back to where it rests now."""
         return self._backend.save_state(self._engine_context, SEQ)
 
     def restore_state(self, state, pos: int) -> None:

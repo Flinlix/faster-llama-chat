@@ -1099,3 +1099,25 @@ template is now refused only for what would be kept.
 - B6: a `ToolTurn` whose result answers no call made before it in the turn is
   refused when it is built, where it used to be written with an invented call
   id.
+
+## 2026-11-08: The oldest llama-cpp-python supported is 0.3.23 (227A)
+
+The adapter looked every C symbol up under each name llama.cpp had given it
+since 0.3.0: the `llama_kv_self_*` and `llama_kv_cache_*` cache edits beside
+`llama_memory_*`, `llama_load_model_from_file`, the `llama_token_*` vocabulary
+calls, a missing vocabulary handle, the boolean `flash_attn` beside
+`flash_attn_type`, and builds without saved states. Checked against each
+release's `llama_cpp.py`: 0.3.10 adds the memory API, 0.3.23 the
+`llama_state_seq_*_ext` calls with `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY` that
+the saved states rest on, and every other name the adapter calls is present
+from 0.3.9 on; the machines this runs on use 0.3.36. The floor is now 0.3.23
+in pyproject.toml, install.sh, the README and the server's image, every symbol
+is required under its one current name, and the fallbacks went with
+`Backend.can_edit_cache` and `Backend.can_save_state`, which could no longer
+answer anything but yes. install.sh now checks the build by constructing the
+adapter, which raises where a symbol is missing. The lookup under several
+names stays for the next rename.
+
+The penalties call still differs inside the supported range: 0.3.23 to 0.3.34
+declare four parameters, 0.3.35 on five, the vocabulary size first, so
+`_penalties_take_vocab_size` stays.

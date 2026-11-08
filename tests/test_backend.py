@@ -32,7 +32,6 @@ def _backend(attr):
     """A Backend whose attribute lookup returns ``attr`` for every token."""
     backend = Backend.__new__(Backend)
     backend._get_attr = lambda vocab, token: attr
-    backend._is_control = None
     return backend
 
 
@@ -49,26 +48,6 @@ def test_a_tag_a_finetune_added_is_a_tag_too():
 
 def test_ordinary_text_is_not():
     assert not _backend(llama_cpp.LLAMA_TOKEN_ATTR_NORMAL).is_special(None, 1)
-
-
-def test_without_the_attribute_lookup_it_falls_back_to_control():
-    backend = Backend.__new__(Backend)
-    backend._get_attr = None
-    backend._is_control = lambda vocab, token: token == 7
-    assert backend.is_special(None, 7)
-    assert not backend.is_special(None, 8)
-
-
-def test_without_either_symbol_nothing_is_a_tag():
-    """A build offering neither answer leaves every token counting as text.
-
-    Tool calling is then off, and a turn terminator no longer validates, which
-    is the honest outcome: nothing here can tell a tag from a word.
-    """
-    backend = Backend.__new__(Backend)
-    backend._get_attr = None
-    backend._is_control = None
-    assert not backend.is_special(None, 7)
 
 
 # ----- the cache edits eviction rests on ---------------------------------
@@ -126,33 +105,6 @@ def test_the_cut_is_tried_inside_a_running_state_not_at_its_end():
     probe = performed.index(("seq_rm", 1, -1))
     assert len(performed[probe - 1][1]) > 2
     assert performed[probe + 1] == ("clear",)
-
-
-def test_a_cache_edit_counts_from_either_api():
-    """What install.sh asks, having no model to prove the edits against.
-
-    It used to reach into these attributes and repeat the pairing itself, which
-    goes stale the next time llama.cpp renames one of them.
-    """
-    present = object()
-
-    def backend(**offered):
-        b = Backend.__new__(Backend)
-        for attr in ("_get_memory", "_mem_clear", "_mem_rm", "_mem_add",
-                     "_kv_clear", "_kv_rm", "_kv_add"):
-            setattr(b, attr, offered.get(attr))
-        return b
-
-    memory_api = backend(_get_memory=present, _mem_clear=present,
-                         _mem_rm=present, _mem_add=present)
-    legacy_api = backend(_kv_clear=present, _kv_rm=present, _kv_add=present)
-    no_shift = backend(_kv_clear=present, _kv_rm=present)
-    no_handle = backend(_mem_clear=present, _mem_rm=present, _mem_add=present)
-
-    assert memory_api.can_edit_cache
-    assert legacy_api.can_edit_cache
-    assert not no_shift.can_edit_cache      # closing the gap is an edit too
-    assert not no_handle.can_edit_cache     # no way to reach the memory ops
 
 
 def _raises_type_error(*_args):
@@ -234,7 +186,7 @@ def test_a_removal_the_cache_refuses_is_raised():
 @pytest.mark.parametrize("answer, taken", [(True, True), (False, False), (None, True)])
 def test_a_removal_reports_the_caches_answer_and_takes_none_for_yes(answer, taken):
     backend = object.__new__(Backend)
-    backend._mem = lambda ctx: "the memory"
+    backend._get_memory = lambda ctx: "the memory"
     backend._mem_rm = lambda *args: answer
     assert backend.kv_seq_rm("the context", 0, 3, -1) is taken
 
@@ -494,47 +446,15 @@ def _stub_context(chains):
 
 
 # ----- flash attention and offload on each build ---------------------------
-@pytest.mark.parametrize("enable", [True, False])
-def test_set_flash_attn_bool_build(enable):
-    from types import SimpleNamespace
-
-    cparams = SimpleNamespace(flash_attn=None)
-    _set_flash_attn(cparams, enable)
-    assert cparams.flash_attn is enable
-
-
 @pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
-def test_set_flash_attn_enum_build(enable, expected):
+def test_flash_attention_is_set_on_or_off(enable, expected):
     from types import SimpleNamespace
 
-    cparams = SimpleNamespace(flash_attn_type=None)  # no bool field
+    cparams = SimpleNamespace(flash_attn_type=None)
     llama_cpp = SimpleNamespace(LLAMA_FLASH_ATTN_TYPE_ENABLED=1,
                          LLAMA_FLASH_ATTN_TYPE_DISABLED=0)
     _set_flash_attn(cparams, enable, llama_cpp=llama_cpp)
     assert cparams.flash_attn_type == expected
-
-
-@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
-def test_set_flash_attn_enum_build_without_constants(enable, expected):
-    from types import SimpleNamespace
-
-    cparams = SimpleNamespace(flash_attn_type=None)
-    _set_flash_attn(cparams, enable, llama_cpp=SimpleNamespace())  # constants absent
-    assert cparams.flash_attn_type == expected
-
-
-def test_set_flash_attn_disable_on_unsupported_build_is_noop():
-    from types import SimpleNamespace
-
-    cparams = SimpleNamespace()  # neither field present
-    _set_flash_attn(cparams, False)  # must not raise
-
-
-def test_set_flash_attn_enable_on_unsupported_build_raises():
-    from types import SimpleNamespace
-
-    with pytest.raises(RuntimeError, match="flash-attention"):
-        _set_flash_attn(SimpleNamespace(), True)
 
 
 @pytest.mark.parametrize("enable", [True, False])
@@ -544,20 +464,6 @@ def test_set_offload_kqv_bool_build(enable):
     cparams = SimpleNamespace(offload_kqv=None)
     _set_offload(cparams, enable)
     assert cparams.offload_kqv is enable
-
-
-def test_set_offload_kqv_enable_on_unsupported_build_is_noop():
-    from types import SimpleNamespace
-
-    # GPU placement is llama.cpp's own default, so a missing param is harmless.
-    _set_offload(SimpleNamespace(), True)  # must not raise
-
-
-def test_set_offload_kqv_disable_on_unsupported_build_raises():
-    from types import SimpleNamespace
-
-    with pytest.raises(RuntimeError, match="KV-offload"):
-        _set_offload(SimpleNamespace(), False)
 
 
 # ----- the sampler chain per generation ------------------------------------
