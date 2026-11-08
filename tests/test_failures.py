@@ -245,6 +245,15 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
 
 
 # ----- what a request asks for ------------------------------------------------------
+def test_a_call_ceiling_where_no_call_is_run_is_refused():
+    w, fake = tool_wrapper()
+    w.begin("persona")
+    for calls in ("refuse", "yield", "withhold"):
+        with pytest.raises(ValueError, match="max_calls"):
+            w.reply("x", calls=calls, max_calls=2)
+    assert w.history() == []
+
+
 def test_a_generation_that_fails_before_it_says_anything_takes_its_question_back():
     w, fake = _flaky(gen_tokens=2)
     w.begin("s")

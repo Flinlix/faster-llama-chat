@@ -242,7 +242,7 @@ class ChatWrapper:
                   withholds the call tokens, so the turn always closes.
             max_calls: Where calls are run, how many one turn may use. ``None``
                 sets no ceiling; a call past one is answered with an error
-                result rather than run.
+                result rather than run. Only where calls are run.
             max_reply_tokens: Override for the per-generation cap.
             stop: Stop strings for this request, added to the config's,
                 matched against the answer only.
@@ -259,9 +259,10 @@ class ChatWrapper:
         Raises:
             ValueError: If no conversation has been begun; if a tool call has
                 left a reply open and ``text`` is given, or a result is still
-                owed; if ``text`` is ``None`` with nothing to answer; or if a
+                owed; if ``text`` is ``None`` with nothing to answer; if a
                 registry holding tools is given to a model that could never
-                call one.
+                call one; if ``"run"`` is asked where :meth:`begin` kept no
+                registry; or if ``max_calls`` is given where no call is run.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
@@ -273,6 +274,8 @@ class ChatWrapper:
                 and calls not in ("withhold", "refuse", "yield", "run"):
             raise ValueError(f"calls must be 'withhold', 'refuse', 'yield', 'run' or a ToolRegistry, "
                              f"not {calls!r}")
+        if max_calls is not None and not runs:
+            raise ValueError(f"max_calls limits calls that are run, and calls={calls!r} runs none")
         if calls == "yield":
             return self._until_call(text, allow_tools=True, **options)
         if calls == "withhold":
@@ -280,6 +283,9 @@ class ChatWrapper:
         if calls == "refuse":
             registry = None
         elif calls == "run":
+            if self._registry is None:
+                raise ValueError("calls='run' runs the registry begin() was given, and it was "
+                                 "given none; pass the registry itself as calls")
             registry = self._registry
         else:
             registry = calls

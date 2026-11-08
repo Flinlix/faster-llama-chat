@@ -1320,6 +1320,10 @@ def test_declaring_takes_a_registry_the_way_begin_does():
     declared = system_turn(wrapper)
     assert "<decl>clock</decl>" in declared
     assert fake.cache == cache_tokens(wrapper)
+    # Read, not kept: which registry a turn runs against stays begin's decision,
+    # so this one has to be handed over again to be run from.
+    with pytest.raises(ValueError, match="given none"):
+        wrapper.reply("wie spät?", calls="run").finish()
 
 
 def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
@@ -1467,6 +1471,8 @@ def test_a_conversation_with_no_tools_needs_no_registry():
     wrapper.begin("persona")
     assert wrapper.reply("hallo", calls=ToolRegistry()).finish().text == "reply"
     assert fake.cache == cache_tokens(wrapper)
+    with pytest.raises(ValueError, match="given none"):     # nothing to run: said, not refused silently
+        wrapper.reply("hallo", calls="run").finish()
 
 
 def test_a_call_invented_with_no_tools_declared_is_answered_not_raised():
@@ -1494,7 +1500,8 @@ def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
     wrapper.begin("persona")            # a reset drops it with everything else
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    wrapper.reply("wetter?", calls="run").finish()    # the old conversation's registry is gone
+    with pytest.raises(ValueError, match="given none"):    # the old conversation's registry is gone
+        wrapper.reply("wetter?", calls="run").finish()
     assert ran == []
 
 

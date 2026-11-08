@@ -802,6 +802,8 @@ its probe, instead of passing it.
 - `ToolRegistry.register(in_system_prompt=)` is `declare_at_begin=`, and
   `specs_for_system_prompt()` is `specs_declared_at_begin()`: the template, not
   the flag, decides where a declaration goes.
+- `calls="run"` where `begin` kept no registry, and `max_calls` with a policy
+  that runs nothing, are refused instead of ignored.
 
 ### Faults the old code had
 
