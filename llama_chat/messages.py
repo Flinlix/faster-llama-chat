@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 
-from .template_extract import call_id
 from .tools import ToolCall, ToolResult, ToolTurn, result_text
 
 
@@ -31,9 +30,8 @@ def as_messages(history) -> list[dict]:
                     messages.append(calling_message(text, calls, n))
                     owed += [call_id(n + k) for k in range(len(calls))]
                     n, text, calls = n + len(calls), "", []
-                messages.append({"role": "tool", "name": step.name,
-                                 "tool_call_id": owed.pop(0) if owed else call_id(n - 1),
-                                 "content": result_text(step.result)})
+                answered = owed.pop(0) if owed else call_id(n - 1)
+                messages.append(result_message(step.name, answered, result_text(step.result)))
         if calls:                       # called, and not answered yet
             messages.append(calling_message(text, calls, n))
             n += len(calls)
@@ -42,12 +40,22 @@ def as_messages(history) -> list[dict]:
     return messages
 
 
+def call_id(n: int) -> str:
+    """The id of the ``n``-th call this library writes, nine letters and digits."""
+    return f"call{n:05d}"
+
+
 def calling_message(text: str, calls: list[ToolCall], first_id: int) -> dict:
     """An assistant message holding ``text`` and ``calls``, numbered from ``first_id``."""
     return {"role": "assistant", "content": text, "tool_calls": [
         {"id": call_id(first_id + k), "type": "function",
          "function": {"name": call.name, "arguments": copy.deepcopy(call.arguments)}}
         for k, call in enumerate(calls)]}
+
+
+def result_message(name: str, tool_call_id: str, text: str) -> dict:
+    """A tool message answering the call ``tool_call_id`` to ``name`` with ``text``."""
+    return {"role": "tool", "name": name, "tool_call_id": tool_call_id, "content": text}
 
 
 def as_history(messages: list[dict]) -> list:

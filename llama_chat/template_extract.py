@@ -21,8 +21,10 @@ import json
 import re
 from typing import Callable
 
+from .messages import calling_message
 from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments,
                        common_prefix_length, shared_tags_length)
+from .tools import ToolCall
 
 # Plain alphanumerics: they survive Jinja `| trim` and are never HTML-escaped.
 
@@ -69,12 +71,10 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
             template variables as keywords, raising where the template does.
     """
     probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
+    render = refusing(render_variables)
 
     def rendered(**variables):
-        try:
-            return render_variables(probe, generation_prompt=True, **variables)
-        except Exception:
-            return None
+        return render(probe, generation_prompt=True, **variables)
 
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
     if rendered(**thinking[True]) == rendered(**thinking[False]):
@@ -94,27 +94,28 @@ def names_read(template: str) -> set[str]:
     return {node.name for node in parsed.find_all(jinja2.nodes.Name) if node.ctx == "load"}
 
 
-def call_id(n: int) -> str:
-    """The id of the ``n``-th call this library writes, nine letters and digits."""
-    return f"call{n:05d}"
+def refusing(render: Render) -> Render:
+    """``render``, answering ``None`` where it raises, as a template refusing a shape does."""
+    def rendered(*args, **kwargs):
+        try:
+            return render(*args, **kwargs)
+        except Exception:
+            return None
+    return rendered
 
 
-def _refusing(render: Render) -> Render:
+def _as_probes_read(render: Render) -> Render:
     """``render`` as probes read it.
 
     It answers ``None`` where it raises, a template refusing a shape. A render
     without a generation prompt comes back without what the template writes
     once after a conversation's last message, which belongs to no turn.
     """
-    def refusing(*args, **kwargs):
-        try:
-            return render(*args, **kwargs)
-        except Exception:
-            return None
-    end = _conversation_end(refusing)
+    refused = refusing(render)
+    end = _conversation_end(refused)
 
     def rendered(*args, **kwargs):
-        text = refusing(*args, **kwargs)
+        text = refused(*args, **kwargs)
         if end and text is not None and not kwargs.get("generation_prompt") \
                 and text.endswith(end):
             return text[:-len(end)]
@@ -154,7 +155,7 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
     Returns:
         The fragments, or ``None`` where the model ships no usable template.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     user = render([{"role": "user", "content": _USER}], reasoning=False)
     if user is None or _USER not in user:
         return None
@@ -187,7 +188,7 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         be recovered. A template without a switch that marks one reasons, or
         may, in every reply.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     found = _thought_tags(render, fragments, tool_calls) or _empty_thought_tags(render)
     if found is None:
         return None
@@ -213,7 +214,7 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
     name without the slash. Such a template has no switch, so the model may
     reason in every reply.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     known = set(tags)
     for close in tags:
         opening = "<" + close[2:]
@@ -277,7 +278,7 @@ def extract_tool_fragments(render: Render,
         The tags, or ``None`` where nothing usable can be recovered, which is
         what a model that cannot call tools looks like from here.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     if fragments.assistant_prefix == fragments.user_prefix:
         return None
     text = _render_call(render, {_KEY: _STRING})
@@ -323,12 +324,9 @@ def extract_call_separator(render: Render, call_open: str) -> str | None:
         The text, or ``None`` where the template does not open each call with
         ``call_open`` or such an end of it.
     """
-    rendered = _refusing(render)([
+    rendered = _as_probes_read(render)([
         {"role": "user", "content": _USER},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": call_id(n), "type": "function",
-             "function": {"name": _TOOL, "arguments": {_KEY: value}}}
-            for n, value in enumerate((_STRING, _STRING2))]},
+        calling_message("", [ToolCall(_TOOL, {_KEY: value}) for value in (_STRING, _STRING2)], 0),
     ], reasoning=False)
     if rendered is None:
         return None
@@ -361,7 +359,7 @@ def extract_call_body(render: Render, call_open: str,
         delimiter. Such a model's calls are still detected, because the tags are
         tokens, but what is inside one cannot be read.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     def rendered_body(arguments) -> str | None:
         rendered = _render_call(render, arguments)
         if rendered is None or call_open not in rendered:
@@ -488,7 +486,7 @@ def extract_call_close_text(render: Render, call_open: str) -> str | None:
     and one without both end with. Where a template writes no two calls in one
     turn, the longest such end of the latter.
     """
-    render = _refusing(render)
+    render = _as_probes_read(render)
     empty, text = _render_call(render, {}), _render_call(render, {_KEY: _STRING})
     if empty is None or text is None or call_open not in empty or call_open not in text:
         return None
@@ -511,7 +509,7 @@ def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
     ``call_open``, and again in the call's body, which is what opens the call
     there. ``None`` where the name does not follow ``call_open`` and recur.
     """
-    rendered = _render_call(_refusing(render), {_KEY: _STRING})
+    rendered = _render_call(_as_probes_read(render), {_KEY: _STRING})
     if rendered is None or call_open not in rendered:
         return None
     after = rendered.split(call_open, 1)[1]
@@ -531,12 +529,8 @@ def _common_suffix(one: str, other: str) -> str:
 
 def _render_call(render: Render, arguments: dict) -> str | None:
     """Render one assistant turn calling ``TOOLNAME`` with ``arguments``."""
-    return render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": call_id(0), "type": "function",
-             "function": {"name": _TOOL, "arguments": arguments}}]},
-    ], reasoning=False)
+    return render([{"role": "user", "content": _USER},
+                   calling_message("", [ToolCall(_TOOL, arguments)], 0)], reasoning=False)
 
 
 def _past_exchange(render: Render, first_prefix: str,
@@ -689,10 +683,8 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
     for reply in replies:
         probes.append(([{"role": "user", "content": _USER}, reply], _ASSISTANT))
         if tool_calls is not None:
-            call = {"id": call_id(0), "type": "function",
-                    "function": {"name": _TOOL, "arguments": {}}}
             probes.append(([{"role": "user", "content": _USER},
-                            {**reply, "content": "", "tool_calls": [call]}],
+                            {**reply, **calling_message("", [ToolCall(_TOOL, {})], 0)}],
                            tool_calls.call_open))
     for messages, after in probes:
         rendered = render(messages, reasoning=True)
@@ -772,7 +764,7 @@ def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ..
     texts = [text for text in dict.fromkeys(texts) if text and _MARK not in text]
     marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]
     content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
-    rendered = _refusing(render)([{"role": "user", "content": content}], reasoning=False)
+    rendered = _as_probes_read(render)([{"role": "user", "content": content}], reasoning=False)
     if rendered is None or not all(mark in rendered for mark in marks):
         return ()
     rewrites = []

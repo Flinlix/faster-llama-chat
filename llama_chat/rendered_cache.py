@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
-from .messages import as_history, as_messages, calling_message, exchange_starts
+from .messages import as_history, as_messages, calling_message, exchange_starts, result_message
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices, splices,
                             windows_are_exact, writes_two_user_turns)
 from .reply import ContextOverflowError
@@ -550,7 +550,7 @@ class RenderedCache:
                     f"the waiting call is {owed.name!r}, not {name!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
-            message = {"role": "tool", "name": name, "tool_call_id": owed_id, "content": text}
+            message = result_message(name, owed_id, text)
             if self._render(self._messages + [message], False) in (
                     None, self._render(self._messages, False)):
                 raise ValueError("this model's template renders no tool result, so a call's "

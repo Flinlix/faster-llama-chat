@@ -11,14 +11,15 @@ from __future__ import annotations
 import dataclasses
 
 from .cache_context import MODEL_READER, ensure_answers
+from .messages import call_id, calling_message, result_message
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, shared_tags_length)
-from .template_extract import (ESCAPABLE, call_id, extract_call_body, extract_call_close_text,
+from .template_extract import (ESCAPABLE, extract_call_body, extract_call_close_text,
                                extract_content_rewrites,
                                extract_call_separator, extract_fragments,
                                extract_named_twice_opening, extract_reasoning, extract_removed_thought,
-                               extract_tool_fragments, names_read)
-from .tools import ToolSpec
+                               extract_tool_fragments, names_read, refusing)
+from .tools import ToolCall, ToolSpec
 
 # Where the prompt and a tool result go in a render. Neither contains the
 # other, so a split on either lands where it means to.
@@ -55,6 +56,7 @@ class ResolvedTemplate:
     def __init__(self, context, *, tool_calls: ToolCallFragments | None = None) -> None:
         ensure_answers(context, MODEL_READER)
         self._context = context
+        self._probe_render = refusing(context.render_with_model_template)
         self._variables: dict = {}      # template variables every render passes
         self._fragments = self._resolve_fragments()
         self._validate_template()
@@ -80,14 +82,13 @@ class ResolvedTemplate:
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
         """``messages`` as the model's template writes them, ``None`` where it refuses that shape."""
-        return self._render(messages, tools, generation_prompt=generation_prompt,
-                            reasoning=reasoning)
-
-    def _render(self, messages, tools=None, *, generation_prompt=False, reasoning=None,
-                **variables):
         return self._context.render_with_model_template(
             messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
-            **self._variables, **variables)
+            **self._variables)
+
+    def _render(self, messages, tools=None, **options):
+        """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
+        return self._probe_render(messages, tools, **self._variables, **options)
 
     # ----- what the wrapper reads ----------------------------------------------
     @property
@@ -354,9 +355,7 @@ class ResolvedTemplate:
         if not call or self._tool_calls is None:
             return None, False
         rendered = self._render([{"role": "user", "content": _PROMPT},
-                                 {"role": "assistant", "content": "", "tool_calls": [
-                                     {"id": call_id(0), "type": "function",
-                                      "function": {"name": _PROBE_FUNCTION, "arguments": {}}}]}])
+                                 calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0)])
         if rendered is None or call["closing"] not in rendered:
             raise ValueError("the model's add-on file closes a call with text its "
                              "template never writes after one")
@@ -538,21 +537,14 @@ class ResolvedTemplate:
 
         Probed once, with a stand-in name: a template renders a result block or
         it does not, and does not branch on which function is being answered.
-        Any failure answers ``False``, because this decides an optional
-        capability and must not stop a conversation that wants no tools.
         """
         if not self._calls_marked:
             return False
-        try:
-            rendered = self._render([
-                {"role": "user", "content": _PROMPT},
-                {"role": "assistant", "content": "", "tool_calls": [
-                    {"id": call_id(0), "type": "function",
-                     "function": {"name": _PROBE_FUNCTION, "arguments": {}}}]},
-                {"role": "tool", "name": _PROBE_FUNCTION, "tool_call_id": call_id(0),
-                 "content": _RESULT}], generation_prompt=True, reasoning=False)
-        except Exception:
-            return False
+        rendered = self._render([
+            {"role": "user", "content": _PROMPT},
+            calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0),
+            result_message(_PROBE_FUNCTION, call_id(0), _RESULT)],
+            generation_prompt=True, reasoning=False)
         return rendered is not None and _RESULT in rendered
 
     def _system_turn(self, tools: list[dict] | None) -> str | None:
@@ -571,10 +563,7 @@ class ResolvedTemplate:
 
     def _declares_in_system_turn(self) -> bool:
         """Whether the system turn the template renders holds a stand-in tool's declaration."""
-        try:
-            rendered = self._system_turn([_PROBE_TOOL.as_declaration()])
-            plain = self._system_turn(None)
-        except Exception:
-            return False
+        rendered = self._system_turn([_PROBE_TOOL.as_declaration()])
+        plain = self._system_turn(None)
         return (rendered is not None and plain is not None and _PROMPT in rendered
                 and _PROMPT in plain and rendered != plain)

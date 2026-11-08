@@ -1080,7 +1080,10 @@ def test_can_call_tools_is_exactly_what_declaring_will_accept(build):
             wrapper.begin("persona", tools=registry)
 
 
-def test_a_context_that_throws_while_probing_still_loads():
+@pytest.mark.parametrize("throws_on", [
+    lambda messages, tools: any(m["role"] == "tool" for m in messages),
+    lambda messages, tools: bool(tools)], ids=["result", "declaration"])
+def test_a_context_that_throws_while_probing_still_loads(throws_on):
     """The probe decides an optional capability, so it cannot refuse the model.
 
     A cache context of your own may raise where the bundled one returns None.
@@ -1088,7 +1091,7 @@ def test_a_context_that_throws_while_probing_still_loads():
     """
     class Throws(FakeContext):
         def render_with_model_template(self, messages, tools=None, **_options):
-            if any(m["role"] == "tool" for m in messages):
+            if throws_on(messages, tools):
                 raise RuntimeError("template blew a gasket")
             return super().render_with_model_template(messages, tools, **_options)
 
