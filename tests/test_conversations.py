@@ -47,8 +47,9 @@ def _fixture(stem):
 class _Run:
     """A conversation on one template, and what the test sent it, recorded by the test.
 
-    ``seen`` holds the cache's text at the start of each reply, and
-    ``decoded`` how many tokens had been decoded by then.
+    ``seen`` holds the cache's text at the start of each reply, ``decoded``
+    how many tokens had been decoded by then, and ``renders`` how many renders
+    had been made.
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False):
@@ -61,13 +62,14 @@ class _Run:
                                        min_reply_tokens=8), context=self.context)
         self.system = "Be brief." if self.chat.can_take_system_prompt else ""
         self.reasoning = reasoning
-        self.seen, self.seen_tokens, self.decoded = [], [], []
+        self.seen, self.seen_tokens, self.decoded, self.renders = [], [], [], []
         self.context.before_reply = self._before_reply
 
     def _before_reply(self, text):
         self.seen.append(text)
         self.seen_tokens.append(list(self.context.cache))
         self.decoded.append(self.context.decoded)
+        self.renders.append(len(self.context.rendered))
 
     def begin(self, history=(), tools=None):
         return self.chat.begin(self.system, list(history), tools=tools, reasoning=self.reasoning)
@@ -137,20 +139,51 @@ def test_every_reply_starts_from_the_templates_render_of_what_was_sent(stem):
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
 
 
+@pytest.mark.parametrize("injected", [False, True], ids=["asked", "injected-then-answered"])
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
-def test_a_question_waits_only_for_its_own_tokens(stem):
+def test_a_question_waits_only_for_its_own_tokens(stem, injected):
     run = _Run(stem)
     run.begin()
-    run.chat.reply(QUESTIONS[0]).finish()
+    for question in QUESTIONS[:3]:      # more than a whole render could hide under the bound
+        run.chat.reply(question).finish()
     waited = run.context.decoded
     rendered = len(run.context.rendered)
-    run.chat.reply(QUESTIONS[1]).finish()
+    if injected:
+        run.chat.inject(QUESTIONS[3])
+        run.chat.reply().finish()
+    else:
+        run.chat.reply(QUESTIONS[3]).finish()
     assert run.chat._conversation._splices
     # The question, the run of template text it joins, and what the template writes after it.
-    assert run.decoded[-1] - waited <= (len(QUESTIONS[1]) + len(run.chat._conversation.prompt_text)
+    assert run.decoded[-1] - waited <= (len(QUESTIONS[3]) + len(run.chat._conversation.prompt_text)
                                         + 40)
     # Nothing but small fixed probes is rendered while the question waits.
-    assert max(run.context.rendered[rendered:rendered + 6]) <= 4
+    assert max(run.context.rendered[rendered:run.renders[-1]]) <= 4
+
+
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
+def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts_after_its_reply(stem):
+    question = "Some background you need not repeat. " * 6 + QUESTIONS[3]
+    probe = _Run(stem)
+    probe.begin()
+    for asked in QUESTIONS[:3]:
+        probe.chat.reply(asked).finish()
+    held, length = len(probe.context.cache), len(probe.context.tokenize(question))
+    # The threshold half way into the question, the room for the reply past it.
+    run = _Run(stem)
+    run.chat.close()
+    size = held + length + 80
+    run.chat = ChatWrapper(Config(context_size=size, min_reply_tokens=8,
+                                  evict_above_fraction=(held + length // 2) / size),
+                           context=run.context)
+    run.begin()
+    for asked in QUESTIONS[:3]:
+        run.chat.reply(asked).finish()
+    rendered = len(run.context.rendered)
+    run.chat.inject(question)
+    reply = run.chat.reply().finish()
+    assert max(run.context.rendered[rendered:run.renders[-1]]) <= 4
+    assert reply.n_evicted_messages
 
 
 @pytest.mark.parametrize("stem", _EVERY)

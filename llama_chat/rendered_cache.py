@@ -287,7 +287,9 @@ class RenderedCache:
         """Decode a message without a reply after it; returns how many history items were dropped for it.
 
         A question is put in the stand-in's place as :meth:`ask` puts one, the
-        generation prompt after it.
+        generation prompt after it: within the room left for a reply, the
+        conversation over ``evict_above_tokens`` until its reply settles, unless
+        ``max_history_messages`` is reached first.
 
         Args:
             accept: As :meth:`ask`.
@@ -314,7 +316,7 @@ class RenderedCache:
             room = self._config.context_size - self._config.min_reply_tokens
             fits = (self._config.max_history_messages is None
                     or n_before < self._config.max_history_messages)
-            if role != "user" or not fits or not self._splice(message, min(room, limit)):
+            if role != "user" or not fits or not self._splice(message, room):
                 self._messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
                 self._ahead, self._spliced_at = None, None
@@ -337,6 +339,8 @@ class RenderedCache:
             if not self._messages or self._messages[-1]["role"] != "user":
                 raise ValueError("there is nothing to answer: the newest message "
                                  "is not a user message")
+            if self._spliced_at is not None and self._spliced_at[1] is self._messages[-1]:
+                return          # spliced with the generation prompt after it, within the room
             self._sync(self._fitting_prompt())
 
     def _fitting_prompt(self) -> list[int]:

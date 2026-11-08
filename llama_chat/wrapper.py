@@ -180,7 +180,9 @@ class ChatWrapper:
         """Prefill one message as context without generating.
 
         Evicts the oldest exchanges until the new message fits inside both
-        eviction limits, then prefills it.
+        eviction limits, then prefills it. A question goes where the next one
+        was prepared for, as :meth:`reply` puts one, and is evicted for after
+        its reply, unless ``max_history_messages`` is reached first.
 
         Returns:
             The number of messages evicted to make room.

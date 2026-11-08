@@ -121,7 +121,7 @@ model and makes later actions raise.
 | doing what | call |
 |------|------|
 | starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits under both eviction limits, from a user turn on, and returns how many history items it kept. A history that ends on a call keeps it owed a result. Refused where the system prompt or the newest exchange cannot fit, and where the template has no system turn of its own for a system prompt; a refused or failed `begin` leaves the conversation it would have replaced as it was |
-| adding context | `inject(text, role="user")`: prefilled, no reply. Evicts first where needed; returns how many messages went. A question injected this way is put where the next question was prepared for, as `reply(text)` puts one, so `inject(text)` then `reply()` waits no longer than `reply(text)` |
+| adding context | `inject(text, role="user")`: prefilled, no reply; returns how many messages went. A question is put where the next question was prepared for, as `reply(text)` puts one, and is evicted for after its reply, so `inject(text)` then `reply()` waits no longer than `reply(text)`. Any other message, or a question where `max_history_messages` is reached, evicts first |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open |
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_unknown_tools(registry_or_specs)` |
