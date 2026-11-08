@@ -443,4 +443,4 @@ tag; real token boundaries are checked by the load check and by
 | `llama_chat/reply_text.py` | a reply's text as it streams: thought, header, stop strings |
 | `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`, `ToolResult`, `ToolTurn` |
 | `llama_chat/call_parsing.py` | reading a call back out of what the model wrote |
-| `llama_chat/addon_files.py`, `llama_chat/model_sampling.py`, `llama_chat/addons/` | add-on files, and the sampling they settle |
+| `llama_chat/addon_files.py`, `llama_chat/addons/` | add-on files, and the sampling they settle |

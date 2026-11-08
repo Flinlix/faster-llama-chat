@@ -16,8 +16,7 @@ from .config import Config, Sampling
 from .cache_context import Eviction, GenerationAccumulator
 from .reply_text import earliest
 from .template import CallBoundary
-from .addon_files import addon_file
-from .model_sampling import with_model_sampling
+from .addon_files import addon_file, with_model_sampling
 from .model_template import ModelTemplate
 
 SEQ = 0  # single active conversation -> single sequence id

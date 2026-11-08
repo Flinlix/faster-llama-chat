@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from llama_chat import addon_files
-from llama_chat.addon_files import SHIPPED_ADDONS, addon_file, read_addon_file, template_fingerprint
+from llama_chat.addon_files import (
+    DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
+    template_fingerprint, with_model_sampling)
 from llama_chat.config import Config
-from llama_chat.model_sampling import DEFAULT_SAMPLING, UNSTATED_SAMPLING, with_model_sampling
 
 _TEMPLATE = "{{ messages }}"
 
