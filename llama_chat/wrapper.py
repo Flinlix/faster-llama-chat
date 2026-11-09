@@ -192,13 +192,15 @@ class ChatWrapper:
               sampling: Sampling | None = None) -> ReplyStream:
         """Generate the reply, streaming it as it is generated.
 
-        Lazy: nothing happens, the headroom check included, until the first
-        iteration. Closing the stream early still ends the turn and records what
-        was generated, so the next generation stays valid. The stream must be
-        driven from one thread at a time; to interrupt from another, pass
-        ``cancel``. An abandoned stream holds the wrapper's lock until it is
-        collected, so exhaust it, close it, use it in a ``with``, or call
-        :meth:`ReplyStream.finish`.
+        A conversation that cannot take the reply is refused at once, before a
+        stream is returned; everything else waits for the first iteration, the
+        headroom check included, and the conversation is checked again there,
+        since another thread may change it in between. Closing the stream
+        early still ends the turn and records what was generated, so the next
+        generation stays valid. The stream must be driven from one thread at a
+        time; to interrupt from another, pass ``cancel``. An abandoned stream
+        holds the wrapper's lock until it is collected, so exhaust it, close
+        it, use it in a ``with``, or call :meth:`ReplyStream.finish`.
 
         Args:
             text: The user request, tokenized with special-token parsing off.
@@ -243,12 +245,14 @@ class ChatWrapper:
             ended, summing every generation where calls were run.
 
         Raises:
-            ValueError: If no conversation has been begun; if a tool call has
-                left a reply open and ``text`` is given, or a result is still
-                owed; if ``text`` is ``None`` with nothing to answer; if a
-                registry holding tools is given to a model that could never
-                call one; if ``"run"`` is asked where :meth:`begin` kept no
-                registry; or if ``max_calls`` is given where no call is run.
+            ValueError: At once, if no conversation has been begun; if a tool
+                call has left a reply open and ``text`` is given, or a result
+                is still owed; if ``text`` is ``None`` with nothing to answer;
+                if ``"run"`` is asked where :meth:`begin` kept no registry; or
+                if ``max_calls`` is given where no call is run. At the first
+                iteration, if a registry holding tools is given to a model
+                that could never call one.
+            RuntimeError: At once, if the wrapper is closed.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
@@ -262,6 +266,9 @@ class ChatWrapper:
                              f"not {calls!r}")
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and calls={calls!r} runs none")
+        self._ensure_open()
+        # Read from what the newest change published, so it never waits for the lock.
+        self._conversation.ensure_can_reply(asks_question=text is not None)
         if calls == "yield":
             return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
         if calls == "withhold":

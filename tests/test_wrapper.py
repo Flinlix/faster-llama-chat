@@ -59,6 +59,51 @@ def test_an_unknown_call_policy_is_refused():
         wrapper.reply("x", calls="sometimes")
 
 
+# ----- a reply the conversation cannot take ---------------------------------
+def test_a_reply_the_conversation_cannot_take_is_refused_when_it_is_asked_for():
+    """Refused by the call itself, before a stream is returned or read."""
+    wrapper, fake = tool_wrapper()
+    with pytest.raises(ValueError, match="call begin"):
+        wrapper.reply("hallo")
+    wrapper.begin("persona")
+    with pytest.raises(ValueError, match="nothing to answer"):
+        wrapper.reply()
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", calls="yield"))
+    for calls in ("yield", "refuse"):
+        with pytest.raises(ValueError, match="1 call"):
+            wrapper.reply(calls=calls)
+    with pytest.raises(ValueError, match="while a reply is open"):
+        wrapper.reply("etwas anderes")
+    wrapper.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        wrapper.reply("hallo")
+
+
+def test_a_conversation_changed_between_the_call_and_the_first_read_is_checked_again():
+    wrapper, _ = tool_wrapper()
+    wrapper.begin("persona")
+    wrapper.inject("frage")
+    stream = wrapper.reply()                    # a question waits: taken
+    wrapper.begin("persona")                    # as another thread might, before it is read
+    with pytest.raises(ValueError, match="nothing to answer"):
+        next(stream)
+
+
+def test_asking_for_a_reply_while_another_runs_does_not_wait_for_it():
+    wrapper, _ = tool_wrapper()
+    wrapper.begin("persona")
+    running = wrapper.reply("hallo")
+    next(running)                               # holds the wrapper's lock
+    asked = []
+    asker = threading.Thread(target=lambda: asked.append(wrapper.reply("noch eine")),
+                             daemon=True)
+    asker.start()
+    asker.join(timeout=5)
+    running.close()
+    assert len(asked) == 1 and asked[0].finish().text
+
+
 # ----- begin ---------------------------------------------------------------
 def test_begin_prefills_system_and_history_once():
     fake = FakeContext()

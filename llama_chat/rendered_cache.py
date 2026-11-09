@@ -94,15 +94,27 @@ class _ConversationState:
         return _ConversationState(**{f.name: _copied(getattr(self, f.name)) for f in fields(self)})
 
 
+@dataclass(frozen=True)
+class _Published:
+    """The conversation as the newest finished change left it, for readers that hold no lock."""
+
+    system_prompt: str = ""
+    history: tuple = ()
+    owed_calls: tuple = ()
+    begun: bool = False
+    reply_open: bool = False
+    newest_role: str | None = None
+
+
 class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation` and :meth:`published_owed_calls`, which read a copy
-    published after each change. Each action leaves the cache equal to the
-    template's render of the messages, a turn that called tools held as it was
-    generated, or, where it raises, the conversation and the cache as they
-    were before it.
+    :meth:`conversation`, :meth:`published_owed_calls` and
+    :meth:`ensure_can_reply`, which read a copy published after each change.
+    Each action leaves the cache equal to the template's render of the
+    messages, a turn that called tools held as it was generated, or, where it
+    raises, the conversation and the cache as they were before it.
     """
 
     def __init__(self, context, template: ResolvedTemplate, config: Config) -> None:
@@ -116,7 +128,7 @@ class RenderedCache:
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
         self._generation: tuple[int, bool, list[int] | None] = (0, False, None)
-        self._published: tuple[tuple, str, tuple] = ((), "", ())
+        self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -126,12 +138,21 @@ class RenderedCache:
 
     def conversation(self) -> tuple[str, list]:
         """The system prompt and the history as ``begin`` takes them, from one publication, the caller's to change; safe to read unlocked."""
-        history, system_prompt, _ = self._published
-        return system_prompt, copy.deepcopy(list(history))
+        published = self._published
+        return published.system_prompt, copy.deepcopy(list(published.history))
 
     def published_owed_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
-        return copy.deepcopy(list(self._published[2]))
+        return copy.deepcopy(list(self._published.owed_calls))
+
+    def ensure_can_reply(self, asks_question: bool) -> None:
+        """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.
+
+        Raises:
+            ValueError: As :meth:`prompt` and :meth:`generate` refuse, or, with
+                ``asks_question``, as :meth:`ask` does where a reply is open.
+        """
+        _ensure_can_reply(self._published, asks_question)
 
     @property
     def tools(self) -> list[ToolSpec]:
@@ -157,6 +178,11 @@ class RenderedCache:
     def owed_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first."""
         return [call for call, _ in _unanswered(self._state.messages)]
+
+    @property
+    def newest_role(self) -> str | None:
+        """The role of the newest message, the system message included; ``None`` before any."""
+        return self._state.messages[-1]["role"] if self._state.messages else None
 
     @property
     def total_tokens(self) -> int:
@@ -281,7 +307,7 @@ class RenderedCache:
                 anything is dropped.
         """
         with self._action():
-            self._ensure_ready("start a request", "generate into")
+            _ensure_ready(self, "start a request", "generate into")
             room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
             alone = self._rendering.length(self._system_part() + [question], generation_prompt=True)
@@ -338,7 +364,7 @@ class RenderedCache:
                 alone, checked before anything is dropped.
         """
         with self._action():
-            self._ensure_ready("inject", "inject into")
+            _ensure_ready(self, "inject", "inject into")
             message = {"role": role, "content": text}
             limit = self._config.evict_above_tokens
             alone = self._rendering.length(self._system_part() + [message], generation_prompt=False)
@@ -369,10 +395,8 @@ class RenderedCache:
                 room for a reply.
         """
         with self._action():
-            self._ensure_ready("start a request", "generate into")
-            if not self._state.messages or self._state.messages[-1]["role"] != "user":
-                raise ValueError("there is nothing to answer: the newest message "
-                                 "is not a user message")
+            _ensure_ready(self, "start a request", "generate into")
+            _ensure_can_reply(self, asks_question=False)
             spliced_at = self._state.spliced_at
             if spliced_at is not None and self._is_current(spliced_at[2]):
                 return          # spliced with the generation prompt after it, within the room
@@ -400,13 +424,11 @@ class RenderedCache:
         beside the closing after the reply.
 
         Raises:
-            ValueError: If no conversation was begun, or the open turn still
-                owes a result.
+            ValueError: If no conversation was begun, the open turn still owes
+                a result, or no turn is open and the newest message is not a
+                user message.
         """
-        if not self._state.begun:
-            raise ValueError("no conversation to generate into; call begin() first")
-        if owed := self.owed_calls:
-            raise ValueError(f"{len(owed)} call(s) still owe a result")
+        _ensure_can_reply(self, asks_question=False)
         asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
@@ -574,7 +596,7 @@ class RenderedCache:
                 of its text.
         """
         with self._action():
-            self._ensure_ready("truncate a reply", "truncate in")
+            _ensure_ready(self, "truncate a reply", "truncate in")
             newest = self._state.messages[-1] if self._state.messages else None
             if newest is None or newest["role"] != "assistant":
                 raise ValueError("the newest message is not an assistant reply")
@@ -603,7 +625,7 @@ class RenderedCache:
                 under ``evict_above_tokens`` for a short question.
         """
         with self._action():
-            self._ensure_ready("declare tools", "declare into")
+            _ensure_ready(self, "declare tools", "declare into")
             if accept is not None:
                 accept()
             self._state.tools = self._state.tools + list(specs)
@@ -643,21 +665,6 @@ class RenderedCache:
         if role == "system":
             return "this model's template writes no system message after the conversation has begun"
         return f"this model's template does not write a {role} message here"
-
-    def _ensure_ready(self, action: str, into: str | None = None) -> None:
-        """Refuse an action before a conversation was begun, or inside a turn a call left open.
-
-        Only a begun conversation holds the sequence opener and the system
-        prompt, and a message inside a model turn that never ended is a shape
-        no template renders and no model was trained on.
-        """
-        if not self._state.begun:
-            raise ValueError(f"no conversation to {into or action}; call begin() first")
-        if self.reply_open:
-            raise ValueError(
-                f"cannot {action} while a reply is open: it stopped on a tool "
-                "call and its turn is unclosed. Finish it with "
-                "reply(), or discard it with begin().")
 
     def _ensure_room_for_a_question(self, remedy: str) -> None:
         """Refuse a system turn and declarations that leave no room under ``evict_above_tokens`` for a short question.
@@ -999,11 +1006,41 @@ class RenderedCache:
             self._publish()
 
     def _publish(self) -> None:
-        """Publish the history, the system prompt and the owed calls for readers that hold no lock."""
+        """Publish the conversation for readers that hold no lock."""
         system = self._system_part()
-        self._published = (tuple(as_history(self._state.messages)),
-                           system[0]["content"] if system else "",
-                           tuple(self.owed_calls))
+        self._published = _Published(
+            system_prompt=system[0]["content"] if system else "",
+            history=tuple(as_history(self._state.messages)), owed_calls=tuple(self.owed_calls),
+            begun=self._state.begun, reply_open=self.reply_open, newest_role=self.newest_role)
+
+
+# ----- what an action may start from -------------------------------------------------
+def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
+    """Refuse an action before a conversation was begun, or inside a turn a call left open.
+
+    ``conversation`` is a :class:`RenderedCache` or what it published. Only a
+    begun conversation holds the sequence opener and the system prompt, and a
+    message inside a model turn that never ended is a shape no template renders
+    and no model was trained on.
+    """
+    if not conversation.begun:
+        raise ValueError(f"no conversation to {into or action}; call begin() first")
+    if conversation.reply_open:
+        raise ValueError(
+            f"cannot {action} while a reply is open: it stopped on a tool "
+            "call and its turn is unclosed. Finish it with "
+            "reply(), or discard it with begin().")
+
+
+def _ensure_can_reply(conversation, asks_question: bool) -> None:
+    """Refuse a reply ``conversation`` cannot take: a question while a reply is open, or, without one, a result still owed or nothing to answer."""
+    if asks_question or not conversation.reply_open:
+        _ensure_ready(conversation, "start a request", "generate into")
+        if not asks_question and conversation.newest_role != "user":
+            raise ValueError("there is nothing to answer: the newest message "
+                             "is not a user message")
+    elif conversation.owed_calls:
+        raise ValueError(f"{len(conversation.owed_calls)} call(s) still owe a result")
 
 
 # ----- helpers ---------------------------------------------------------------------
