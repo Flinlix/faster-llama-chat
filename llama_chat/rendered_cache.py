@@ -524,7 +524,7 @@ class RenderedCache:
     def _write_unreadable(self) -> bool:
         """Answer a call that could not be read, where the context has room; whether it was."""
         try:
-            self.add_result(UNKNOWN_FUNCTION, _UNREADABLE_RESULT)
+            self.add_result(ToolCall(UNKNOWN_FUNCTION, {}), _UNREADABLE_RESULT)
             return True
         except ValueError:          # no room for it, or the template writes no result
             return False
@@ -539,7 +539,7 @@ class RenderedCache:
         self._state.kept_at = {}
         self._publish()
 
-    def add_result(self, call: ToolCall | str, result) -> None:
+    def add_result(self, call: ToolCall, result) -> None:
         """Record what the oldest owed call returned, clipped where it cannot fit; after the last one, decode the prompt for the reply.
 
         Raises:
@@ -552,17 +552,16 @@ class RenderedCache:
         with self._action():
             if not self._state.begun:
                 raise ValueError("no conversation to answer a call in; call begin() first")
-            name = call.name if isinstance(call, ToolCall) else call
             waiting = _unanswered(self._state.messages)
             if not waiting:
                 raise ValueError("no tool call is waiting for a result")
             owed, owed_id = waiting[0]
-            if name != owed.name or (isinstance(call, ToolCall) and call != owed):
+            if call != owed:
                 raise ValueError(
-                    f"the waiting call is {owed.name!r}, not {name!r}; results "
+                    f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
-            message = result_message(name, owed_id, text)
+            message = result_message(owed.name, owed_id, text)
             if self._rendering.render(self._state.messages + [message], False) in (
                     None, self._rendering.render(self._state.messages, False)):
                 raise ValueError("this model's template renders no tool result, so a call's "

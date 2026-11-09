@@ -230,7 +230,7 @@ def test_the_reported_calls_are_not_the_wrappers_own_list():
         except StopIteration as done:
             reply = done.value
             break
-    wrapper.inject_tool_result("clock", {"time": "09:00"})
+    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
 
     assert not bool(wrapper._conversation.owed_calls)          # the wrapper's list emptied
     assert [c.name for c in reply.tool_calls] == ["clock"]   # the Reply's did not
@@ -242,7 +242,7 @@ def test_a_result_resumes_the_same_turn():
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", calls="yield"))
 
-    wrapper.inject_tool_result("clock", {"time": "09:00"})
+    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     fake.call_script = []
     events = list(wrapper.reply(calls="yield"))
 
@@ -259,11 +259,11 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     fake.call_script = ["fn:first{}"]
     assert list(wrapper.reply("los", calls="yield")) == [ToolCall("first", {})]
 
-    wrapper.inject_tool_result("first", "ok")
+    wrapper.inject_tool_result(ToolCall("first", {}), "ok")
     fake.call_script = ["fn:second{}"]
     assert list(wrapper.reply(calls="yield")) == [ToolCall("second", {})]
 
-    wrapper.inject_tool_result("second", "ok")
+    wrapper.inject_tool_result(ToolCall("second", {}), "ok")
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
 
@@ -286,7 +286,7 @@ def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
     assert list(wrapper.reply("los", calls="yield")) == [ToolCall("first", {})]
     assert len(rows(wrapper)) - 1 > 2      # over the limit, turn still open
 
-    wrapper.inject_tool_result("first", "ok")
+    wrapper.inject_tool_result(ToolCall("first", {}), "ok")
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
     assert len(rows(wrapper)) - 1 == 2     # back inside it once closed
@@ -295,22 +295,37 @@ def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
 
 
 def test_a_result_under_the_wrong_name_is_refused():
-    """Results are owed in call order, so the name identifies which one."""
+    """Results are owed in call order, so only the oldest call owed is answered."""
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
     list(wrapper.reply("los", calls="yield"))
 
-    with pytest.raises(ValueError, match="the waiting call is 'clock'"):
-        wrapper.inject_tool_result("other", "b")
+    with pytest.raises(ValueError, match=re.escape("the waiting call is ToolCall(name='clock'")):
+        wrapper.inject_tool_result(ToolCall("other", {}), "b")
 
     # The refusal consumed nothing: both calls are still owed, in order.
-    wrapper.inject_tool_result("clock", "a")
-    wrapper.inject_tool_result("other", "b")
+    wrapper.inject_tool_result(ToolCall("clock", {}), "a")
+    wrapper.inject_tool_result(ToolCall("other", {}), "b")
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
     assert fake.cache == cache_tokens(wrapper)
+
+
+@pytest.mark.parametrize("not_the_call", ["clock", ToolCall("clock", {"city": "Bonn"})])
+def test_a_result_answers_the_call_itself_not_its_name(not_the_call):
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", calls="yield"))
+    before = list(fake.cache)
+
+    with pytest.raises(ValueError, match="the waiting call is"):
+        wrapper.inject_tool_result(not_the_call, "ok")
+
+    assert fake.cache == before
+    assert wrapper._conversation.owed_calls == [ToolCall("clock", {})]
 
 
 def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
@@ -328,7 +343,7 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
     wrapper._config = wrapper._conversation._config = Config(context_size=before + 1,
                                                              evict_above_fraction=0.9)
     with pytest.raises(ContextOverflowError, match="result wrapping alone"):
-        wrapper.inject_tool_result("clock", "ok")
+        wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
 
     # Nothing reached the cache, and the call is still owed.
     assert len(fake.cache) == before
@@ -340,7 +355,7 @@ def test_a_result_with_no_call_waiting_is_refused():
     wrapper, _ = tool_wrapper()
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="no tool call is waiting"):
-        wrapper.inject_tool_result("clock", "ok")
+        wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
 
 
 def test_going_on_without_a_request_and_nothing_to_answer_is_refused():
@@ -361,7 +376,7 @@ def test_a_new_turn_cannot_open_inside_a_reply_a_call_left_open():
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", calls="yield"))
-    wrapper.inject_tool_result("clock", "ok")
+    wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
     assert not bool(wrapper._conversation.owed_calls)
 
     for action in (lambda: wrapper.reply("etwas anderes").finish(),
@@ -433,7 +448,7 @@ def test_an_oversized_result_is_clipped_and_keeps_its_tags():
     list(wrapper.reply("wie spät?", calls="yield"))
 
     before = len(fake.cache)
-    wrapper.inject_tool_result("clock", "x" * 10_000)
+    wrapper.inject_tool_result(ToolCall("clock", {}), "x" * 10_000)
 
     # The turn still fits, and the block still ends where the template ends one.
     assert len(fake.cache) <= wrapper._config.context_size
@@ -614,7 +629,7 @@ def test_a_reset_ends_the_turn_a_call_was_holding_open():
     # appended to whatever message now sits last, which is the persona.
     assert not bool(wrapper._conversation.owed_calls)
     with pytest.raises(ValueError, match="no tool call is waiting"):
-        wrapper.inject_tool_result("clock", {"time": "09:00"})
+        wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     assert [m["role"] for m in rows(wrapper)] == ["system"]
     assert fake.cache == cache_tokens(wrapper)
 
@@ -631,7 +646,7 @@ def test_reply_open_outlasts_the_calls_that_are_owed():
     list(wrapper.reply("wie spät?", calls="yield"))
     assert bool(wrapper._conversation.owed_calls) and wrapper.reply_open
 
-    wrapper.inject_tool_result("clock", {"time": "09:00"})
+    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     assert not bool(wrapper._conversation.owed_calls)     # nothing is owed any more
     assert wrapper.reply_open                   # but the turn has not closed
     for action in (lambda: wrapper.reply("weiter").finish(),
@@ -859,12 +874,12 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     assert asked == [ToolCall("clock", {}), ToolCall("other", {})]
     assert bool(wrapper._conversation.owed_calls)
 
-    wrapper.inject_tool_result("clock", "a")
+    wrapper.inject_tool_result(ToolCall("clock", {}), "a")
     # One down, one still owed: resuming now would leave a call unanswered.
     with pytest.raises(ValueError, match="1 call"):
         list(wrapper.reply(calls="yield"))
 
-    wrapper.inject_tool_result("other", "b")
+    wrapper.inject_tool_result(ToolCall("other", {}), "b")
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
     assert not bool(wrapper._conversation.owed_calls)
@@ -896,8 +911,8 @@ def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
                         '{"name":"other","arguments":{}}]']
     list(wrapper.reply("los", calls="yield"))
     before = len(fake.cache)
-    wrapper.inject_tool_result("clock", "a")
-    wrapper.inject_tool_result("other", "b")
+    wrapper.inject_tool_result(ToolCall("clock", {}), "a")
+    wrapper.inject_tool_result(ToolCall("other", {}), "b")
     written = fake.text_of(fake.cache[before:])
     assert written == "<result>clock(a)</result>\n<result>other(b)</result><done>"
     list(wrapper.reply(calls="yield"))
@@ -910,7 +925,7 @@ def test_a_model_needing_nothing_extra_gets_nothing():
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", calls="yield"))
-    wrapper.inject_tool_result("clock", "ok")
+    wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
 
     before = len(fake.cache)
     fake.call_script = []
@@ -1222,7 +1237,7 @@ def test_a_template_with_no_result_block_refuses_the_result():
     list(wrapper.reply("wie spät?", calls="yield"))
 
     with pytest.raises(ValueError, match="renders no tool result"):
-        wrapper.inject_tool_result("clock", "ok")
+        wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
     # Refused before anything was written, so the call is still owed.
     assert bool(wrapper._conversation.owed_calls)
     assert fake.cache == cache_tokens(wrapper)

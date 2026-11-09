@@ -304,7 +304,7 @@ class ChatWrapper:
         yield from generation.tool_calls
         return generation
 
-    def inject_tool_result(self, call: ToolCall | str, result) -> None:
+    def inject_tool_result(self, call: ToolCall, result) -> None:
         """Hand the model what the tool it called returned.
 
         Written where this model's own template writes a result, inside the
@@ -314,8 +314,8 @@ class ChatWrapper:
         the README, "Tool calling".
 
         Args:
-            call: The call being answered, as it was handed to you, or its name
-                alone. Either way it must be the oldest unanswered one.
+            call: The call being answered, as it was handed to you. It must
+                be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
 
         Raises:

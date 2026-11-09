@@ -3,6 +3,7 @@
 from llama_chat.config import Config
 from llama_chat.generation import generate
 from llama_chat.template import CallBoundary
+from llama_chat.tools import ToolCall
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
 from tests.wrappers import cache_tokens, rows
@@ -158,7 +159,7 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     list(wrapper.reply("wie spät?", calls="yield"))
     assert rows(wrapper)[-1]["text"] == ""     # nothing visible yet
 
-    wrapper.inject_tool_result("clock", {"time": "09:00"})
+    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     fake.call_script = []
     resumed = "".join(e for e in wrapper.reply(calls="yield") if isinstance(e, str))
 
