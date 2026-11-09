@@ -3,6 +3,7 @@
 import pytest
 
 from llama_chat.tools import ToolCall
+from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)
 
@@ -51,7 +52,7 @@ def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
     for broken in _one_token_off(sound):
         fake.cache = broken
         with pytest.raises(AssertionError, match="no longer holds what the wrapper holds"):
-            assert_cache_reads_as_rendered(w)
+            assert_cache_reads_as_rendered(w, fake)
     fake.cache = sound
 
 
@@ -60,25 +61,25 @@ def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
 def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_same_or_stops_short(
         conversation):
     w, fake = conversation()
-    tokens = w._conversation._memory.tokens
     sound = list(fake.cache)
     for broken in _one_token_off(sound):
-        fake.cache, tokens[:] = broken, broken
+        fake.cache = broken
+        overwrite_held_tokens(w, broken)
         read = fake.text_of(broken)
         if read != fake.text_of(sound) and not fake.text_of(sound).startswith(read):
             with pytest.raises(AssertionError, match="does not read as the template renders"):
-                assert_cache_reads_as_rendered(w)
-    fake.cache, tokens[:] = sound, sound
+                assert_cache_reads_as_rendered(w, fake)
+    fake.cache = sound
+    overwrite_held_tokens(w, sound)
 
 
 def test_a_cache_left_behind_its_tokens_with_nothing_failed_is_caught_not_brought_back():
-    w, _fake = _plain()
-    memory = w._conversation._memory
-    held = list(memory.tokens)
-    memory.replace(held[:-1])       # what an action that left the cache for later would leave
+    w, fake = _plain()
+    held = held_tokens(w)
+    leave_cache_behind(w, held[:-1])
     with pytest.raises(AssertionError, match="no longer holds what the wrapper holds"):
-        assert_cache_reads_as_rendered(w)
-    memory.replace(held)
+        assert_cache_reads_as_rendered(w, fake)
+    leave_cache_behind(w, held)
 
 
 def test_a_cache_a_failed_decode_left_behind_is_brought_back_as_the_next_action_would():
@@ -93,5 +94,5 @@ def test_a_cache_a_failed_decode_left_behind_is_brought_back_as_the_next_action_
     fake.prefill = fails_halfway
     with pytest.raises(RuntimeError, match="refused the batch"):
         w.inject("lost on the way")
-    assert fake.cache != w._conversation._memory.tokens
-    assert_cache_reads_as_rendered(w)
+    assert fake.cache != held_tokens(w)
+    assert_cache_reads_as_rendered(w, fake)

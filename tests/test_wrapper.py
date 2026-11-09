@@ -15,6 +15,7 @@ from llama_chat.config import Config, Sampling
 from llama_chat import ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
+from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
 from tests.wrappers import (assert_consistent, begun_wrapper, held_renders,
@@ -333,7 +334,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
     w.begin("s")
     for i in range(8):
         w.reply(f"message number {i} with some length").finish()
-        assert w.total_tokens <= w._config.evict_above_tokens  # rests under threshold
+        assert w.total_tokens <= w.config.evict_above_tokens  # rests under threshold
         assert rows(w)[0]["role"] == "system"        # system survives
         assert [r["role"] for r in rows(w)][1:2] in ([], ["user"])  # opens on a user turn
         assert_consistent(w, fake)
@@ -372,7 +373,7 @@ def test_a_generation_evicts_down_to_the_message_limit():
     for i in range(8):
         w.reply(f"q{i}").finish()
         assert _n_kept(w) <= 4
-        assert w.total_tokens < w._config.evict_above_tokens  # the tokens never bound
+        assert w.total_tokens < w.config.evict_above_tokens  # the tokens never bound
         assert rows(w)[0]["role"] == "system"       # system still survives
         assert rows(w)[-1]["role"] == "assistant"   # newest turn kept
         assert_consistent(w, fake)
@@ -478,7 +479,7 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
         w.reply(f"message number {i} with some length").finish()
         roles = [s["role"] for s in rows(w)]
         assert roles[0] == "system"             # system survives
-        assert w.total_tokens <= w._config.context_size   # never overflows
+        assert w.total_tokens <= w.config.context_size   # never overflows
         assert_consistent(w, fake)             # the cache as recorded after it is brought back
     assert fake.edit_count("shift") == 0             # shift path never used
     assert fake.resets + fake.edit_count("restore") > resets_after_begin   # brought back instead
@@ -580,19 +581,13 @@ def test_a_refusing_reply_proceeds_when_headroom_is_sufficient():
 
 # ----- what generation reads from the template, checked at load -----------
 def test_a_template_whose_closing_after_a_reply_is_not_where_its_tags_say_is_refused(monkeypatch):
-    from llama_chat.resolved_template import ResolvedTemplate
-    read = ResolvedTemplate._resolve_fragments
-    monkeypatch.setattr(ResolvedTemplate, "_resolve_fragments",
-                        lambda self: dataclasses.replace(read(self), assistant_suffix="<end>\n"))
+    read_fragments_as(monkeypatch, assistant_suffix="<end>\n")
     with pytest.raises(ValueError, match="closing after a reply"):
         ChatWrapper(Config(), context=FakeContext(PLAIN))
 
 
 def test_a_template_whose_generation_prompt_is_not_where_its_tags_say_is_refused(monkeypatch):
-    from llama_chat.resolved_template import ResolvedTemplate
-    read = ResolvedTemplate._resolve_fragments
-    monkeypatch.setattr(ResolvedTemplate, "_resolve_fragments",
-                        lambda self: dataclasses.replace(read(self), generation_prompt="<x>"))
+    read_fragments_as(monkeypatch, generation_prompt="<x>")
     with pytest.raises(ValueError, match="generation prompt"):
         ChatWrapper(Config(), context=FakeContext(PLAIN))
 
@@ -625,12 +620,12 @@ def test_a_stream_and_a_resume_hand_it_over_as_well():
 
 # ----- a system turn where the template has one or none --------------------
 def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
-                    context=FakeContext(PLAIN))
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     w.inject("hi", "user")
     w.inject("Notiz", "system")
-    assert w._context.text_of(w._context.cache).endswith(
+    assert fake.text_of(fake.cache).endswith(
         "<[turn>system\nNotiz<turn]>\n")
 
 

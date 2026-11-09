@@ -5,8 +5,10 @@ import sys
 import pytest
 
 from llama_chat.config import Config
+from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
+from tests.chat_templates import fixture
 from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
@@ -33,7 +35,7 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     """Same text, other tokens: the template's past reply is the text, tokenized."""
     w, fake = begun_wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
     reply = w.reply("hi").finish()
-    assert rendered_reply(fake, "ok!!") in held_text(w)
+    assert rendered_reply(fake, "ok!!") in held_text(fake)
     assert max(fake.cache) <= sys.maxunicode          # none of the generated ids is kept
     assert reply.text == "ok!!"
 
@@ -86,8 +88,8 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     w, fake = begun_wrapper()
     w.inject("Eins. Zwei.", "assistant")
     w.truncate_last_reply("Eins.")
-    assert held_text(w).endswith(rendered_reply(fake, "Eins.").rstrip("\n") + "\n<[turn>")
-    assert "Zwei" not in held_text(w)
+    assert held_text(fake).endswith(rendered_reply(fake, "Eins.").rstrip("\n") + "\n<[turn>")
+    assert "Zwei" not in held_text(fake)
 
 
 def test_a_reply_that_called_a_tool_cannot_be_cut():
@@ -122,7 +124,7 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
     w.reply("hi").finish()
     # No rebuild: the request and the past reply are all that is decoded again.
     assert fake.resets == resets
-    assert fake.total_prefilled() - prefilled < 2 * len(newest_turn(w)) + 20
+    assert fake.total_prefilled() - prefilled < 2 * len(newest_turn(fake)) + 20
     assert_consistent(w, fake)
     w.truncate_last_reply("Ant")
     assert fake.resets == resets
@@ -185,15 +187,15 @@ def test_a_context_that_saves_states_must_restore_them():
 # ----- a reply ended by its closing text -----------------------------------
 def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
     """A cache that cannot cut at its end goes back to a saved state instead."""
-    from llama_chat.template import CallBoundary
-
+    # A template whose reply ends where a text its closing opens with is written.
+    known = fixture("kimi-k3")
+    closing = ResolvedTemplate(FakeContext(known)).call_boundary().turn_end_text
     for can_shift in (True, False):
-        # Three tokens of the reply, then two of the closing, which leave the reply again.
-        fake = FakeContext(PLAIN, gen_tokens=5, gen_text="rep<|", can_shift=can_shift)
-        w = ChatWrapper(Config(context_size=2000), context=fake)
-        # A template whose reply ends where the text its closing opens with begins.
-        w._template.call_boundary = lambda *args, **kwargs: CallBoundary(turn_end_text="<|")
+        # The reply, then its closing, which leaves the reply again.
+        fake = FakeContext(known, ["rep" + closing, "Fine."], can_shift=can_shift)
+        w = ChatWrapper(Config(context_size=2000, min_reply_tokens=8), context=fake)
         w.begin("s")
         assert w.reply("hi").finish().text == "rep"
+        assert fake.edit_count("cut" if can_shift else "restore") == 1
         w.reply("again").finish()
         assert_consistent(w, fake)

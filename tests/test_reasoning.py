@@ -5,11 +5,13 @@ import sys
 import pytest
 
 from llama_chat.config import Config
+from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.template import Reasoning
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
-from tests.invented_templates import EMPTY_THOUGHT, PLAIN, REASONING_KEEPING_THOUGHTS, THINK_ON
+from tests.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
+                                      THINK_ON)
 
 from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
@@ -17,10 +19,11 @@ from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_
 def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     w, _fake = reasoning_wrapper()
     assert w.can_reason
-    assert w._template.reasoning == Reasoning(
+    template = ResolvedTemplate(FakeContext(REASONING))
+    assert template.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
         generation_prompt="<[turn>model\n")
-    assert w._template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
+    assert template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
 
 
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
@@ -36,28 +39,28 @@ def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation()
 def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
     for reasoning in (True, False):
         w, fake = reasoning_wrapper(reasoning)
-        assert system_turn(w).startswith("<[turn>system\n" + THINK_ON) == reasoning
-        assert system_turn(w).endswith("s<turn]>")
+        assert system_turn(fake).startswith("<[turn>system\n" + THINK_ON) == reasoning
+        assert system_turn(fake).endswith("s<turn]>")
 
 
 def test_with_tools_declared_the_switch_is_rendered_with_them():
     w, fake = reasoning_wrapper()
     specs = [ToolSpec("uhr", "", {})]
     w.begin("s", tools=specs, reasoning=True)
-    assert THINK_ON in system_turn(w) and "<decl>uhr</decl>" in system_turn(w)
+    assert THINK_ON in system_turn(fake) and "<decl>uhr</decl>" in system_turn(fake)
 
 
 def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     w, fake = reasoning_wrapper(False, gen_text="Antwort.", gen_tokens=8)
     held = []
     sampled = fake.sampled_tokens
-    fake.sampled_tokens = lambda *a, **k: (held.append(held_text(w)), (yield from sampled(*a, **k)))[1]
+    fake.sampled_tokens = lambda *a, **k: (held.append(held_text(fake)), (yield from sampled(*a, **k)))[1]
     w.reply("hi").finish()
     assert rendered_prompt(fake, reasoning=False).endswith(EMPTY_THOUGHT)
     # Generated after the empty thought, kept without it, as a past reply is.
     assert held[0].endswith(EMPTY_THOUGHT)
-    assert rendered_reply(fake, "Antwort.", w._conversation._state.reasoning) in held_text(w)
-    assert EMPTY_THOUGHT not in held_text(w)
+    assert rendered_reply(fake, "Antwort.", reasoning=False) in held_text(fake)
+    assert EMPTY_THOUGHT not in held_text(fake)
 
 
 def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
@@ -67,8 +70,8 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     assert stream.reply.text == "Antwort."
     assert stream.reply.n_reasoning_tokens == len("<thought>Denken</thought>")
     assert rows(w)[-1]["text"] == "Antwort."
-    assert rendered_reply(fake, "Antwort.", w._conversation._state.reasoning) in held_text(w)
-    assert "Denken" not in held_text(w)
+    assert rendered_reply(fake, "Antwort.", reasoning=True) in held_text(fake)
+    assert "Denken" not in held_text(fake)
     assert_consistent(w, fake)
     w.reply("weiter").finish()
 
@@ -107,8 +110,8 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w, fake = reasoning_wrapper()
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
-    assert rendered_reply(fake, "Ant", w._conversation._state.reasoning) in held_text(w)
-    assert "Antwort" not in held_text(w)
+    assert rendered_reply(fake, "Ant", reasoning=True) in held_text(fake)
+    assert "Antwort" not in held_text(fake)
 
 
 def test_a_reply_that_is_all_thought_is_removed():
@@ -168,11 +171,11 @@ def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
 # ----- a reply kept with its thought ---------------------------------------
 def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into():
     w, fake = reasoning_wrapper(template=REASONING_KEEPING_THOUGHTS, tokens_spell_text=False)
-    assert w._template.reasoning.past_keeps_thought
+    assert ResolvedTemplate(FakeContext(REASONING_KEEPING_THOUGHTS)).reasoning.past_keeps_thought
     reply = w.reply("hi").finish()
     assert reply.text == "Antwort."
     assert (rendered_prompt(fake, reasoning=True) + THOUGHTFUL
-            + rendered_close(fake, reasoning=True)) in held_text(w)
+            + rendered_close(fake, reasoning=True)) in held_text(fake)
     assert max(fake.cache) <= sys.maxunicode          # none of the generated ids is kept
 
 

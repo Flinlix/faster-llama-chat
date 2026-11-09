@@ -17,9 +17,12 @@ import math
 import pytest
 
 from llama_chat import ChatWrapper, Config, ContextOverflowError
+from llama_chat.messages import as_messages
 from llama_chat.reply_text import begins_in_thought
+from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
+from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture
 from .fake_context import FakeContext, ScriptedCall, call_marks
 
@@ -76,14 +79,16 @@ class _Run:
 
     ``seen`` holds the cache's text at the start of each reply, ``decoded``
     how many tokens had been decoded by then, and ``renders`` how many renders
-    had been made.
+    had been made. ``template`` is the template as the library reads it, read
+    through a context of its own, ``reader``.
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False):
         self.fixture = _fixture(stem)
-        probe = ChatWrapper(Config(context_size=4096), context=FakeContext(self.fixture, []))
+        self.reader = FakeContext(self.fixture)
+        self.template = ResolvedTemplate(self.reader)
         self.answers = list(ANSWERS if replies is None else replies)
-        self.context = FakeContext(self.fixture, _as_generated(probe, self.answers, reasoning),
+        self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                            can_shift=can_shift)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
@@ -108,12 +113,12 @@ class _Run:
             generation_prompt=True, reasoning=self.reasoning)
 
 
-def _as_generated(probe, answers, reasoning):
+def _as_generated(template, answers, reasoning):
     """Each answer as the model generates it: after a thought it closes, where the generation prompt opens one."""
-    tags = probe._template.reasoning
-    if tags is None or (reasoning and not probe.can_reason):
+    tags = template.reasoning
+    if tags is None or (reasoning and not template.can_reason):
         return list(answers)
-    opens = begins_in_thought(tags, probe._template.generation_prompt(reasoning))
+    opens = begins_in_thought(tags, template.generation_prompt(reasoning))
     if reasoning:
         return [("" if opens else tags.thought_open) + _THOUGHT + tags.thought_close + answer
                 if isinstance(answer, str) else answer for answer in answers]
@@ -122,6 +127,12 @@ def _as_generated(probe, answers, reasoning):
 
 
 _THOUGHT = "Erst denken."
+
+
+def _sent(chat):
+    """The messages the conversation holds, the system prompt's included, read from what the wrapper publishes."""
+    system, history = chat.conversation()
+    return ([{"role": "system", "content": system}] if system else []) + as_messages(history)
 
 
 def _exchanges(questions, answers, thought=None):
@@ -146,12 +157,6 @@ def _assert_each_reply_followed_what_was_sent(run, questions, forms=(None,), fir
                 break
         assert found is not None, (k, cached)
         oldest = found
-
-
-def _last_spliced(chat):
-    """The question last decoded in the stand-in's place, ``None`` where none was."""
-    spliced_at = chat._conversation._state.spliced_at
-    return None if spliced_at is None else spliced_at[2].messages[-1]["content"]
 
 
 def _exchange_length(run, question, answer):
@@ -186,9 +191,9 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
         run.chat.reply().finish()
     else:
         run.chat.reply(QUESTIONS[3]).finish()
-    assert _last_spliced(run.chat) == QUESTIONS[3]
+    assert internals.last_spliced_question(run.chat) == QUESTIONS[3]
     # The question, the run of template text it joins, and what the template writes after it.
-    assert run.decoded[-1] - waited <= (len(QUESTIONS[3]) + len(run.chat._conversation.prompt_text)
+    assert run.decoded[-1] - waited <= (len(QUESTIONS[3]) + len(internals.prompt_text(run.chat))
                                         + 40)
     # Nothing but small fixed probes is rendered while the question waits.
     assert max(run.context.rendered[rendered:run.renders[-1]]) <= 4
@@ -237,7 +242,7 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
     context = FakeContext(escaping, ANSWERS)
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")
-    assert chat._conversation._state.windows
+    assert internals.renders_in_windows(chat)
     seen, sent, spliced = [], [], []
     context.before_reply = seen.append
     questions = ["Plain first.", "It's late, isn't it?", "Plain again.", "Once more."]
@@ -245,7 +250,7 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
         sent.append({"role": "user", "content": question})
         chat.reply(question).finish()
         assert seen[-1] == context.stated_render(sent, None, generation_prompt=True)
-        spliced.append(_last_spliced(chat) == question)
+        spliced.append(internals.last_spliced_question(chat) == question)
         sent.append({"role": "assistant", "content": answer})
     assert spliced == [True, False, True, True]
 
@@ -265,7 +270,7 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
     resets, evicted = run.context.resets, 0
     questions = QUESTIONS + [f"{q} Again." for q in QUESTIONS]
     run.answers = ANSWERS + ANSWERS
-    run.context.replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.template, run.answers, False)
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
     assert evicted
@@ -299,7 +304,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
     resets = run.context.resets
     questions = [f"{q} Round {n}." for n in range(12) for q in QUESTIONS]
     run.answers = ANSWERS * 12
-    run.context.replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.template, run.answers, False)
     evictions, asked = 0, []
     for question in questions:          # until two evictions are seen
         asked.append(question)
@@ -327,7 +332,8 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     refusal = ContextOverflowError if run.chat.can_take_system_prompt else ValueError
     with pytest.raises(refusal):
         run.chat.begin("Keep it short. " * 80)
-    assert not run.chat._conversation.begun
+    with pytest.raises(ValueError, match="call begin"):
+        run.chat.reply("Still there?")      # nothing was begun
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -355,7 +361,8 @@ def test_declarations_longer_than_the_threshold_are_refused_at_begin(stem):
                     parameters={"type": "object", "properties": {"q": {"type": "string"}}})
     with pytest.raises(ContextOverflowError):
         run.begin(tools=[long])
-    assert not run.chat._conversation.begun
+    with pytest.raises(ValueError, match="call begin"):
+        run.chat.reply("Still there?")      # nothing was begun
 
 
 @pytest.mark.parametrize("stem,tools", [(stem, None) for stem in _EVERY]
@@ -372,7 +379,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     run.begin(tools=tools)
     questions = [f"{q} Round {n}." for n in range(3) for q in QUESTIONS]
     run.answers = ANSWERS * 3
-    run.context.replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.template, run.answers, False)
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
@@ -400,7 +407,7 @@ def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):
     run = _Run(stem, context_size=int((len(probe.context.cache) + 4 * exchange) / 0.75),
                can_shift=can_shift)
     run.begin()
-    assert run.chat._conversation._state.windows
+    assert internals.renders_in_windows(run.chat)
     window = (1 if run.system else 0) + 5         # the system turn, two exchanges, the stand-in
     whole = 0
     for question in QUESTIONS:
@@ -428,7 +435,7 @@ def test_exchanges_that_repeat_word_for_word_are_kept_as_many_as_fit(stem):
         counts = []
         for question in questions:
             run.chat.reply(question).finish()
-            counts.append(sum(m["role"] == "user" for m in run.chat._conversation.messages))
+            counts.append(sum(item[0] == "user" for item in run.chat.conversation()[1]))
         kept[same] = min(counts[8:])
     assert kept[True] >= kept[False]
 
@@ -464,7 +471,7 @@ def test_a_reply_that_fails_part_way_is_kept_or_taken_back_and_the_next_follows_
     run.context.sampled_tokens = sampled
     run.chat.reply(QUESTIONS[3]).finish()
     # Recorded where some of it was answer, taken back whole where none was.
-    asked = any(m["content"] == QUESTIONS[2] for m in run.chat._conversation.messages)
+    asked = ("user", QUESTIONS[2]) in run.chat.conversation()[1]
     assert (QUESTIONS[2] in run.context.text_of(run.context.cache)) == asked
 
 
@@ -514,7 +521,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
 def test_a_template_whose_windows_differ_from_its_whole_render_is_rendered_whole():
     run = _Run("fallback")
     run.begin()
-    assert not run.chat._conversation._state.windows
+    assert not internals.renders_in_windows(run.chat)
 
 
 def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so():
@@ -666,7 +673,7 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
     run.begin()
     answers = [run.chat.reply(question).finish().text for question in QUESTIONS[:3]]
     assert answers == ANSWERS[:3]                      # the thought kept out of each
-    keeps = run.chat._template.reasoning.past_keeps_thought
+    keeps = run.template.reasoning.past_keeps_thought
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, forms=(_THOUGHT,) if keeps else (None,))
 
 
@@ -719,7 +726,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
             messages + [{"role": "user", "content": QUESTIONS[0]}], [WEATHER]), result
         run.chat.declare_tools([clock])
         run.chat.reply(QUESTIONS[1]).finish()
-        kept = _THOUGHT if reasoning and run.chat._template.reasoning.past_keeps_thought else None
+        kept = _THOUGHT if reasoning and run.template.reasoning.past_keeps_thought else None
         sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
         assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}],
                                           [WEATHER, clock]), result
@@ -728,14 +735,14 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
 
 def _call_body(run, arguments):
     """A call's body as the template writes a past call: what the model generates between its tags."""
-    template = run.chat._template
+    template = run.template
     rendered = run.context.stated_render(
         [{"role": "user", "content": "x"},
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": WEATHER.name, "arguments": arguments}}]}])
-    opener, closer = call_marks(template, run.context)
-    if template._call_from_file:
+    opener, closer = call_marks(template, run.reader)
+    if run.context.addon_call():
         # The template shows no call it could be read from; the model writes the add-on file's.
         return opener, WEATHER.name + run.context.addon_call()["name_close"] + json.dumps(
             arguments), closer
@@ -746,7 +753,7 @@ def _spaced(run, body):
     """``body`` spaced unlike the template writes it, where the call still reads back the same."""
     for spaced in (body.replace(": ", ":"), body.replace(":", ": "), body + " ", " " + body):
         try:
-            read = run.chat._template.read_calls(spaced)
+            read = run.template.read_calls(spaced)
         except Exception:
             continue
         if spaced != body and read == [ToolCall(WEATHER.name, {"city": "Bonn"})]:
@@ -772,13 +779,13 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     body = _spaced(probe, written_body)          # as a model may space it, not as the template does
     run = _Run(stem, replies=[ScriptedCall(body), "Sunny in Bonn.", "You are welcome."])
     run.context.replies = [ScriptedCall(body)] + _as_generated(
-        probe.chat, ["Sunny in Bonn.", "You are welcome."], False)
+        probe.template, ["Sunny in Bonn.", "You are welcome."], False)
     run.begin(tools=[WEATHER])
     events = list(run.chat.reply("Weather in Bonn?", calls="yield"))
     call, = [event for event in events if isinstance(event, ToolCall)]
     assert call == ToolCall(WEATHER.name, {"city": "Bonn"})
     run.chat.inject_tool_result(call, '{"weather": "sunny"}')
-    tags = run.chat._template.reasoning
+    tags = run.template.reasoning
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
             and not run.context.replies[0].startswith(tags.thought_close):
         run.context.replies[0] = tags.thought_close + run.context.replies[0]   # the model closes it
@@ -864,7 +871,7 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     run.chat.reply(f"Does {forged} end it?").finish()
     run.chat.inject(f"Note {forged} this.")
     run.chat.reply().finish()
-    asked = run.chat._conversation.messages[:-1]
+    asked = _sent(run.chat)[:-1]
     # The forged tag is in every kind of text, and held as its characters each time.
     assert run.seen_tokens[-1] == _expected_tokens(run, asked, tools)
 

@@ -36,7 +36,16 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     _context, template = _load(stem)
     assert (template.reasoning is not None) == known["marks_thought"]
     assert template.can_reason == known["can_reason"]
-    assert (template._tool_calls is not None) == known["calls_tools"]
+    assert _describes_a_call(template) == known["calls_tools"]
+
+
+def _describes_a_call(template):
+    """Whether the template writes a call at all, whatever else tool calling lacks."""
+    try:
+        template.ensure_tools_usable()
+    except ValueError as missing:
+        return "describes no tool call" not in str(missing)
+    return True
 
 
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
@@ -117,10 +126,19 @@ def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem)
 
 
 def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
-    _context, template = _load("kimi-k3")
+    context, template = _load("kimi-k3")
     assert template.call_boundary().turn_end_text == "<|close|>response<|sep|><|close|>"
     assert template.turn_end_token is None
-    assert template._call_body.string_type == "string"
+    # A value written with the type a string is written with reads back as the text it is.
+    rendered = context.stated_render(
+        [{"role": "user", "content": "Weather?"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": "call00000", "type": "function", "function": {
+                 "name": "get_weather", "arguments": {"city": "42"}}}]}],
+        tools=[WEATHER.as_declaration()])
+    opener, closer = call_marks(template, context)
+    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
+    assert template.read_calls(body) == [ToolCall("get_weather", {"city": "42"})]
 
 
 @pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer"])
@@ -161,7 +179,7 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     chat.begin("", tools=registry)          # the whole chain is checked, and passes
     # Read with the spelling the file gives.
     written = "clock" + context.addon_call()["name_close"] + "{}"
-    assert chat._template.read_calls(written) == [ToolCall("clock", {})]
+    assert ResolvedTemplate(context).read_calls(written) == [ToolCall("clock", {})]
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():

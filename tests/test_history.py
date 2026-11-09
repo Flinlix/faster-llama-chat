@@ -3,6 +3,7 @@
 import pytest
 
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
+from tests.internals import owed_calls_held
 from tests.invented_templates import CALL_TAGS, TOOLS_CLOSING_OPEN_TURNS
 
 from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
@@ -122,7 +123,7 @@ def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     assert w.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
     again, _ = tool_wrapper()
     again.begin("persona", w.conversation()[1], tools=weather_registry())
-    again._conversation.owed_calls[0].arguments["city"] = "Rom"
+    owed_calls_held(again)[0].arguments["city"] = "Rom"
     assert again.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
 
 

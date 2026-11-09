@@ -6,8 +6,10 @@ import threading
 import pytest
 
 from llama_chat import ChatWrapper, Config, ContextOverflowError
+from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 from tests.fake_context import FakeContext
+from tests.internals import kept_turns
 from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
 from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
@@ -217,7 +219,7 @@ def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(c
             else:
                 assert _state(w) == done, (refuses_two_user_turns, at)      # recovered, as if nothing failed
             _go_on(w, fake)
-            assert_cache_reads_as_rendered(w)
+            assert_cache_reads_as_rendered(w, fake)
             w.close()                   # checked here, not again after the test
 
 
@@ -258,7 +260,7 @@ def test_a_failed_restart_keeps_the_call_its_conversation_owes_and_nothing_else(
     call, = [e for e in w.reply("wie spät?", calls="yield") if isinstance(e, ToolCall)]
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 600)
-    assert w.reply_open and w._conversation.owed_calls == [call]
+    assert w.reply_open and w.owed_calls == [call]
     w.inject_tool_result(call, "12:00")
     w.reply().finish()
     assert not w.reply_open
@@ -281,7 +283,7 @@ def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stay
         try:
             w.inject_tool_result(calls[0], "12:00")
         except ContextOverflowError:
-            assert fake.cache == held and w._conversation.owed_calls == calls
+            assert fake.cache == held and w.owed_calls == calls
             with pytest.raises(ValueError, match="owe a result"):
                 w.reply().finish()           # never resumed without its result
             return
@@ -309,7 +311,7 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
     fake.call_script = ["fn:clock{}"]
     reply = w.reply("welcher Tag?", calls="run").finish()
     assert reply.stop_reason == "end_of_turn" and not w.reply_open
-    assert "unwritable_result" in held_text(w)
+    assert "unwritable_result" in held_text(fake)
 
 
 def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
@@ -321,10 +323,10 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
     cancel = threading.Event()
     cancel.set()
     assert w.reply(cancel=cancel).finish().text == ""
-    assert not w.reply_open and w._conversation._state.kept
-    assert "fn:clock{}" in held_text(w)
+    assert not w.reply_open and kept_turns(w)
+    assert "fn:clock{}" in held_text(fake)
     w.reply("und jetzt?").finish()
-    assert "fn:clock{}" in held_text(w)
+    assert "fn:clock{}" in held_text(fake)
 
 
 # ----- questions --------------------------------------------------------------------
@@ -356,13 +358,13 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     w, fake = tool_wrapper()
     w.begin("persona", [("user", "a"), ("assistant", "b")])
     seen = []
-    split = type(w._conversation._rendering).split
+    split = ConversationRendering.split
 
     def reading(self, messages, generation_prompt):
         seen.append(len(w.conversation()[1]))           # as another thread reads it, mid-action
         return split(self, messages, generation_prompt)
 
-    monkeypatch.setattr(type(w._conversation._rendering), "split", reading)
+    monkeypatch.setattr(ConversationRendering, "split", reading)
     w.reply("c").finish()
     assert set(seen) <= {2, 4}
 
@@ -394,7 +396,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
     with pytest.raises(RuntimeError, match="decode failed"):
         w.reply("Wetter?", calls="yield").finish()
     fake.sampled_tokens = sampled
-    assert not w.reply_open and w._conversation.owed_calls == []
+    assert not w.reply_open and w.owed_calls == []
     assert w.conversation()[1][-2:] == [("user", "Wetter?"), ("assistant", "")]
     w.reply("weiter").finish()
 
@@ -412,7 +414,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
         except ContextOverflowError:
             continue
         if reply.stop_reason == "unreadable_tool_call" and not w.reply_open:
-            assert newest_turn(w).count("<[turn>model") == 1
+            assert newest_turn(fake).count("<[turn>model") == 1
             return
     pytest.fail("no context size left the error result without room")
 

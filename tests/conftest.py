@@ -4,21 +4,24 @@ import pytest
 
 from llama_chat.wrapper import ChatWrapper
 
+from .internals import context_of, is_closed
 from .wrappers import assert_cache_reads_as_rendered
 
 
 @pytest.fixture(autouse=True)
 def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
-    built = []
+    built, contexts = [], []
     build = ChatWrapper.__init__
 
     def recording(self, *args, **kwargs):
         build(self, *args, **kwargs)
-        if hasattr(self._context, "cache") and hasattr(self._context, "text_of"):
+        context = context_of(self)
+        if hasattr(context, "cache") and hasattr(context, "text_of"):
             built.append(self)
+            contexts.append(context)
 
     monkeypatch.setattr(ChatWrapper, "__init__", recording)
     yield built
-    for wrapper in built:
-        if not wrapper._closed:
-            assert_cache_reads_as_rendered(wrapper)
+    for wrapper, context in zip(built, contexts):
+        if not is_closed(wrapper):
+            assert_cache_reads_as_rendered(wrapper, context)

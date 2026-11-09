@@ -4,6 +4,7 @@ from llama_chat.config import Config
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
+from tests import internals
 from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN, REASONING, TOOLS
 
@@ -14,25 +15,20 @@ def tool_wrapper(context_size=512, **kw):
                        context=fake), fake
 
 
-def cache_tokens(wrapper):
-    """What the wrapper holds the cache to be, token by token."""
-    return list(wrapper._conversation._memory.tokens)
-
-
-def held_text(wrapper) -> str:
+def held_text(fake) -> str:
     """What the cache spells: the characters, the tags and the generated text."""
-    return wrapper._context.text_of(wrapper._context.cache)
+    return fake.text_of(fake.cache)
 
 
-def newest_turn(wrapper) -> str:
-    """The cache's text from the newest user turn on."""
-    text = held_text(wrapper)
+def newest_turn(fake) -> str:
+    """The cache's text from the newest user turn on, in the invented format."""
+    text = held_text(fake)
     return text[text.rfind("<[turn>user"):]
 
 
-def system_turn(wrapper) -> str:
-    """The cache's text up to the end of the system turn."""
-    text = held_text(wrapper)
+def system_turn(fake) -> str:
+    """The cache's text up to the end of the system turn, in the invented format."""
+    text = held_text(fake)
     return text[:text.find("<turn]>") + len("<turn]>")]
 
 
@@ -58,38 +54,29 @@ def held_renders(context, messages, tools=None, reasoning=False) -> list[str]:
     return [text for text in found if text is not None]
 
 
-def assert_cache_reads_as_rendered(wrapper):
-    """The cache holds what the wrapper holds it to be, and reads as the template renders the conversation around each kept turn.
+def assert_cache_reads_as_rendered(wrapper, fake):
+    """``fake``, the wrapper's cache, holds what the wrapper holds it to be, and reads as the template renders the conversation around each kept turn.
 
     The cache is compared as it stands, unless a decode, an edit or a
     generation failed since it was last brought up: then it is brought back
     first, as the next action would bring it back.
     """
-    conversation = wrapper._conversation
-    memory = conversation._memory
-    if not memory.is_known:
-        memory.repair()
-    assert wrapper._context.cache == memory.tokens, \
+    internals.bring_cache_back(wrapper)
+    assert fake.cache == internals.held_tokens(wrapper), \
         "the cache no longer holds what the wrapper holds it to be"
-    if not conversation.begun:
+    if not internals.is_begun(wrapper):
         return
-    messages, text_of = conversation.messages, wrapper._context.text_of
-    tools = [spec.as_declaration() for spec in conversation.tools] or None
-    renders = held_renders(wrapper._context, messages, tools,
-                           reasoning=conversation._state.reasoning)
-    held = text_of(wrapper._context.cache)
-    kept = [(text_of(k.tokens), text_of(k.tokens[:1]), text_of(k.tokens[-1:]),
-             (k.last.get("content") or "").strip()) for k in conversation._state.kept]
-    assert any(_reads_as(held, render, kept) for render in renders), \
+    renders = held_renders(fake, internals.rendered_messages(wrapper),
+                           internals.declarations(wrapper), reasoning=internals.reasons(wrapper))
+    text_of = fake.text_of
+    kept = [(text_of(tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text)
+            for tokens, text in internals.kept_turns(wrapper)]
+    assert any(_reads_as(text_of(fake.cache), render, kept) for render in renders), \
         "the cache does not read as the template renders the conversation"
-    for render in (False, True):
-        split = conversation._rendering.split(messages, render)
-        if split is not None:
-            for kept_turn in conversation._state.kept:
-                placed = conversation._rendering.place(kept_turn, messages, split)
-                assert placed is not None, "a turn kept as generated was lost"
-                assert placed[0] < placed[1], \
-                    "a turn kept as generated stands in for none of the template's text"
+    for placed in internals.kept_turn_places(wrapper):
+        assert placed is not None, "a turn kept as generated was lost"
+        assert placed[0] < placed[1], \
+            "a turn kept as generated stands in for none of the template's text"
 
 
 def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str]]) -> bool:
@@ -156,7 +143,7 @@ def begun_wrapper(template=PLAIN, **fake_kw):
 
 def assert_consistent(wrapper, fake):
     """The physical cache holds what the wrapper holds it to be."""
-    assert fake.cache == cache_tokens(wrapper)
+    assert fake.cache == internals.held_tokens(wrapper)
     assert wrapper.total_tokens == len(fake.cache)
 
 
