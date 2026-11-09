@@ -26,7 +26,7 @@ def _as_rendered(w, fake):
     """The cache equals the template's own render of the conversation."""
     assert_consistent(w, fake)
     found = rows(w)
-    rendered = held_renders(w._template, [{"role": r["role"], "content": r["text"]} for r in found])
+    rendered = held_renders(fake, [{"role": r["role"], "content": r["text"]} for r in found])
     assert fake.text_of(fake.cache) in rendered
 
 

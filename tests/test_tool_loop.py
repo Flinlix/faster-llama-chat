@@ -84,7 +84,7 @@ def _moving(**fake_kw):
 def _as_rendered_with(w, fake, specs):
     """The cache equals the template's render of the conversation, ``specs`` declared."""
     assert_consistent(w, fake)
-    rendered = held_renders(w._template, [{"role": r["role"], "content": r["text"]} for r in rows(w)],
+    rendered = held_renders(fake, [{"role": r["role"], "content": r["text"]} for r in rows(w)],
                             tools=[spec.as_declaration() for spec in specs])
     assert fake.text_of(fake.cache) in rendered
 

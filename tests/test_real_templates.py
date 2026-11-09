@@ -90,12 +90,12 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
         # writes it in another order; a call in that form reads back.
         body = "get_weather" + call["name_close"] + '{"city": "Berlin"}'
     else:
-        rendered = context.render_with_model_template(
+        rendered = context.stated_render(
             [{"role": "user", "content": "Weather?"},
              {"role": "assistant", "content": "", "tool_calls": [
                  {"id": "call00000", "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
-            tools=[WEATHER.as_declaration()], reasoning=False)
+            tools=[WEATHER.as_declaration()])
         opener, closer = call_marks(template, context)
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
@@ -188,11 +188,11 @@ _LOST = {
                                   if not addon_file(None, fixture(stem)["chat_template"])["call"]])
 def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, arguments):
     context, template = _load(stem)
-    rendered = context.render_with_model_template(
+    rendered = context.stated_render(
         [{"role": "user", "content": "x"},
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
-              "function": {"name": "fn", "arguments": arguments}}]}], reasoning=False)
+              "function": {"name": "fn", "arguments": arguments}}]}])
     opener, closer = call_marks(template, context)
     body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     read = template.read_calls(body)

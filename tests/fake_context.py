@@ -290,6 +290,11 @@ class FakeContext:
                 out.append(EMPTY_THOUGHT)
         return "".join(out)
 
+    def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
+        """Its render: this template reads its reasoning switch itself, and nothing is read off it."""
+        return self.render_with_model_template(messages, tools, generation_prompt=generation_prompt,
+                                               reasoning=reasoning)
+
     def sampled_tokens(self, sampling, withheld_tokens):
         """The next scripted call where its call tag may be drawn, else the scripted reply; then the end of generation."""
         self.samplings.append(sampling)

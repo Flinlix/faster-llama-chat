@@ -55,7 +55,8 @@ def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
     fake.cache = sound
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning], ids=["plain", "reasoning"])
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn],
+                         ids=["plain", "reasoning", "kept-turn"])
 def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_same_or_stops_short(
         conversation):
     w, fake = conversation()

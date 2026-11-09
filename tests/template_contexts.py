@@ -55,6 +55,7 @@ class TemplateContext:
     def __init__(self, fixture: dict) -> None:
         self._model = _compiled(fixture["chat_template"], fixture["eos_token"])
         self._template = fixture["chat_template"]
+        self._stated = fixture["render_variables"]
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: list[str] = []
         found = set(TAG.findall(self._template))
@@ -65,6 +66,11 @@ class TemplateContext:
                                    generation_prompt=False, reasoning=None, **variables):
         return self._model.render(messages, tools, generation_prompt=generation_prompt,
                                   reasoning=reasoning, **variables)
+
+    def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
+        """The render with the variables the fixture states for ``reasoning``, none of them read off the template."""
+        return self._model.render(messages, tools, generation_prompt=generation_prompt,
+                                  reasoning=None, **self._stated["on" if reasoning else "off"])
 
     def chat_template_text(self):
         return self._template
