@@ -5,12 +5,20 @@ stand-in, one token per character and one per tag, so what is compared is the
 text.
 """
 
+import json
 import re
+from pathlib import Path
 
 from llama_chat.addon_files import addon_file
 from llama_chat.model_template import ModelTemplate
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
+
+
+def fixture(stem: str) -> dict:
+    """The test template ``stem`` of ``tests/templates/``, as its file holds it."""
+    return json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
+
 
 # What the template-wide tests ask, answer and call, the same in every file.
 QUESTIONS = ["How are you?", "Name a colour.", "And a number?", "Why that one?",

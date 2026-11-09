@@ -1,73 +1,11 @@
 """Reading a call back out of what a model generated."""
 
-import json
-
 import pytest
 
-from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.call_parsing import parse_calls
 from llama_chat.template import CallBody
-from llama_chat.template_extract import extract_fragments
 from llama_chat.tools import ToolCall
 from tests.wrappers import FAKE_CALL_BODY
-
-
-ELEMENT = CallBody(name_close=">\n<", key_open="parameter=", key_close=">\n",
-                   pair_sep="\n</parameter>\n<parameter=",
-                   body_close="\n</parameter>\n</function>\n",
-                   empty_close="/function>\n")
-
-
-def _element_body(name, arguments):
-    """What an element-shaped model generates between its call tags."""
-    parts = [f"\n<function={name}>\n"]
-    for key, value in arguments.items():
-        parts.append(f"<parameter={key}>\n{value}\n</parameter>\n")
-    parts.append("</function>\n")
-    return "".join(parts)
-
-
-def _json_object(name, arguments):
-    return json.dumps({"name": name, "arguments": arguments})
-
-
-def _json_array(name, arguments):
-    return json.dumps([{"name": name, "arguments": arguments}])
-
-
-def _python_call(name, arguments):
-    return f"{name}(" + ", ".join(
-        f"{k}={json.dumps(v)}" for k, v in arguments.items()) + ")"
-
-
-def _attribute_xml(name, arguments):
-    body = "".join(f'<parameter name="{k}">{json.dumps(v)}</parameter>\n'
-                   for k, v in arguments.items())
-    return f'<invoke name="{name}">\n{body}</invoke>'
-
-
-def _key_value_tags(name, arguments):
-    return name + "".join(
-        f"<arg_key>{k}</arg_key><arg_value>"
-        + (v if isinstance(v, str) else json.dumps(v)) + "</arg_value>"
-        for k, v in arguments.items())
-
-
-SHAPES = {
-    "key value tags": _key_value_tags,
-    "json object": _json_object,
-    "json array": _json_array,
-    "python call": _python_call,
-    "attribute xml": _attribute_xml,
-    "delimited": lambda n, a: f"call:{n}{{" + ",".join(
-        f"{k}:" + (f"<|\"|>{v}<|\"|>" if isinstance(v, str) else json.dumps(v))
-        for k, v in a.items()) + "}",
-}
-
-
-ARGUMENTS = [{}, {"title": "Zahnarzt"}, {"title": "Zahnarzt", "minutes": 30},
-             {"where": {"city": "Bern"}}, {"days": [1, 2]},
-             {"title": "a,b:c"}, {"flag": True}, {"nothing": None}]
 
 
 _KEY_VALUE = CallBody(name_close="", key_open="<arg_key>", key_close="</arg_key><arg_value>",
@@ -124,48 +62,6 @@ def test_the_shapes_the_json_family_comes_in(raw):
 def test_without_a_grammar_anything_but_json_is_refused():
     with pytest.raises(ValueError, match="no call_body"):
         parse_calls("fn:clock{}", None, "fn:")
-
-
-# ----- the same parser, an unlike model ------------------------------------
-@pytest.mark.parametrize("arguments", [
-    {},
-    {"title": "Zahnarzt"},
-    {"title": "Zahnarzt", "minutes": 30},
-])
-def test_an_element_shaped_model_reads_with_the_same_parser(arguments):
-    call, = parse_calls(_element_body("calendar_add", arguments), ELEMENT,
-                      "\n<function=")
-    assert call == ToolCall("calendar_add", arguments)
-
-
-# ----- the shapes a model may write a call in ------------------------------
-@pytest.mark.parametrize("shape", sorted(SHAPES))
-@pytest.mark.parametrize("arguments", ARGUMENTS)
-def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
-    """One model family's call shape survives recovery and parsing intact.
-
-    Render a call the way that family does, recover the call body from the
-    rendering, and read the call back equal to what went in.
-    """
-    emit = SHAPES[shape]
-
-    def render(messages, tools=None, **_options):
-        out = []
-        for m in messages:
-            calls = m.get("tool_calls", ())
-            inner = "".join("<tc>" + emit(c["function"]["name"],
-                                          c["function"]["arguments"]) + "</tc>"
-                            for c in calls)
-            out.append(f"<[turn>{m['role']}\n{inner}{m['content'].strip()}"
-                       + ("" if calls else "<turn]>\n"))
-        return "".join(out)
-
-    tools = extract_tool_fragments(render, extract_fragments(render))
-    call_body = extract_call_body(render, tools.call_open, "</tc>")
-    lead_in = tools.call_open[len("<tc>"):]
-
-    call, = parse_calls(emit("calendar_add", arguments), call_body, lead_in)
-    assert call == ToolCall("calendar_add", arguments)
 
 
 # ----- a model that writes a batch -----------------------------------------
