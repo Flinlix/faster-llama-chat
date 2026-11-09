@@ -1,4 +1,4 @@
-"""Every action that is refused or fails leaves the conversation and the cache as they were before it, and usable."""
+"""Every action that is refused or fails leaves the conversation and the cache as they were before it, a reply keeping only what it produced, and usable."""
 
 import datetime as real_datetime
 import threading
@@ -6,41 +6,219 @@ import threading
 import pytest
 
 from llama_chat import ChatWrapper, Config, ContextOverflowError
-from llama_chat.tools import ToolCall, ToolRegistry
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 from tests.fake_context import FakeContext
-from tests.wrappers import (assert_consistent, held_text, newest_turn, rows, tool_wrapper,
-                            weather_registry)
+from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
+                            newest_turn, rows, tool_wrapper, weather_registry)
 
 
 class _Flaky(FakeContext):
-    """A fake cache whose next decode, cut or generation fails once, a decode part-way."""
+    """A fake cache whose next decode, cut or generation fails once, or whose operation number ``fail_at`` fails; a failed decode lands some of its tokens first."""
 
     fail = None             # "decode", "cut" or "generate"
+    fail_at = None          # counted over every operation from 0
+    operations = 0
+
+    def _fails(self, kind=None) -> bool:
+        """Whether this operation fails: the next of ``kind`` asked to, or operation number ``fail_at``."""
+        self.operations += 1
+        if (kind is not None and self.fail == kind) or self.operations - 1 == self.fail_at:
+            self.fail = self.fail_at = None
+            return True
+        return False
 
     def prefill(self, token_ids, start_pos, want_logits):
-        if self.fail == "decode":
-            self.fail = None
+        if self._fails("decode"):
             self.cache.extend(token_ids[:len(token_ids) // 2])
             raise RuntimeError("decode failed")
         super().prefill(token_ids, start_pos, want_logits)
 
+    def decode_generated(self, token_ids, start_pos):
+        if self._fails():
+            self.cache.extend(token_ids)
+            raise RuntimeError("decode failed")
+        super().decode_generated(token_ids, start_pos)
+
     def remove_from(self, pos):
-        if self.fail == "cut":
-            self.fail = None
+        if self._fails("cut"):
             raise RuntimeError("the cache refused to remove its tokens")
         super().remove_from(pos)
+
+    def apply_eviction(self, ev):
+        if self._fails():
+            raise RuntimeError("the cache refused to shift")
+        super().apply_eviction(ev)
+
+    def reset(self):
+        if self._fails():
+            raise RuntimeError("the cache refused to empty")
+        super().reset()
+
+    def save_state(self):
+        if self._fails():
+            raise RuntimeError("the cache refused to save its state")
+        return super().save_state()
+
+    def restore_state(self, state, pos):
+        if self._fails():
+            raise RuntimeError("the cache refused the saved state")
+        super().restore_state(state, pos)
 
     def sampled_tokens(self, *args, **kwargs):
         if self.fail == "generate":
             self.fail = None
             self.cache.append(ord("x"))
             raise RuntimeError("generation failed")
-        return (yield from super().sampled_tokens(*args, **kwargs))
+        for token in super().sampled_tokens(*args, **kwargs):
+            if self._fails():
+                raise RuntimeError("generation failed")
+            yield token
 
 
 def _flaky(**kw):
     fake = _Flaky(**kw)
     return ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake), fake
+
+
+# ----- every action, failing at every point ----------------------------------------
+_CALL, _CALLED = "fn:uhr{}", ToolCall("uhr", {})
+_CALENDAR = ToolSpec("kalender", "Die Termine.", {"type": "object", "properties": {}})
+_CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
+           "neither": dict(can_shift=False, can_cut_tail=False)}
+
+
+def _begin(*history):
+    """A step that begins the conversation on ``history``, a clock its one tool."""
+    def begin(w, fake):
+        tools = ToolRegistry()
+        tools.register(lambda: "12:00", "Die Zeit.", name="uhr")
+        w.begin("persona", list(history), tools=tools)
+    return begin
+
+
+def _exchanged(w, fake):
+    w.reply("eins").finish()
+
+
+def _injected(w, fake):
+    _exchanged(w, fake)
+    w.inject("Lies das.")
+
+
+def _owing(w, fake):
+    _exchanged(w, fake)
+    fake.call_script = [_CALL]
+    list(w.reply("Wetter?", calls="yield"))
+
+
+def _answered(w, fake):
+    _owing(w, fake)
+    w.inject_tool_result(w.owed_calls[0], "sonnig")
+
+
+def _replying(text=None, script=None, **options):
+    def act(w, fake, shown):
+        fake.call_script = [script] if script else []
+        for event in w.reply(text, **options):
+            if isinstance(event, str):
+                shown.append(event)
+    return act
+
+
+# What each action is taken from, what it does, and for a reply the calls its model makes.
+_ACTIONS = {
+    "begin": (_exchanged, lambda w, f, s: w.begin("neu", [("user", "a"), ("assistant", "b")]), None),
+    "begin while a call is owed": (_owing, lambda w, f, s: w.begin("neu"), None),
+    "inject": (_exchanged, lambda w, f, s: w.inject("Notiz dazu."), None),
+    "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.owed_calls[0], "sonnig"),
+                           None),
+    "truncate_last_reply": (_exchanged, lambda w, f, s: w.truncate_last_reply("Ge"), None),
+    "declare_tools": (_exchanged, lambda w, f, s: w.declare_tools([_CALENDAR]), None),
+    "reply": (_exchanged, _replying("zwei"), []),
+    "reply to the first question": (_begin(), _replying("zwei"), []),
+    "reply to an injected question": (_injected, _replying(), []),
+    "reply to the question a history ends on": (
+        _begin(("user", "alt"), ("assistant", "älter"), ("user", "Und?")), _replying(), []),
+    "reply refusing a call": (_exchanged, _replying("Wetter?", _CALL), [_CALLED]),
+    "reply running a call": (_exchanged, _replying("Wetter?", _CALL, calls="run"), [_CALLED]),
+    "reply yielding a call": (_exchanged, _replying("Wetter?", _CALL, calls="yield"), [_CALLED]),
+    "reply going on after a result": (_answered, _replying(calls="yield"), []),
+}
+
+
+def _state(w):
+    return w.conversation(), w.owed_calls, w.reply_open, w.total_tokens
+
+
+def _steps(history):
+    """A history as one list: each message, and each step of a tool turn, its text as the assistant's."""
+    return [step for item in history for step in (
+        [("assistant", s) if isinstance(s, str) else s for s in item.steps]
+        if isinstance(item, ToolTurn) else [item])]
+
+
+def _assert_kept_only_what_it_produced(before, after, shown, calls):
+    """A failed reply loses nothing, and adds nothing, or what it produced: the text it showed, then a call or a result."""
+    held, kept = _steps(before[0][1]), _steps(after[0][1])
+    assert after[0][0] == before[0][0] and kept[:len(held)] == held
+    added = kept[len(held):]
+    texts = [step[1] for step in added if isinstance(step, tuple) and step[0] == "assistant"]
+    assert "".join(texts) == "".join(shown)
+    made = [step for step in added if isinstance(step, ToolCall)]
+    assert made == calls[:len(made)]
+    last = added[-1] if added else None
+    assert not isinstance(last, tuple) or (last[0] == "assistant" and last[1]), \
+        "the failed reply left a question or an empty reply behind"
+
+
+def _go_on(w, fake):
+    """Use the conversation as it was left: answer what is owed, close an open turn, then reply."""
+    fake.call_script = []
+    for call in w.owed_calls:
+        w.inject_tool_result(call, "sonnig")
+    if w.reply_open:
+        w.reply(calls="yield").finish()
+    history = w.conversation()[1]
+    waiting = bool(history) and isinstance(history[-1], tuple) and history[-1][0] == "user"
+    w.reply(None if waiting else "weiter").finish()
+
+
+@pytest.mark.parametrize("action", sorted(_ACTIONS))
+@pytest.mark.parametrize("cache", sorted(_CACHES))
+def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(cache, action):
+    """A reply keeps what it produced before the failure and nothing else; any other action changes nothing."""
+    prepare, act, calls = _ACTIONS[action]
+    for join in ("", None):
+        def prepared():
+            fake = _Flaky(calls_tools=True, gen_tokens=5, gen_text="Gern.", user_join=join,
+                          **_CACHES[cache])
+            w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
+                                   min_reply_tokens=20), context=fake)
+            _begin(("user", "alt"), ("assistant", "älter"))(w, fake)
+            prepare(w, fake)
+            fake.operations = 0
+            return w, fake
+
+        w, fake = prepared()
+        act(w, fake, [])
+        done, points = _state(w), fake.operations
+        for at in range(points):
+            w, fake = prepared()
+            before, shown = _state(w), []
+            fake.fail_at = at
+            try:
+                act(w, fake, shown)
+            except RuntimeError:
+                assert fake.operations == at + 1, "the cache was used again after it failed"
+                if calls is None:
+                    assert _state(w) == before, (join, at)
+                else:
+                    _assert_kept_only_what_it_produced(before, _state(w), shown, calls)
+            else:
+                assert _state(w) == done, (join, at)      # recovered, as if nothing failed
+            _go_on(w, fake)
+            assert_cache_reads_as_rendered(w)
+            w.close()                   # checked here, not again after the test
 
 
 # ----- restarts --------------------------------------------------------------------
@@ -54,18 +232,6 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
     assert w.conversation() == ("s", before)
     w.reply("zwei").finish()
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
-
-
-def test_a_restart_whose_decode_fails_puts_the_previous_conversation_back():
-    w, fake = _flaky(gen_tokens=2)
-    w.begin("s")
-    w.reply("eins").finish()
-    before = w.conversation()[1]
-    fake.fail = "decode"
-    with pytest.raises(RuntimeError):
-        w.begin("t", [("user", "a"), ("assistant", "b")])
-    assert w.conversation() == ("s", before)
-    w.reply("zwei").finish()                   # the cache is decoded again, then goes on
 
 
 def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(monkeypatch):
@@ -166,20 +332,6 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
 
 
 # ----- questions --------------------------------------------------------------------
-@pytest.mark.parametrize("join", ["", None], ids=["writes-two-questions", "refuses-two-questions"])
-def test_a_question_whose_decode_fails_is_not_recorded(join):
-    w, fake = _flaky(user_join=join, gen_tokens=2)
-    w.begin("s")
-    w.reply("eins").finish()
-    before = w.conversation()[1]
-    fake.fail = "decode"
-    with pytest.raises(RuntimeError):
-        w.reply("zwei").finish()
-    assert w.conversation()[1] == before
-    w.reply("drei").finish()
-    assert [r["text"] for r in rows(w)][-2] == "drei"
-
-
 def test_a_question_without_room_for_its_reply_is_not_recorded():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60),
@@ -190,28 +342,7 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
     assert w.conversation()[1] == []
 
 
-# ----- the cache's own failures -----------------------------------------------------
-def test_a_cut_the_cache_refuses_is_noticed_and_repaired_by_the_next_action():
-    w, fake = _flaky(gen_tokens=12, gen_text="hello there!", can_cut_tail=True)
-    w.begin("s")
-    w.reply("eins").finish()
-    fake.fail = "cut"
-    with pytest.raises(RuntimeError):
-        w.truncate_last_reply("hello")
-    w.reply("zwei").finish()
-
-
-def test_after_a_failed_generation_nothing_is_decoded_into_the_cache_until_it_is_repaired():
-    w, fake = _flaky(gen_tokens=2)
-    w.begin("s")
-    fake.fail = "generate"
-    decoded = len(fake.prefill_calls)
-    with pytest.raises(RuntimeError, match="generation failed"):
-        w.reply("eins").finish()
-    assert len(fake.prefill_calls) == decoded + 1          # the question, nothing after it
-    w.reply("zwei").finish()
-
-
+# ----- a cache that cannot shift ----------------------------------------------------
 def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_once():
     fake = FakeContext(gen_tokens=2, can_shift=False)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5,
@@ -248,53 +379,6 @@ def test_a_call_ceiling_where_no_call_is_run_is_refused():
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", calls=calls, max_calls=2)
     assert w.conversation()[1] == []
-
-
-def test_a_generation_that_fails_before_it_says_anything_takes_its_question_back():
-    w, fake = _flaky(gen_tokens=2)
-    w.begin("s")
-    w.reply("eins").finish()
-    before = w.conversation()[1]
-    fake.fail = "generate"
-    with pytest.raises(RuntimeError):
-        w.reply("zwei").finish()
-    assert w.conversation()[1] == before
-    w.reply("zwei").finish()
-    assert w.conversation()[1][-2:] == [("user", "zwei"), ("assistant", "re")]
-
-
-
-def test_a_failed_generation_keeps_a_question_its_request_did_not_ask():
-    w, fake = _flaky(gen_tokens=2)
-    w.begin("s")
-    w.reply("eins").finish()
-    w.inject("Lies diese Notiz.")
-    before = w.conversation()[1]
-    fake.fail = "generate"
-    with pytest.raises(RuntimeError):
-        w.reply().finish()
-    assert w.conversation()[1] == before
-    w.reply().finish()
-    assert w.conversation()[1][-2:] == [("user", "Lies diese Notiz."), ("assistant", "re")]
-
-
-def test_a_failed_generation_keeps_the_question_a_history_ends_on():
-    w, fake = _flaky(gen_tokens=2)
-    w.begin("s", [("user", "aus der Geschichte")])
-    fake.fail = "generate"
-    with pytest.raises(RuntimeError):
-        w.reply().finish()
-    assert w.conversation()[1] == [("user", "aus der Geschichte")]
-
-
-def test_a_question_taken_back_after_a_failed_generation_leaves_no_reply_recorded():
-    fake = _Flaky(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s")
-    fake.fail = "generate"
-    with pytest.raises(RuntimeError):
-        w.reply("eins").finish()
-    assert w.conversation() == ("s", [])
 
 
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
