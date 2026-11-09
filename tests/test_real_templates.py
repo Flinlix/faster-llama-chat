@@ -17,7 +17,7 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
 from .template_contexts import (ConversationContext, TaggedContext, TagTokenizingContext,
-                                TemplateContext)
+                                TemplateContext, call_marks)
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
 _CONVERSATION = [("user", " ping "), ("assistant", " pong "), ("user", " again ")]
@@ -188,9 +188,7 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
                  {"id": "call00000", "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
             tools=[_TOOL.as_declaration()], reasoning=False)
-        boundary = template.call_boundary()
-        opener, closer = (boundary.call_texts if boundary.call_texts is not None
-                          else (context.token_text(t) for t in boundary.tool_tokens))
+        opener, closer = call_marks(template, context)
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     assert template.read_calls(body) == [ToolCall("get_weather", {"city": "Berlin"})]
@@ -260,8 +258,8 @@ def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     fixture = json.loads((Path(__file__).parent / "templates" / "qwen-3.6.json").read_text())
     context = TaggedContext(fixture)
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
-    template = ResolvedTemplate(context)
-    assert template.tool_tokens is not None and template.call_boundary().call_texts is None
+    boundary = ResolvedTemplate(context).call_boundary()
+    assert boundary.tool_tokens is not None and boundary.call_texts is None
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
@@ -296,9 +294,7 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, argument
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": "fn", "arguments": arguments}}]}], reasoning=False)
-    boundary = template.call_boundary()
-    opener, closer = (boundary.call_texts if boundary.call_texts is not None
-                      else (context.token_text(t) for t in boundary.tool_tokens))
+    opener, closer = call_marks(template, context)
     body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     read = template.read_calls(body)
     if any((path.stem, key) in _LOST for key in arguments):

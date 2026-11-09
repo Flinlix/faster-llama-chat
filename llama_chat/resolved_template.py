@@ -148,14 +148,6 @@ class ResolvedTemplate:
                                  self._reasoning if reasoning else None)
 
     @property
-    def tool_tokens(self) -> tuple[int, int] | None:
-        """The ``(open, close)`` tokens bracketing a call, or ``None``.
-
-        ``None`` also where a call is marked by its texts instead.
-        """
-        return self._boundary.tool_tokens
-
-    @property
     def can_call_tools(self) -> bool:
         """Whether all four steps tool calling needs came out of this template.
 

@@ -112,6 +112,15 @@ class TagTokenizingContext(TaggedContext):
         return tokens + [ord(c) for c in text[pos:]]
 
 
+def call_marks(template, context) -> tuple[str, str]:
+    """The texts a call opens and closes with in a render: its own texts, else its tags' text."""
+    boundary = template.call_boundary()
+    if boundary.call_texts is not None:
+        return boundary.call_texts
+    opener, closer = boundary.tool_tokens
+    return context.token_text(opener), context.token_text(closer)
+
+
 def closers(tag: str) -> list[str]:
     """The tags that would close ``tag``."""
     inner = tag.strip("<>[]")

@@ -21,7 +21,8 @@ from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
-from .template_contexts import ANSWERS, QUESTIONS, WEATHER, ConversationContext, ScriptedCall
+from .template_contexts import (ANSWERS, QUESTIONS, WEATHER, ConversationContext, ScriptedCall,
+                                call_marks)
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
 _FIXTURES = {path.stem: json.loads(path.read_text()) for path in _TEMPLATES}
@@ -662,9 +663,7 @@ def _call_body(run, arguments):
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": WEATHER.name, "arguments": arguments}}]}], reasoning=False)
-    boundary = template.call_boundary()
-    opener, closer = (boundary.call_texts if boundary.call_texts is not None
-                      else (run.context.token_text(t) for t in boundary.tool_tokens))
+    opener, closer = call_marks(template, run.context)
     if template._call_from_file:
         # The template shows no call it could be read from; the model writes the add-on file's.
         return opener, WEATHER.name + run.context.addon_call()["name_close"] + json.dumps(

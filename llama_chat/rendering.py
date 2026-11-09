@@ -62,7 +62,7 @@ class ConversationRendering:
         self._inputs = inputs
         self._reader = MemoTokenizer(context)
         self._memo: dict = {}             # renders and splits, by what was rendered
-        self._tag_tokens = {text: token for token in (template.tool_tokens or ())
+        self._tag_tokens = {text: token for token in (template.call_boundary().tool_tokens or ())
                             if (text := context.token_text(token))}
 
     def forget_renders(self) -> None:
