@@ -1,14 +1,15 @@
 """Generating on the engine's cache context: calls found as they are generated, cancelling."""
 
 from llama_chat.config import Config
+from llama_chat.generation import generate
 from llama_chat.template import CallBoundary
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
 from tests.wrappers import cache_tokens, rows
 
 
-# These drive the real KVContext.generate over a stubbed backend, because
-# the fake context reimplements this contract and so cannot test it.
+# These drive the generation loop over KVContext's own steps on a stubbed
+# backend, so that what reaches the engine is pinned along with the loop.
 def _generating(pieces: dict, order: list, eog: int | None = None):
     """A KVContext that samples ``order`` and renders each token from ``pieces``."""
     from types import SimpleNamespace
@@ -41,7 +42,7 @@ def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
 
     assert list(stream) == ["hi "]      # the call's own text is never yielded
     assert acc.stop_reason == "tool_call"
@@ -56,7 +57,7 @@ def test_the_held_back_tail_is_released_when_a_call_opens():
 
     acc = GenerationAccumulator()
     # "ZZZZ" is longer than "hi ", so nothing can be emitted before the call.
-    stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
     assert list(stream) == ["hi "]
     assert acc.text == "hi "            # nothing of the reply was lost
 
@@ -70,7 +71,7 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
     assert next(stream) == "hi "
     stream.close()
     assert acc.stop_reason == "interrupted"
@@ -81,7 +82,7 @@ def test_a_call_the_token_cap_cuts_short_is_dropped():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = _generating(_PIECES, [0, 1, 2]).generate(0, 3, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2]), 0, 3, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
     assert list(stream) == ["hi "]
     assert acc.stop_reason == "token_limit"
     assert acc.tool_call == ""          # half a call is no call
@@ -93,19 +94,18 @@ def test_without_tool_tokens_a_call_tag_is_ordinary_text():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = _generating(_PIECES, [0, 1, 2, 3]).generate(0, 4, out=acc)
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 4, out=acc)
     assert "".join(stream) == "hi <call>fn:clock{}</call>"
     assert acc.stop_reason == "token_limit"
 
 
-# The two ways a stream ends that the fake context answers for itself. Pinned
-# here for the same reason as the call detection above: only the real loop
-# decides what reaches the cache before it stops.
+# The two ways a stream ends besides a call, and what reaches the cache
+# before it stops.
 def test_end_of_generation_stops_before_the_token_reaches_the_cache():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = _generating(_PIECES, [0, 4], eog=4).generate(0, 10, out=acc)
+    stream = generate(_generating(_PIECES, [0, 4], eog=4), 0, 10, out=acc)
     assert "".join(stream) == "hi "
     assert acc.stop_reason == "end_of_turn"
     assert acc.token_ids == [0]     # the end token is recognised, never decoded
@@ -124,7 +124,7 @@ def test_cancelling_ends_the_stream_within_one_token():
     render = ctx._backend.token_to_piece_bytes
     ctx._backend.token_to_piece_bytes = lambda v, t: (cancel.set(), render(v, t))[1]
 
-    stream = ctx.generate(0, 10, out=acc, cancel=cancel)
+    stream = generate(ctx, 0, 10, out=acc, cancel=cancel)
     assert "".join(stream) == "hi "
     assert acc.stop_reason == "interrupted"
     assert acc.token_ids == [0]
@@ -136,7 +136,7 @@ def test_the_held_back_tail_is_flushed_when_generation_runs_out():
     acc = GenerationAccumulator()
     # A stop string this long holds back three characters at every step, so
     # without the final flush the reply would end short.
-    stream = _generating({0: b"abc", 1: b"def"}, [0, 1]).generate(0, 2, out=acc)
+    stream = generate(_generating({0: b"abc", 1: b"def"}, [0, 1]), 0, 2, out=acc)
     assert "".join(stream) == "abcdef"
     assert acc.stop_reason == "token_limit"
     assert acc.text == "abcdef"

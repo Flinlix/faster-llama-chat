@@ -30,12 +30,12 @@ class _Flaky(FakeContext):
             raise RuntimeError("the cache refused to remove its tokens")
         super().remove_from(pos)
 
-    def generate(self, *args, **kwargs):
+    def sampled_tokens(self, *args, **kwargs):
         if self.fail == "generate":
             self.fail = None
             self.cache.append(ord("x"))
             raise RuntimeError("generation failed")
-        return (yield from super().generate(*args, **kwargs))
+        return (yield from super().sampled_tokens(*args, **kwargs))
 
 
 def _flaky(**kw):
@@ -309,17 +309,18 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
     w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
     w.begin("s", tools=weather_registry())
     fake.call_script.append("@@@ kein Aufruf @@@")
-    generate = fake.generate
+    sampled = fake.sampled_tokens
 
     def then_failing_decode(*args, **kwargs):
-        result = yield from generate(*args, **kwargs)
-        fake.fail = "decode"            # the decode of the error result
-        return result
+        try:
+            yield from sampled(*args, **kwargs)
+        finally:
+            fake.fail = "decode"        # the decode of the error result
 
-    fake.generate = then_failing_decode
+    fake.sampled_tokens = then_failing_decode
     with pytest.raises(RuntimeError, match="decode failed"):
         w.reply("Wetter?", calls="yield").finish()
-    fake.generate = generate
+    fake.sampled_tokens = sampled
     assert not w.reply_open and w._conversation.owed_calls == []
     assert w.history()[-2:] == [("user", "Wetter?"), ("assistant", "")]
     w.reply("weiter").finish()

@@ -58,8 +58,8 @@ def test_with_tools_declared_the_switch_is_rendered_with_them():
 def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     w, fake = reasoning_wrapper(False, gen_text="Antwort.", gen_tokens=8)
     held = []
-    generate = fake.generate
-    fake.generate = lambda *a, **k: (held.append(held_text(w)), (yield from generate(*a, **k)))[1]
+    sampled = fake.sampled_tokens
+    fake.sampled_tokens = lambda *a, **k: (held.append(held_text(w)), (yield from sampled(*a, **k)))[1]
     w.reply("hi").finish()
     assert rendered_prompt(fake, reasoning=False).endswith(EMPTY_THOUGHT)
     # Generated after the empty thought, kept without it, as a past reply is.

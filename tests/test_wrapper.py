@@ -13,6 +13,7 @@ import pytest
 
 from llama_chat.config import Config, Sampling
 from llama_chat import ChatWrapper, ContextOverflowError
+from llama_chat.generation import generate
 from tests.fake_context import BOS, DEFAULT_FRAGMENTS, FakeContext
 from tests.wrappers import (assert_consistent, begun_wrapper, cache_tokens, held_renders,
                             tool_wrapper, rows)
@@ -289,7 +290,7 @@ def test_generator_close_marks_interrupted():
 
     fake = FakeContext(gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
-    g = fake.generate(0, 5, out=acc)
+    g = generate(fake, 0, 5, out=acc)
     next(g)
     g.close()
     assert acc.stop_reason == "interrupted"

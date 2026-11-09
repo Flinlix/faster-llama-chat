@@ -8,8 +8,8 @@ text.
 import re
 
 from llama_chat.addon_files import addon_file
-from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.model_template import ModelTemplate
+from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 
 # What the template-wide tests ask, answer and call, the same in every file.
@@ -81,6 +81,8 @@ class TemplateContext:
 
 
 TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[A-Z_]+\]|<｜[^｜]+｜>|\]~!?[a-z][\[\]]|\[[a-z]~\[")
+# The token that ends a generation: past every character, as a tag's is below them.
+END_OF_GENERATION = 0x110000
 
 
 def call_marks(template, context) -> tuple[str, str]:
@@ -95,13 +97,16 @@ def call_marks(template, context) -> tuple[str, str]:
 class ConversationContext(TemplateContext):
     """The same, with a cache a wrapper writes a whole conversation into.
 
-    Each generation writes the next reply of ``replies``, one token per
-    character, and first hands ``before_reply`` the cache's text, so a test can
-    compare it with the template's render of the conversation at that moment.
+    Each generation is the library's own loop drawing the next reply of
+    ``replies``, one token per character, then the end of generation. It
+    first hands ``before_reply`` the cache's text, so a test can compare it
+    with the template's render of the conversation at that moment.
     """
 
     def __init__(self, fixture: dict, replies: list[str], can_shift: bool = True) -> None:
         super().__init__(fixture)
+        self._fixture = fixture
+        self._call_mark_tokens = None
         self.cache: list[int] = []
         self.can_shift = can_shift
         self.can_cut_tail = can_shift
@@ -154,42 +159,39 @@ class ConversationContext(TemplateContext):
         self.edits.append(("shift", ev.remove_start, ev.shift_delta))
         del self.cache[ev.remove_start:ev.remove_end]
 
-    def generate(self, start_pos, max_generated_tokens, out=None, cancel=None,
-                 sampling=None, ends_turn=None, boundary=None):
-        assert start_pos == len(self.cache)
+    def sampled_tokens(self, sampling, withheld_tokens):
         if self.before_reply is not None:
             self.before_reply(self.text_of(self.cache))
-        generated = out if out is not None else GenerationAccumulator()
-        if isinstance(self._replies[0], ScriptedCall):
-            return (yield from self._generate_call(generated, boundary))
-        reply = self._replies.pop(0)[:max(0, max_generated_tokens)]
-        for ch in reply:
-            self.cache.append(ord(ch))
-            generated.token_ids.append(ord(ch))
-            generated.text += ch
-            yield ch
-        generated.stop_reason = "end_of_turn"
-        return generated
-
-    def _generate_call(self, generated, boundary):
-        """Write the scripted call as the model would: its opening, its body, its closing."""
-        call = self._replies.pop(0)
-        assert boundary is not None and (boundary.tool_tokens or boundary.call_texts), \
-            "a call was scripted where calls are withheld"
-        if boundary.tool_tokens:
-            opening, closing = ([token] for token in boundary.tool_tokens)
+        scripted = self._replies.pop(0)
+        if isinstance(scripted, ScriptedCall):
+            yield from self._call_tokens(scripted)
         else:
-            opening, closing = ([ord(c) for c in text] for text in boundary.call_texts)
-        for ch in call.before:
-            self.cache.append(ord(ch))
-            generated.token_ids.append(ord(ch))
-            generated.text += ch
-            yield ch
-        for token in opening + [ord(c) for c in call.body] + closing:
-            self.cache.append(token)
-            generated.token_ids.append(token)
-        generated.stop_reason, generated.tool_call = "tool_call", call.body
-        return generated
+            yield from (ord(ch) for ch in scripted)
+        while True:
+            yield END_OF_GENERATION
+
+    def _call_tokens(self, call):
+        """The scripted call as the model writes it: its ``before``, then its opening, its body, its closing."""
+        if self._call_mark_tokens is None:
+            # The template's own call tags as tokens, else its call texts as characters.
+            reader = TemplateContext(self._fixture)
+            template = ResolvedTemplate(reader)
+            marks = call_marks(template, reader)
+            by_tags = template.call_boundary().tool_tokens is not None
+            self._call_mark_tokens = tuple(self.tokenize(text) if by_tags else [ord(c) for c in text]
+                                           for text in marks)
+        opening, closing = self._call_mark_tokens
+        return self.tokenize(call.before) + opening + [ord(c) for c in call.body] + closing
+
+    def decode_generated(self, token_ids, start_pos):
+        assert start_pos == len(self.cache), (start_pos, len(self.cache))
+        self.cache.extend(token_ids)
+
+    def ends_generation(self, token):
+        return token == END_OF_GENERATION
+
+    def token_bytes(self, token):
+        return b"" if token == END_OF_GENERATION else self.token_text(token).encode()
 
     def close(self):
         pass

@@ -427,20 +427,16 @@ def test_a_reply_that_fails_part_way_is_kept_or_taken_back_and_the_next_follows_
     run.begin()
     for question in QUESTIONS[:2]:
         run.chat.reply(question).finish()
-    generate = run.context.generate
+    sampled = run.context.sampled_tokens
 
-    def failing_part_way(*args, out, **kwargs):
-        for ch in "Partly":
-            run.context.cache.append(ord(ch))
-            out.token_ids.append(ord(ch))
-            out.text += ch
-            yield ch
+    def failing_part_way(*args, **kwargs):
+        yield from (ord(ch) for ch in "Partly")
         raise RuntimeError("the generation failed part-way")
 
-    run.context.generate = failing_part_way
+    run.context.sampled_tokens = failing_part_way
     with pytest.raises(RuntimeError, match="part-way"):
         run.chat.reply(QUESTIONS[2]).finish()
-    run.context.generate = generate
+    run.context.sampled_tokens = sampled
     run.chat.reply(QUESTIONS[3]).finish()
     # Recorded where some of it was answer, taken back whole where none was.
     asked = any(m["content"] == QUESTIONS[2] for m in run.chat._conversation.messages)
@@ -453,20 +449,21 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
     run.begin()
     for question in QUESTIONS[:2]:
         run.chat.reply(question).finish()
-    generate, prefill = run.context.generate, run.context.prefill
+    sampled, prefill = run.context.sampled_tokens, run.context.prefill
 
     def failing(*args, **kwargs):
         raise RuntimeError("the decode failed")
 
     def then_failing(*args, **kwargs):
-        result = yield from generate(*args, **kwargs)
-        run.context.prefill = failing           # the decode ahead, after the reply
-        return result
+        try:
+            yield from sampled(*args, **kwargs)
+        finally:
+            run.context.prefill = failing       # the decode ahead, after the reply
 
-    run.context.generate = then_failing
+    run.context.sampled_tokens = then_failing
     with pytest.raises(RuntimeError, match="decode failed"):
         run.chat.reply(QUESTIONS[2]).finish()
-    run.context.generate, run.context.prefill = generate, prefill
+    run.context.sampled_tokens, run.context.prefill = sampled, prefill
     run.chat.reply(QUESTIONS[3]).finish()
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
 
@@ -822,10 +819,12 @@ def test_a_shortened_reply_is_kept_as_the_template_writes_it():
 def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_turn():
     # Llama 3.2 writes no text beside a call; what the model wrote before one
     # stays only in the tokens its turn keeps, and the next call still reads.
+    # A call that opens with plain text follows the tag the model writes first.
     probe = _Run("llama-3.2")
     opener, body, closer = _call_body(probe, {"city": "Bonn"})
     run = _Run("llama-3.2", replies=["x"])
-    run.context._replies = [ScriptedCall(body), ScriptedCall(body, before="Once more. "),
+    before = "Once more. <|python_tag|>"
+    run.context._replies = [ScriptedCall(body), ScriptedCall(body, before=before),
                             "Sunny twice.", "Bye."]
     run.begin(tools=[WEATHER])
     calls = [e for e in run.chat.reply("Weather in Bonn?", calls="yield") if isinstance(e, ToolCall)]
@@ -835,7 +834,7 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     run.chat.inject_tool_result(calls[0], "sunny")
     assert run.chat.reply().finish().text == "Sunny twice."
     run.chat.reply("Thanks.").finish()
-    assert "Once more. " + opener + body + closer in run.seen[-1]
+    assert before + opener + body + closer in run.seen[-1]
 
 
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():

@@ -196,25 +196,22 @@ def test_a_context_that_saves_states_must_restore_them():
 # ----- a reply ended by its closing text -----------------------------------
 def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
     """A cache that cannot cut at its end goes back to a saved state instead."""
+    from llama_chat.template import CallBoundary
+
     from .fake_context import FakeContext
 
     class _ClosingText(FakeContext):
-        def generate(self, start_pos, max_generated_tokens, out=None, **kw):
-            generated = yield from super().generate(start_pos, max_generated_tokens,
-                                                    out=out, **kw)
-            # Two tokens of the closing were decoded and leave the reply again.
-            self.cache += [ord("<"), ord("|")]
-            generated.cached_beyond = 2
-            return generated
-
         def remove_from(self, pos):
             assert self.can_shift, "a cache that cannot cut was cut"
             super().remove_from(pos)
 
     for can_shift in (True, False):
-        fake = _ClosingText(gen_tokens=3, can_shift=can_shift)
+        # Three tokens of the reply, then two of the closing, which leave the reply again.
+        fake = _ClosingText(gen_tokens=5, gen_text="rep<|", can_shift=can_shift)
         w = ChatWrapper(Config(context_size=2000), context=fake)
+        # A template whose reply ends where the text its closing opens with begins.
+        w._template.call_boundary = lambda *args, **kwargs: CallBoundary(turn_end_text="<|")
         w.begin("s")
-        w.reply("hi").finish()
+        assert w.reply("hi").finish().text == "rep"
         w.reply("again").finish()
         assert_consistent(w, fake)

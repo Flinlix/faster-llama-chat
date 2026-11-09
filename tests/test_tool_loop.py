@@ -44,13 +44,10 @@ class _SaysBeforeCalling(FakeContext):
         super().__init__(calls_tools=True, **kw)
         self._before_call = before_call
 
-    def _generate_call(self, generated, tool_tokens):
+    def _call_tokens(self, body):
         for ch in self._before_call:
-            self.cache.append(ord(ch))
-            generated.token_ids.append(ord(ch))
-            generated.text += ch
-            yield ch
-        return (yield from super()._generate_call(generated, tool_tokens))
+            yield self._generated(ch)
+        yield from super()._call_tokens(body)
 
 
 class _ResultBlock(FakeContext):
@@ -715,7 +712,7 @@ def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():
 
     wrapper.reply("wie spät?", calls=registry, max_calls=3).finish()
 
-    assert len(fake.call_script) == 17               # three tries, then words
+    assert len(fake.call_script) == 16               # three tries, then one left as text
     assert not wrapper.reply_open
 
 
@@ -727,7 +724,7 @@ def test_a_refusing_reply_does_not_retry_an_unreadable_call():
 
     wrapper.reply("wie spät?").finish()
 
-    assert len(fake.call_script) == 4                # one try, then words
+    assert len(fake.call_script) == 3                # one try, then one left as text
     assert not wrapper.reply_open
 
 
@@ -746,7 +743,7 @@ def test_a_ceiling_of_zero_binds_an_unreadable_call_too():
     reply = wrapper.reply("wie spät?", calls=registry, max_calls=0).finish()
 
     assert reply.tool_limit_reached
-    assert len(fake.call_script) == 4                # no retry was allowed
+    assert len(fake.call_script) == 3                # no retry: the next is left as text
     assert not wrapper.reply_open
 
 

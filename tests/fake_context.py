@@ -5,8 +5,13 @@ resolved template call on a cache context: a template of its own, rendered
 from its fragments, and a *physical cache* (a plain list of token ids) so tests
 can assert the cache holds what the wrapper holds it to be.
 
-``prefill`` asserts ``start_pos == len(cache)``: every decode lands at the
-cache's end, after whatever cut, restore or rebuild put it there.
+``prefill`` and ``decode_generated`` assert ``start_pos == len(cache)``:
+every decode lands at the cache's end, after whatever cut, restore or rebuild
+put it there.
+
+A generation is the library's own loop drawing this fake model's scripted
+tokens: its next call where its call tag may be drawn, else its reply, then
+the end of generation.
 
 Each cache edit asserts the ability it needs, so a wrapper that cuts a cache
 which cannot cut, or shifts one which cannot shift, fails here.
@@ -23,8 +28,8 @@ from __future__ import annotations
 import re
 from dataclasses import fields, replace
 
-from llama_chat.cache_context import Eviction, GenerationAccumulator
-from llama_chat.template import CallBoundary, TemplateFragments
+from llama_chat.cache_context import Eviction
+from llama_chat.template import TemplateFragments
 
 BOS = -1
 
@@ -35,6 +40,8 @@ _TAG = re.compile(r"<[^<>\s]+>")
 # produces them: the call tags, and every other tag below _FIRST_TAG.
 TOOL_OPEN, TOOL_CLOSE = -10, -11
 _FIRST_TAG = -100
+# The token that ends a generation, which no text produces either.
+END_OF_GENERATION = -2
 # What this fake model writes between its call tag and the function's name.
 CALL_LEAD_IN = "fn:"
 
@@ -84,7 +91,8 @@ class FakeContext:
                  can_cut_tail: bool = False) -> None:
         self.cache: list[int] = []
         self.can_cut_tail = can_cut_tail
-        # Call bodies this fake model will produce, one per generation.
+        # Call bodies this fake model will produce, one per generation that may
+        # draw its call tag.
         self.call_script: list[str] = []
         self._fragments = fragments
         # A second model, one that writes tool calls. Its tags are recovered
@@ -204,6 +212,12 @@ class FakeContext:
     def token_text(self, token: int) -> str:
         return self._tag_texts.get(token, "")
 
+    def ends_generation(self, token: int) -> bool:
+        return token == END_OF_GENERATION
+
+    def token_bytes(self, token: int) -> bytes:
+        return self.text_of([token]).encode()
+
     def text_of(self, tokens: list[int]) -> str:
         """What ``tokens`` spell: characters, the generated ones as they were generated, and the tags."""
         return "".join(self._generated_chars.get(t) or self.token_text(t)
@@ -276,64 +290,36 @@ class FakeContext:
                 out.append(EMPTY_THOUGHT)
         return "".join(out)
 
-    def generate(self, start_pos: int, max_generated_tokens: int,
-                 out: GenerationAccumulator | None = None, cancel=None, sampling=None,
-                 ends_turn=None, boundary: CallBoundary = CallBoundary()):
-        """Stream generated tokens, mirroring KVContext.generate's contract.
-
-        Each token is appended to the cache *before* its text delta is yielded,
-        and ``out`` is filled incrementally, so an early ``close()`` leaves the
-        cache and ``out.token_ids`` in agreement. Both abort routes record
-        ``stop_reason == "interrupted"``: the ``cancel`` event (checked once per
-        token) and a ``close()`` of the generator.
-        """
-        assert start_pos == len(self.cache)
+    def sampled_tokens(self, sampling, withheld_tokens):
+        """The next scripted call where its call tag may be drawn, else the scripted reply; then the end of generation."""
         self.samplings.append(sampling)
-        generated = out if out is not None else GenerationAccumulator()
-        if boundary.tool_tokens is not None and self.call_script:
-            yield from self._generate_call(generated, boundary.tool_tokens)
-            return generated
-        n = max(0, min(self._gen_tokens, max_generated_tokens))
-        for i in range(n):
-            if cancel is not None and cancel.is_set():
-                generated.stop_reason = "interrupted"
-                break
-            ch = self._gen_text[i] if i < len(self._gen_text) else "x"
-            tok = ord(ch) if self._tokens_spell_text else self._next_gen + i
-            self._generated_chars[tok] = ch
-            self.cache.append(tok)  # decoded into the cache before surfacing text
-            generated.token_ids.append(tok)
-            generated.text += ch
-            try:
-                yield ch
-            except GeneratorExit:
-                generated.stop_reason = "interrupted"
-                raise
+        if self.call_script and TOOL_OPEN not in withheld_tokens:
+            yield from self._call_tokens(self.call_script.pop(0))
         else:
-            generated.stop_reason = ("end_of_turn" if n == self._gen_tokens
-                                    else "token_limit")
-        self._next_gen += n
-        return generated
+            for i in range(self._gen_tokens):
+                yield self._generated(self._gen_text[i] if i < len(self._gen_text) else "x")
+        while True:
+            yield END_OF_GENERATION
 
-    def _generate_call(self, generated: GenerationAccumulator,
-                       tool_tokens: tuple[int, int]):
-        """Emit the next scripted call: open tag, body, close tag, no deltas.
+    def _call_tokens(self, body: str):
+        """A scripted call: its tags around the call's text, which opens with the lead-in."""
+        yield TOOL_OPEN
+        for ch in body if body.startswith(CALL_LEAD_IN) else CALL_LEAD_IN + body:
+            yield self._generated(ch)
+        yield TOOL_CLOSE
 
-        Mirrors the real contract: every token reaches the cache, none of the
-        call's text is yielded, and the body lands on ``tool_call`` rather than
-        on ``text``.
-        """
-        body = self.call_script.pop(0)
-        opener, closer = tool_tokens
-        spelled = ([ord(c) for c in CALL_LEAD_IN + body] if self._tokens_spell_text
-                   else range(len(body)))
-        for token in (opener, *spelled, closer):
-            self.cache.append(token)
-            generated.token_ids.append(token)
-        generated.tool_call = body
-        generated.stop_reason = "tool_call"
-        return
-        yield        # a generator either way, so the caller can drive it
+    def _generated(self, ch: str) -> int:
+        """The token this fake model generates ``ch`` as."""
+        if self._tokens_spell_text:
+            token = ord(ch)
+        else:
+            token, self._next_gen = self._next_gen, self._next_gen + 1
+        self._generated_chars[token] = ch
+        return token
+
+    def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
+        assert start_pos == len(self.cache), (start_pos, len(self.cache))
+        self.cache.extend(token_ids)
 
     def close(self) -> None:
         pass

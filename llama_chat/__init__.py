@@ -40,13 +40,14 @@ __all__ = [
     "ToolTurn",
     "ToolSpec",
     "ToolRegistry",
-    # For a cache context of one's own, ``ChatWrapper(context=...)``, and a
-    # model whose template writes no call it can be read from, ``tool_calls=``.
+    # For a cache context of one's own, ``ChatWrapper(context=...)``.
     "CacheContext",
     "ModelReader",
     "Eviction",
+    # Read and filled by the library's own generation loop.
     "GenerationAccumulator",
     "CallBoundary",
+    # For a model whose template writes no call it can be read from, ``tool_calls=``.
     "ToolCallFragments",
     "CallBody",
 ]

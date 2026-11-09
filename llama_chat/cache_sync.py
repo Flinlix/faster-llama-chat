@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .cache_context import CacheContext, Eviction, GenerationAccumulator
+from .generation import generate
 from .template import common_prefix_length
 
 # Maps a token id to one character, so token lists search as strings.
@@ -80,7 +81,7 @@ class CacheSync:
         if not self._logits:
             self._decode_again_with_logits()
         start = self._end
-        pieces = self._context.generate(start, max_generated_tokens, out=out, **options)
+        pieces = generate(self._context, start, max_generated_tokens, out=out, **options)
         try:
             yield from pieces
         except GeneratorExit:

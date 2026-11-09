@@ -8,13 +8,11 @@ finds a member missing.
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass, field
-from collections.abc import Callable
-from typing import Iterator, Protocol
+from collections.abc import Generator
+from typing import Protocol
 
 from .config import Sampling
-from .template import CallBoundary
 
 
 @dataclass
@@ -95,7 +93,7 @@ class ModelReader(Protocol):
 
 
 class CacheContext(ModelReader, Protocol):
-    """The same, with the cache a conversation is decoded into."""
+    """The same, with the cache a conversation is decoded into and the steps a generation takes in it."""
 
     @property
     def context_size(self) -> int:
@@ -113,11 +111,23 @@ class CacheContext(ModelReader, Protocol):
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
 
-    def generate(self, start_pos: int, max_generated_tokens: int,
-                 out: GenerationAccumulator | None = None,
-                 cancel: threading.Event | None = None, sampling: Sampling | None = None,
-                 ends_turn: Callable[[int], bool] | None = None,
-                 boundary: CallBoundary = CallBoundary()) -> Iterator[str]: ...
+    def sampled_tokens(self, sampling: Sampling | None,
+                       withheld_tokens: tuple[int, ...]) -> Generator[int, None, None]:
+        """Tokens drawn one at a time, each from the logits of the newest decode.
+
+        ``sampling`` stands in for the configuration's settings where given,
+        and no token of ``withheld_tokens`` is drawn. Closing it frees what
+        drawing took.
+        """
+
+    def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
+        """Decode the tokens a generation adds at ``start_pos``, logits kept for the last."""
+
+    def ends_generation(self, token: int) -> bool:
+        """Whether drawing ``token`` ends a generation, neither decoded nor shown."""
+
+    def token_bytes(self, token: int) -> bytes:
+        """The bytes ``token`` stands for, which may hold part of a character."""
 
     def apply_eviction(self, ev: Eviction) -> None: ...
 
