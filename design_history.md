@@ -1126,3 +1126,155 @@ as the median turn without an eviction. The dropped stretch is found and
 shifted at the new seam between the system text and the next question, so the
 real tokenizer keeps the memory rolling. Without a model, all of Gemma 3's
 conversation tests now run with a system prompt and pass.
+
+## 2026-11-09: Restructured inside the library (226A)
+
+The rethink found the library doing several things in two places, and the
+engine adapter holding logic that names no engine. No public name changed.
+What a caller can notice is named below: a few error messages and one
+warning, and the members the two cache-context protocols ask for (I1, I9).
+
+**The generation loop is engine-neutral (I1).** The loop that generates a
+reply moved out of the engine adapter into `llama_chat/generation.py`: the
+UTF-8 decoding, holding back text that may start a call or a reply's end,
+recognizing calls by token or by text, cancelling, the token cap and the stop
+reasons. A cache context answers four steps instead of `generate`:
+`sampled_tokens`, `decode_generated`, `ends_generation` and `token_bytes`.
+The test stand-ins only hand out scripted tokens, so the real call detection
+runs over every test template. Three call-budget counts and one Llama 3.2
+script changed, because the old stand-ins skipped detection: a call that opens
+with plain text counts only at a reply's start or after a tag.
+`decode_generated` stays separate from `prefill`, so that the stand-ins'
+prefill counts keep checking the wrapper's own decode accounting.
+
+**Tags found from the tokenizer's answers (I9).** The model reader protocol
+no longer asks for the model's tag list, for a text split at its tags, or for
+the first tag in a text. `llama_chat/tokenizing.py` computes all three from
+`tokenize`, `token_text`, `is_special` and `special_tokens`, with the
+algorithm the engine adapter ran before, so the real tag logic runs in every
+test. The three template stand-ins became one, and the fake model writes each
+tag as one token. `is_special` stays beside `special_tokens` because the
+template stand-ins hold every tag-shaped text, such as argument names written
+as tags, which no list made ahead of time contains. Asking for a vocabulary
+size was rejected: the stand-ins number characters by code point, so a
+vocabulary walk would cost over a million calls per load.
+
+**One sampler per generation (I10).** Every generation builds its sampler
+chain from its effective settings and frees it when it ends; the shared chain
+built at load and reset for generations without overrides was removed. A new
+chain starts its penalty window and its seed exactly as a reset one did, so
+one path replaces three, at the cost of building a few stages per reply. A
+warning about an incompatible penalties signature now appears at the first
+generation rather than at load.
+
+**Add-on files in one module (I11).** The add-on file and the model's
+sampling share one module, since both settle what a model needs beyond its
+template and are read together at load. The template renderer is a plain
+function of the engine adapter, because it resolves no C symbol, so rendering
+a template no longer builds the whole adapter.
+
+**Reading a call (I3).** Reading a generated call is one call,
+`ResolvedTemplate.read_calls`, which puts back the lead-in an opening made of
+text holds and parses with the model's call body. The wrapper and the tests
+used to rebuild that step from five separate properties; those are removed,
+as is `tool_tokens`, and every reader of how a call is marked, the rendering
+included, goes through `call_boundary()`. The call-format probes (the tags around a call, the
+separator and closing between calls, a name written twice, the argument
+spelling) moved from `template_extract.py` into `call_format.py`, which only
+the call resolution uses. The probe helpers both need are public names in
+`template_extract` (`USER_SENTINEL`, `ASSISTANT_SENTINEL`, `TOOL_SENTINEL`,
+`as_probes_read`, `Render`), so the dependency runs one way and no module
+imports a sibling's private name.
+
+**No formatter (I5).** `TemplateFormatter` is removed. `ResolvedTemplate`
+gives the generation prompt and the answer opening for a reasoning mode and
+refuses reasoning a model cannot do (`ensure_can_reason`, as
+`ensure_tools_usable`, so `begin` refuses before it resets anything).
+`RenderedCache` alone holds whether the conversation reasons, and
+`RenderedCache.generate` bounds a reply by the room left beside the closing,
+which is tokenized once at load instead of on every generation.
+
+**Fewer probes (I8).** The fragments' three whitespace settings
+(`trim_content`, `reply_strip`, `system_strip`) and the padded probes that
+measured them are removed. They fed only the content form the marker split
+tries, and the split already tries each text stripped on both sides, at either
+end and of newlines; it now applies the learned rewrites to each of those
+forms too, so a template that both strips and escapes is still matched. The
+rewrites stay: without them the typed-tag test on flint fails. The
+template-wide splice probe (three plain questions rendered at begin and at
+each later declaration) is removed as well. Each question is checked by
+`question_splices` on its own text before it is spliced, and windows need the
+newest question spliced, so the probe added no guarantee; it only kept a
+template that failed one probe question from splicing any question. Windows
+rest on `windows_are_exact` alone. All 52 test templates passed the probes,
+so a new test with an escaping template covers questions that cannot be
+spliced.
+
+**The conversation's state (I6).** The state a failed action puts back is one
+record, `_ConversationState`, which `_action` copies field by field and
+restores whole, so a field added to the conversation is rolled back unless it
+is deliberately put outside the record (the current generation, the action's
+render memo and the published copy are). The calls owed a result are no
+longer stored: they are read from the messages, from the newest calling turn
+and the results after it, so the owed list cannot drift from the
+conversation. A full run first checked that the stored list matched that
+reading on all 79,891 reads. A call made live is now reported as a copy, as
+one from a history given to begin already was. The records made ahead (the
+render for the next question, the splice note and the question an ask added)
+each carry the conversation and the cache version they were made for, and are
+used only while both are unchanged, or, for the window, while the
+conversation continues from theirs; no action clears them. The cache length
+alone was rejected, because two different targets of one conversation can
+have the same length; `CacheSync.version` changes with every change to the
+token list, checked by a random test of 3000 operations with injected
+failures. After a failed action that changed the cache, the next question is
+rendered whole once.
+
+**Renders and the cache, each in one place (I7).** Bringing the cache to a
+target is `CacheSync.hold`, so the comparison with the target, the search for
+a dropped stretch, the cut and the decode live with the tokens they change;
+the conversation only says when a stretch may have been dropped and when to
+rest at the cut. The prefix is compared on token lists, measured faster than
+converting both to text (15 ms against 24 ms at 128k tokens); the text form is
+built only for the stretch search. A conversation's renders, their splits and
+their tokens as the cache holds them are `ConversationRendering` in
+`rendering.py`, which reads the declarations, the reasoning switch and the
+kept turns from the conversation at every use. A target is returned with the
+position of each kept turn in it (`Target`), and the conversation records
+those positions only where it brings the cache to that target, so measuring a
+length no longer changes them.
+
+**One generation path in the wrapper (I2).** One generation function, run with
+the lock held, chooses between going on with the open turn and a new request.
+The tool loop drives it directly and reads the calls from its `Reply`, instead
+of collecting them back out of a stream that had appended them. The wrapper's
+own check that no call is owed a result went, since `RenderedCache.generate`
+makes the same check before anything is generated. The "yield" path still
+releases the lock before it hands the calls over, because a caller answers
+each call while reading the stream.
+
+**A reply's text as one object (I4).** `ReplyText` feeds each piece through
+the thought filter, the header filter and the stop strings in that order, and
+settles what is held back from the stop reason. The wrapper no longer
+assembles the three filters or carries their flags, and the filters are
+private to `reply_text`. `reply_header` and `begins_in_thought` stay public:
+the tests use the first for two cases the object cannot show (a thought tag
+or the answer opening always matches first there), and the second to script
+how a model writes.
+
+**Small items (I12).** A cache that cannot shift is not asked even for a shift
+by nothing at load, because some caches abort the process when asked to shift.
+A sampler chain whose stage fails to join is freed before the error
+propagates. A history refused at begin is explained by the part that would be
+kept, not by messages that would be dropped, and a question that does not fit
+after dropping gets the message of `_fitting_prompt`. Every load-time probe
+reads a render that raises as a refusal, in one function (`refusing`),
+because a cache context of one's own may raise where the bundled one returns
+None, and a probe decides an optional capability; a render during a
+conversation still raises, and a raising context at load gets the probe's own
+refusal, for example "the model cannot be used", instead of its raw
+exception. One common-prefix function serves texts and token lists, comparing
+slices by halving; the common suffix is the same function on reversed
+sequences. Probe and live messages are built by the same helpers, so their
+shapes agree by construction. A reply header is read only where both openings
+leave a reader between their shared ends.
