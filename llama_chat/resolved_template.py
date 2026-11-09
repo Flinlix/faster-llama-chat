@@ -11,16 +11,15 @@ from __future__ import annotations
 import dataclasses
 
 from .cache_context import MODEL_READER, ensure_answers
+from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
+                          extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
 from .messages import call_id, calling_message, result_message
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, common_prefix_length,
                        shared_tags_length)
-from .template_extract import (ESCAPABLE, extract_call_body, extract_call_close_text,
-                               extract_content_rewrites,
-                               extract_call_separator, extract_fragments,
-                               extract_named_twice_opening, extract_reasoning, extract_removed_thought,
-                               extract_tool_fragments, names_read, refusing)
+from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_fragments,
+                               extract_reasoning, extract_removed_thought, names_read, refusing)
 from .tools import ToolCall, ToolSpec
 
 # Where the prompt and a tool result go in a render. Neither contains the

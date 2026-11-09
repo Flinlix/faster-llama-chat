@@ -4,11 +4,11 @@ import json
 
 import pytest
 
+from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.call_parsing import parse_calls
 from llama_chat.config import Config
 from llama_chat.template import CallBody, ToolCallFragments
-from llama_chat.template_extract import (extract_call_body, extract_fragments,
-                                         extract_tool_fragments)
+from llama_chat.template_extract import extract_fragments
 from llama_chat.tools import ToolCall
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext

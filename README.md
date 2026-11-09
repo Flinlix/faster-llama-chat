@@ -439,7 +439,8 @@ tag; real token boundaries are checked by the load check and by
 | `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it |
 | `llama_chat/model_template.py` | a model's chat template, rendered with its reasoning switch |
 | `llama_chat/resolved_template.py` | one model's template read and checked, tool calling settled |
-| `llama_chat/template_extract.py` | the probes that read a template |
+| `llama_chat/template_extract.py` | the probes that read a template: the tags around a turn, a thought, what it writes otherwise in a message |
+| `llama_chat/call_format.py` | the probes that read how a template writes a call: its tags, what separates and closes calls, the argument spelling |
 | `llama_chat/template.py` | what a template is read for: the tags around a turn and a thought, `ToolCallFragments`, `CallBody`, `CallBoundary` |
 | `llama_chat/reply_text.py` | a reply's text as it streams: thought, header, stop strings |
 | `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`, `ToolResult`, `ToolTurn` |

@@ -9,11 +9,10 @@ import itertools
 
 import pytest
 
+from llama_chat.call_format import (_KEY, _KEY2, _NUMBER, _STRING, _STRING2, extract_call_body,
+                                    extract_tool_fragments)
 from llama_chat.template import CallBody
-from llama_chat.template_extract import (_KEY, _KEY2, _NUMBER, _STRING,
-                                         _STRING2, _TOOL, extract_call_body,
-                                         extract_fragments,
-                                         extract_tool_fragments, reasoning_switch)
+from llama_chat.template_extract import _TOOL, extract_fragments, reasoning_switch
 
 
 def _tool_fragments(render):
