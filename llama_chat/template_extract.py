@@ -26,12 +26,12 @@ from .template import (CallBody, Reasoning, TemplateFragments, ToolCallFragments
                        common_prefix_length, common_suffix_length, shared_tags_length)
 from .tools import ToolCall
 
-# Plain alphanumerics: they survive Jinja `| trim` and are never HTML-escaped.
-
 # The fields chat templates read a reply's thought from.
 _THOUGHT_FIELDS = ("reasoning_content", "thinking")
 
-# Message content, one per role, a second user turn, and a thought.
+# Message content, one per role, a second user turn, and a thought. These and the
+# probe texts below are plain alphanumerics: they survive Jinja `| trim` and are
+# never HTML-escaped.
 _SYS = "SYSMSG"
 _USER = "USERMSG"
 _USER2 = "USERTWO"
