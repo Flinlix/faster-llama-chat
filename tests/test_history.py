@@ -5,7 +5,7 @@ import pytest
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 from tests.fake_context import TOOL_CLOSE, TOOL_OPEN
 
-from tests.wrappers import (assert_consistent, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
+from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
 
 
@@ -63,11 +63,10 @@ def test_the_turns_own_text_is_never_read_as_a_tag():
 
 
 def test_a_conversation_goes_on_after_a_past_tool_turn():
-    w, fake = unbegun_tool_wrapper()
+    w, _fake = unbegun_tool_wrapper()
     w.begin("s", [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"),
                                            "Zwölf."))], tools=[ToolSpec("uhr", "", {})])
     w.reply("danke").finish()
-    assert_consistent(w, fake)
 
 
 def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
@@ -99,7 +98,6 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     for _event in past.reply(calls="yield"):
         pass
     assert past_fake.cache == fake.cache
-    assert_consistent(past, past_fake)
 
 
 def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_the_same():

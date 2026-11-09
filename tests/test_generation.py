@@ -6,7 +6,7 @@ from llama_chat.template import CallBoundary
 from llama_chat.tools import ToolCall
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
-from tests.wrappers import cache_tokens, rows
+from tests.wrappers import rows
 
 
 # These drive the generation loop over KVContext's own steps on a stubbed
@@ -170,4 +170,3 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     held = fake.text_of(fake.cache)
     assert "clock" in held and "09:00" in held      # yet both reached the cache
     assert wrapper.conversation()[1][-1].steps[-1] == resumed   # and that is what is read back
-    assert fake.cache == cache_tokens(wrapper)

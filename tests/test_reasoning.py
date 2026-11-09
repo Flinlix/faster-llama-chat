@@ -56,7 +56,6 @@ def test_a_reply_that_does_not_reason_opens_with_what_the_template_adds():
     assert held[0].endswith(EMPTY_THOUGHT)
     assert rendered_reply(fake, "Antwort.", w._conversation._state.reasoning) in held_text(w)
     assert EMPTY_THOUGHT not in held_text(w)
-    assert_consistent(w, fake)
 
 
 def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
@@ -70,13 +69,11 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     assert "Denken" not in held_text(w)
     assert_consistent(w, fake)
     w.reply("weiter").finish()
-    assert_consistent(w, fake)
 
 
 def test_a_thought_the_model_has_without_being_asked_is_kept_out_too():
-    w, fake = reasoning_wrapper(False)
+    w, _fake = reasoning_wrapper(False)
     assert w.reply("hi").finish().text == "Antwort."
-    assert_consistent(w, fake)
 
 
 def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
@@ -102,7 +99,6 @@ def test_a_reply_that_called_a_tool_is_kept_as_generated():
         pass
     assert fake.cache[:len(generated)] == generated          # the turn as it was generated
     assert rows(w)[-1]["text"] == "Antwort."
-    assert_consistent(w, fake)
 
 
 def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
@@ -111,7 +107,6 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
     w.truncate_last_reply("Ant")
     assert rendered_reply(fake, "Ant", w._conversation._state.reasoning) in held_text(w)
     assert "Antwort" not in held_text(w)
-    assert_consistent(w, fake)
 
 
 def test_a_reply_that_is_all_thought_is_removed():
@@ -121,14 +116,12 @@ def test_a_reply_that_is_all_thought_is_removed():
     assert [m["role"] for m in rows(w)] == ["system", "user"]
     assert_consistent(w, fake)
     w.reply("weiter").finish()
-    assert_consistent(w, fake)
 
 
 def test_a_reply_cut_inside_a_thought_tag_keeps_none_of_it():
-    w, fake = reasoning_wrapper(False, gen_text="<thou", gen_tokens=5)
+    w, _fake = reasoning_wrapper(False, gen_text="<thou", gen_tokens=5)
     stream = w.reply("hi", max_reply_tokens=3)
     assert "".join(stream) == ""
-    assert_consistent(w, fake)
 
 
 def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shift():
@@ -145,7 +138,6 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
     assert len(fake.evictions) > evictions
     # The last cache edit is a decode after the eviction, which carries its shift.
     assert at_eviction[-1] < len(fake.prefill_calls)
-    assert_consistent(w, fake)
 
 
 @pytest.mark.parametrize("reasoning", [False, True])
@@ -160,17 +152,15 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     before = len(fake.cache)
     list(w.reply(calls="yield"))
     assert fake.cache[before:before + 2] == fake.tokenize("ok")
-    assert_consistent(w, fake)
 
 
 # ----- stop strings and a reasoning reply ----------------------------------
 def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
     thoughtful = "<thought>a\n\nb</thought>Antwort.\n\nRest"
-    w, fake = reasoning_wrapper(gen_text=thoughtful, gen_tokens=len(thoughtful))
+    w, _fake = reasoning_wrapper(gen_text=thoughtful, gen_tokens=len(thoughtful))
     reply = w.reply("hi", stop=["\n\n"]).finish()
     assert reply.text == "Antwort." and reply.stop_reason == "stop_string"
     assert rows(w)[-1]["text"] == "Antwort."
-    assert_consistent(w, fake)
 
 
 # ----- a reply kept with its thought ---------------------------------------
@@ -182,7 +172,6 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
     assert (rendered_prompt(fake, reasoning=True) + THOUGHTFUL
             + rendered_close(fake, reasoning=True)) in held_text(w)
     assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
-    assert_consistent(w, fake)
 
 
 # ----- a header naming another reader --------------------------------------

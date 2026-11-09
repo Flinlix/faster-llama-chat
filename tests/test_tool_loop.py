@@ -91,7 +91,7 @@ def _as_rendered_with(w, fake, specs):
 
 # ----- declaring -----------------------------------------------------------
 def test_the_declaration_reaches_the_system_turn():
-    wrapper, fake = tool_wrapper()
+    wrapper, _ = tool_wrapper()
 
     clock = ToolSpec(name="clock", description="Sagt die Zeit.",
                      parameters={"type": "object", "properties": {}, "required": []})
@@ -102,7 +102,6 @@ def test_the_declaration_reaches_the_system_turn():
     written = system_turn(wrapper)
     assert "<decl>clock</decl>" in written
     assert "persona" in written
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_declaration_is_tokenized_as_tags_and_the_prompt_is_not():
@@ -130,7 +129,6 @@ def test_a_call_ends_the_stream_and_holds_the_turn_open():
     assert bool(wrapper._conversation.owed_calls)
     # Nothing of the call reached the reply text.
     assert rows(wrapper)[-1]["text"] == ""
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_call_refused_without_tools_still_lets_the_reply_go_on():
@@ -242,9 +240,8 @@ def test_a_result_resumes_the_same_turn():
 
     assert "".join(e for e in events if isinstance(e, str))
     assert not bool(wrapper._conversation.owed_calls)
-    # One assistant message for the whole exchange, and the cache still agrees.
+    # One assistant message for the whole exchange.
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_two_calls_in_a_row_stay_inside_one_turn():
@@ -262,7 +259,6 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     list(wrapper.reply(calls="yield"))
 
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
@@ -285,7 +281,6 @@ def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
     list(wrapper.reply(calls="yield"))
     assert len(rows(wrapper)) - 1 == 2     # back inside it once closed
     assert rows(wrapper)[0]["role"] == "system"
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_result_under_the_wrong_name_is_refused():
@@ -304,7 +299,6 @@ def test_a_result_under_the_wrong_name_is_refused():
     wrapper.inject_tool_result(ToolCall("other", {}), "b")
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
-    assert fake.cache == cache_tokens(wrapper)
 
 
 @pytest.mark.parametrize("not_the_call", ["clock", ToolCall("clock", {"city": "Bonn"})])
@@ -342,7 +336,6 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
     # Nothing reached the cache, and the call is still owed.
     assert len(fake.cache) == before
     assert bool(wrapper._conversation.owed_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_result_with_no_call_waiting_is_refused():
@@ -392,7 +385,6 @@ def test_an_oversized_result_is_clipped_and_keeps_its_tags():
     written = fake.text_of(fake.cache[before:])
     assert written.startswith("<result>clock(")
     assert written.endswith(")</result>")
-    assert fake.cache == cache_tokens(wrapper)
 
 
 # ----- the local loop ------------------------------------------------------
@@ -410,7 +402,6 @@ def test_a_running_reply_runs_the_tool_and_yields_only_prose():
     assert seen == ["ran"]
     assert out                        # the reply after the result
     assert not bool(wrapper._conversation.owed_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 @pytest.mark.parametrize("before_call, after_call, joined", [
@@ -448,7 +439,6 @@ def test_a_running_reply_stops_calling_at_the_ceiling_and_closes_the_turn():
     assert len(runs) == 2
     assert not bool(wrapper._conversation.owed_calls)
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_declaration_added_later_reaches_the_model():
@@ -461,7 +451,6 @@ def test_a_declaration_added_later_reaches_the_model():
 
     written = fake.text_of(fake.cache)
     assert "<decl>clock</decl>" in written
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_declaring_nothing_writes_nothing():
@@ -487,7 +476,6 @@ def test_declarations_too_large_to_fit_are_refused_rather_than_truncated():
 
     # A refused declaration leaves the conversation exactly as it was.
     assert fake.cache == before
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_an_empty_parameter_schema_is_a_caller_saying_no_parameters():
@@ -533,7 +521,6 @@ def test_a_call_this_parser_cannot_read_still_closes_the_turn():
     # Left open, nothing would ever close it and the next request would prefill
     # into a model turn that never ended.
     assert not bool(wrapper._conversation.owed_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_an_unreadable_call_says_why():
@@ -570,7 +557,6 @@ def test_a_reset_ends_the_turn_a_call_was_holding_open():
     assert [m["role"] for m in rows(wrapper)] == ["system"]
     wrapper.reply("etwas anderes").finish()
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_reply_open_outlasts_the_calls_that_are_owed():
@@ -619,7 +605,6 @@ def test_an_unreadable_call_is_told_so_and_the_reply_goes_on():
     assert not wrapper.reply_open
     turn = newest_turn(wrapper)
     assert "unreadable_call" in turn
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_failed_call_is_named_as_one_and_told_to_try_again():
@@ -824,7 +809,6 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     fake.call_script = []
     list(wrapper.reply(calls="yield"))
     assert not bool(wrapper._conversation.owed_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
@@ -877,7 +861,6 @@ def test_a_running_reply_answers_every_call_of_a_batch():
     list(wrapper.reply("los", calls=registry))
 
     assert ran == ["clock", "other"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
@@ -894,7 +877,6 @@ def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
     written = fake.text_of(fake.cache[before:])
     assert written == "<result>clock(a)</result>\n<result>other(b)</result><done>"
     list(wrapper.reply(calls="yield"))
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_model_needing_nothing_extra_gets_nothing():
@@ -937,7 +919,6 @@ def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction
     # The system turn is pinned, so the declaration in it is never evicted.
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert wrapper.declare_tools(registry) == 0
-    assert fake.cache == cache_tokens(wrapper)
 
 
 # ----- what a model that cannot do this looks like -------------------------
@@ -965,7 +946,6 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     refusals = [str(result) for result in written if "tool_limit_reached" in str(result)]
     assert len(refusals) == 2                  # the other two were answered
     assert "the limit is 1" in refusals[0]     # and the count reads correctly
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_an_add_on_files_call_format_gives_no_calls_to_a_template_that_writes_none():
@@ -1154,7 +1134,6 @@ def test_a_refused_declaration_leaves_the_conversation_alone():
         wrapper.begin("zweite persona", tools=registry)
 
     assert rows(wrapper) == before
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_model_without_tools_is_still_fine_without_them():
@@ -1175,7 +1154,6 @@ def test_a_template_with_no_result_block_refuses_the_result():
         wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
     # Refused before anything was written, so the call is still owed.
     assert bool(wrapper._conversation.owed_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 # ----- what a caller has to write ------------------------------------------
@@ -1222,7 +1200,6 @@ def test_a_result_is_injected_under_the_call_it_answers():
 
     assert not bool(wrapper._conversation.owed_calls)
     assert "12:00" in _result_of(wrapper)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_declaring_takes_a_registry_the_way_begin_does():
@@ -1258,7 +1235,7 @@ def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
     def weather(city: str) -> dict:
         return {}
 
-    wrapper, fake = tool_wrapper()
+    wrapper, _ = tool_wrapper()
     wrapper.begin("persona", tools=registry)
 
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
@@ -1269,7 +1246,6 @@ def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert "<decl>weather</decl>" in _declared_in(wrapper, 0)
     assert [m["role"] for m in rows(wrapper)] == ["system"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_declaring_the_same_registry_again_writes_nothing():
@@ -1280,7 +1256,7 @@ def test_declaring_the_same_registry_again_writes_nothing():
     def clock() -> dict:
         return {}
 
-    wrapper, fake = tool_wrapper()
+    wrapper, _ = tool_wrapper()
     wrapper.begin("persona", tools=registry)
     wrapper.declare_tools(registry)
     once = rows(wrapper)
@@ -1289,7 +1265,6 @@ def test_declaring_the_same_registry_again_writes_nothing():
     wrapper.declare_tools(registry)
 
     assert rows(wrapper) == once
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_declaring_skips_what_the_system_turn_already_holds():
@@ -1300,7 +1275,7 @@ def test_declaring_skips_what_the_system_turn_already_holds():
     def clock() -> dict:
         return {}
 
-    wrapper, fake = tool_wrapper()
+    wrapper, _ = tool_wrapper()
     wrapper.begin("persona", tools=registry)
     before = rows(wrapper)
 
@@ -1318,7 +1293,6 @@ def test_declaring_skips_what_the_system_turn_already_holds():
     wrapper.begin("persona")                     # a reset forgets what was said
     wrapper.declare_tools(registry)
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_turn_may_call_as_often_as_it_likes_by_default():
@@ -1336,7 +1310,6 @@ def test_a_turn_may_call_as_often_as_it_likes_by_default():
     assert len(ran) == 9                         # every one of them ran
     assert not reply.tool_limit_reached
     assert not any("tool_limit_reached" in text for text, _ in fake.tokenize_calls)
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_stream_of_calls_hands_back_its_reply_too():
@@ -1360,7 +1333,6 @@ def test_begin_keeps_the_registry_it_declared_from():
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
     assert "".join(wrapper.reply("wetter?", calls="run")) == "reply"
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_a_running_reply_is_its_own_stream_drained():

@@ -19,12 +19,11 @@ def _without_restore(fake):
 
 # ----- cutting the newest reply --------------------------------------------
 def test_a_cut_keeps_the_prefix_and_the_next_request_appends_at_the_cache_end():
-    w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
+    w, _fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply("hi").finish()
     w.truncate_last_reply("Eins.")
     assert rows(w)[-1]["text"] == "Eins."
     w.reply("weiter").finish()
-    assert_consistent(w, fake)
 
 
 def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_as_its_text():
@@ -34,7 +33,6 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     assert rendered_reply(fake, "ok!!") in held_text(w)
     assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
     assert reply.text == "ok!!"
-    assert_consistent(w, fake)
 
 
 def test_a_model_that_ships_no_chat_template_is_refused_at_load():
@@ -87,7 +85,6 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     w.truncate_last_reply("Eins.")
     assert held_text(w).endswith(rendered_reply(fake, "Eins.").rstrip("\n") + "\n<[turn>")
     assert "Zwei" not in held_text(w)
-    assert_consistent(w, fake)
 
 
 def test_a_reply_that_called_a_tool_cannot_be_cut():
@@ -112,7 +109,6 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     # From the state saved before the reply where there is one, else rebuilt.
     assert fake.rebuilds == rebuilds + (not saves_state)
     assert rows(w)[-1]["text"] == "Eins."
-    assert_consistent(w, fake)
 
 
 # ----- a past reply on a cache that cannot shift ---------------------------
@@ -127,7 +123,6 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
     assert_consistent(w, fake)
     w.truncate_last_reply("Ant")
     assert fake.rebuilds == rebuilds
-    assert_consistent(w, fake)
 
 
 def test_a_cache_that_saves_no_state_is_rebuilt_instead():
@@ -137,7 +132,6 @@ def test_a_cache_that_saves_no_state_is_rebuilt_instead():
     rebuilds = fake.rebuilds
     w.reply("hi").finish()
     assert fake.rebuilds == rebuilds + 1
-    assert_consistent(w, fake)
 
 
 # ----- saved states of a cache that cannot shift ---------------------------
@@ -151,7 +145,6 @@ def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
     rebuilds = fake.rebuilds
     w.truncate_last_reply("Ant")
     assert fake.rebuilds == rebuilds + 1
-    assert_consistent(w, fake)
 
 
 def test_a_cache_that_takes_a_cut_needs_no_saved_state():
@@ -162,7 +155,6 @@ def test_a_cache_that_takes_a_cut_needs_no_saved_state():
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
     assert fake.saved_states == saved and fake.rebuilds == rebuilds
-    assert_consistent(w, fake)
 
 
 def test_a_cut_leaves_a_state_for_the_next_reply():

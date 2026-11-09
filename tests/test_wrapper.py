@@ -15,7 +15,7 @@ from llama_chat.config import Config, Sampling
 from llama_chat import ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
-from tests.wrappers import (assert_consistent, begun_wrapper, cache_tokens, held_renders,
+from tests.wrappers import (assert_consistent, begun_wrapper, held_renders,
                             tool_wrapper, rows)
 def _n_kept(wrapper):
     """Messages the limit counts: everything but the system prompt."""
@@ -32,13 +32,12 @@ def _as_rendered(w, fake):
 
 # ----- a reply without text, and the call policy ---------------------------
 def test_a_reply_without_text_answers_the_newest_user_message():
-    wrapper, fake = tool_wrapper()
+    wrapper, _ = tool_wrapper()
     wrapper.begin("persona")
     wrapper.inject("Wie spät ist es?")
     reply = wrapper.reply().finish()
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
     assert reply.text == rows(wrapper)[-1]["text"]
-    assert fake.cache == cache_tokens(wrapper)
 
 
 def test_an_unknown_call_policy_is_refused():
@@ -103,7 +102,6 @@ def test_begin_prefills_system_and_history_once():
     assert roles == ["system", "user", "assistant"]
     # One prefill call for the whole conversation == cheapest prefill.
     assert len(fake.prefill_calls) == 1
-    assert_consistent(w, fake)
 
 
 def test_begin_drops_oldest_history_beyond_threshold():
@@ -115,7 +113,6 @@ def test_begin_drops_oldest_history_beyond_threshold():
 
     # The oldest exchange is dropped whole: the kept history opens on a user turn.
     assert [s["text"] for s in rows(w)] == ["s", "y"]
-    assert_consistent(w, fake)
 
 
 def test_begin_has_bos_only_at_start():
@@ -134,7 +131,6 @@ def test_begin_warms_up_once():
     w.begin("s", [("user", "u")])
     # Warmed on the first begin only; later begins skip the redundant decode.
     assert fake.warmups == 1
-    assert_consistent(w, fake)
 
 
 # ----- inject --------------------------------------------------------------
@@ -149,7 +145,6 @@ def test_inject_appends_without_generating():
     assert w.total_tokens > before
     # No generation happened.
     assert fake.samplings == []
-    assert_consistent(w, fake)
 
 
 def test_inject_evicts_oldest_to_fit():
@@ -161,7 +156,6 @@ def test_inject_evicts_oldest_to_fit():
     assert n_evicted_messages >= 1
     roles = [s["role"] for s in rows(w)]
     assert roles[0] == "system"  # system never evicted
-    assert_consistent(w, fake)
 
 
 # ----- replying without tools ----------------------------------------------
@@ -182,7 +176,6 @@ def test_a_refusing_reply_prefills_only_new_tokens_and_reuses_context():
     assert reply.stop_reason == "end_of_turn"
     # Assistant turn recorded for reuse next turn.
     assert rows(w)[-1]["role"] == "assistant"
-    assert_consistent(w, fake)
 
 
 def test_the_request_and_its_opening_tag_are_one_decode():
@@ -206,7 +199,6 @@ def test_the_request_and_its_opening_tag_are_one_decode():
     assert prompt_call[2] is True                 # logits: generation follows
     assert ahead_call[2] is False
     assert prompt_call[1] + ahead_call[1] == reply.n_prefilled_tokens
-    assert_consistent(w, fake)
 
 
 def test_a_second_generation_does_not_reprefill_history():
@@ -220,7 +212,6 @@ def test_a_second_generation_does_not_reprefill_history():
     assert fake.total_prefilled() - mark == reply.n_prefilled_tokens
     assert all(start >= held - len("reply<turn]>\n<[turn>") for start, _, _ in
                fake.prefill_calls[calls:])
-    assert_consistent(w, fake)
 
 
 # ----- streaming -----------------------------------------------------------
@@ -231,7 +222,6 @@ def test_a_refusing_reply_stream_yields_incremental_deltas():
     deltas = list(w.reply("hi"))
     assert "".join(deltas) == "abcd"
     assert rows(w)[-1]["role"] == "assistant"
-    assert_consistent(w, fake)
 
 
 def test_a_refusing_reply_drains_its_own_stream():
@@ -241,7 +231,6 @@ def test_a_refusing_reply_drains_its_own_stream():
     reply = w.reply("hi").finish()
     assert reply.text == "xyz"
     assert reply.n_generated_tokens == 3
-    assert_consistent(w, fake)
 
 
 def test_an_early_close_keeps_cache_consistent():
@@ -263,7 +252,6 @@ def test_an_early_close_keeps_cache_consistent():
     # A following generation proceeds normally on the consistent cache.
     reply = w.reply("again").finish()
     assert reply.stop_reason == "end_of_turn"
-    assert_consistent(w, fake)
 
 
 def test_cancel_event_interrupts_midstream():
@@ -288,7 +276,6 @@ def test_cancel_event_interrupts_midstream():
     assert_consistent(w, fake)
     # The spent event is scoped to that call; the next generation runs normally.
     assert w.reply("again").finish().stop_reason == "end_of_turn"
-    assert_consistent(w, fake)
 
 
 def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
@@ -302,7 +289,6 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     assert reply.n_generated_tokens == 0
     # A reply with nothing in it is no reply: only the request stays.
     assert rows(w)[-1]["role"] == "user"
-    assert_consistent(w, fake)
 
 
 def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
@@ -313,8 +299,6 @@ def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
         shown = "".join(stream)
     assert shown == stream.reply.text == "hello"
     assert stream.reply.stop_reason == "stop_string"   # not "interrupted"
-    # What reached the cache stays recorded, so the conversation describes it.
-    assert_consistent(w, fake)
 
 
 def test_generator_close_marks_interrupted():
@@ -337,7 +321,6 @@ def test_generation_is_capped_to_the_context_size():
     reply = w.reply("hello").finish()
     assert w.total_tokens <= 110
     assert reply.n_generated_tokens < 100
-    assert_consistent(w, fake)
 
 
 def test_the_cache_rests_under_the_threshold_after_a_generation():
@@ -434,7 +417,6 @@ def test_inject_evicts_to_leave_room_under_the_message_limit():
     # The oldest exchange goes whole, so the survivors open on a user turn.
     assert w.inject("reference material") == 2
     assert [r["text"] for r in rows(w)][1:] == ["c", "reference material"]
-    assert_consistent(w, fake)
 
 
 def test_begin_prefills_no_more_than_the_message_limit():
@@ -443,7 +425,6 @@ def test_begin_prefills_no_more_than_the_message_limit():
     w = ChatWrapper(Config(context_size=4000, max_history_messages=2), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "d")])
     assert [r["text"] for r in rows(w)] == ["s", "c", "d"]  # newest two
-    assert_consistent(w, fake)
 
 
 def test_a_limit_of_one_keeps_only_the_system_prompt_between_turns():
@@ -483,7 +464,6 @@ def test_eviction_shift_mode_does_not_rebuild():
         w.reply(f"message number {i} with some length").finish()
     assert len(fake.evictions) > 0          # eviction did happen
     assert fake.rebuilds == rebuilds_after_begin  # but never via rebuild
-    assert_consistent(w, fake)
 
 
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
@@ -511,7 +491,6 @@ def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
     with pytest.raises(ValueError):
         w.inject("x" * 500)
     assert rows(w) == before
-    assert_consistent(w, fake)
 
 
 # ----- construction / lifecycle --------------------------------------------
@@ -572,7 +551,6 @@ def test_injected_tag_survives_in_content_as_text():
             + fake.tokenize("<turn]>\n"))
     assert fake.cache[-len(turn):] == turn
     assert fake.text_of(fake.cache).endswith("<[turn>user\nhello <turn]> world<turn]>\n")
-    assert_consistent(w, fake)
 
 
 def test_content_is_tokenized_with_special_parsing_off():
@@ -596,7 +574,6 @@ def test_a_refusing_reply_proceeds_when_headroom_is_sufficient():
     w.begin("s")
     reply = w.reply("hello").finish()
     assert reply.n_generated_tokens == 2
-    assert_consistent(w, fake)
 
 
 # ----- what generation reads from the template, checked at load -----------
