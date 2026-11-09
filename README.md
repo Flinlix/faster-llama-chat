@@ -123,11 +123,11 @@ model and makes later actions raise.
 | starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_messages`, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
 | adding context | `inject(text, role="user")`: prefilled, no reply; returns how many messages went. A question is put where the next question was prepared for, as `reply(text)` puts one, and is evicted for after its reply, so `inject(text)` then `reply()` waits no longer than `reply(text)`. Any other message, or a question where `max_history_messages` is reached, evicts first |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open |
-| answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
+| answering a call yourself | `inject_tool_result(call, result)` for each of `owed_calls`, oldest first, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_tools(registry_or_specs)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads both as the newest finished change left them |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `wait_idle(timeout_s)` |
+| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `owed_calls`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):

@@ -1,11 +1,12 @@
 """Declaring tools to a conversation, the turn a call holds open, and running the tools."""
 
 import re
+import threading
 
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from llama_chat import ChatWrapper, ContextOverflowError
 from tests.fake_context import FakeContext
 from tests.wrappers import (assert_consistent, cache_tokens, held_renders,
@@ -870,6 +871,43 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     list(wrapper.reply(calls="yield"))
     assert not bool(wrapper._conversation.owed_calls)
     assert fake.cache == cache_tokens(wrapper)
+
+
+def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
+                        '{"name":"other","arguments":{"city":"Bonn"}}]']
+    asked = list(wrapper.reply("los", calls="yield"))
+    assert wrapper.owed_calls == asked
+
+    wrapper.owed_calls[1].arguments["city"] = "Rom"          # a copy, the caller's to change
+    wrapper.inject_tool_result(asked[0], "a")
+    assert wrapper.owed_calls == [ToolCall("other", {"city": "Bonn"})]
+    wrapper.inject_tool_result(asked[1], "b")
+    assert wrapper.owed_calls == [] and wrapper.reply_open
+
+
+def test_a_history_owes_the_calls_of_its_newest_turn_that_no_result_answers():
+    wrapper, _ = tool_wrapper()
+    clock, other = ToolCall("clock", {}), ToolCall("other", {})
+    wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other))])
+    assert wrapper.owed_calls == [clock, other]
+    wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other, ToolResult("clock", "a")))])
+    assert wrapper.owed_calls == [other]
+
+
+def test_the_owed_calls_are_read_without_waiting_for_a_running_reply():
+    wrapper, _ = tool_wrapper()
+    wrapper.begin("persona")
+    stream = wrapper.reply("hallo")
+    next(stream)                                # the reply holds the wrapper's lock
+    read = []
+    reader = threading.Thread(target=lambda: read.append(wrapper.owed_calls), daemon=True)
+    reader.start()
+    reader.join(timeout=5)
+    stream.close()
+    assert read == [[]]
 
 
 def test_a_running_reply_answers_every_call_of_a_batch():

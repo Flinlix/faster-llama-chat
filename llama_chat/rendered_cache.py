@@ -98,10 +98,11 @@ class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation`, which reads a copy published after each change.
-    Each action leaves the cache equal to the template's render of the
-    messages, a turn that called tools held as it was generated, or, where it
-    raises, the conversation and the cache as they were before it.
+    :meth:`conversation` and :meth:`published_owed_calls`, which read a copy
+    published after each change. Each action leaves the cache equal to the
+    template's render of the messages, a turn that called tools held as it was
+    generated, or, where it raises, the conversation and the cache as they
+    were before it.
     """
 
     def __init__(self, context, template: ResolvedTemplate, config: Config) -> None:
@@ -115,7 +116,7 @@ class RenderedCache:
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
         self._generation: tuple[int, bool, list[int] | None] = (0, False, None)
-        self._published: tuple[tuple, str] = ((), "")
+        self._published: tuple[tuple, str, tuple] = ((), "", ())
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -125,8 +126,12 @@ class RenderedCache:
 
     def conversation(self) -> tuple[str, list]:
         """The system prompt and the history as ``begin`` takes them, from one publication, the caller's to change; safe to read unlocked."""
-        history, system_prompt = self._published
+        history, system_prompt, _ = self._published
         return system_prompt, copy.deepcopy(list(history))
+
+    def published_owed_calls(self) -> list[ToolCall]:
+        """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
+        return copy.deepcopy(list(self._published[2]))
 
     @property
     def tools(self) -> list[ToolSpec]:
@@ -994,10 +999,11 @@ class RenderedCache:
             self._publish()
 
     def _publish(self) -> None:
-        """Publish the history and the system prompt for readers that hold no lock."""
+        """Publish the history, the system prompt and the owed calls for readers that hold no lock."""
         system = self._system_part()
         self._published = (tuple(as_history(self._state.messages)),
-                           system[0]["content"] if system else "")
+                           system[0]["content"] if system else "",
+                           tuple(self.owed_calls))
 
 
 # ----- helpers ---------------------------------------------------------------------

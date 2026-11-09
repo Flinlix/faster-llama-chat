@@ -455,6 +455,17 @@ class ChatWrapper:
         """
         return self._conversation.reply_open
 
+    @property
+    def owed_calls(self) -> list[ToolCall]:
+        """The calls the model made that still wait for a result, oldest first.
+
+        Each is answered with :meth:`inject_tool_result`, in this order, and
+        :meth:`reply` goes on with the turn only once none is left. Safe from
+        any thread, as :meth:`conversation` is: the calls as the newest
+        finished change left them, each a copy that is the caller's to change.
+        """
+        return self._conversation.published_owed_calls()
+
     # ----- lifecycle -----------------------------------------------------------
     def close(self) -> None:
         """Free the underlying context and model. Idempotent and thread-safe.
