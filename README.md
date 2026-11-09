@@ -9,13 +9,12 @@ again.
 Every model whose GGUF ships a chat template is encoded exactly as that
 template writes the conversation, without code particular to the model, or
 refused: the template renders the conversation, and the cache is compared
-with that render and decoded only where the two differ. After a reply, while
-it is read, the newest exchanges are rendered with a stand-in where the next
-question goes, so a question waits only for its own tokens. Tool calls work on
-any model whose template describes them: the tags
-and the argument spelling are recovered from the template. What a template
-cannot tell, such as a model's recommended sampling, comes from a small JSON
-add-on file.
+with that render and decoded only where the two differ. The work for the next
+question is done right after a reply, while the reply is read, so a question
+waits only for its own tokens. Tool calls work on any model whose template
+describes them: the tags and the argument spelling are recovered from the
+template. What a template cannot tell, such as a model's recommended sampling,
+comes from a small JSON add-on file.
 
 - [Why](#why) and [how it differs from llama.cpp's context shift](#compared-with-llamacpps-context-shift)
 - [Install](#install)
@@ -29,7 +28,6 @@ add-on file.
 - [A model without a usable template](#a-model-without-a-usable-template)
 - [Your own cache context](#your-own-cache-context)
 - [Verify](#verify)
-- [Layout](#layout)
 
 How each of these works, and why it was built that way, is in
 [design_history.md](design_history.md).
@@ -121,7 +119,7 @@ model and makes later actions raise.
 | doing what | call |
 |------|------|
 | starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_messages`, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
-| adding context | `inject(text, role="user")`: prefilled, no reply; returns how many messages went. A question is put where the next question was prepared for, as `reply(text)` puts one, and is evicted for after its reply, so `inject(text)` then `reply()` waits no longer than `reply(text)`. Any other message, or a question where `max_history_messages` is reached, evicts first |
+| adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. A message of another role, or a user message once `max_history_messages` is reached, evicts first |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called; the rest is checked when the stream is first read |
 | answering a call yourself | `inject_tool_result(call, result)` for each of `owed_calls`, oldest first, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_tools(registry_or_specs)` |
@@ -216,11 +214,9 @@ elsewhere. A `ToolSpec` declares a tool that this process does not run.
 
 **When the model is told.** `declare_at_begin=True`, the default, declares a
 tool when `begin` writes the conversation; `declare_at_begin=False` leaves it
-for `declare_tools`, which adds it later. Either way the declaration
-goes where the template writes declarations: into the system turn, with the
-conversation after it decoded again once, or, for a template that declares
-tools right before the newest user turn, into what that turn carries, where it
-moves on with each question and the stretch it leaves is removed in place.
+for `declare_tools`, which adds it later. Either way the declaration goes
+where the template writes declarations. Where that is the system turn, a later
+declaration decodes the conversation after it again once.
 
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
@@ -252,14 +248,15 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 ```
 
 Reasoning is chosen per conversation, at `begin`, because a template may switch
-it in the system turn. `can_reason` says whether this model's thought tags
-were recovered; the switch is the template's, wherever it writes it. Every stream yields the answer alone, with or
-without reasoning, and a header a template writes for another reader is kept
-out of it too. Stop strings are matched against the answer only. A finished
-reply is kept as the template writes a past reply, without its thought where
-the template leaves one out; where that differs from what was generated, the
-end of the reply is decoded again in that form right after the reply, while it
-is read. A turn that called tools keeps the tokens it was generated as.
+it in the system turn. `can_reason` says whether `begin` accepts
+`reasoning=True`, which it does where the template marks a thought. Every
+stream yields the answer alone, with or without reasoning, and a header a
+template writes for another reader is kept out of it too. Stop strings are
+matched against the answer only. A finished reply is kept as the template
+writes a past reply, without its thought where the template leaves one out.
+Where that differs from what was generated, the cache is brought to that form
+right after the reply, while it is read. A turn that called tools keeps the
+tokens it was generated as.
 
 ## Keeping a conversation
 
@@ -369,13 +366,11 @@ or construction raises: a model could never stop on plain text.
 **Special tokens in message content.** A caller's text (a message, a thought, a
 call's name and arguments) is tokenized with special-token parsing off, and the
 template's tags with it on, so a literal tag typed into a message stays text
-and can never forge a turn boundary. Where each text sits is known exactly: the
-conversation is rendered a second time with a marker in place of each text,
-and the two renders must agree on everything else. A template that writes
-something of a text besides the text in its place, such as its length or a
-branch on a word in it, is refused for that conversation. The plain text
-between two tags, the template's and the caller's alike, is tokenized as one
-run, as a render of the whole conversation tokenizes it.
+and can never forge a turn boundary. A conversation is refused where its
+template writes anything derived from a text besides the text itself, such as
+the text's length, or something it writes only when the text holds a certain
+word. The plain text between two tags, the template's and the caller's alike,
+is tokenized as one run, as a render of the whole conversation tokenizes it.
 
 **A template that writes the date** follows the clock: a conversation that runs
 past midnight is decoded again once, from the date on.
@@ -406,46 +401,8 @@ python -m pytest -q                                  # no model needed
 python examples/demo.py /path/to/model.gguf          # against a real model
 ```
 
-`tests/test_conversations.py` drives whole conversations, evictions, restarts,
-mid-conversation declarations, reasoning and live calls through every real
-template in `tests/templates/`, and through a small template of its own that
-fails the checks the shortcuts rest on. Before every reply it checks that the
-cache holds exactly the template's render of the conversation the test sent,
-a turn that called tools held as it was generated, that a tag typed into any
-text stays text, and that a reply decodes only what changed.
-`tests/conftest.py` ends every test on a model-free cache by reading the cache
-against the template's render. `tests/test_failures.py` checks that a refused
-or failed action leaves the conversation and the cache as they were.
-`tests/test_real_templates.py` runs each template through the check a model
-meets at load, in each reasoning mode, with the add-on files that ship. In
-these tests the tokenizer is a stand-in, one token per character and one per
-tag; real token boundaries are checked by the load check and by
-`examples/demo.py`.
-
-## Layout
-
-| File | Role |
-|------|------|
-| `llama_chat/wrapper.py` | `ChatWrapper`: the conversation |
-| `llama_chat/rendered_cache.py` | the messages, and the cache kept as the template renders them: windows, the stand-in question, kept tool turns, the open turn and its owed calls |
-| `llama_chat/rendering.py` | a conversation's renders, split and tokenized as the cache holds them, each kept tool turn in its place |
-| `llama_chat/split_render.py` | a render split into the template's text and the caller's, each text placed by a render with markers |
-| `llama_chat/render_checks.py` | what a template's renders allow: the stand-in question, windows, history that stays written |
-| `llama_chat/reply.py` | `Reply`, `ReplyStream`, `ContextOverflowError`: what a request produces |
-| `llama_chat/config.py` | `Config`, `Sampling` |
-| `llama_chat/cache_context.py` | the two protocols a cache context answers, and the types they take |
-| `llama_chat/context.py` | `KVContext`: the model loaded, its tokenizer, prefill, the steps a generation takes and cache edits |
-| `llama_chat/generation.py` | a generation token by token: its text streamed, a call told apart by its tags or its texts, and where it stops |
-| `llama_chat/_backend.py` | the adapter over llama-cpp-python; the only module that names it |
-| `llama_chat/cache_sync.py` | the tokens the cache should hold, and the one place that decodes into it: the comparison with a target, evictions, cuts, saved states, and repair after a failed decode |
-| `llama_chat/messages.py` | a history as `begin` takes it, and as the messages a template is given |
-| `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it, and where the model's tags lie in a text |
-| `llama_chat/model_template.py` | a model's chat template, rendered with its reasoning switch |
-| `llama_chat/resolved_template.py` | one model's template read and checked, tool calling settled |
-| `llama_chat/template_extract.py` | the probes that read a template: the tags around a turn, a thought, what it writes otherwise in a message |
-| `llama_chat/call_format.py` | the probes that read how a template writes a call: its tags, what separates and closes calls, the argument spelling |
-| `llama_chat/template.py` | what a template is read for: the tags around a turn and a thought, `ToolCallFragments`, `CallBody`, `CallBoundary` |
-| `llama_chat/reply_text.py` | a reply's text as it streams: thought, header, stop strings |
-| `llama_chat/tools.py` | `ToolRegistry`, `ToolSpec`, `ToolCall`, `ToolResult`, `ToolTurn` |
-| `llama_chat/call_parsing.py` | reading a call back out of what the model wrote |
-| `llama_chat/addon_files.py`, `llama_chat/addons/` | add-on files, and the sampling they settle |
+The tests run every chat template in `tests/templates/` with a stand-in
+tokenizer, one token per character and one per tag; each test file's docstring
+says what it checks. The demo loads a real model with its own tokenizer and
+prints how many tokens each action decodes; add `--gpu-layers -1` to run it on
+the GPU.

@@ -1363,3 +1363,20 @@ before; a wrong state is never accepted.
 second eviction trigger (P5), stays at the user's word. Removing
 `calls="run"` and the registry `begin` keeps (P2), and the smaller removals of
 P12, wait for the user's answer to an explanation of each.
+
+## 2026-11-09: The README keeps to what a caller relies on
+
+The README's passages on how the library works inside were removed. Each was
+already recorded in the entry named here:
+
+| Removed from the README | Recorded in |
+|---|---|
+| the render with a stand-in where the next question goes, made after each reply | "The template as the program", "Rendering windows" |
+| an injected question put where the next question was prepared for | "An injected question waits only for itself" |
+| `can_reason` as "the thought tags were recovered", the reasoning switch being the template's | "How reasoning is read", "What a template is read for, and refused for" |
+| declarations that move with each question, where a template declares tools before the newest user turn, their old stretch removed in place | "Declaring tools later writes them where the template writes them" under the first structure review, "The target, built without the cache" |
+| each text placed by a second render with a marker in its place | "Every text placed by a marker render" |
+| what each test file checks | each test file's docstring |
+| the table of modules and their roles | each module's docstring |
+
+The Verify section now says only how to run the tests and the demo.
