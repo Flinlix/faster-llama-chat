@@ -96,9 +96,8 @@ def test_a_module_writes_no_tag_of_a_real_template(module):
     assert not sorted(tag for tag in _template_tags() if len(tag) > 3 and tag in text)
 
 
-def test_the_test_doubles_tags_are_no_real_templates():
-    from .fake_context import DEFAULT_FRAGMENTS, EMPTY_THOUGHT, SYSTEM_PREFIX, SYSTEM_SUFFIX, THINK_ON
-    invented = set(re.findall(r"<[^<>\s]+>", "".join(
-        [SYSTEM_PREFIX, SYSTEM_SUFFIX,
-         DEFAULT_FRAGMENTS.assistant_prefix, EMPTY_THOUGHT, THINK_ON])))
+def test_the_invented_templates_tags_are_no_real_templates():
+    from .invented_templates import INVENTED
+    invented = {tag for template in INVENTED.values()
+                for tag in TAG.findall(template["chat_template"])}
     assert invented and not invented & _template_tags()

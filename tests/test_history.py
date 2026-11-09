@@ -3,7 +3,7 @@
 import pytest
 
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
-from tests.fake_context import CALL_TAGS
+from tests.invented_templates import CALL_TAGS, TOOLS_CLOSING_OPEN_TURNS
 
 from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
@@ -15,7 +15,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     live, fake = tool_wrapper(context_size=2048)
     live.begin("persona", tools=registry)
     live.reply("hallo").finish()
-    fake.call_script = ["weather{city:'Bonn'}"]
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
     live.reply("wetter?", calls="run").finish()
     live.reply("danke").finish()
     history = live.conversation()[1]
@@ -33,7 +33,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
 # ----- a history that called tools -----------------------------------------
 def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     live, fake = unbegun_tool_wrapper()
-    fake.call_script.append("uhr{}")
+    fake.call_script.append("fn:uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
     for event in live.reply("wie spät?", calls="yield"):
         call = event
@@ -81,7 +81,7 @@ def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
 def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
         closes_turn_before_next):
     live, fake = unbegun_tool_wrapper()
-    fake.call_script.append("uhr{}")
+    fake.call_script.append("fn:uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
     for event in live.reply("wie spät?", calls="yield"):
         call = event
@@ -89,7 +89,8 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     for _event in live.reply(calls="yield"):
         pass
 
-    past, past_fake = unbegun_tool_wrapper(closes_turn_before_next=closes_turn_before_next)
+    past, past_fake = (unbegun_tool_wrapper(TOOLS_CLOSING_OPEN_TURNS) if closes_turn_before_next
+                       else unbegun_tool_wrapper())
     past.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("uhr", {}),
                                                      ToolResult("uhr", {"zeit": "12:00"})))],
                tools=[ToolSpec("uhr", "", {})])
@@ -114,7 +115,7 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
 def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     w, fake = tool_wrapper()
     w.begin("persona", tools=weather_registry())
-    fake.call_script = ["weather{city:'Bonn'}"]
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", calls="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
     w.conversation()[1][-1].steps[-1].arguments["city"] = "Rom"

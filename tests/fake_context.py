@@ -1,30 +1,66 @@
 """A model-free stand-in for :class:`~llama_chat.context.KVContext`, worked over a list of ints.
 
-It renders with a test template's renderer, the one a model is loaded with, or
-without one with an invented format of its own. Only the tokenizer is a
-stand-in, one token per character and one per tag, so what is compared is the
-text. The cache is a plain list of token ids, and the model is a script.
+It renders with a test template's renderer, the one a model is loaded with.
+Only the tokenizer is a stand-in, one token per character and one per tag, so
+what is compared is the text. The cache is a plain list of token ids, and the
+model is a script.
 """
 
 from __future__ import annotations
 
 import functools
+import json
 import re
-from dataclasses import fields, replace
+import sys
 
 from llama_chat.addon_files import addon_file
 from llama_chat.model_template import ModelTemplate
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.template import TemplateFragments
+
+
+class _Renders:
+    """A template's renderer, and its renders remembered, up to a bound, where only their inputs decide them."""
+
+    _BOUND = 200                    # renders kept before the memory starts over
+
+    def __init__(self, text: str, eos_text: str) -> None:
+        self._model = ModelTemplate(text, eos_text)
+        # A template that reads the clock may render the same inputs otherwise later.
+        self._remembers = "strftime_now" not in text
+        self._known: dict = {}
+
+    def render(self, messages, tools=None, *, generation_prompt=False, reasoning=None,
+               **variables) -> str | None:
+        key = self._key(messages, tools, generation_prompt, reasoning, variables)
+        if key is not None and key in self._known:
+            return self._known[key]
+        rendered = self._model.render(messages, tools, generation_prompt=generation_prompt,
+                                      reasoning=reasoning, **variables)
+        if key is not None:
+            if len(self._known) > self._BOUND:
+                self._known.clear()
+            self._known[key] = rendered
+        return rendered
+
+    def _key(self, messages, tools, generation_prompt, reasoning, variables) -> str | None:
+        """The inputs spelled exactly, ``None`` where they are not plain data or the template reads the clock."""
+        if not self._remembers:
+            return None
+        plain = (messages, tools, generation_prompt, reasoning, sorted(variables.items()))
+        try:
+            json.dumps(plain)       # plain data only, whose spelling holds no address
+        except (TypeError, ValueError):
+            return None
+        return repr(plain)
 
 
 @functools.cache
-def _compiled(text: str, eos_text: str) -> ModelTemplate:
+def _compiled(text: str, eos_text: str) -> _Renders:
     """A template's renderer, compiled once for every context over the same text."""
-    return ModelTemplate(text, eos_text)
+    return _Renders(text, eos_text)
 
 
-# Every tag-shaped text of a test template, and the invented format's turn tags.
+# Every tag-shaped text of a test template, the invented ones' turn tags included.
 TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[A-Z_]+\]"
                  r"|<｜[^｜]+｜>|\]~!?[a-z][\[\]]|\[[a-z]~\[|<\[[a-z]+>|<[a-z]+\]>")
 
@@ -33,140 +69,11 @@ TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[
 BOS = -1
 END_OF_GENERATION = -2
 _FIRST_TAG = -3
+# Where the ids of generated tokens that spell no character's own start: past
+# every character's code point.
+_FIRST_GENERATED = sys.maxunicode + 1
 
 
-# ----- the invented format ---------------------------------------------------------
-# The tags are invented, not any real model's, so nothing can pass by matching a
-# format hard-coded somewhere.
-SYSTEM_PREFIX, SYSTEM_SUFFIX = "<[turn>system\n", "<turn]>\n"
-DEFAULT_FRAGMENTS = TemplateFragments(
-    user_prefix="<[turn>user\n", user_suffix="<turn]>\n",
-    assistant_prefix="<[turn>model\n", assistant_suffix="<turn]>\n",
-)
-# Its reasoning, where it has any: a switch at the top of the system turn, an
-# empty thought opening a reply that does not reason, and the tags around a thought.
-THINK_ON = "<think_on>\n"
-THOUGHT_OPEN, THOUGHT_CLOSE = "<thought>", "</thought>"
-EMPTY_THOUGHT = THOUGHT_OPEN + THOUGHT_CLOSE
-# The tags around a call, and what it writes between its opening and the function's name.
-CALL_TAGS = ("<call>", "</call>")
-CALL_LEAD_IN = "fn:"
-
-
-def _invented_value(value):
-    """The invented format quotes a string and writes anything else bare."""
-    return f"'{value}'" if isinstance(value, str) else str(value)
-
-
-def _call_blocks(calls) -> list[str]:
-    """Calls as the invented format writes them, one block each."""
-    blocks = []
-    for call in calls:
-        fn = call["function"]
-        body = ",".join(f"{k}:{_invented_value(v)}" for k, v in fn["arguments"].items())
-        blocks.append(f"{CALL_TAGS[0]}{CALL_LEAD_IN}{fn['name']}{{{body}}}{CALL_TAGS[1]}")
-    return blocks
-
-
-class _InventedFormat:
-    """A template of the context's own, rendered by hand from its fragments and flags.
-
-    A call leaves its turn open, and the result and the prose after it stay
-    inside that same turn. A newest reply's thought is written only in a turn
-    that calls a tool, as one real template does.
-
-    Args:
-        calls_tools: Whether a call is written; without it, a call is dropped.
-        closes_turn_before_next: Whether a turn left open after a result is
-            closed when another message follows it.
-        can_reason: Whether the template has a reasoning switch.
-        user_join: What is written between two user turns in a row; ``None``
-            refuses them.
-        keeps_thought: Whether a past reply keeps its thought, where one that
-            called no tool otherwise loses it.
-        declares_in_newest_turn: Whether tools are declared right before the
-            newest user turn rather than in the system turn.
-    """
-
-    def __init__(self, fragments: TemplateFragments = DEFAULT_FRAGMENTS,
-                 calls_tools: bool = False, closes_turn_before_next: bool = False,
-                 can_reason: bool = False, user_join: str | None = "",
-                 keeps_thought: bool = False, declares_in_newest_turn: bool = False) -> None:
-        self.fragments = fragments
-        self.calls_tools = calls_tools
-        self.closes_turn_before_next = closes_turn_before_next
-        self.can_reason = can_reason
-        self.user_join = user_join
-        self.keeps_thought = keeps_thought
-        self.declares_in_newest_turn = declares_in_newest_turn
-        if can_reason:
-            self.fragments = replace(
-                fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
-
-    def tag_source(self) -> str:
-        """The text its listed tags are read from: its fragments."""
-        return "".join(getattr(self.fragments, field.name) for field in fields(self.fragments)
-                       if isinstance(getattr(self.fragments, field.name), str))
-
-    def render(self, messages, tools=None, *, generation_prompt=False, reasoning=None):
-        if any(not isinstance(m.get("content", ""), str) for m in messages):
-            return None             # content blocks: a shape this template refuses
-        renders_reasoning = self.can_reason and reasoning is not False
-        frags = self.fragments
-        opening = {"system": SYSTEM_PREFIX, "user": frags.user_prefix,
-                   "model": frags.assistant_prefix}
-        closing = {"system": SYSTEM_SUFFIX, "user": frags.user_suffix,
-                   "model": frags.assistant_suffix}
-        out, turn_open, previous = [], False, None
-        newest_user = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=None)
-        for index, m in enumerate(messages):
-            role = "model" if m["role"] == "assistant" else m["role"]
-            if role == previous == "user":
-                if self.user_join is None:
-                    return None
-                out.append(self.user_join)
-            previous = role
-            if turn_open and role != "tool" and role != "model" \
-                    and self.closes_turn_before_next:
-                out.append("<turn]>\n")
-                turn_open = False
-            if role == "tool":
-                out.append(f"<result>{m['name']}({m['content']})</result>")
-                continue
-            calls = m.get("tool_calls", ()) if self.calls_tools else ()
-            if role == "model" and turn_open:
-                # Text after a result, and another round of calls, go on in the same turn.
-                out.append(m["content"].strip())
-                out.extend(_call_blocks(calls))
-                if not calls:
-                    out.append(closing["model"])
-                    turn_open = False
-                continue
-            if self.declares_in_newest_turn and index == newest_user:
-                for declared in tools or ():
-                    out.append(f"<decl>{declared['function']['name']}</decl>")
-            out.append(opening[role])
-            if role == "system" and renders_reasoning:
-                out.append(THINK_ON)
-            if (calls or self.keeps_thought) and self.can_reason and m.get("reasoning_content"):
-                out.append(THOUGHT_OPEN + m["reasoning_content"] + THOUGHT_CLOSE)
-            out.extend(_call_blocks(calls))
-            out.append(m["content"].strip())
-            if role == "system" and not self.declares_in_newest_turn:
-                for declared in tools or ():
-                    out.append(f"<decl>{declared['function']['name']}</decl>")
-            if calls:
-                turn_open = True               # the result belongs in this turn
-            else:
-                out.append(closing[role])
-        if generation_prompt and not turn_open:
-            out.append(opening["model"])
-            if self.can_reason and not renders_reasoning:
-                out.append(EMPTY_THOUGHT)
-        return "".join(out)
-
-
-# ----- the context -----------------------------------------------------------------
 class ScriptedCall:
     """A call the context's model writes in place of a reply, ``body`` between its tags, ``before`` it as reply text."""
 
@@ -193,9 +100,8 @@ class FakeContext:
     such as one closing each argument of a call. A tag typed into a message,
     which is tokenized with parsing off, stays its characters and cannot
     become the model's own. The tags it lists are those the template spells,
-    and the opening of each closing tag among them. The invented format's
-    tokenizer puts :data:`BOS` first where asked to; a test template's puts
-    nothing there.
+    and the opening of each closing tag among them. Where the fixture says
+    ``adds_bos``, :data:`BOS` comes first where the opener is asked for.
 
     A generation is the library's own loop drawing, in this order: the next of
     ``call_script`` where a call's opening may be drawn, else the next of
@@ -208,9 +114,8 @@ class FakeContext:
     shifts one which cannot shift, fails here.
 
     Args:
-        fixture: The test template to render with, as its file holds it.
-            Without one, the invented format renders, configured by the
-            keywords :class:`_InventedFormat` takes.
+        fixture: The template to render with, as a test template's fixture
+            holds it.
         replies: What the model generates, one per generation in order: a
             text, or a :class:`ScriptedCall`.
         tokens_spell_text: Whether a generated token is its character's own,
@@ -219,23 +124,17 @@ class FakeContext:
             text tokenizes into.
     """
 
-    def __init__(self, fixture: dict | None = None, replies=(), *, gen_tokens: int = 5,
+    def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
-                 tokens_spell_text: bool = True, **invented) -> None:
-        assert fixture is None or not invented, "a test template takes none of the invented flags"
+                 tokens_spell_text: bool = True) -> None:
         self._fixture = fixture
-        if fixture is None:
-            self._format = _InventedFormat(**invented)
-            self._template, tag_source = None, self._format.tag_source()
-        else:
-            self._format = None
-            self._model = _compiled(fixture["chat_template"], fixture["eos_token"])
-            self._template = tag_source = fixture["chat_template"]
-            self._stated = fixture["render_variables"]
-        self._adds_bos = fixture is None
+        self._model = _compiled(fixture["chat_template"], fixture["eos_token"])
+        self._template = fixture["chat_template"]
+        self._stated = fixture["render_variables"]
+        self._adds_bos = fixture.get("adds_bos", False)
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: dict[int, str] = {}
-        found = set(TAG.findall(tag_source))
+        found = set(TAG.findall(self._template))
         self._listed = tuple(self._tag_token(tag) for tag in sorted(
             found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
         self._call_mark_tokens = None
@@ -250,7 +149,7 @@ class FakeContext:
         self.gen_text = gen_text
         self.before_reply = None
         self._tokens_spell_text = tokens_spell_text
-        self._next_generated = 1000
+        self._next_generated = _FIRST_GENERATED
         self._generated_chars: dict[int, str] = {}   # what each generated token spells
         # What was asked of it, in order.
         self.tokenize_calls: list[tuple[str, bool]] = []      # (text, parse_special)
@@ -299,7 +198,7 @@ class FakeContext:
             return self._tag_texts[token]
         if token in self._generated_chars:
             return self._generated_chars[token]
-        return chr(token) if 0 < token < 0x110000 else ""
+        return chr(token) if 0 < token <= sys.maxunicode else ""
 
     def text_of(self, tokens: list[int]) -> str:
         """What ``tokens`` spell: characters, the generated ones as they were generated, and the tags."""
@@ -313,22 +212,11 @@ class FakeContext:
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None, **variables) -> str | None:
         self.rendered.append(len(messages))
-        if self._format is not None:
-            return self._format.render(messages, tools, generation_prompt=generation_prompt,
-                                       reasoning=reasoning)
         return self._model.render(messages, tools, generation_prompt=generation_prompt,
                                   reasoning=reasoning, **variables)
 
     def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
-        """The render with what the template states for ``reasoning``, nothing of it read off the template.
-
-        A test template's is rendered with the variables its file states, and
-        is not recorded; the invented format reads its reasoning switch itself.
-        """
-        if self._format is not None:
-            return self.render_with_model_template(messages, tools,
-                                                   generation_prompt=generation_prompt,
-                                                   reasoning=reasoning)
+        """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded."""
         return self._model.render(messages, tools, generation_prompt=generation_prompt,
                                   reasoning=None, **self._stated["on" if reasoning else "off"])
 
@@ -337,7 +225,7 @@ class FakeContext:
 
     def addon_call(self) -> dict:
         # The shipped add-on file that names this template, as a model's load finds it.
-        return {} if self._template is None else addon_file(None, self._template)["call"]
+        return addon_file(None, self._template)["call"]
 
     # ----- the cache ---------------------------------------------------------------
     def reset(self) -> None:
@@ -391,9 +279,7 @@ class FakeContext:
         if self.before_reply is not None:
             self.before_reply(self.text_of(self.cache))
         if self.call_script and self._call_marks()[0][0] not in withheld_tokens:
-            body = self.call_script.pop(0)
-            yield from self._call_tokens(ScriptedCall(
-                body if body.startswith(CALL_LEAD_IN) else CALL_LEAD_IN + body))
+            yield from self._call_tokens(ScriptedCall(self.call_script.pop(0)))
         elif self.replies:
             scripted = self.replies.pop(0)
             if isinstance(scripted, ScriptedCall):
@@ -418,13 +304,10 @@ class FakeContext:
     def _call_marks(self) -> tuple[list[int], list[int]]:
         """The template's own call tags as tokens, else its call texts as characters."""
         if self._call_mark_tokens is None:
-            if self._format is not None:
-                marks, by_tags = CALL_TAGS, True
-            else:
-                reader = FakeContext(self._fixture)
-                template = ResolvedTemplate(reader)
-                marks = call_marks(template, reader)
-                by_tags = template.call_boundary().tool_tokens is not None
+            reader = FakeContext(self._fixture)
+            template = ResolvedTemplate(reader)
+            marks = call_marks(template, reader)
+            by_tags = template.call_boundary().tool_tokens is not None
             self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)
                                            for text in marks)
         return self._call_mark_tokens

@@ -5,7 +5,7 @@ import pytest
 from llama_chat.call_parsing import parse_calls
 from llama_chat.template import CallBody
 from llama_chat.tools import ToolCall
-from tests.wrappers import FAKE_CALL_BODY
+from tests.invented_templates import CALL_BODY
 
 
 _KEY_VALUE = CallBody(name_close="", key_open="<arg_key>", key_close="</arg_key><arg_value>",
@@ -22,26 +22,26 @@ _ELEMENTS = CallBody(name_close='">|', key_open="<", key_close=">", pair_sep="|<
 # ----- reading a call back -------------------------------------------------
 def test_a_call_parses_into_a_name_and_typed_arguments():
     call, = parse_calls("fn:calendar_add{title:'Zahnarzt',minutes:30,all_day:false}",
-                      FAKE_CALL_BODY, "fn:")
+                      CALL_BODY, "fn:")
     assert call == ToolCall(name="calendar_add",
                             arguments={"title": "Zahnarzt", "minutes": 30,
                                        "all_day": False})
 
 
 def test_a_quoted_argument_may_hold_the_separators():
-    call, = parse_calls("fn:say{text:'a,b:c{d}'}", FAKE_CALL_BODY, "fn:")
+    call, = parse_calls("fn:say{text:'a,b:c{d}'}", CALL_BODY, "fn:")
     assert call.arguments == {"text": "a,b:c{d}"}
 
 
 def test_nested_objects_and_lists_survive():
-    call, = parse_calls("fn:x{where:{city:'Bern'},days:[1,2]}", FAKE_CALL_BODY, "fn:")
+    call, = parse_calls("fn:x{where:{city:'Bern'},days:[1,2]}", CALL_BODY, "fn:")
     assert call.arguments == {"where": {"city": "Bern"}, "days": [1, 2]}
 
 
 @pytest.mark.parametrize("body", ["", "fn:", "fn:name", "fn:{a:1}"])
 def test_something_that_is_not_a_call_is_refused(body):
     with pytest.raises(ValueError):
-        parse_calls(body, FAKE_CALL_BODY, "fn:")
+        parse_calls(body, CALL_BODY, "fn:")
 
 
 # ----- a call that names itself --------------------------------------------
@@ -81,13 +81,13 @@ def test_an_empty_argument_value_reads_as_an_empty_string():
     a substring of every string, so an empty value took the object branch and
     indexed past its own end.
     """
-    assert parse_calls("fn:clock{city:}", FAKE_CALL_BODY, "fn:") == [
+    assert parse_calls("fn:clock{city:}", CALL_BODY, "fn:") == [
         ToolCall("clock", {"city": ""})]
 
 
 def test_an_argument_with_no_separator_at_all_is_refused():
     with pytest.raises(ValueError, match="an argument with no value"):
-        parse_calls("fn:clock{city}", FAKE_CALL_BODY, "fn:")
+        parse_calls("fn:clock{city}", CALL_BODY, "fn:")
 
 
 def test_a_batch_entry_that_is_not_a_call_voids_the_whole_batch():
@@ -104,7 +104,7 @@ def test_a_batch_entry_with_no_usable_name_voids_the_whole_batch():
 def test_a_value_that_only_looks_like_a_json_string_is_read_as_written():
     # It opens and closes with a quote, so JSON is tried first; it is not valid
     # JSON, so the model's own quoting decides instead.
-    assert parse_calls("""fn:say{text:"a"b"}""", FAKE_CALL_BODY, "fn:") == [
+    assert parse_calls("""fn:say{text:"a"b"}""", CALL_BODY, "fn:") == [
         ToolCall("say", {"text": '"a"b"'})]
 
 
@@ -118,12 +118,12 @@ def test_nested_arguments_that_are_not_json_are_not_a_call():
 def test_a_nested_object_written_in_the_model_s_own_delimiters():
     # The value is neither JSON nor quoted, so it is read with the same
     # delimiters again, one level down.
-    assert parse_calls("fn:plan{where:{city:'Bonn',day:2}}", FAKE_CALL_BODY, "fn:") == [
+    assert parse_calls("fn:plan{where:{city:'Bonn',day:2}}", CALL_BODY, "fn:") == [
         ToolCall("plan", {"where": {"city": "Bonn", "day": 2}})]
 
 
 def test_a_list_value_written_in_the_model_s_own_delimiters():
-    assert parse_calls("fn:plan{days:['Mo','Di',3]}", FAKE_CALL_BODY, "fn:") == [
+    assert parse_calls("fn:plan{days:['Mo','Di',3]}", CALL_BODY, "fn:") == [
         ToolCall("plan", {"days": ["Mo", "Di", 3]})]
 
 

@@ -912,13 +912,14 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
 
 
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
+    from tests.invented_templates import TOOLS
     from tests.wrappers import weather_registry
-    fake = FakeContext(calls_tools=True, gen_tokens=6, gen_text="Sonnig")
+    fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Sonnig")
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
                        context=fake)
     chat.begin("persona", tools=weather_registry())
     for n in range(8):
-        fake.call_script = ["weather{city:" + " " * 60 + "'Bonn'}"]      # far wider than written
+        fake.call_script = ["fn:weather{city:" + " " * 60 + "'Bonn'}"]      # far wider than written
         reply = chat.reply(f"Wetter {n}?", calls="run").finish()
         assert reply.text == "Sonnig"
         assert chat.total_tokens <= chat.config.evict_above_tokens

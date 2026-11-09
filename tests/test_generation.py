@@ -6,6 +6,7 @@ from llama_chat.template import CallBoundary
 from llama_chat.tools import ToolCall
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
+from tests.invented_templates import TOOLS
 from tests.wrappers import rows
 
 
@@ -152,7 +153,7 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     Whatever persists the conversation reads it back with the resumed prose,
     not only what came before the call.
     """
-    fake = FakeContext(calls_tools=True, gen_text="neun Uhr")
+    fake = FakeContext(TOOLS, gen_text="neun Uhr")
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]

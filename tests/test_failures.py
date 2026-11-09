@@ -8,6 +8,7 @@ import pytest
 from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 from tests.fake_context import FakeContext
+from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
 from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
 
@@ -76,7 +77,7 @@ class _Flaky(FakeContext):
 
 
 def _flaky(**kw):
-    fake = _Flaky(**kw)
+    fake = _Flaky(PLAIN, **kw)
     return ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake), fake
 
 
@@ -188,10 +189,9 @@ def _go_on(w, fake):
 def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(cache, action):
     """A reply keeps what it produced before the failure and nothing else; any other action changes nothing."""
     prepare, act, calls = _ACTIONS[action]
-    for join in ("", None):
+    for refuses_two_user_turns, template in ((False, TOOLS), (True, TOOLS_REFUSING_TWO_USER_TURNS)):
         def prepared():
-            fake = _Flaky(calls_tools=True, gen_tokens=5, gen_text="Gern.", user_join=join,
-                          **_CACHES[cache])
+            fake = _Flaky(template, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
             w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
                                    min_reply_tokens=20), context=fake)
             _begin(("user", "alt"), ("assistant", "älter"))(w, fake)
@@ -211,11 +211,11 @@ def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(c
             except RuntimeError:
                 assert fake.operations == at + 1, "the cache was used again after it failed"
                 if calls is None:
-                    assert _state(w) == before, (join, at)
+                    assert _state(w) == before, (refuses_two_user_turns, at)
                 else:
                     _assert_kept_only_what_it_produced(before, _state(w), shown, calls)
             else:
-                assert _state(w) == done, (join, at)      # recovered, as if nothing failed
+                assert _state(w) == done, (refuses_two_user_turns, at)      # recovered, as if nothing failed
             _go_on(w, fake)
             assert_cache_reads_as_rendered(w)
             w.close()                   # checked here, not again after the test
@@ -266,7 +266,7 @@ def test_a_failed_restart_keeps_the_call_its_conversation_owes_and_nothing_else(
 
 # ----- results ---------------------------------------------------------------------
 def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stays_owed():
-    fake = FakeContext(calls_tools=True)
+    fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=40),
                     context=fake)
     w.begin("s")
@@ -329,7 +329,7 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
 
 # ----- questions --------------------------------------------------------------------
 def test_a_question_without_room_for_its_reply_is_not_recorded():
-    fake = FakeContext(gen_tokens=2)
+    fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60),
                     context=fake)
     w.begin("s")
@@ -340,7 +340,7 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
 
 # ----- a cache that cannot shift ----------------------------------------------------
 def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_once():
-    fake = FakeContext(gen_tokens=2, can_shift=False)
+    fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5,
                            evict_to_fraction_without_shift=0.2), context=fake)
     w.begin("s")
@@ -378,10 +378,10 @@ def test_a_call_ceiling_where_no_call_is_run_is_refused():
 
 
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
-    fake = _Flaky(calls_tools=True, gen_tokens=3)
+    fake = _Flaky(TOOLS, gen_tokens=3)
     w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
     w.begin("s", tools=weather_registry())
-    fake.call_script.append("@@@ kein Aufruf @@@")
+    fake.call_script.append("fn:@@@ kein Aufruf @@@")
     sampled = fake.sampled_tokens
 
     def then_failing_decode(*args, **kwargs):
@@ -401,13 +401,13 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
 
 def test_a_reply_kept_without_text_holds_the_replys_opening_once():
     for size in range(100, 300):
-        fake = FakeContext(calls_tools=True, gen_tokens=6, gen_text="Hallo.")
+        fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Hallo.")
         w = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0, min_reply_tokens=60),
                         context=fake)
         try:
             w.begin("s", tools=weather_registry())
             w.reply("eins").finish()
-            fake.call_script.append("@@@ kein Aufruf @@@")
+            fake.call_script.append("fn:@@@ kein Aufruf @@@")
             reply = w.reply("Wetter?", calls="yield").finish()
         except ContextOverflowError:
             continue
@@ -418,7 +418,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
 
 
 def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
-    fake = FakeContext(can_shift=False, can_cut_tail=False, user_join=None, gen_tokens=3)
+    fake = FakeContext(REFUSES_TWO_USER_TURNS, can_shift=False, can_cut_tail=False, gen_tokens=3)
     w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b")] * 10 + [("user", "q")])
     with pytest.raises(ValueError, match="two user turns"):
@@ -430,7 +430,7 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
 
 def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_tokens():
     from llama_chat.cache_sync import CacheSync
-    fake = _Flaky(can_shift=False, can_cut_tail=False)
+    fake = _Flaky(PLAIN, can_shift=False, can_cut_tail=False)
     memory = CacheSync(fake)
     memory.pin(3)
     fake.fail = "decode"            # the first half, up to the pin
@@ -449,7 +449,7 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
 
     from llama_chat.cache_context import GenerationAccumulator
     from llama_chat.cache_sync import CacheSync
-    fake = _Flaky(gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
+    fake = _Flaky(PLAIN, gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
     memory, draw = CacheSync(fake), random.Random(0)
 
     def some_tokens():

@@ -1,11 +1,14 @@
 """Cutting the newest reply back, and the saved states a cache that cannot shift returns to."""
 
+import sys
+
 import pytest
 
 from llama_chat.config import Config
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext
+from tests.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
                             reasoning_wrapper, rendered_reply, rows)
 def _without_restore(fake):
@@ -31,7 +34,7 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     w, fake = begun_wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
     reply = w.reply("hi").finish()
     assert rendered_reply(fake, "ok!!") in held_text(w)
-    assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
+    assert max(fake.cache) <= sys.maxunicode          # none of the generated ids is kept
     assert reply.text == "ok!!"
 
 
@@ -41,7 +44,7 @@ def test_a_model_that_ships_no_chat_template_is_refused_at_load():
             return None
 
     with pytest.raises(ValueError, match="no chat template"):
-        ChatWrapper(Config(context_size=500), context=_NoTemplate())
+        ChatWrapper(Config(context_size=500), context=_NoTemplate(PLAIN))
 
 
 def test_the_tokens_that_stay_are_not_decoded_again():
@@ -88,8 +91,8 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
 
 
 def test_a_reply_that_called_a_tool_cannot_be_cut():
-    w, fake = begun_wrapper(calls_tools=True)
-    fake.call_script.append("uhr{}")
+    w, fake = begun_wrapper(TOOLS)
+    fake.call_script.append("fn:uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
     for _event in w.reply("wie spät?", calls="yield"):
         pass
@@ -176,7 +179,7 @@ def test_what_a_reply_decodes_again_is_counted(can_shift):
 def test_a_context_that_saves_states_must_restore_them():
     with pytest.raises(TypeError, match="restore_state"):
         ChatWrapper(Config(context_size=500),
-                    context=_without_restore(FakeContext(can_shift=False)))
+                    context=_without_restore(FakeContext(PLAIN, can_shift=False)))
 
 
 # ----- a reply ended by its closing text -----------------------------------
@@ -184,14 +187,9 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
     """A cache that cannot cut at its end goes back to a saved state instead."""
     from llama_chat.template import CallBoundary
 
-    class _ClosingText(FakeContext):
-        def remove_from(self, pos):
-            assert self.can_shift, "a cache that cannot cut was cut"
-            super().remove_from(pos)
-
     for can_shift in (True, False):
         # Three tokens of the reply, then two of the closing, which leave the reply again.
-        fake = _ClosingText(gen_tokens=5, gen_text="rep<|", can_shift=can_shift)
+        fake = FakeContext(PLAIN, gen_tokens=5, gen_text="rep<|", can_shift=can_shift)
         w = ChatWrapper(Config(context_size=2000), context=fake)
         # A template whose reply ends where the text its closing opens with begins.
         w._template.call_boundary = lambda *args, **kwargs: CallBoundary(turn_end_text="<|")

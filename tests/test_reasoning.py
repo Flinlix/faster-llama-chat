@@ -1,5 +1,6 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
+import sys
 
 import pytest
 
@@ -7,7 +8,8 @@ from llama_chat.config import Config
 from llama_chat.template import Reasoning
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from tests.fake_context import EMPTY_THOUGHT, FakeContext, THINK_ON
+from tests.fake_context import FakeContext
+from tests.invented_templates import EMPTY_THOUGHT, PLAIN, REASONING_KEEPING_THOUGHTS, THINK_ON
 
 from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
@@ -23,7 +25,7 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
 
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
-                    context=FakeContext())
+                    context=FakeContext(PLAIN))
     w.begin("s", [("user", "hi")])
     assert not w.can_reason
     with pytest.raises(ValueError, match="reasoning"):
@@ -89,7 +91,7 @@ def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
 
 def test_a_reply_that_called_a_tool_is_kept_as_generated():
     w, fake = reasoning_wrapper()
-    fake.call_script.append("uhr{}")
+    fake.call_script.append("fn:uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=True)
     for event in w.reply("wie spät?", calls="yield"):
         call = event
@@ -144,7 +146,7 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
 def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     """Nothing is added after the result: the template's wrapping ends the turn as it ends it."""
     w, fake = reasoning_wrapper(reasoning, gen_text="ok", gen_tokens=2)
-    fake.call_script.append("uhr{}")
+    fake.call_script.append("fn:uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
     for event in w.reply("wie spät?", calls="yield"):
         call = event
@@ -165,13 +167,13 @@ def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
 
 # ----- a reply kept with its thought ---------------------------------------
 def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into():
-    w, fake = reasoning_wrapper(keeps_thought=True, tokens_spell_text=False)
+    w, fake = reasoning_wrapper(template=REASONING_KEEPING_THOUGHTS, tokens_spell_text=False)
     assert w._template.reasoning.past_keeps_thought
     reply = w.reply("hi").finish()
     assert reply.text == "Antwort."
     assert (rendered_prompt(fake, reasoning=True) + THOUGHTFUL
             + rendered_close(fake, reasoning=True)) in held_text(w)
-    assert all(t < 1000 for t in fake.cache)          # none of the generated ids is kept
+    assert max(fake.cache) <= sys.maxunicode          # none of the generated ids is kept
 
 
 # ----- a header naming another reader --------------------------------------

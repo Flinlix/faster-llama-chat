@@ -4,11 +4,11 @@ import pytest
 
 from llama_chat.resolved_template import ResolvedTemplate
 from tests.fake_context import FakeContext
-from tests.wrappers import fragments_with
+from tests.invented_templates import PLAIN
 
 
 def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_to_it():
-    context = FakeContext()
+    context = FakeContext(PLAIN)
     template = ResolvedTemplate(context)
     assert template.fragments.generation_prompt == ""
     assert template.generation_prompt() == "<[turn>model\n"
@@ -19,4 +19,5 @@ def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_
 
 
 def test_a_tag_in_a_content_stays_in_it():
-    assert fragments_with().content("hi <turn]> there") == "hi <turn]> there"
+    fragments = ResolvedTemplate(FakeContext(PLAIN)).fragments
+    assert fragments.content("hi <turn]> there") == "hi <turn]> there"
