@@ -173,7 +173,10 @@ class Config:
             raise InvalidSettingError("top_p", "top_p must be in (0, 1]")
         if self.min_p is not None and not 0.0 <= self.min_p <= 1.0:
             raise InvalidSettingError("min_p", "min_p must be in [0, 1]")
-        _check_seed(self.seed)
+        if self.seed is not None and not 0 <= self.seed <= 0xFFFFFFFE:
+            raise InvalidSettingError(
+                "seed",
+                "seed must be None or an int in [0, 2**32 - 2] (use None for a random seed)")
         if self.log_level not in LOG_LEVELS:
             raise InvalidSettingError("log_level",
                                       f"log_level must be one of {list(LOG_LEVELS)}")
@@ -197,7 +200,8 @@ class Sampling:
     """Sampling settings for one request, overriding the :class:`Config`'s.
 
     Every field left ``None`` keeps the value the wrapper was built with, so an
-    empty ``Sampling`` changes nothing.
+    empty ``Sampling`` changes nothing. A setting is refused where
+    :class:`Config` refuses it, by the same checks.
 
     Attributes:
         temperature: As :attr:`Config.temperature`.
@@ -215,28 +219,16 @@ class Sampling:
     frequency_penalty: float | None = None
 
     def __post_init__(self) -> None:
-        if self.top_p is not None and not 0.0 < self.top_p <= 1.0:
-            raise InvalidSettingError("top_p", "top_p must be in (0, 1]")
-        _check_seed(self.seed)
-
-    @property
-    def overrides(self) -> dict:
-        """The fields this request sets, by name."""
-        return {f.name: getattr(self, f.name) for f in fields(self)
-                if getattr(self, f.name) is not None}
-
-    def applied_to(self, config: Config) -> Config:
-        """``config`` with this request's settings in place of its own.
-
-        Raises:
-            InvalidSettingError: If a setting is one :class:`Config` refuses,
-                such as a seed outside its range.
-        """
-        return replace(config, **self.overrides)
+        with_request_sampling(Config(), self)
 
 
-def _check_seed(seed: int | None) -> None:
-    """Refuse a seed the sampler cannot take; ``None`` asks for a fresh one."""
-    if seed is not None and not 0 <= seed <= 0xFFFFFFFE:
-        raise InvalidSettingError(
-            "seed", "seed must be None or an int in [0, 2**32 - 2] (use None for a random seed)")
+def with_request_sampling(config: Config, sampling: Sampling | None) -> Config:
+    """``config`` with the settings ``sampling`` sets in place of its own; ``config`` itself without one.
+
+    Raises:
+        InvalidSettingError: If a setting is one :class:`Config` refuses.
+    """
+    if sampling is None:
+        return config
+    return replace(config, **{f.name: getattr(sampling, f.name) for f in fields(sampling)
+                              if getattr(sampling, f.name) is not None})

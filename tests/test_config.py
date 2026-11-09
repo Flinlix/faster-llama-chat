@@ -2,7 +2,7 @@
 
 import pytest
 
-from llama_chat.config import Config, Sampling
+from llama_chat.config import Config, InvalidSettingError, Sampling, with_request_sampling
 
 
 # ----- cache type, flash attention and offload -----------------------------
@@ -82,15 +82,26 @@ def test_an_eviction_threshold_that_rounds_to_nothing_is_refused():
 
 # ----- a sampling built for one request ------------------------------------
 def test_an_empty_sampling_overrides_nothing():
-    assert Sampling().overrides == {}
     config = Config(temperature=0.7)
-    assert Sampling().applied_to(config) == config
+    assert with_request_sampling(config, Sampling()) == config
+    assert with_request_sampling(config, None) == config
 
 
 def test_a_sampling_replaces_exactly_the_fields_it_sets():
-    applied = Sampling(temperature=0.2, seed=7).applied_to(
-        Config(temperature=0.7, top_p=0.9))
+    applied = with_request_sampling(Config(temperature=0.7, top_p=0.9),
+                                    Sampling(temperature=0.2, seed=7))
     assert (applied.temperature, applied.seed, applied.top_p) == (0.2, 7, 0.9)
+
+
+@pytest.mark.parametrize("bad", [{"top_p": 0.0}, {"top_p": 1.5}, {"seed": -1},
+                                 {"seed": 2**32 - 1}])
+def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
+    with pytest.raises(InvalidSettingError) as by_config:
+        Config(**bad)
+    with pytest.raises(InvalidSettingError) as by_request:
+        Sampling(**bad)
+    assert (by_request.value.field, str(by_request.value)) == \
+        (by_config.value.field, str(by_config.value))
 
 
 @pytest.mark.parametrize("bad", [{"top_p": 0.0}, {"top_p": 1.5}])

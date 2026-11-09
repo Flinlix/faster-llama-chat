@@ -647,7 +647,7 @@ def test_a_restart_says_how_much_history_it_kept():
 # ----- sampling per request ------------------------------------------------
 def test_a_seed_the_config_refuses_is_refused_for_one_request_too():
     with pytest.raises(ValueError, match="seed"):
-        Sampling(seed=-1).applied_to(Config())
+        Sampling(seed=-1)
 
 
 @pytest.mark.parametrize("calls", ["refuse", "registry", "yield"])

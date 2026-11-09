@@ -11,7 +11,7 @@ import os
 from collections.abc import Callable
 
 from ._backend import Backend, set_log_level
-from .config import Config, Sampling
+from .config import Config, Sampling, with_request_sampling
 from .cache_context import Eviction
 from .addon_files import addon_file, with_model_sampling
 from .model_template import ModelTemplate
@@ -212,9 +212,8 @@ class KVContext:
     def sampled_tokens(self, sampling: Sampling | None, withheld_tokens: tuple[int, ...]):
         """Tokens drawn one at a time from a sampler chain of their own, freed when this is closed."""
         # A chain of its own: penalties count this generation's tokens only, and a seed starts over.
-        sampler = self._build_sampler(
-            sampling.applied_to(self._config) if sampling is not None else self._config,
-            withheld_tokens)
+        sampler = self._build_sampler(with_request_sampling(self._config, sampling),
+                                      withheld_tokens)
         try:
             while True:
                 yield self._backend.sample(sampler, self._engine_context)
