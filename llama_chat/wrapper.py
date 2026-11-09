@@ -8,7 +8,6 @@ design_history.md, "The render is the conversation's encoding".
 
 from __future__ import annotations
 
-import contextlib
 import math
 import threading
 from collections.abc import Callable, Generator
@@ -282,9 +281,10 @@ class ChatWrapper:
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and calls={calls!r} runs none")
         if calls == "yield":
-            return self._until_call(text, recognizes_calls=True, **options)
+            return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
         if calls == "withhold":
-            return self._until_call(text, recognizes_calls=False, withhold=True, **options)
+            return ReplyStream(self._until_call(text, recognizes_calls=False, withhold=True,
+                                                **options))
         if calls == "refuse":
             registry = None
         elif calls == "run":
@@ -297,28 +297,14 @@ class ChatWrapper:
         return ReplyStream(self._generate_until_answered(
             text, registry=registry, max_calls=max_calls, **options))
 
-    def _until_call(self, text: str | None, *, recognizes_calls: bool, held: bool = False,
-                    withhold: bool = False, **options) -> ReplyStream[str | ToolCall]:
-        """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
-
-        ``recognizes_calls`` False leaves a call the model writes as text,
-        which is what makes the last permitted round of an exchange certain to
-        close the turn.
-        ``held`` says the caller holds the lock already, for a whole exchange.
-        """
-        return ReplyStream(_deltas_then_calls(
-            self._one_generation(text, recognizes_calls, held, withhold, **options)))
-
-    def _one_generation(self, text, recognizes_calls: bool, held: bool, withhold: bool = False,
-                        **options):
-        """Resume the open turn or start a request, decided under the lock."""
-        with contextlib.nullcontext() if held else self._lock:
-            self._ensure_open()
-            if text is None and self._conversation.reply_open:
-                return (yield from self._resume(recognizes_calls=recognizes_calls, withhold=withhold,
-                                                **options))
-            return (yield from self._request_and_generate(text, recognizes_calls=recognizes_calls,
-                                                          withhold=withhold, **options))
+    def _until_call(self, text: str | None,
+                    **options) -> Generator[str | ToolCall, None, Reply]:
+        """One generation, from ``text`` or on from the open turn, then the calls it stopped at."""
+        with self._lock:
+            generation = yield from self._generate(text, **options)
+        # The lock is released before the calls: a caller answers each while reading the stream.
+        yield from generation.tool_calls
+        return generation
 
     def inject_tool_result(self, call: ToolCall | str, result) -> None:
         """Hand the model what the tool it called returned.
@@ -556,7 +542,7 @@ class ChatWrapper:
             # starts, not after the model has asked for one.
             if registry is not None and len(registry) > 0:
                 self._template.ensure_tools_usable()
-            stream = self._until_call(text, recognizes_calls=True, held=True, **kwargs)
+            deltas = self._generate(text, recognizes_calls=True, **kwargs)
             # An absent ceiling counts down without ever reaching zero, so the
             # three places that read it need no case of their own.
             calls_left = math.inf if max_calls is None else max_calls
@@ -564,10 +550,10 @@ class ChatWrapper:
             generations: list[Reply] = []
             try:
                 while True:
-                    asked, generation = yield from self._read_generation(
-                        stream, after="".join(g.text for g in generations))
+                    generation = yield from self._read_generation(
+                        deltas, after="".join(g.text for g in generations))
                     generations.append(generation)
-                    if not asked:
+                    if not generation.tool_calls:
                         if self._conversation.reply_open:
                             # An unreadable call: its result is already written, and
                             # the turn wants the reply that follows it. Nothing is
@@ -578,9 +564,9 @@ class ChatWrapper:
                             any_call_asked = True
                             if registry is not None and calls_left > 0:
                                 calls_left -= 1
-                            stream = self._until_call(
+                            deltas = self._generate(
                                 None, recognizes_calls=registry is not None and calls_left > 0,
-                                held=True, **kwargs)
+                                **kwargs)
                             continue
                         # The ceiling binds only once a call has been asked for:
                         # without one the last generation kept its call tokens.
@@ -588,41 +574,32 @@ class ChatWrapper:
                                                 any_call_asked and calls_left == 0)
                     any_call_asked = True
                     settled, calls_left = self._settle_calls(
-                        asked, registry, calls_left, max_calls)
+                        generation.tool_calls, registry, calls_left, max_calls)
                     may_call_again = registry is not None and calls_left > 0
                     for call, result in settled:
                         self._conversation.add_result(call, _explain_failure(result, may_call_again))
-                    stream = self._until_call(None, recognizes_calls=may_call_again, held=True,
-                                              **kwargs)
+                    deltas = self._generate(None, recognizes_calls=may_call_again, **kwargs)
             finally:
-                stream.close()
+                deltas.close()
 
-    def _read_generation(self, stream, after: str):
-        """Yield one generation's text, and return what it left behind.
+    def _read_generation(self, deltas: Generator[str, None, Reply], after: str):
+        """Yield one generation's text, and return the :class:`Reply` describing it.
 
-        Driven by hand rather than with ``for``, which would discard the
-        :class:`Reply` the generation returns. Where ``after``, the text shown
-        before it, and this text would join without whitespace, a blank line
-        goes between them.
-
-        Returns:
-            The calls the model asked for, in the order it asked, and the
-            :class:`Reply` describing the generation, its text starting with
-            the blank line where one was put.
+        Driven by hand rather than with ``for``, which would discard that
+        :class:`Reply`. Where ``after``, the text shown before it, and this
+        text would join without whitespace, a blank line goes between them,
+        and the Reply's text starts with it.
         """
-        asked, separator = [], None if after and not after[-1].isspace() else ""
+        separator = None if after and not after[-1].isspace() else ""
         while True:
             try:
-                event = next(stream)
+                delta = next(deltas)
             except StopIteration as ended:
-                return asked, replace(ended.value, text=(separator or "") + ended.value.text)
-            if isinstance(event, ToolCall):
-                asked.append(event)
-                continue
-            if separator is None and event:
-                separator = "" if event[0].isspace() else "\n\n"
-                event = separator + event
-            yield event
+                return replace(ended.value, text=(separator or "") + ended.value.text)
+            if separator is None and delta:
+                separator = "" if delta[0].isspace() else "\n\n"
+                delta = separator + delta
+            yield delta
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):
@@ -652,66 +629,32 @@ class ChatWrapper:
             settled.append((call, result))
         return settled, calls_left
 
-    def _request_and_generate(
-        self, text: str | None, *, max_reply_tokens: int | None = None,
-        stop: list[str] | None = None, cancel: threading.Event | None = None,
-        sampling: Sampling | None = None, recognizes_calls: bool = True, withhold: bool = False,
-    ) -> Generator[str, None, Reply]:
-        """Add the user request, then generate one reply from the cache's end.
+    def _generate(self, text: str | None, *, recognizes_calls: bool,
+                  max_reply_tokens: int | None, stop: list[str] | None,
+                  cancel: threading.Event | None, sampling: Sampling | None,
+                  withhold: bool = False) -> Generator[str, None, Reply]:
+        """Generate one reply from the cache's end and record what it left, as a Reply.
 
-        Without ``text``, the reply answers the newest message, which must be
-        a user message already written. One generation, so a call it stops on
-        leaves the turn open for a result. The lock must be held.
-        """
-        self._ensure_open()
-        conversation = self._conversation
-        decoded_from = conversation.decoded
-        if text is None:
-            conversation.prompt()
-            n_evicted = 0
-        else:
-            n_evicted = conversation.ask(text, accept=self._reporting("user", text))
-        return (yield from self._generate_into_reply(
-            decoded_from=decoded_from, n_evicted_messages=n_evicted,
-            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            recognizes_calls=recognizes_calls, withhold=withhold, sampling=sampling))
-
-    def _resume(self, *, max_reply_tokens: int | None = None,
-                stop: list[str] | None = None,
-                cancel: threading.Event | None = None,
-                recognizes_calls: bool = True, withhold: bool = False,
-                sampling: Sampling | None = None):
-        """Generate on into the open reply, adding no message of its own. The lock must be held."""
-        self._ensure_open()
-        if self._conversation.owed_calls:
-            raise ValueError(f"{len(self._conversation.owed_calls)} call(s) still owe "
-                             f"a result")
-        return (yield from self._generate_into_reply(
-            decoded_from=self._conversation.decoded, n_evicted_messages=0,
-            max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
-            recognizes_calls=recognizes_calls, withhold=withhold, sampling=sampling))
-
-    def _generate_into_reply(self, *, decoded_from: int, n_evicted_messages: int,
-                             max_reply_tokens: int | None,
-                             stop: list[str] | None,
-                             cancel: threading.Event | None,
-                             recognizes_calls: bool,
-                             sampling: Sampling | None = None,
-                             withhold: bool = False,
-                             ) -> Generator[str, None, Reply]:
-        """Generate from the cache's end and record what it left, as a Reply.
+        Without ``text``, it goes on with the open turn, adding no message of
+        its own, or else answers the newest message, which must be a user
+        message already written. One generation, so a call it stops on leaves
+        the turn open for a result. The lock must be held.
 
         Args:
-            decoded_from: What the cache had decoded when the request began,
-                so the Reply counts every token decoded for it.
-            n_evicted_messages: What the caller evicted to get here.
-            max_reply_tokens, stop, cancel, sampling: As :meth:`reply`.
+            text, max_reply_tokens, stop, cancel, sampling: As :meth:`reply`.
             recognizes_calls: ``False`` leaves a call the model writes as text,
                 so this generation cannot end on a call and the turn is certain
                 to close.
             withhold: Also keep a call's opening token from ever being drawn.
         """
+        self._ensure_open()
         conversation = self._conversation
+        decoded_from = conversation.decoded
+        n_evicted_messages = 0
+        if text is not None:
+            n_evicted_messages = conversation.ask(text, accept=self._reporting("user", text))
+        elif not conversation.reply_open:
+            conversation.prompt()
         close_tokens = self._context.tokenize(self._formatter.assistant_close(),
                                               add_special=False)
         budget = self._config.context_size - conversation.total_tokens - len(close_tokens)
@@ -823,28 +766,6 @@ def _all_specs(tools) -> list[ToolSpec] | None:
     if isinstance(tools, ToolRegistry):
         return tools.specs()
     return tools
-
-
-def _deltas_then_calls(stream):
-    """Yield a generation's text deltas, then the calls it stopped at.
-
-    The wrapped generator is closed whatever happens, so an early close still
-    ends the turn and releases the wrapper's lock.
-    """
-    reply = None
-    try:
-        while True:
-            try:
-                delta = next(stream)
-            except StopIteration as done:
-                reply = done.value
-                break
-            yield delta
-    finally:
-        stream.close()
-    for call in reply.tool_calls:
-        yield call
-    return reply
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:
