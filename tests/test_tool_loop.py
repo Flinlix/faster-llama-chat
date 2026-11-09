@@ -8,7 +8,7 @@ import pytest
 from llama_chat.config import Config
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from llama_chat import ChatWrapper, ContextOverflowError
-from tests.fake_context import FakeContext
+from tests.fake_context import FakeContext, ScriptedCall
 from tests.wrappers import (assert_consistent, cache_tokens, held_renders,
                             newest_turn, system_turn, tool_wrapper,
                             weather_registry, rows)
@@ -29,19 +29,6 @@ class _KeylessCallContext(FakeContext):
             return None
         return re.sub(r"(<call>fn:\w+\{)([^}]*)\}",
                       lambda call: call[1] + re.sub(r"\w+:", "", call[2]) + "}", rendered)
-
-
-class _SaysBeforeCalling(FakeContext):
-    """The fake model, writing a sentence before each call it makes."""
-
-    def __init__(self, before_call: str, **kw) -> None:
-        super().__init__(calls_tools=True, **kw)
-        self._before_call = before_call
-
-    def _call_tokens(self, body):
-        for ch in self._before_call:
-            yield self._generated(ch)
-        yield from super()._call_tokens(body)
 
 
 class _ResultBlock(FakeContext):
@@ -412,12 +399,12 @@ def test_a_running_reply_runs_the_tool_and_yields_only_prose():
 ])
 def test_the_texts_around_a_call_are_parted_by_a_blank_line_where_they_would_join(
         before_call, after_call, joined):
-    fake = _SaysBeforeCalling(before_call, gen_text=after_call, gen_tokens=len(after_call))
+    fake = FakeContext(calls_tools=True, gen_text=after_call, gen_tokens=len(after_call))
     wrapper = ChatWrapper(Config(context_size=512, evict_above_fraction=0.9), context=fake)
     wrapper.begin("persona")
     registry = ToolRegistry()
     registry.register(lambda: {"time": "09:00"}, "Sagt die Zeit.", name="clock")
-    fake.call_script = ["fn:clock{}"]
+    fake.replies = [ScriptedCall("fn:clock{}", before=before_call)]
 
     stream = wrapper.reply("wie spät?", calls=registry)
     shown = "".join(stream)
@@ -893,7 +880,7 @@ def test_a_model_needing_nothing_extra_gets_nothing():
 
     # What the generation holds is the sampled tokens, then the turn's closing
     # tag and the next question's opening, decoded ahead, and nothing in front.
-    generated = fake._gen_tokens
+    generated = fake.gen_tokens
     closing = len(fake.tokenize("<turn]>\n<[turn>"))
     assert len(fake.cache) - before == generated + closing
 
@@ -1046,18 +1033,12 @@ def test_a_context_that_throws_while_probing_still_loads(throws_on):
 
 def test_the_result_block_is_probed_once_not_per_result():
     """A property read must not render a template, so the answer is kept."""
-    class Counting(FakeContext):
-        renders = 0
-        def render_with_model_template(self, messages, tools=None, **_options):
-            Counting.renders += 1
-            return super().render_with_model_template(messages, tools, **_options)
-
-    fake = Counting(calls_tools=True)
+    fake = FakeContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=1024), context=fake)
-    after_construction = Counting.renders
+    after_construction = len(fake.rendered)
     for _ in range(5):
         assert wrapper.can_call_tools
-    assert Counting.renders == after_construction
+    assert len(fake.rendered) == after_construction
 
 
 def test_declaring_refuses_a_model_that_could_never_call():

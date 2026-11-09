@@ -3,7 +3,7 @@
 import pytest
 
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
-from tests.fake_context import TOOL_CLOSE, TOOL_OPEN
+from tests.fake_context import CALL_TAGS
 
 from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
@@ -59,7 +59,8 @@ def test_the_turns_own_text_is_never_read_as_a_tag():
     own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
     # Each is tokenized with special-token parsing off, joined to the plain text around it.
     assert all(any(text in run for run in own) for text in ("<call>", "</call>", "<turn]>"))
-    assert fake.cache.count(TOOL_OPEN) == 1 and fake.cache.count(TOOL_CLOSE) == 1
+    opening, closing = (fake.tokenize(tag) for tag in CALL_TAGS)
+    assert fake.cache.count(*opening) == 1 and fake.cache.count(*closing) == 1
 
 
 def test_a_conversation_goes_on_after_a_past_tool_turn():
@@ -88,8 +89,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     for _event in live.reply(calls="yield"):
         pass
 
-    past, past_fake = unbegun_tool_wrapper()
-    past_fake._closes_turn_before_next = closes_turn_before_next
+    past, past_fake = unbegun_tool_wrapper(closes_turn_before_next=closes_turn_before_next)
     past.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("uhr", {}),
                                                      ToolResult("uhr", {"zeit": "12:00"})))],
                tools=[ToolSpec("uhr", "", {})])

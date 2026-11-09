@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from .template_contexts import STEMS, TAG, fixture
+from .chat_templates import STEMS, fixture
+from .fake_context import TAG
 
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 _ENGINE_MODULE, _ENGINE_WORDS = "_backend.py", {"llama", "llama-cpp-python"}

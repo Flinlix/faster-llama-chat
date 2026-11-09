@@ -10,7 +10,7 @@ from llama_chat.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
 from llama_chat.config import Config
-from tests.template_contexts import STEMS, fixture
+from tests.chat_templates import STEMS, fixture
 
 _TEMPLATE = "{{ messages }}"
 

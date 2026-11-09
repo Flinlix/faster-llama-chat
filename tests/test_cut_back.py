@@ -104,34 +104,34 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
         fake.save_state = lambda: None
         w.begin("s")
     w.reply("hi").finish()
-    rebuilds = fake.rebuilds
+    resets = fake.resets
     w.truncate_last_reply("Eins.")
     # From the state saved before the reply where there is one, else rebuilt.
-    assert fake.rebuilds == rebuilds + (not saves_state)
+    assert fake.resets == resets + (not saves_state)
     assert rows(w)[-1]["text"] == "Eins."
 
 
 # ----- a past reply on a cache that cannot shift ---------------------------
 def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_state():
     w, fake = reasoning_wrapper(can_shift=False)
-    rebuilds = fake.rebuilds
+    resets = fake.resets
     prefilled = fake.total_prefilled()
     w.reply("hi").finish()
     # No rebuild: the request and the past reply are all that is decoded again.
-    assert fake.rebuilds == rebuilds
+    assert fake.resets == resets
     assert fake.total_prefilled() - prefilled < 2 * len(newest_turn(w)) + 20
     assert_consistent(w, fake)
     w.truncate_last_reply("Ant")
-    assert fake.rebuilds == rebuilds
+    assert fake.resets == resets
 
 
 def test_a_cache_that_saves_no_state_is_rebuilt_instead():
     w, fake = reasoning_wrapper(can_shift=False)
     fake.save_state = lambda: None
     w.begin("s", reasoning=True)
-    rebuilds = fake.rebuilds
+    resets = fake.resets
     w.reply("hi").finish()
-    assert fake.rebuilds == rebuilds + 1
+    assert fake.resets == resets + 1
 
 
 # ----- saved states of a cache that cannot shift ---------------------------
@@ -142,19 +142,19 @@ def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
     def refuse(state, pos):
         raise RuntimeError("the cache refused the saved state")
     fake.restore_state = refuse
-    rebuilds = fake.rebuilds
+    resets = fake.resets
     w.truncate_last_reply("Ant")
-    assert fake.rebuilds == rebuilds + 1
+    assert fake.resets == resets + 1
 
 
 def test_a_cache_that_takes_a_cut_needs_no_saved_state():
     w, fake = reasoning_wrapper(can_shift=False)
     fake.can_cut_tail = True
     w.begin("s", reasoning=True)
-    saved, rebuilds = fake.saved_states, fake.rebuilds
+    saved, resets = fake.saved_states, fake.resets
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
-    assert fake.saved_states == saved and fake.rebuilds == rebuilds
+    assert fake.saved_states == saved and fake.resets == resets
 
 
 def test_a_cut_leaves_a_state_for_the_next_reply():
@@ -183,8 +183,6 @@ def test_a_context_that_saves_states_must_restore_them():
 def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
     """A cache that cannot cut at its end goes back to a saved state instead."""
     from llama_chat.template import CallBoundary
-
-    from .fake_context import FakeContext
 
     class _ClosingText(FakeContext):
         def remove_from(self, pos):

@@ -348,12 +348,12 @@ def test_turn_closes_after_the_eviction_not_before():
 
     evicting = 0
     for i in range(8):
-        n_evictions = len(fake.evictions)
+        n_evictions = fake.edit_count("shift")
         reply = w.reply(f"message number {i} with some length").finish()
         if reply.n_evicted_messages:
             evicting += 1
             # The eviction landed, and the closer is the turn's last prefill.
-            assert len(fake.evictions) > n_evictions
+            assert fake.edit_count("shift") > n_evictions
             last = fake.prefill_calls[-1]
             assert last[0] + last[1] == w.total_tokens   # closer at the tail
             assert last[2] is False                      # no logits wanted
@@ -459,11 +459,11 @@ def test_eviction_shift_mode_does_not_rebuild():
     fake = FakeContext(gen_tokens=2)  # can_shift=True
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
     w.begin("s")
-    rebuilds_after_begin = fake.rebuilds  # begin() resets once
+    resets_after_begin = fake.resets  # begin() resets once
     for i in range(8):
         w.reply(f"message number {i} with some length").finish()
-    assert len(fake.evictions) > 0          # eviction did happen
-    assert fake.rebuilds == rebuilds_after_begin  # but never via rebuild
+    assert fake.edit_count("shift") > 0          # eviction did happen
+    assert fake.resets == resets_after_begin  # but never via rebuild
 
 
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
@@ -471,15 +471,15 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     fake = FakeContext(gen_tokens=2, can_shift=False)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
     w.begin("s")
-    rebuilds_after_begin = fake.rebuilds
+    resets_after_begin = fake.resets
     for i in range(8):
         w.reply(f"message number {i} with some length").finish()
         roles = [s["role"] for s in rows(w)]
         assert roles[0] == "system"             # system survives
         assert w.total_tokens <= w._config.context_size   # never overflows
         assert_consistent(w, fake)             # the cache as recorded after it is brought back
-    assert len(fake.evictions) == 0             # shift path never used
-    assert fake.rebuilds + fake.restores > rebuilds_after_begin   # brought back instead
+    assert fake.edit_count("shift") == 0             # shift path never used
+    assert fake.resets + fake.edit_count("restore") > resets_after_begin   # brought back instead
 
 
 def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
@@ -637,7 +637,7 @@ def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_t
     w, fake = begun_wrapper(user_join="<sep>", gen_tokens=0)
     w.reply("eins").finish()
     assert [m["role"] for m in rows(w)] == ["system", "user"]
-    fake._gen_tokens = 5
+    fake.gen_tokens = 5
     w.reply("zwei").finish()
     _as_rendered(w, fake)
 
@@ -647,7 +647,7 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
     w.reply("eins").finish()
     found = [(m["role"], m["text"]) for m in rows(w)]
     assert found[1:] == [("user", "eins"), ("assistant", "")]
-    fake._gen_tokens = 5
+    fake.gen_tokens = 5
     w.reply("zwei").finish()
     _as_rendered(w, fake)
 

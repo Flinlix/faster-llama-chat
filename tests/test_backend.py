@@ -461,13 +461,12 @@ def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
 
 def test_every_method_takes_the_arguments_the_written_boundary_lists():
     from tests.fake_context import FakeContext
-    from tests.template_contexts import ConversationContext
 
     def parameters(owner, name):
         member = inspect.getattr_static(owner, name, None)
         return list(inspect.signature(member).parameters) if inspect.isfunction(member) else None
 
-    for context in (KVContext, FakeContext, ConversationContext):
+    for context in (KVContext, FakeContext):
         for name in CACHE_CONTEXT:
             assert parameters(context, name) == parameters(CacheContext, name), (context, name)
 

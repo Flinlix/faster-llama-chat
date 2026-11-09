@@ -17,7 +17,8 @@ from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_fragments, reasoning_switch
 
-from .template_contexts import STEMS, TemplateContext, fixture
+from .chat_templates import STEMS, fixture
+from .fake_context import FakeContext
 
 
 def _tool_fragments(render):
@@ -28,7 +29,7 @@ def _tool_fragments(render):
 @functools.cache
 def _real(stem):
     """The renderer the test template ``stem`` is loaded with."""
-    return TemplateContext(fixture(stem)).render_with_model_template
+    return FakeContext(fixture(stem)).render_with_model_template
 
 
 def test_gemma_user_assistant_fragments():

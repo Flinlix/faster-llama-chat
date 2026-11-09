@@ -20,8 +20,8 @@ from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
-from .template_contexts import (ANSWERS, QUESTIONS, STEMS, WEATHER, ConversationContext,
-                                ScriptedCall, call_marks, fixture)
+from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture
+from .fake_context import FakeContext, ScriptedCall, call_marks
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -81,9 +81,9 @@ class _Run:
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False):
         self.fixture = _fixture(stem)
-        probe = ChatWrapper(Config(context_size=4096), context=ConversationContext(self.fixture, []))
+        probe = ChatWrapper(Config(context_size=4096), context=FakeContext(self.fixture, []))
         self.answers = list(ANSWERS if replies is None else replies)
-        self.context = ConversationContext(self.fixture, _as_generated(probe, self.answers, reasoning),
+        self.context = FakeContext(self.fixture, _as_generated(probe, self.answers, reasoning),
                                            can_shift=can_shift)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
@@ -95,7 +95,7 @@ class _Run:
     def _before_reply(self, text):
         self.seen.append(text)
         self.seen_tokens.append(list(self.context.cache))
-        self.decoded.append(self.context.decoded)
+        self.decoded.append(self.context.total_prefilled())
         self.renders.append(len(self.context.rendered))
 
     def begin(self, history=(), tools=None):
@@ -179,7 +179,7 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
     run.begin()
     for question in QUESTIONS[:3]:      # more than a whole render could hide under the bound
         run.chat.reply(question).finish()
-    waited = run.context.decoded
+    waited = run.context.total_prefilled()
     rendered = len(run.context.rendered)
     if injected:
         run.chat.inject(QUESTIONS[3])
@@ -234,7 +234,7 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
     escaping = dict(_FALLBACK, chat_template=(
         "{%- for m in messages -%}<|{{ m.role }}|>{{ m.content|e }}<|end|>{%- endfor -%}"
         "{%- if add_generation_prompt -%}<|assistant|>{%- endif -%}"))
-    context = ConversationContext(escaping, ANSWERS)
+    context = FakeContext(escaping, ANSWERS)
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")
     assert chat._conversation._state.windows
@@ -265,7 +265,7 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
     resets, evicted = run.context.resets, 0
     questions = QUESTIONS + [f"{q} Again." for q in QUESTIONS]
     run.answers = ANSWERS + ANSWERS
-    run.context._replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.chat, run.answers, False)
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
     assert evicted
@@ -299,7 +299,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
     resets = run.context.resets
     questions = [f"{q} Round {n}." for n in range(12) for q in QUESTIONS]
     run.answers = ANSWERS * 12
-    run.context._replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.chat, run.answers, False)
     evictions, asked = 0, []
     for question in questions:          # until two evictions are seen
         asked.append(question)
@@ -372,7 +372,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     run.begin(tools=tools)
     questions = [f"{q} Round {n}." for n in range(3) for q in QUESTIONS]
     run.answers = ANSWERS * 3
-    run.context._replies = _as_generated(run.chat, run.answers, False)
+    run.context.replies = _as_generated(run.chat, run.answers, False)
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
@@ -495,7 +495,7 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
 
 def test_a_reply_kept_as_generated_is_not_shortened():
     for size in range(700, 900, 2):
-        context = ConversationContext(_fixture("qwen-3"),
+        context = FakeContext(_fixture("qwen-3"),
                                       [ScriptedCall("not a call", before="Moment. ")])
         chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
                                   min_reply_tokens=120), context=context)
@@ -521,7 +521,7 @@ def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so()
     wrapping = dict(_FALLBACK, chat_template=_FALLBACK["chat_template"].replace(
         "{{ m.content }}", "{% if '<' in m.content %}<![CDATA[{{ m.content }}]]>"
                            "{% else %}{{ m.content }}{% endif %}"))
-    context = ConversationContext(wrapping, ["Fine."])
+    context = FakeContext(wrapping, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")
     seen = []
@@ -536,7 +536,7 @@ def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so()
 def test_a_template_that_writes_something_of_a_message_besides_its_text_is_refused():
     counting = dict(_FALLBACK, chat_template=_FALLBACK["chat_template"].replace(
         "{{ m.content }}", "({{ m.content|length }}){{ m.content }}"))
-    context = ConversationContext(counting, ["Fine."])
+    context = FakeContext(counting, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     with pytest.raises(ValueError, match="text in its place"):
         chat.begin("")
@@ -596,7 +596,7 @@ def test_a_restart_keeps_only_the_newest_history_that_fits(stem):
 
 def test_a_template_that_writes_an_older_exchange_otherwise_once_another_follows_is_refused():
     rewriting = dict(_FALLBACK, chat_template="<|count|>{{ messages|length }}" + _FALLBACK["chat_template"])
-    context = ConversationContext(rewriting, ["Fine."])
+    context = FakeContext(rewriting, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     with pytest.raises(ValueError, match="older exchange"):
         chat.begin("")
@@ -771,7 +771,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     opener, written_body, closer = _call_body(probe, {"city": "Bonn"})
     body = _spaced(probe, written_body)          # as a model may space it, not as the template does
     run = _Run(stem, replies=[ScriptedCall(body), "Sunny in Bonn.", "You are welcome."])
-    run.context._replies = [ScriptedCall(body)] + _as_generated(
+    run.context.replies = [ScriptedCall(body)] + _as_generated(
         probe.chat, ["Sunny in Bonn.", "You are welcome."], False)
     run.begin(tools=[WEATHER])
     events = list(run.chat.reply("Weather in Bonn?", calls="yield"))
@@ -780,8 +780,8 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     run.chat.inject_tool_result(call, '{"weather": "sunny"}')
     tags = run.chat._template.reasoning
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
-            and not run.context._replies[0].startswith(tags.thought_close):
-        run.context._replies[0] = tags.thought_close + run.context._replies[0]   # the model closes it
+            and not run.context.replies[0].startswith(tags.thought_close):
+        run.context.replies[0] = tags.thought_close + run.context.replies[0]   # the model closes it
     assert run.chat.reply(calls="yield").finish().text == "Sunny in Bonn."
     run.chat.inject("Thanks.")
     run.chat.reply().finish()
@@ -898,7 +898,7 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     opener, body, closer = _call_body(probe, {"city": "Bonn"})
     run = _Run("llama-3.2", replies=["x"])
     before = "Once more. <|python_tag|>"
-    run.context._replies = [ScriptedCall(body), ScriptedCall(body, before=before),
+    run.context.replies = [ScriptedCall(body), ScriptedCall(body, before=before),
                             "Sunny twice.", "Bye."]
     run.begin(tools=[WEATHER])
     calls = [e for e in run.chat.reply("Weather in Bonn?", calls="yield") if isinstance(e, ToolCall)]
@@ -912,7 +912,6 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
 
 
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
-    from tests.fake_context import FakeContext
     from tests.wrappers import weather_registry
     fake = FakeContext(calls_tools=True, gen_tokens=6, gen_text="Sonnig")
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
@@ -930,7 +929,7 @@ def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refus
     switching = dict(_FALLBACK, chat_template=_FALLBACK["chat_template"].replace(
         "<|assistant_{{ messages|length }}|>",
         "<|assistant|>{% if '/no_think' in messages[-1].content %}<|nothink|>{% endif %}"))
-    context = ConversationContext(switching, ["Fine.", "Fine."])
+    context = FakeContext(switching, ["Fine.", "Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")
     with pytest.raises(ValueError, match="text in its place"):
@@ -942,6 +941,6 @@ def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
     short = dict(_FALLBACK, chat_template="{% if messages|length > 5 %}"
                  "{{ raise_exception('too long') }}{% endif %}" + _FALLBACK["chat_template"])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
-                       context=ConversationContext(short, []))
+                       context=FakeContext(short, []))
     with pytest.raises(ValueError, match="cannot\\s+be told"):
         chat.begin("")

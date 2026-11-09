@@ -16,15 +16,15 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolRegistry
 
-from .template_contexts import (STEMS, WEATHER, ConversationContext, TemplateContext, call_marks,
-                                fixture)
+from .chat_templates import STEMS, WEATHER, fixture
+from .fake_context import FakeContext, call_marks
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
 
 
 def _load(stem):
-    context = TemplateContext(fixture(stem))
+    context = FakeContext(fixture(stem))
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
     return context, ResolvedTemplate(context)
@@ -136,7 +136,7 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
 
 def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
-    context = TemplateContext(fixture("qwen-3.6"))
+    context = FakeContext(fixture("qwen-3.6"))
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
     boundary = ResolvedTemplate(context).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
@@ -148,14 +148,14 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     registry = ToolRegistry()
     registry.register(lambda: "12:00", "The time.", name="clock")
 
-    without = ConversationContext(known, ["Fine."])
+    without = FakeContext(known, ["Fine."])
     without.addon_call = lambda: {}
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=without)
     assert not chat.can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
         chat.begin("", tools=registry)
 
-    context = ConversationContext(known, ["Fine."])
+    context = FakeContext(known, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     assert chat.can_call_tools
     chat.begin("", tools=registry)          # the whole chain is checked, and passes
@@ -165,7 +165,7 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
-    context = TemplateContext(fixture("gpt-oss"))
+    context = FakeContext(fixture("gpt-oss"))
     context.addon_call = lambda: {"opening": "<|channel|>commentary to=functions.",
                                   "name_close": " <|constrain|>json<|message|>",
                                   "closing": "<|never|>"}

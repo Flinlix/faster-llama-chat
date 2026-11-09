@@ -185,8 +185,8 @@ def reasoning_wrapper(reasoning=True, config=None, **fake_kw):
     return w, fake
 
 
-def unbegun_tool_wrapper():
-    fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.")
+def unbegun_tool_wrapper(**fake_kw):
+    fake = FakeContext(calls_tools=True, gen_tokens=7, gen_text="Gleich.", **fake_kw)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     return w, fake
 

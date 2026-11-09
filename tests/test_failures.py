@@ -237,10 +237,10 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
 def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(monkeypatch):
     import llama_cpp.llama_chat_format as chat_format
 
-    from tests.template_contexts import ConversationContext, fixture
+    from tests.chat_templates import fixture
     today = [real_datetime.datetime(2026, 11, 7, 23, 59)]
     monkeypatch.setattr(chat_format, "datetime", type("_Clock", (), {"now": staticmethod(lambda: today[0])}))
-    context = ConversationContext(fixture("llama-3.2"), ["Eins.", "Zwei."])
+    context = FakeContext(fixture("llama-3.2"), ["Eins.", "Zwei."])
     w = ChatWrapper(Config(context_size=400, min_reply_tokens=8), context=context)
     w.begin("Be brief.")
     w.reply("One?").finish()
@@ -345,9 +345,9 @@ def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_o
                            evict_to_fraction_without_shift=0.2), context=fake)
     w.begin("s")
     for i in range(8):
-        before = fake.rebuilds + fake.restores
+        before = fake.resets + fake.edit_count("restore")
         w.reply(f"message number {i} with some length").finish()
-        assert fake.rebuilds + fake.restores - before <= 1
+        assert fake.resets + fake.edit_count("restore") - before <= 1
         assert_consistent(w, fake)
 
 
@@ -423,9 +423,9 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
     w.begin("s", [("user", "a"), ("assistant", "b")] * 10 + [("user", "q")])
     with pytest.raises(ValueError, match="two user turns"):
         w.inject("noch eine Frage")
-    rebuilds, decoded = fake.rebuilds, fake.total_prefilled()
+    resets, decoded = fake.resets, fake.total_prefilled()
     w.reply().finish()
-    assert fake.rebuilds == rebuilds and fake.total_prefilled() - decoded < 100
+    assert fake.resets == resets and fake.total_prefilled() - decoded < 100
 
 
 def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_tokens():
