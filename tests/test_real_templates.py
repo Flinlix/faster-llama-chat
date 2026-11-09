@@ -86,11 +86,11 @@ def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(p
                          ids=lambda p: p.stem)
 def test_a_reply_that_reasons_streams_only_its_answer(path):
     _fixture, _context, template = _load(path)
-    tags, formatter = template.reasoning, template.formatter(True)
-    inside = begins_in_thought(tags, formatter.generation_prompt())
+    tags, prompt = template.reasoning, template.generation_prompt(True)
+    inside = begins_in_thought(tags, prompt)
     generated = ("" if inside else tags.thought_open) + "Denken" \
         + tags.thought_close + "Antwort."
-    reply = ReplyText(tags, formatter.answer_opening(), formatter.generation_prompt(), [])
+    reply = ReplyText(tags, template.answer_opening(True), prompt, [])
     shown = "".join(reply.feed(piece) for piece in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
     assert reply.thought == "Denken" and reply.thought_pieces > 0
@@ -112,9 +112,9 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     context = TagTokenizingContext(fixture)
     template = ResolvedTemplate(context)
     tags, turn_end = template.reasoning, template.turn_end_token
-    formatter = template.formatter(True)
-    inside = begins_in_thought(tags, formatter.generation_prompt())
-    reply_text = ReplyText(tags, formatter.answer_opening(), formatter.generation_prompt(), [])
+    prompt = template.generation_prompt(True)
+    inside = begins_in_thought(tags, prompt)
+    reply_text = ReplyText(tags, template.answer_opening(True), prompt, [])
     ends = reply_text.turn_end_test(turn_end, context.token_text(turn_end))
     reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close
              + "Antwort." + template._fragments.assistant_suffix)
@@ -226,11 +226,10 @@ def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
                          ids=lambda p: p.stem)
 def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
     _fixture, _context, template = _load(path)
-    formatter = template.formatter()
-    assert formatter.answer_opening()
-    generated = formatter.answer_opening() + "Antwort."
-    reply = ReplyText(template.reasoning, formatter.answer_opening(),
-                      formatter.generation_prompt(), [])
+    opening = template.answer_opening()
+    assert opening
+    generated = opening + "Antwort."
+    reply = ReplyText(template.reasoning, opening, template.generation_prompt(), [])
     shown = "".join(reply.feed(c) for c in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
 

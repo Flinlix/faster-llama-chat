@@ -173,39 +173,6 @@ class Reasoning:
     past_keeps_thought: bool = False
 
 
-class TemplateFormatter:
-    """What is read around sampling: the generation prompt, the closing after a reply, a reply's own opening.
-
-    It follows the conversation's reasoning: ``reasoning`` is set for one that
-    reasons.
-    """
-
-    def __init__(self, fragments: TemplateFragments,
-                 reasoning: Reasoning | None = None) -> None:
-        self._fragments = fragments
-        self._reasoning = reasoning
-
-    def generation_prompt(self) -> str:
-        """The generation prompt a reply is sampled after."""
-        if self._reasoning:
-            return self._reasoning.generation_prompt
-        return self._fragments.generation_prompt or self._fragments.assistant_prefix
-
-    def assistant_close(self) -> str:
-        """What the template writes after a reply's text to close its turn."""
-        return self._fragments.assistant_suffix
-
-    def answer_opening(self) -> str:
-        """What a past reply's tag holds that the generation prompt leaves to the model.
-
-        A template that routes replies through channels ends its generation
-        prompt before the channel's own header, which the model writes and
-        the answer does not include.
-        """
-        prompt, tag = self.generation_prompt(), self._fragments.assistant_prefix
-        return tag[len(prompt):] if tag.startswith(prompt) else ""
-
-
 def common_prefix_length(one: Sequence, other: Sequence) -> int:
     """How long a beginning two sequences of the same type share."""
     low, high = 0, min(len(one), len(other))

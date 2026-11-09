@@ -87,7 +87,7 @@ def _as_generated(probe, answers, reasoning):
     tags = probe._template.reasoning
     if tags is None or (reasoning and not probe.can_reason):
         return list(answers)
-    opens = begins_in_thought(tags, probe._template.formatter(reasoning).generation_prompt())
+    opens = begins_in_thought(tags, probe._template.generation_prompt(reasoning))
     if reasoning:
         return [("" if opens else tags.thought_open) + _THOUGHT + tags.thought_close + answer
                 if isinstance(answer, str) else answer for answer in answers]

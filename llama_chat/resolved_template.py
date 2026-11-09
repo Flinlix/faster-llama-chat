@@ -15,9 +15,8 @@ from .call_format import (extract_call_body, extract_call_close_text, extract_ca
                           extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
 from .messages import call_id, calling_message, result_message
-from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
-                       TemplateFragments, ToolCallFragments, common_prefix_length,
-                       shared_tags_length)
+from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
+                       ToolCallFragments, common_prefix_length, shared_tags_length)
 from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_fragments,
                                extract_reasoning, extract_removed_thought, names_read, refusing)
 from .tools import ToolCall, ToolSpec
@@ -81,6 +80,8 @@ class ResolvedTemplate:
             self._boundary = dataclasses.replace(self._boundary,
                                                  thought_tags=tuple(t for t in tags if t))
         self._check_what_generation_reads()
+        self._n_closing_tokens = len(context.tokenize(self._fragments.assistant_suffix,
+                                                      add_special=False))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -134,17 +135,44 @@ class ResolvedTemplate:
             return False
         return _SYSTEM in first[:common_prefix_length(first, second)]
 
-    def formatter(self, reasoning: bool = False) -> TemplateFormatter:
-        """What renders one message, and what is decoded around sampling.
+    def ensure_can_reason(self) -> None:
+        """Refuse to have this model reason where its template marks no thought.
+
+        Raises:
+            ValueError: If this model cannot reason.
+        """
+        if not self.can_reason:
+            raise ValueError("this model's template marks no thought that could be "
+                             "told from the answer, so it cannot be asked for reasoning")
+
+    def generation_prompt(self, reasoning: bool = False) -> str:
+        """The generation prompt a reply is sampled after, in the reasoning mode given.
 
         Raises:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
-        if reasoning and not self.can_reason:
-            raise ValueError("this model's template marks no thought that could be "
-                             "told from the answer, so it cannot be asked for reasoning")
-        return TemplateFormatter(self._fragments,
-                                 self._reasoning if reasoning else None)
+        if not reasoning:
+            return self._fragments.generation_prompt or self._fragments.assistant_prefix
+        self.ensure_can_reason()
+        return self._reasoning.generation_prompt
+
+    def answer_opening(self, reasoning: bool = False) -> str:
+        """What a past reply's tag holds that the generation prompt leaves to the model.
+
+        A template that routes replies through channels ends its generation
+        prompt before the channel's own header, which the model writes and
+        the answer does not include.
+
+        Raises:
+            ValueError: If ``reasoning`` is asked of a model that cannot reason.
+        """
+        prompt, tag = self.generation_prompt(reasoning), self._fragments.assistant_prefix
+        return tag[len(prompt):] if tag.startswith(prompt) else ""
+
+    @property
+    def n_closing_tokens(self) -> int:
+        """How many tokens the closing after a reply's text takes."""
+        return self._n_closing_tokens
 
     @property
     def can_call_tools(self) -> bool:
@@ -263,13 +291,12 @@ class ResolvedTemplate:
         """
         question = [{"role": "user", "content": _PROMPT}]
         exchange = question + [{"role": "assistant", "content": _NEXT}, *_EXCHANGE[1:]]
+        closing = self._fragments.assistant_suffix.strip()
         for reasoning in (False, True) if self.can_reason else (False,):
-            formatter = self.formatter(reasoning)
             prompted = self._render(question, generation_prompt=True, reasoning=reasoning)
             past = self._render(exchange, reasoning=reasoning)
-            closing = formatter.assistant_close().strip()
             if prompted is None or past is None or not prompted.endswith(
-                    formatter.generation_prompt()) or not past.split(_NEXT, 1)[-1].lstrip() \
+                    self.generation_prompt(reasoning)) or not past.split(_NEXT, 1)[-1].lstrip() \
                     .startswith(closing):
                 raise ValueError(
                     "this model's template writes its generation prompt or the closing "

@@ -86,7 +86,6 @@ class ChatWrapper:
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
             self._template = ResolvedTemplate(self._context, tool_calls=tool_calls)
-            self._formatter = self._template.formatter()
         except BaseException:
             if owns_context:
                 self._context.close()
@@ -161,7 +160,8 @@ class ChatWrapper:
             specs = list(_specs_declared_at_begin(tools) or [])
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 self._template.ensure_tools_usable()
-            formatter = self._template.formatter(reasoning)
+            if reasoning:
+                self._template.ensure_can_reason()
             if system_prompt and not self._template.has_system_turn:
                 raise ValueError(
                     "this model's template does not keep a system prompt in place: it "
@@ -172,7 +172,6 @@ class ChatWrapper:
                 self._warmed = True
             kept = self._conversation.start(system_prompt, messages, specs, reasoning)
             self._registry = registry
-            self._formatter = formatter
             return kept
 
     # ----- adding context ------------------------------------------------------
@@ -654,17 +653,15 @@ class ChatWrapper:
             n_evicted_messages = conversation.ask(text, accept=self._reporting("user", text))
         elif not conversation.reply_open:
             conversation.prompt()
-        close_tokens = self._context.tokenize(self._formatter.assistant_close(),
-                                              add_special=False)
-        budget = self._config.context_size - conversation.total_tokens - len(close_tokens)
         cap = max_reply_tokens if max_reply_tokens is not None else self._config.max_reply_tokens
         stops = list(self._config.stop_strings) + list(stop or [])
 
         generated = GenerationAccumulator()
-        reply_text = ReplyText(self._template.reasoning, self._formatter.answer_opening(),
+        reply_text = ReplyText(self._template.reasoning,
+                               self._template.answer_opening(conversation.reasoning),
                                conversation.prompt_text, stops)
         pieces = conversation.generate(
-            max(0, min(cap, budget)), generated, cancel=cancel,
+            cap, generated, cancel=cancel,
             sampling=sampling, ends_turn=self._turn_end_test(reply_text),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
         try:

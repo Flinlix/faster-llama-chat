@@ -148,6 +148,11 @@ class RenderedCache:
         return self._state.begun
 
     @property
+    def reasoning(self) -> bool:
+        """Whether the conversation reasons, as it was begun."""
+        return self._state.reasoning
+
+    @property
     def reply_open(self) -> bool:
         """Whether the newest turn called tools and is not closed: a call is owed a result, or a result waits for the reply after it."""
         return bool(self.owed_calls) or self._ends_on_result()
@@ -404,7 +409,10 @@ class RenderedCache:
 
     # ----- generating -------------------------------------------------------------------
     def generate(self, max_tokens: int, generated: GenerationAccumulator, **options):
-        """Stream one generation from the cache's end; what it decodes is held as the cache's.
+        """Stream one generation of at most ``max_tokens`` from the cache's end; what it decodes is held as the cache's.
+
+        It stops short of ``max_tokens`` where the context leaves less room
+        beside the closing after the reply.
 
         Raises:
             ValueError: If no conversation was begun, or the open turn still
@@ -418,7 +426,9 @@ class RenderedCache:
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.reply_open, before_question)
-        return self._memory.generate(max_tokens, generated, **options)
+        room = (self._config.context_size - len(self._memory.tokens)
+                - self._template.n_closing_tokens)
+        return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, recorded=None) -> int:
