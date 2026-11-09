@@ -9,7 +9,7 @@ from tests.wrappers import (assert_consistent, begun_wrapper, tool_wrapper, unbe
                             weather_registry, rows)
 
 
-# ----- beginning again from history() --------------------------------------
+# ----- beginning again from conversation() ---------------------------------
 def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     registry = weather_registry()
     live, fake = tool_wrapper(context_size=2048)
@@ -18,7 +18,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     fake.call_script = ["weather{city:'Bonn'}"]
     live.reply("wetter?", calls="run").finish()
     live.reply("danke").finish()
-    history = live.history()
+    history = live.conversation()[1]
     assert [type(item).__name__ for item in history] == [
         "tuple", "tuple", "tuple", "ToolTurn", "tuple", "tuple"]
     turn = history[3]
@@ -27,7 +27,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     again, fake_again = tool_wrapper(context_size=2048)
     again.begin("persona", history, tools=registry)
     assert fake_again.cache == fake.cache
-    assert again.history() == history
+    assert again.conversation()[1] == history
 
 
 # ----- a history that called tools -----------------------------------------
@@ -45,7 +45,7 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     past.begin("s", [("user", "wie spät?"), ToolTurn((
         ToolCall("uhr", {}), ToolResult("uhr", {"zeit": "12:00"}), "Gleich."))],
         tools=[ToolSpec("uhr", "", {})])
-    assert past.history()[-1].text == "Gleich."
+    assert past.conversation()[1][-1].text == "Gleich."
     # The live turn opens with the generation prompt, a past one as the template
     # writes it; this template makes the two the same.
     assert past_fake.cache == fake.cache
@@ -107,8 +107,8 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
     live.begin("persona", tools=weather_registry())
     live.reply("hallo").finish()
     again, fake_again = tool_wrapper()
-    again.begin(live.system_prompt, live.history(), tools=weather_registry())
-    assert live.system_prompt == "persona"
+    again.begin(*live.conversation(), tools=weather_registry())
+    assert live.conversation()[0] == "persona"
     assert fake_again.cache == fake.cache
 
 
@@ -119,12 +119,12 @@ def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     fake.call_script = ["weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", calls="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
-    w.history()[-1].steps[-1].arguments["city"] = "Rom"
-    assert w.history()[-1].steps[-1].arguments == {"city": "Bonn"}
+    w.conversation()[1][-1].steps[-1].arguments["city"] = "Rom"
+    assert w.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
     again, _ = tool_wrapper()
-    again.begin("persona", w.history(), tools=weather_registry())
+    again.begin("persona", w.conversation()[1], tools=weather_registry())
     again._conversation.owed_calls[0].arguments["city"] = "Rom"
-    assert again.history()[-1].steps[-1].arguments == {"city": "Bonn"}
+    assert again.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
 
 
 def test_the_conversation_reads_back_as_begin_takes_it():

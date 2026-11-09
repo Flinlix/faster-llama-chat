@@ -98,11 +98,10 @@ class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`history`, :meth:`conversation` and :attr:`system_prompt`, which
-    read a copy published after each change. Each action leaves the cache
-    equal to the template's render of the messages, a turn that called tools
-    held as it was generated, or, where it raises, the conversation and the
-    cache as they were before it.
+    :meth:`conversation`, which reads a copy published after each change.
+    Each action leaves the cache equal to the template's render of the
+    messages, a turn that called tools held as it was generated, or, where it
+    raises, the conversation and the cache as they were before it.
     """
 
     def __init__(self, context, template: ResolvedTemplate, config: Config) -> None:
@@ -124,17 +123,8 @@ class RenderedCache:
         """The conversation as the template is given it; not to be changed by the caller."""
         return self._state.messages
 
-    @property
-    def system_prompt(self) -> str:
-        """The system prompt, as last published; safe to read unlocked."""
-        return self._published[1]
-
-    def history(self) -> list:
-        """The conversation as ``begin`` takes it, as last published, the caller's to change; safe to read unlocked."""
-        return copy.deepcopy(list(self._published[0]))
-
     def conversation(self) -> tuple[str, list]:
-        """The system prompt and the history, from one publication; safe to read unlocked."""
+        """The system prompt and the history as ``begin`` takes them, from one publication, the caller's to change; safe to read unlocked."""
         history, system_prompt = self._published
         return system_prompt, copy.deepcopy(list(history))
 

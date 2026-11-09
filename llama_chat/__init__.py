@@ -9,8 +9,8 @@ The core actions, each prefilling as little as possible:
   refusing, handing over or running the tool calls the model makes.
 * :meth:`ChatWrapper.truncate_last_reply`: shorten the newest reply to what was
   read or heard of it.
-* :meth:`ChatWrapper.history`: the conversation the cache holds, tool turns
-  included, as :meth:`ChatWrapper.begin` takes it.
+* :meth:`ChatWrapper.conversation`: the system prompt and the history the
+  cache holds, tool turns included, as :meth:`ChatWrapper.begin` takes them.
 
 Crossing either eviction limit removes the oldest exchanges and shifts the
 survivors down, reusing their KV without re-prefilling. A model whose own

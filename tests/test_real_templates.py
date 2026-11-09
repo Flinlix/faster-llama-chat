@@ -53,7 +53,8 @@ def _held_before_the_reply(path, history, question, system=None, tools=None, rea
 
 
 def _render(context, chat, messages, tools=None, reasoning=False):
-    system = [{"role": "system", "content": chat.system_prompt}] if chat.system_prompt else []
+    prompt = chat.conversation()[0]
+    system = [{"role": "system", "content": prompt}] if prompt else []
     return chat._template.render(
         system + messages, [spec.as_declaration() for spec in tools] if tools else None,
         generation_prompt=True, reasoning=reasoning)

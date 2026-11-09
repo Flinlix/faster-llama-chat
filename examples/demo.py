@@ -49,7 +49,7 @@ def load_bar(frac: float, width: int = 40) -> None:
 
 
 def show(w: ChatWrapper) -> None:
-    history = w.history()
+    _, history = w.conversation()
     print(f"  cache: {w.total_tokens} tokens across {len(history)} messages after the system prompt")
     for item in history:
         role, text = ("assistant", item.text) if isinstance(item, ToolTurn) else item
@@ -114,8 +114,9 @@ def main() -> None:
     begin(sw, "You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
-        roles = [item[0] if isinstance(item, tuple) else "assistant" for item in sw.history()]
-        assert sw.system_prompt or not sw.can_take_system_prompt, "system message was evicted"
+        system, history = sw.conversation()
+        roles = [item[0] if isinstance(item, tuple) else "assistant" for item in history]
+        assert system or not sw.can_take_system_prompt, "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "

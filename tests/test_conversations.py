@@ -313,7 +313,7 @@ def test_a_long_history_is_kept_from_its_newest_end_within_half_the_context_unre
     before = len(run.context.rendered)
     kept = run.begin(history)
     assert 0 < kept < len(history)
-    assert run.chat.history() == history[-kept:]
+    assert run.chat.conversation()[1] == history[-kept:]
     # No render is given much more than twice what is kept, never the whole history.
     assert max(run.context.rendered[before:]) <= 2 * kept + 4
     tokens = lambda items: len(run.context.tokenize(run.render(   # noqa: E731
@@ -351,7 +351,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
-        assert any(role == "user" for role, _ in run.chat.history())
+        assert any(role == "user" for role, _ in run.chat.conversation()[1])
     assert evicted
 
 
@@ -527,7 +527,7 @@ def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_wen
     run.chat.reply("And now?").finish()
     sent = sum(_exchanges(QUESTIONS[:3], ANSWERS[:3]), [])
     assert run.seen[0] == run.render(sent + [{"role": "user", "content": "And now?"}])
-    assert run.chat.history()[:6] == history
+    assert run.chat.conversation()[1][:6] == history
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -557,10 +557,10 @@ def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable():
     run = _Run("qwen-2.5", context_size=300)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    history, held = run.chat.history(), list(run.context.cache)
+    history, held = run.chat.conversation()[1], list(run.context.cache)
     with pytest.raises(ValueError):
         run.chat.begin("x" * 400)               # longer than the limit
-    assert run.chat.history() == history and run.context.cache == held
+    assert run.chat.conversation()[1] == history and run.context.cache == held
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
 
 
@@ -649,7 +649,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
     sent = as_messages([("user", "Weather?"), turn]) + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1]), [])
     assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}],
                                       [WEATHER, clock])
-    assert isinstance(run.chat.history()[1], ToolTurn)
+    assert isinstance(run.chat.conversation()[1][1], ToolTurn)
 
 
 def _call_body(run, arguments):
@@ -802,7 +802,7 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call():
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
-    assert run.chat.history()[-1] == ("assistant", "Write")
+    assert run.chat.conversation()[1][-1] == ("assistant", "Write")
 
 
 def test_a_shortened_reply_is_kept_as_the_template_writes_it():
@@ -849,7 +849,7 @@ def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limit
         reply = chat.reply(f"Wetter {n}?", calls="run").finish()
         assert reply.text == "Sonnig"
         assert chat.total_tokens <= chat.config.evict_above_tokens
-    assert len(chat.history()) < 8
+    assert len(chat.conversation()[1]) < 8
 
 
 def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refused():
@@ -861,7 +861,7 @@ def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refus
     chat.begin("")
     with pytest.raises(ValueError, match="text in its place"):
         chat.reply("Hello /no_think").finish()
-    assert chat.history() == [] and chat.reply("Hello").finish().text == "Fine."
+    assert chat.conversation()[1] == [] and chat.reply("Hello").finish().text == "Fine."
 
 
 def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():

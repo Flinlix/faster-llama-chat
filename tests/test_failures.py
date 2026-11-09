@@ -48,10 +48,10 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
     w, fake = _flaky(gen_tokens=2)
     w.begin("s")
     w.reply("eins").finish()
-    before = w.history()
+    before = w.conversation()[1]
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 600)
-    assert w.history() == before and w.system_prompt == "s"
+    assert w.conversation() == ("s", before)
     w.reply("zwei").finish()
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
 
@@ -60,11 +60,11 @@ def test_a_restart_whose_decode_fails_puts_the_previous_conversation_back():
     w, fake = _flaky(gen_tokens=2)
     w.begin("s")
     w.reply("eins").finish()
-    before = w.history()
+    before = w.conversation()[1]
     fake.fail = "decode"
     with pytest.raises(RuntimeError):
         w.begin("t", [("user", "a"), ("assistant", "b")])
-    assert w.history() == before and w.system_prompt == "s"
+    assert w.conversation() == ("s", before)
     w.reply("zwei").finish()                   # the cache is decoded again, then goes on
     assert_consistent(w, fake)
 
@@ -86,7 +86,7 @@ def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversa
     today[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 400)
-    assert w.history() == [("user", "One?"), ("assistant", "Eins.")]
+    assert w.conversation()[1] == [("user", "One?"), ("assistant", "Eins.")]
     assert w.reply("Two?").finish().text == "Zwei."
 
 
@@ -172,11 +172,11 @@ def test_a_question_whose_decode_fails_is_not_recorded(join):
     w, fake = _flaky(user_join=join, gen_tokens=2)
     w.begin("s")
     w.reply("eins").finish()
-    before = w.history()
+    before = w.conversation()[1]
     fake.fail = "decode"
     with pytest.raises(RuntimeError):
         w.reply("zwei").finish()
-    assert w.history() == before
+    assert w.conversation()[1] == before
     w.reply("drei").finish()
     assert [r["text"] for r in rows(w)][-2] == "drei"
     assert_consistent(w, fake)
@@ -189,7 +189,7 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
     w.begin("s")
     with pytest.raises(ContextOverflowError):
         w.reply("hello").finish()
-    assert w.history() == []
+    assert w.conversation()[1] == []
 
 
 # ----- the cache's own failures -----------------------------------------------------
@@ -236,7 +236,7 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     split = type(w._conversation._rendering).split
 
     def reading(self, messages, generation_prompt):
-        seen.append(len(w.history()))           # as another thread reads it, mid-action
+        seen.append(len(w.conversation()[1]))           # as another thread reads it, mid-action
         return split(self, messages, generation_prompt)
 
     monkeypatch.setattr(type(w._conversation._rendering), "split", reading)
@@ -251,20 +251,20 @@ def test_a_call_ceiling_where_no_call_is_run_is_refused():
     for calls in ("refuse", "yield", "withhold"):
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", calls=calls, max_calls=2)
-    assert w.history() == []
+    assert w.conversation()[1] == []
 
 
 def test_a_generation_that_fails_before_it_says_anything_takes_its_question_back():
     w, fake = _flaky(gen_tokens=2)
     w.begin("s")
     w.reply("eins").finish()
-    before = w.history()
+    before = w.conversation()[1]
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply("zwei").finish()
-    assert w.history() == before
+    assert w.conversation()[1] == before
     w.reply("zwei").finish()
-    assert w.history()[-2:] == [("user", "zwei"), ("assistant", "re")]
+    assert w.conversation()[1][-2:] == [("user", "zwei"), ("assistant", "re")]
     assert_consistent(w, fake)
 
 
@@ -274,13 +274,13 @@ def test_a_failed_generation_keeps_a_question_its_request_did_not_ask():
     w.begin("s")
     w.reply("eins").finish()
     w.inject("Lies diese Notiz.")
-    before = w.history()
+    before = w.conversation()[1]
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply().finish()
-    assert w.history() == before
+    assert w.conversation()[1] == before
     w.reply().finish()
-    assert w.history()[-2:] == [("user", "Lies diese Notiz."), ("assistant", "re")]
+    assert w.conversation()[1][-2:] == [("user", "Lies diese Notiz."), ("assistant", "re")]
 
 
 def test_a_failed_generation_keeps_the_question_a_history_ends_on():
@@ -289,7 +289,7 @@ def test_a_failed_generation_keeps_the_question_a_history_ends_on():
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply().finish()
-    assert w.history() == [("user", "aus der Geschichte")]
+    assert w.conversation()[1] == [("user", "aus der Geschichte")]
 
 
 def test_a_question_taken_back_after_a_failed_generation_leaves_no_reply_recorded():
@@ -320,7 +320,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
         w.reply("Wetter?", calls="yield").finish()
     fake.sampled_tokens = sampled
     assert not w.reply_open and w._conversation.owed_calls == []
-    assert w.history()[-2:] == [("user", "Wetter?"), ("assistant", "")]
+    assert w.conversation()[1][-2:] == [("user", "Wetter?"), ("assistant", "")]
     w.reply("weiter").finish()
     assert_consistent(w, fake)
 

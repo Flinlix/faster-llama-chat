@@ -126,7 +126,7 @@ model and makes later actions raise.
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
 | telling the model about more tools | `declare_tools(registry_or_specs)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
-| reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. `system_prompt` and `history()` read each alone. Safe from any thread, while a reply runs too: each reads the conversation as the newest finished change left it, and `conversation()` reads both from the same one |
+| reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads both as the newest finished change left them |
 | where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 

@@ -408,31 +408,16 @@ class ChatWrapper:
         self._lock.release()
         return True
 
-    @property
-    def system_prompt(self) -> str:
-        """The system prompt the conversation was begun with, for :meth:`begin` beside :meth:`history`."""
-        return self._conversation.system_prompt
-
-    def history(self) -> list[tuple[str, str] | ToolTurn]:
-        """The conversation the cache holds, oldest first, as :meth:`begin` takes it.
-
-        Every message after the system prompt: ``(role, text)`` pairs, and a
-        :class:`~llama_chat.tools.ToolTurn` for an assistant turn that called
-        tools, with its calls and results. Begun again from it, with the same
-        system prompt and tools, the conversation reads in as the template
-        writes it, a call still owed a result owed again. Safe from any thread,
-        including while another is mid-generation: it is the conversation as
-        the newest finished change left it.
-        """
-        return self._conversation.history()
-
     def conversation(self) -> tuple[str, list[tuple[str, str] | ToolTurn]]:
-        """The system prompt and the history, read together as one change left them.
+        """The system prompt and the history the cache holds, as :meth:`begin` takes them.
 
-        ``begin(*chat.conversation())``, with the same tools, begins again as it
-        was. Safe from any thread, where :attr:`system_prompt` and
-        :meth:`history` read one after the other could each see another
-        :meth:`begin`.
+        The history is every message after the system prompt, oldest first:
+        ``(role, text)`` pairs, and a :class:`~llama_chat.tools.ToolTurn` for
+        an assistant turn that called tools, with its calls and results.
+        ``begin(*chat.conversation())``, with the same tools, begins again as
+        the template writes it, a call still owed a result owed again. Safe
+        from any thread, including while another is mid-generation: both are
+        read as the newest finished change left them.
         """
         return self._conversation.conversation()
 
