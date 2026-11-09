@@ -30,12 +30,12 @@ _THOUGHT_FIELDS = ("reasoning_content", "thinking")
 # probe texts below are plain alphanumerics: they survive Jinja `| trim` and are
 # never HTML-escaped.
 _SYS = "SYSMSG"
-_USER = "USERMSG"
+USER_SENTINEL = "USERMSG"
 _USER2 = "USERTWO"
-_ASSISTANT = "ASSTMSG"
+ASSISTANT_SENTINEL = "ASSTMSG"
 _THOUGHT = "THOUGHTMSG"
 # The function a probe calls, and what brackets each text the rewrite probe reads.
-_TOOL = "TOOLNAME"
+TOOL_SENTINEL = "TOOLNAME"
 _MARK = "QQMARK"
 
 # Renders messages through the model's template, or returns None where the
@@ -57,7 +57,7 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
         render_variables: Renders ``messages`` with ``generation_prompt`` and
             template variables as keywords, raising where the template does.
     """
-    probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
+    probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     render = refusing(render_variables)
 
     def rendered(**variables):
@@ -66,7 +66,8 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
     if rendered(**thinking[True]) == rendered(**thinking[False]):
         on, off = rendered(reasoning_effort="high"), rendered()
-        if None not in (on, off) and on.split(_USER, 1)[-1] != off.split(_USER, 1)[-1]:
+        if None not in (on, off) \
+                and on.split(USER_SENTINEL, 1)[-1] != off.split(USER_SENTINEL, 1)[-1]:
             thinking = {True: {"reasoning_effort": "high"}, False: {}}
     return lambda reasoning: {} if reasoning is None else thinking[reasoning]
 
@@ -91,7 +92,7 @@ def refusing(render: Render) -> Render:
     return rendered
 
 
-def _as_probes_read(render: Render) -> Render:
+def as_probes_read(render: Render) -> Render:
     """``render`` as probes read it.
 
     It answers ``None`` where it raises, a template refusing a shape. A render
@@ -116,12 +117,14 @@ def _conversation_end(render: Render) -> str:
     Read as what follows a lone user turn but not the same turn followed by a
     reply, and also ends the render with the reply.
     """
-    alone = render([{"role": "user", "content": _USER}], reasoning=False)
-    followed = render([{"role": "user", "content": _USER},
-                       {"role": "assistant", "content": _ASSISTANT}], reasoning=False)
-    if alone is None or followed is None or _USER not in alone or _USER not in followed:
+    alone = render([{"role": "user", "content": USER_SENTINEL}], reasoning=False)
+    followed = render([{"role": "user", "content": USER_SENTINEL},
+                       {"role": "assistant", "content": ASSISTANT_SENTINEL}], reasoning=False)
+    if alone is None or followed is None \
+            or USER_SENTINEL not in alone or USER_SENTINEL not in followed:
         return ""
-    after_alone, after_followed = alone.split(_USER, 1)[1], followed.split(_USER, 1)[1]
+    after_alone = alone.split(USER_SENTINEL, 1)[1]
+    after_followed = followed.split(USER_SENTINEL, 1)[1]
     end = after_alone[shared_tags_length(after_alone, after_followed):]
     return end if followed.endswith(end) else ""
 
@@ -142,11 +145,11 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
     Returns:
         The fragments, or ``None`` where the model ships no usable template.
     """
-    render = _as_probes_read(render)
-    user = render([{"role": "user", "content": _USER}], reasoning=False)
-    if user is None or _USER not in user:
+    render = as_probes_read(render)
+    user = render([{"role": "user", "content": USER_SENTINEL}], reasoning=False)
+    if user is None or USER_SENTINEL not in user:
         return None
-    first_prefix, _, user_suffix = user.partition(_USER)
+    first_prefix, _, user_suffix = user.partition(USER_SENTINEL)
     tags = (_past_exchange(render, first_prefix, user_suffix)
             or _newest_exchange(render, first_prefix, user_suffix))
     user_prefix, assistant_prefix, assistant_suffix = tags
@@ -171,13 +174,13 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         be recovered. A template without a switch that marks one reasons, or
         may, in every reply.
     """
-    render = _as_probes_read(render)
+    render = as_probes_read(render)
     found = _thought_tags(render, fragments, tool_calls) or _empty_thought_tags(render)
     if found is None:
         return None
     tags, reply_with_thought = found
     prompt = fragments.generation_prompt or fragments.assistant_prefix
-    messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": _USER}]
+    messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     on = render(messages, generation_prompt=True, reasoning=True)
     off = render(messages, generation_prompt=True, reasoning=False)
     if on is not None and off is not None and on != off:
@@ -197,16 +200,16 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
     name without the slash. Such a template has no switch, so the model may
     reason in every reply.
     """
-    render = _as_probes_read(render)
+    render = as_probes_read(render)
     known = set(tags)
     for close in tags:
         opening = "<" + close[2:]
         if not close.startswith("</") or opening not in known:
             continue
-        rendered = render([{"role": "user", "content": _USER},
-                           {"role": "assistant", "content": _THOUGHT + close + _ASSISTANT},
+        rendered = render([{"role": "user", "content": USER_SENTINEL},
+                           {"role": "assistant", "content": _THOUGHT + close + ASSISTANT_SENTINEL},
                            {"role": "user", "content": _USER2}], reasoning=False)
-        if rendered is not None and _ASSISTANT in rendered and _THOUGHT not in rendered:
+        if rendered is not None and ASSISTANT_SENTINEL in rendered and _THOUGHT not in rendered:
             return Reasoning(thought_open=opening, thought_close=close,
                              generation_prompt=fragments.generation_prompt
                              or fragments.assistant_prefix)
@@ -233,9 +236,9 @@ def _past_keeps_thought(render: Render, reply: dict | None) -> bool:
     if reply is None:
         return False
     rendered = render([
-        {"role": "user", "content": _USER},
+        {"role": "user", "content": USER_SENTINEL},
         {key: value for key, value in reply.items() if key != "tool_calls"}
-        | ({"content": _ASSISTANT} if "tool_calls" in reply else {}),
+        | ({"content": ASSISTANT_SENTINEL} if "tool_calls" in reply else {}),
         {"role": "user", "content": _USER2},
     ], reasoning=True)
     return rendered is not None and _THOUGHT in rendered
@@ -245,25 +248,25 @@ def _past_exchange(render: Render, first_prefix: str,
                    user_suffix: str) -> tuple[str, str, str] | None:
     """The user and assistant tags, read from a reply that a later turn follows."""
     rendered = render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": _ASSISTANT},
+        {"role": "user", "content": USER_SENTINEL},
+        {"role": "assistant", "content": ASSISTANT_SENTINEL},
         {"role": "user", "content": _USER2},
     ], reasoning=False)
     newest = render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": _ASSISTANT},
+        {"role": "user", "content": USER_SENTINEL},
+        {"role": "assistant", "content": ASSISTANT_SENTINEL},
     ], reasoning=False)
-    opened = _USER + user_suffix
-    if rendered is None or newest is None or _ASSISTANT not in newest \
+    opened = USER_SENTINEL + user_suffix
+    if rendered is None or newest is None or ASSISTANT_SENTINEL not in newest \
             or opened not in rendered or _USER2 not in rendered:
         return None
     exchange = rendered.split(opened, 1)[1]
-    if _ASSISTANT not in exchange:
+    if ASSISTANT_SENTINEL not in exchange:
         return None
-    assistant_prefix, _, between = exchange.partition(_ASSISTANT)
+    assistant_prefix, _, between = exchange.partition(ASSISTANT_SENTINEL)
     between = between.split(_USER2, 1)[0]
     # Empty where turns have no closing tag, the next turn's tag ending them.
-    assistant_suffix = newest.split(_ASSISTANT, 1)[1]
+    assistant_suffix = newest.split(ASSISTANT_SENTINEL, 1)[1]
     if not between.startswith(assistant_suffix):
         # A past reply closes with another tag than a newest one; the user
         # tag then starts where the role tags' shared opening last occurs.
@@ -296,21 +299,21 @@ def _newest_exchange(render: Render, user_prefix: str,
                      user_suffix: str) -> tuple[str, str, str]:
     """The tags read from one user turn and its reply, or the user tags reused."""
     both = render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": _ASSISTANT},
+        {"role": "user", "content": USER_SENTINEL},
+        {"role": "assistant", "content": ASSISTANT_SENTINEL},
     ], reasoning=False)
-    if both is None or _ASSISTANT not in both or _USER + user_suffix not in both:
+    if both is None or ASSISTANT_SENTINEL not in both or USER_SENTINEL + user_suffix not in both:
         # No assistant turn to split off; the user tags still give generation
         # an open and close pair.
         return user_prefix, user_prefix, user_suffix
-    tail = both.split(_USER + user_suffix, 1)[1]
-    assistant_prefix, _, assistant_suffix = tail.partition(_ASSISTANT)
+    tail = both.split(USER_SENTINEL + user_suffix, 1)[1]
+    assistant_prefix, _, assistant_suffix = tail.partition(ASSISTANT_SENTINEL)
     return user_prefix, assistant_prefix, assistant_suffix
 
 
 def _prompt_added(render: Render, reasoning: bool) -> str | None:
     """The whole generation prompt after a user turn, or ``None``."""
-    messages = [{"role": "user", "content": _USER}]
+    messages = [{"role": "user", "content": USER_SENTINEL}]
     plain = render(messages, reasoning=reasoning)
     prompted = render(messages, generation_prompt=True, reasoning=reasoning)
     if plain is None or prompted is None or not prompted.startswith(plain):
@@ -336,20 +339,20 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
     past reply's tag; where a past reply's tag already holds it, as an empty
     thought, it is the last tag before the thought.
     """
-    opened = _USER + fragments.user_suffix
+    opened = USER_SENTINEL + fragments.user_suffix
     prompt = fragments.generation_prompt or fragments.assistant_prefix
     probes = []
-    replies = [{"role": "assistant", "content": _ASSISTANT, field: _THOUGHT}
+    replies = [{"role": "assistant", "content": ASSISTANT_SENTINEL, field: _THOUGHT}
                for field in _THOUGHT_FIELDS]
     # A template may read the thought from a content block of its own.
     replies.append({"role": "assistant", "content": [
         {"type": "thinking", "thinking": _THOUGHT},
-        {"type": "text", "text": _ASSISTANT}]})
+        {"type": "text", "text": ASSISTANT_SENTINEL}]})
     for reply in replies:
-        probes.append(([{"role": "user", "content": _USER}, reply], _ASSISTANT))
+        probes.append(([{"role": "user", "content": USER_SENTINEL}, reply], ASSISTANT_SENTINEL))
         if tool_calls is not None:
-            probes.append(([{"role": "user", "content": _USER},
-                            {**reply, **calling_message("", [ToolCall(_TOOL, {})], 0)}],
+            probes.append(([{"role": "user", "content": USER_SENTINEL},
+                            {**reply, **calling_message("", [ToolCall(TOOL_SENTINEL, {})], 0)}],
                            tool_calls.call_open))
     for messages, after in probes:
         rendered = render(messages, reasoning=True)
@@ -406,7 +409,7 @@ def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ..
     texts = [text for text in dict.fromkeys(texts) if text and _MARK not in text]
     marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]
     content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
-    rendered = _as_probes_read(render)([{"role": "user", "content": content}], reasoning=False)
+    rendered = as_probes_read(render)([{"role": "user", "content": content}], reasoning=False)
     if rendered is None or not all(mark in rendered for mark in marks):
         return ()
     rewrites = []

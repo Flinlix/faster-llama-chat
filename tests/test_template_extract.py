@@ -12,7 +12,7 @@ import pytest
 from llama_chat.call_format import (_KEY, _KEY2, _NUMBER, _STRING, _STRING2, extract_call_body,
                                     extract_tool_fragments)
 from llama_chat.template import CallBody
-from llama_chat.template_extract import _TOOL, extract_fragments, reasoning_switch
+from llama_chat.template_extract import TOOL_SENTINEL, extract_fragments, reasoning_switch
 
 
 def _tool_fragments(render):
@@ -394,7 +394,7 @@ def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
 
 
 # The sentinels a render can drop, and the text each appears as.
-_SENTINELS = {"name": _TOOL, "key": _KEY, "key2": _KEY2,
+_SENTINELS = {"name": TOOL_SENTINEL, "key": _KEY, "key2": _KEY2,
               "string": _STRING, "string2": _STRING2, "number": str(_NUMBER)}
 
 
@@ -469,8 +469,9 @@ def test_no_render_sentinel_contains_another():
     sentinels = {name: getattr(module, name)
                  for module, names in (
                      (resolved_template, ("_PROMPT", "_RESULT", "_NEXT")),
-                     (template_extract, ("_SYS", "_USER", "_USER2", "_ASSISTANT",
-                                         "_THOUGHT", "_TOOL")))
+                     (template_extract, ("_SYS", "USER_SENTINEL", "_USER2",
+                                         "ASSISTANT_SENTINEL", "_THOUGHT",
+                                         "TOOL_SENTINEL")))
                  for name in names}
     assert len(set(sentinels.values())) == len(sentinels)
     for name, value in sentinels.items():

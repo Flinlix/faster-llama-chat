@@ -12,7 +12,8 @@ import dataclasses
 from .messages import calling_message
 from .template import (CallBody, TemplateFragments, ToolCallFragments, common_prefix_length,
                        common_suffix_length, shared_tags_length)
-from .template_extract import _ASSISTANT, _TOOL, _USER, Render, _as_probes_read
+from .template_extract import (ASSISTANT_SENTINEL, TOOL_SENTINEL, USER_SENTINEL, Render,
+                               as_probes_read)
 from .tools import ToolCall
 
 # Probe arguments, plain alphanumerics like every probe text. `AKEYONE` sorts
@@ -48,21 +49,21 @@ def extract_tool_fragments(render: Render,
         The tags, or ``None`` where nothing usable can be recovered, which is
         what a model that cannot call tools looks like from here.
     """
-    render = _as_probes_read(render)
+    render = as_probes_read(render)
     if fragments.assistant_prefix == fragments.user_prefix:
         return None
     text = _render_call(render, {_KEY: _STRING})
     number = _render_call(render, {_KEY: _NUMBER})
     if text is None or number is None:
         return None
-    if _TOOL not in text or _TOOL not in number:
+    if TOOL_SENTINEL not in text or TOOL_SENTINEL not in number:
         return None            # the template dropped the call instead of rendering it
-    head = text.split(_TOOL, 1)[0]
+    head = text.split(TOOL_SENTINEL, 1)[0]
     # The turn holding the call has to be locatable, or there is no telling
     # where the conversation before it ends and the call's own opening begins.
     # It may open without the content tag a reply in words opens with, and
     # then begins after the tags the two share.
-    after_user = _USER + fragments.user_suffix
+    after_user = USER_SENTINEL + fragments.user_suffix
     if after_user not in head:
         return None
     turn = head.split(after_user, 1)[1]
@@ -77,7 +78,7 @@ def extract_tool_fragments(render: Render,
     call_close = _common_suffix(text, number)
     # A template that ignored the arguments renders the two probes identically,
     # and then the shared ending runs back past the call into the conversation.
-    if not call_open or not call_close or _TOOL in call_close:
+    if not call_open or not call_close or TOOL_SENTINEL in call_close:
         return None
     return ToolCallFragments(call_open=call_open, call_close=call_close)
 
@@ -94,9 +95,10 @@ def extract_call_separator(render: Render, call_open: str) -> str | None:
         The text, or ``None`` where the template does not open each call with
         ``call_open`` or such an end of it.
     """
-    rendered = _as_probes_read(render)([
-        {"role": "user", "content": _USER},
-        calling_message("", [ToolCall(_TOOL, {_KEY: value}) for value in (_STRING, _STRING2)], 0),
+    rendered = as_probes_read(render)([
+        {"role": "user", "content": USER_SENTINEL},
+        calling_message("", [ToolCall(TOOL_SENTINEL, {_KEY: value})
+                             for value in (_STRING, _STRING2)], 0),
     ], reasoning=False)
     if rendered is None:
         return None
@@ -129,7 +131,7 @@ def extract_call_body(render: Render, call_open: str,
         delimiter. Such a model's calls are still detected, because the tags are
         tokens, but what is inside one cannot be read.
     """
-    render = _as_probes_read(render)
+    render = as_probes_read(render)
     def rendered_body(arguments) -> str | None:
         rendered = _render_call(render, arguments)
         if rendered is None or call_open not in rendered:
@@ -140,7 +142,7 @@ def extract_call_body(render: Render, call_open: str,
     empty, text = rendered_body({}), rendered_body({_KEY: _STRING})
     number, pair = rendered_body({_KEY: _NUMBER}), rendered_body({_KEY: _STRING,
                                                                   _KEY2: _STRING2})
-    if any(r is None or _TOOL not in r for r in (empty, text, number, pair)):
+    if any(r is None or TOOL_SENTINEL not in r for r in (empty, text, number, pair)):
         return None
     # The sentinels the splits below index on. A template that drops one proves
     # nothing about the delimiter that would have surrounded it.
@@ -151,8 +153,8 @@ def extract_call_body(render: Render, call_open: str,
 
     # After the name: as far as the one-argument and the no-argument renders
     # agree. Past that they diverge into the first argument and into the end.
-    opens_args = text.split(_TOOL, 1)[1].split(_KEY, 1)[0]
-    no_arguments = empty.split(_TOOL, 1)[1]
+    opens_args = text.split(TOOL_SENTINEL, 1)[1].split(_KEY, 1)[0]
+    no_arguments = empty.split(TOOL_SENTINEL, 1)[1]
     name_close = opens_args[:common_prefix_length(opens_args, no_arguments)]
     # Nothing between the name and the arguments is readable only where the
     # first key's own tag marks where they begin, and nothing follows a name
@@ -203,7 +205,7 @@ def extract_call_body(render: Render, call_open: str,
         **_nested_forms(rendered_body, text, before_value[len(bare_before):], quote_close),
     )
     # A delimiter still holding a probe's own text is no fixed delimiter at all.
-    sentinels = (_TOOL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
+    sentinels = (TOOL_SENTINEL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
     if any(sentinel in delimiter for sentinel in sentinels
            for delimiter in dataclasses.astuple(body) if isinstance(delimiter, str)):
         return None
@@ -256,7 +258,7 @@ def extract_call_close_text(render: Render, call_open: str) -> str | None:
     and one without both end with. Where a template writes no two calls in one
     turn, the longest such end of the latter.
     """
-    render = _as_probes_read(render)
+    render = as_probes_read(render)
     empty, text = _render_call(render, {}), _render_call(render, {_KEY: _STRING})
     if empty is None or text is None or call_open not in empty or call_open not in text:
         return None
@@ -279,13 +281,13 @@ def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
     ``call_open``, and again in the call's body, which is what opens the call
     there. ``None`` where the name does not follow ``call_open`` and recur.
     """
-    rendered = _render_call(_as_probes_read(render), {_KEY: _STRING})
+    rendered = _render_call(as_probes_read(render), {_KEY: _STRING})
     if rendered is None or call_open not in rendered:
         return None
     after = rendered.split(call_open, 1)[1]
-    if not after.startswith(_TOOL) or _TOOL not in after[len(_TOOL):]:
+    if not after.startswith(TOOL_SENTINEL) or TOOL_SENTINEL not in after[len(TOOL_SENTINEL):]:
         return None
-    return after[len(_TOOL):after.index(_TOOL, len(_TOOL))]
+    return after[len(TOOL_SENTINEL):after.index(TOOL_SENTINEL, len(TOOL_SENTINEL))]
 
 
 def _common_suffix(one: str, other: str) -> str:
@@ -295,15 +297,15 @@ def _common_suffix(one: str, other: str) -> str:
 
 def _render_call(render: Render, arguments: dict) -> str | None:
     """Render one assistant turn calling ``TOOLNAME`` with ``arguments``."""
-    return render([{"role": "user", "content": _USER},
-                   calling_message("", [ToolCall(_TOOL, arguments)], 0)], reasoning=False)
+    return render([{"role": "user", "content": USER_SENTINEL},
+                   calling_message("", [ToolCall(TOOL_SENTINEL, arguments)], 0)], reasoning=False)
 
 
 def _newest_opening(render: Render, fragments: TemplateFragments) -> str:
     """What a newest reply opens with after the assistant tag, beyond a past one's."""
-    newest = render([{"role": "user", "content": _USER},
-                     {"role": "assistant", "content": _ASSISTANT}], reasoning=False)
-    opened = _USER + fragments.user_suffix + fragments.assistant_prefix
+    newest = render([{"role": "user", "content": USER_SENTINEL},
+                     {"role": "assistant", "content": ASSISTANT_SENTINEL}], reasoning=False)
+    opened = USER_SENTINEL + fragments.user_suffix + fragments.assistant_prefix
     if newest is None or opened not in newest:
         return ""
-    return newest.split(opened, 1)[1].split(_ASSISTANT, 1)[0]
+    return newest.split(opened, 1)[1].split(ASSISTANT_SENTINEL, 1)[0]
