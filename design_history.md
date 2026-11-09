@@ -1186,3 +1186,94 @@ already recorded in the entry named here:
 | the table of modules and their roles | each module's docstring |
 
 The Verify section now says only how to run the tests and the demo.
+
+## 2026-11-09: A test suite that tries to break the rules, not to repeat them
+
+The rethink found the tests leaning on a hand-written renderer, on copies of
+names the code defines, on the library's own readings of a template, and on
+its private fields. Each change below removes one of those. The suite went from
+2,779 tests in 285 s to 2,786 in 55 s, with no check dropped.
+
+**One stand-in, rendering real templates.** The two model-free stand-ins
+became one, `FakeContext` in `tests/fake_context.py`, with one tokenizer, one
+cache, one record of what was asked of it and one scripted model. The invented
+test format is a real Jinja text rendered by the renderer a model is loaded
+with: each of the 14 small templates in `tests/invented_templates.py` is that
+text with its switches set at the top. They replace the hand renderer and the
+five subclasses that rewrote its renders with regular expressions, so no test
+can pass on render behaviour only a hand-written renderer had. Before the hand
+renderer was deleted, 20,881 random renders were shown to match it. The
+invented reasoning switch is `<think_on>`, since real templates write
+placeholders such as `<function-name>`, so a hyphen cannot mark a tag. The
+test templates' helpers are in `tests/chat_templates.py`, because the README
+names `tests/fake_context.py` as the worked example of a cache context.
+Generated token ids start above every character's code point.
+
+**Expected renders from what a template states.** The expected render in the
+template-wide tests takes a template's variables from what its fixture
+states (a `render_variables` field in each), not from what the library reads
+off the template, so a wrong reading fails a test instead of passing it.
+Against a copy of the library that reads no reasoning switch, the old
+expectations let 122 of 130 reasoning tests pass, the new ones fail 51.
+Stating the variables showed one such case: cohere-2 reasons by default and
+switches off with `reasoning_effort: "none"`, which the switch rule in "How
+reasoning is read" never tries, so its reasoning-off prompt is the template's
+reasoning-on prompt. Its 18 cases are expected failures in strict mode, so
+they turn into failures once the library tries that value; the fix waits for
+a decision.
+
+**The automatic check, tested.** The check `tests/conftest.py` runs after
+every test used to repair the cache first, which hid a cache an action had left
+behind its tokens. It now repairs only where a failed decode, edit or
+generation marked the cache unknown, which is what the next action would do;
+over the whole suite every wrapper ends with the cache current except two
+after a failed generation. It requires the template's version of a kept turn
+to begin and end where the turn does, and compares everything around it
+exactly. `tests/test_cache_check.py` breaks the cache one token at a time and
+shows the check catches each break; the opening token, which spells no text,
+is covered by the token comparison alone. With the check tested, 78
+end-of-test checks that repeated it were removed.
+
+**One property for a failed action.** The rule that a failed action leaves
+everything as it was is tested as one property: every public action, on three
+kinds of cache, fails at each of its cache operations in turn. A reply is the
+documented exception: it keeps what it produced before the failure, pinned as
+the text the stream showed and then the calls and results it made, never a
+lone question. The property replaced ten single cases. A second, roomy size
+reached no further library function, so only the size at which actions evict
+is kept.
+
+**Nothing copied from the code.** The probe markers are read from the
+library's source (the hand list had missed seven of sixteen), the call probe
+texts are recorded from what the probes ask a template to render, and the
+cache types come from the configuration. Renderers that copied a real format
+were replaced by that format's template; their shape round trip was dropped,
+since the real-template test covers every one of those shapes with a superset
+of its arguments.
+
+**Where each check lives.** `tests/test_real_templates.py` holds what a load
+checks; the whole-conversation tests on real templates live together in
+`tests/test_conversations.py`, all fixtures read through one loader. Test
+contexts compiled their template again for each conversation, and compiling
+costs ten times a load's own checks (40 ms against 4 ms); compiling each
+template once took the suite from 285 s to 76 s. The stand-in also remembers
+up to 200 renders per template, except for templates that read the clock,
+since a Jinja render costs about 130 µs where the hand renderer took 4 µs; that
+took it to 55 s, with peak memory from 158 MB to 177 MB. Hand-picked templates
+became selections by property only where the property holds on its own, as
+with the thought test over every template that reasons.
+
+**No private reads.** Tests read only public members, except in
+`tests/internals.py`, where each fact no public member gives has one function
+returning plain values, so an internal change that keeps the behaviour changes
+only that module. The engine adapter's own tests (`tests/test_backend.py`,
+`tests/test_generation.py`) still read the adapter's internals.
+
+**Duplicates and names.** Tests were deleted as duplicates only where another
+test makes every one of their checks on the same code path. Three generation
+tests had become empty when stop strings left the generation loop; they now
+give the loop a closing text to hold back, and fail where the release at a
+call or the final flush is removed. Test names that spoke of old settings use
+the current ones.
+
+The contract's verification text now lists, for each rule, one line per test file and what that file tries to break.
