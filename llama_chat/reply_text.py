@@ -4,10 +4,77 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .reply import StopReason
 from .template import Reasoning, common_prefix_length, common_suffix_length
 
 
-class ThoughtFilter:
+class ReplyText:
+    """A reply's answer as it streams: its thought and any header for another reader taken out, then its stop strings matched.
+
+    Args:
+        reasoning: The model's thought tags; ``None`` for a model that has none.
+        answer_opening: What a past reply's tag holds that the generation
+            prompt leaves to the model.
+        prompt_text: The template text the generation follows, which says
+            whether it opens in a thought.
+        stops: Stop strings, matched against the answer only.
+    """
+
+    def __init__(self, reasoning: Reasoning | None, answer_opening: str, prompt_text: str,
+                 stops: list[str]) -> None:
+        self._reasoning = reasoning
+        self._thought = (_ThoughtFilter(reasoning, begins_in_thought(reasoning, prompt_text))
+                         if reasoning is not None else None)
+        self._opening = _AnswerOpening(answer_opening, reply_header(answer_opening, reasoning))
+        self._stops = _AnswerStops(stops)
+
+    def feed(self, piece: str) -> str:
+        """The part of ``piece`` that is certainly answer, possibly empty."""
+        text = self._thought.feed(piece) if self._thought else piece
+        return self._stops.feed(self._opening.feed(text))
+
+    def finish(self, stop_reason: StopReason) -> str:
+        """The answer still held back, once the generation has ended for ``stop_reason``."""
+        # A cut reply may end on the start of a thought's tag.
+        complete = stop_reason not in ("interrupted", "token_limit")
+        last = self._opening.feed(self._thought.flush(complete) if self._thought else "")
+        # A header held back at a call is the call's, not the answer's.
+        header_done = complete and stop_reason != "tool_call"
+        return self._stops.flush(last + self._opening.flush(header_done))
+
+    @property
+    def answer(self) -> str:
+        """The answer passed on so far."""
+        return self._stops.text
+
+    @property
+    def thought(self) -> str:
+        """The thought fed so far, its tags and surrounding whitespace left out."""
+        return self._thought.thought if self._thought else ""
+
+    @property
+    def thought_pieces(self) -> int:
+        """How many of the pieces fed held thought."""
+        return self._thought.thought_pieces if self._thought else 0
+
+    @property
+    def met_stop_string(self) -> bool:
+        """Whether a stop string ended the answer."""
+        return self._stops.stopped
+
+    def turn_end_test(self, turn_end: int, turn_end_text: str) -> Callable[[int], bool]:
+        """Whether a sampled token ends the reply, besides the end-of-generation tokens.
+
+        Where a thought's closing begins with the turn's end, that token is the
+        closing's while the reply is inside a thought.
+        """
+        thought = self._thought
+        if thought is not None and self._reasoning.thought_close.strip().startswith(turn_end_text):
+            return lambda token: token == turn_end and not thought.in_thought
+        return lambda token: token == turn_end
+
+
+class _ThoughtFilter:
     """Passes on a reply's text as it streams, all but its thoughts.
 
     The tags are matched without their surrounding whitespace, which a model
@@ -118,7 +185,7 @@ class ThoughtFilter:
         return 0
 
 
-class AnswerOpening:
+class _AnswerOpening:
     """Removes the header a model writes ahead of its answer, where it writes one.
 
     Only the answer's start is read: until the text is known to begin with the
@@ -180,18 +247,6 @@ def reply_header(answer_opening: str, reasoning: Reasoning | None) -> tuple[str,
     return answer[:start], answer[len(answer) - end:]
 
 
-def turn_end_test(turn_end: int, turn_end_text: str, reasoning: Reasoning | None,
-                  thought: ThoughtFilter | None) -> Callable[[int], bool]:
-    """Whether a sampled token ends the reply, besides the end-of-generation tokens.
-
-    Where a thought's closing begins with the turn's end, that token is the
-    closing's while the reply is inside a thought.
-    """
-    if thought is not None and reasoning.thought_close.strip().startswith(turn_end_text):
-        return lambda token: token == turn_end and not thought.in_thought
-    return lambda token: token == turn_end
-
-
 def begins_in_thought(reasoning: Reasoning, decoded: str) -> bool:
     """Whether generation after ``decoded`` starts inside a thought."""
     return decoded.rstrip().endswith(reasoning.thought_open.strip())
@@ -212,7 +267,7 @@ def earliest(text: str, needles: list[str], search_from: int = 0) -> int | None:
     return found
 
 
-class AnswerStops:
+class _AnswerStops:
     """Collects an answer as it streams, ending it at the earliest stop string.
 
     Text that could still begin a stop string is held back until it is known

@@ -216,19 +216,18 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
 
 # ----- a header naming another reader --------------------------------------
 def test_a_header_naming_another_reader_is_never_shown():
-    from llama_chat.reply_text import AnswerOpening, reply_header
+    from llama_chat.reply_text import ReplyText, reply_header
     from llama_chat.template import Reasoning
     tags = Reasoning(thought_open=" to=self<|message|>", thought_close="<|eom|>",
                      generation_prompt="")
-    header = reply_header(" to=user<|message|>", tags)
-    assert header == ("to=", "<|message|>")
-    opening = AnswerOpening(" to=user<|message|>", header)
-    assert opening.feed(" to=get_wea") + opening.feed("ther") == ""
-    assert opening.flush(False) == ""                     # cut at a call: never shown
-    opening = AnswerOpening(" to=user<|message|>", header)
-    assert opening.feed(" to=user<|message|>Hallo") == "Hallo"
-    opening = AnswerOpening(" to=user<|message|>", header)
-    assert opening.feed(" to=notes<|message|>Text") == "Text"
+    assert reply_header(" to=user<|message|>", tags) == ("to=", "<|message|>")
+    reply = ReplyText(tags, " to=user<|message|>", "", [])
+    assert reply.feed(" to=get_wea") + reply.feed("ther") == ""
+    assert reply.finish("tool_call") == ""                # held at a call: never shown
+    reply = ReplyText(tags, " to=user<|message|>", "", [])
+    assert reply.feed(" to=user<|message|>Hallo") + reply.finish("end_of_turn") == "Hallo"
+    reply = ReplyText(tags, " to=user<|message|>", "", [])
+    assert reply.feed(" to=notes<|message|>Text") + reply.finish("end_of_turn") == "Text"
 
 
 def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_shared_ends():

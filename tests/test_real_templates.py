@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from llama_chat import ChatWrapper, Config
-from llama_chat.reply_text import ThoughtFilter, begins_in_thought
+from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
@@ -86,15 +86,14 @@ def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(p
                          ids=lambda p: p.stem)
 def test_a_reply_that_reasons_streams_only_its_answer(path):
     _fixture, _context, template = _load(path)
-    tags = template.reasoning
-    opening = template.formatter(True).generation_prompt()
-    inside = begins_in_thought(tags, opening)
+    tags, formatter = template.reasoning, template.formatter(True)
+    inside = begins_in_thought(tags, formatter.generation_prompt())
     generated = ("" if inside else tags.thought_open) + "Denken" \
         + tags.thought_close + "Antwort."
-    thought = ThoughtFilter(tags, inside)
-    shown = "".join(thought.feed(piece) for piece in generated) + thought.flush()
+    reply = ReplyText(tags, formatter.answer_opening(), formatter.generation_prompt(), [])
+    shown = "".join(reply.feed(piece) for piece in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
-    assert thought.thought_pieces > 0
+    assert reply.thought == "Denken" and reply.thought_pieces > 0
 
 
 @pytest.mark.parametrize("stem, first_tag", [("cohere-aya", "<|END_RESPONSE|>"),
@@ -109,24 +108,22 @@ def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
 @pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer", "qwen-3.6"])
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     """gpt-oss closes a thought with the tag that also closes its turn."""
-    from llama_chat.reply_text import AnswerOpening, turn_end_test
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
     context = TagTokenizingContext(fixture)
     template = ResolvedTemplate(context)
     tags, turn_end = template.reasoning, template.turn_end_token
     formatter = template.formatter(True)
     inside = begins_in_thought(tags, formatter.generation_prompt())
-    thought = ThoughtFilter(tags, inside)
-    opening = AnswerOpening(formatter.answer_opening())
-    ends = turn_end_test(turn_end, context.token_text(turn_end), tags, thought)
+    reply_text = ReplyText(tags, formatter.answer_opening(), formatter.generation_prompt(), [])
+    ends = reply_text.turn_end_test(turn_end, context.token_text(turn_end))
     reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close
              + "Antwort." + template._fragments.assistant_suffix)
     shown = ""
     for token in context.tokenize(reply):
         if ends(token):
             break
-        shown += opening.feed(thought.feed(context.token_text(token)))
-    assert shown + opening.feed(thought.flush()) + opening.flush() == "Antwort."
+        shown += reply_text.feed(context.token_text(token))
+    assert shown + reply_text.finish("end_of_turn") == "Antwort."
 
 
 # Families whose calls cannot be read, so tools are refused, and why. A family
@@ -228,14 +225,13 @@ def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
 @pytest.mark.parametrize("path", [p for p in _TEMPLATES if p.stem in ("gpt-oss", "muse-glimmer")],
                          ids=lambda p: p.stem)
 def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
-    from llama_chat.reply_text import AnswerOpening
     _fixture, _context, template = _load(path)
     formatter = template.formatter()
     assert formatter.answer_opening()
     generated = formatter.answer_opening() + "Antwort."
-    thought, opening = ThoughtFilter(template.reasoning), AnswerOpening(formatter.answer_opening())
-    shown = "".join(opening.feed(thought.feed(c)) for c in generated)
-    shown += opening.feed(thought.flush()) + opening.flush()
+    reply = ReplyText(template.reasoning, formatter.answer_opening(),
+                      formatter.generation_prompt(), [])
+    shown = "".join(reply.feed(c) for c in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
 
 

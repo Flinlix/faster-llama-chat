@@ -18,8 +18,7 @@ from .config import Config, Sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
 from .reply import Reply, ReplyStream
-from .reply_text import (AnswerOpening, AnswerStops, ThoughtFilter, begins_in_thought,
-                         reply_header, turn_end_test)
+from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate
 from .template import ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
@@ -662,60 +661,47 @@ class ChatWrapper:
         stops = list(self._config.stop_strings) + list(stop or [])
 
         generated = GenerationAccumulator()
-        tags = self._template.reasoning
-        inside = begins_in_thought(tags, conversation.prompt_text) if tags else False
-        thought = ThoughtFilter(tags, inside) if tags else None
-        # Stop strings are matched against the answer only, after the thought
-        # and any header for another reader are taken out.
-        opening = AnswerOpening(self._formatter.answer_opening(),
-                                reply_header(self._formatter.answer_opening(), tags))
-        answer = AnswerStops(stops)
+        reply_text = ReplyText(self._template.reasoning, self._formatter.answer_opening(),
+                               conversation.prompt_text, stops)
         pieces = conversation.generate(
             max(0, min(cap, budget)), generated, cancel=cancel,
-            sampling=sampling, ends_turn=self._turn_end_test(thought),
+            sampling=sampling, ends_turn=self._turn_end_test(reply_text),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
         try:
             for piece in pieces:
-                shown = answer.feed(opening.feed(thought.feed(piece) if thought else piece))
+                shown = reply_text.feed(piece)
                 if shown:
                     yield shown
-                if answer.stopped:
+                if reply_text.met_stop_string:
                     pieces.close()
                     generated.stop_reason = "stop_string"
                     break
             else:
-                # A cut reply may end on the start of a thought's tag.
-                complete = generated.stop_reason not in ("interrupted", "token_limit")
-                last = opening.feed(thought.flush(complete) if thought else "")
-                # A header held back at a call is the call's, not the answer's.
-                header_done = complete and generated.stop_reason != "tool_call"
-                if shown := answer.flush(last + opening.flush(header_done)):
+                if shown := reply_text.finish(generated.stop_reason):
                     yield shown
         finally:
             pieces.close()
             # Runs on normal completion and on early close alike.
-            n_evicted_messages += self._record_reply(generated, answer.text, thought)
+            n_evicted_messages += self._record_reply(generated, reply_text)
         return Reply(
-            text=answer.text,
+            text=reply_text.answer,
             n_prefilled_tokens=conversation.decoded - decoded_from,
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
             tool_calls=conversation.owed_calls,
-            n_reasoning_tokens=thought.thought_pieces if thought else 0,
+            n_reasoning_tokens=reply_text.thought_pieces,
         )
 
-    def _turn_end_test(self, thought: ThoughtFilter | None) -> Callable[[int], bool] | None:
+    def _turn_end_test(self, reply_text: ReplyText) -> Callable[[int], bool] | None:
         """Whether a sampled token ends the reply, besides the end-of-generation tokens."""
         turn_end = self._template.turn_end_token
         if turn_end is None:
             return None
-        # Read at each sample: the filter has been fed every piece yielded before it.
-        return turn_end_test(turn_end, self._context.token_text(turn_end),
-                             self._template.reasoning, thought)
+        # Read at each sample: every piece yielded before it has been fed.
+        return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end))
 
-    def _record_reply(self, generated: GenerationAccumulator, answer: str,
-                      thought: ThoughtFilter | None) -> int:
+    def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText) -> int:
         """Record what one generation left and settle the cache after it; how many history items were evicted.
 
         A call that could not be read ends the generation as
@@ -725,9 +711,9 @@ class ChatWrapper:
         called = generated.stop_reason == "tool_call"
         if called and not calls:
             generated.stop_reason = "unreadable_tool_call"
-        tags = self._template.reasoning
+        tags, answer = self._template.reasoning, reply_text.answer
         # Given to a template that writes a past reply's thought; another is written without it.
-        kept_thought = thought.thought if thought and tags.past_keeps_thought else ""
+        kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         return self._conversation.record_reply(answer, kept_thought, calls, called,
                                                recorded=self._reporting("assistant", answer))
 

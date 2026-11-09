@@ -1,5 +1,6 @@
 """Filtering a reply's text: stop strings, thoughts and channel headers."""
 
+from llama_chat.reply_text import ReplyText
 from llama_chat.template import Reasoning
 
 
@@ -17,39 +18,38 @@ def test_the_earliest_of_several_needles_is_found():
     assert earliest("xxSTOP", ["STOP"], search_from=3) is None
 
 
-# ----- the thought filter --------------------------------------------------
+# ----- the thought ---------------------------------------------------------
 def test_the_thought_count_never_exceeds_the_pieces_fed():
     import random
-    from llama_chat.reply_text import ThoughtFilter
     tags = Reasoning("<thought>", "</thought>", "", "")
     text = "a<thought>x</thought>b<thought>y</thought>c<tho"
     rng = random.Random(7)
     for _ in range(2000):
         cuts = sorted(rng.sample(range(1, len(text)), rng.randint(1, 12)))
         pieces = [text[i:j] for i, j in zip([0, *cuts], [*cuts, len(text)])]
-        f = ThoughtFilter(tags)
-        shown = "".join(f.feed(p) for p in pieces) + f.flush()
-        assert shown == "abc<tho"
-        assert 0 < f.thought_pieces <= len(pieces)
+        reply = ReplyText(tags, "", "", [])
+        shown = "".join(reply.feed(p) for p in pieces) + reply.finish("end_of_turn")
+        assert shown == reply.answer == "abc<tho"
+        assert reply.thought == "xy"
+        assert 0 < reply.thought_pieces <= len(pieces)
 
 
 # ----- a channel's header --------------------------------------------------
 def test_a_channel_header_cut_short_is_not_answer():
-    from llama_chat.reply_text import AnswerOpening
-    opening = AnswerOpening("<|channel|>final<|message|>")
-    assert opening.feed("<|channel|>final") == "" and opening.flush(complete=False) == ""
+    reply = ReplyText(None, "<|channel|>final<|message|>", "", [])
+    assert reply.feed("<|channel|>final") == "" and reply.finish("token_limit") == ""
 
 
 def test_whitespace_after_a_channel_header_is_not_answer():
-    from llama_chat.reply_text import AnswerOpening
-    opening = AnswerOpening("</mm:think>")
-    assert opening.feed("</mm:think>") + opening.feed("\n\n") + opening.feed("Antwort.") \
+    reply = ReplyText(None, "</mm:think>", "", [])
+    assert reply.feed("</mm:think>") + reply.feed("\n\n") + reply.feed("Antwort.") \
         == "Antwort."
 
 
 def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
-    from llama_chat.reply_text import ThoughtFilter
-    f = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
-    assert f.feed(" ") + f.feed(" x") + f.flush() == "  x"
-    g = ThoughtFilter(Reasoning("<thought>", "</thought>", "", ""))
-    assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") + g.flush() == "b"
+    tags = Reasoning("<thought>", "</thought>", "", "")
+    f = ReplyText(tags, "", "", [])
+    assert f.feed(" ") + f.feed(" x") + f.finish("end_of_turn") == "  x"
+    g = ReplyText(tags, "", "", [])
+    assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") \
+        + g.finish("end_of_turn") == "b"
