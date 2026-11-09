@@ -20,7 +20,6 @@ from .rendered_cache import RenderedCache
 from .reply import Reply, ReplyStream
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate
-from .template import ToolCallFragments
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 
 
@@ -33,7 +32,6 @@ class ChatWrapper:
         config: Config | None = None,
         context=None,
         *,
-        tool_calls: ToolCallFragments | None = None,
         on_message: Callable[[str, str], None] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
     ) -> None:
@@ -45,10 +43,6 @@ class ChatWrapper:
             context: A cache context of your own, in place of the one built
                 from ``config``. :meth:`close` closes it too; only a
                 construction that fails part-way leaves it alone.
-            tool_calls: Explicit call tags, and optionally the argument
-                spelling inside them, for a model whose template describes
-                neither. Without the spelling, such a model still detects its
-                calls and reports them unreadable.
             on_message: Invoked with ``(role, text)`` for every genuine new
                 message, so not for the system prompt or a ``begin`` replay: a
                 question or an injected message once every check has passed
@@ -85,7 +79,7 @@ class ChatWrapper:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
-            self._template = ResolvedTemplate(self._context, tool_calls=tool_calls)
+            self._template = ResolvedTemplate(self._context)
         except BaseException:
             if owns_context:
                 self._context.close()
@@ -462,9 +456,7 @@ class ChatWrapper:
         a block to answer a call in. True here is exactly what :meth:`begin`
         accepts ``tools`` for. Where only the spelling is missing a call is
         still detected, so :attr:`Reply.stop_reason` can still be
-        ``"unreadable_tool_call"``, but nothing runnable comes out of it. Supply
-        the spelling as the body of ``ChatWrapper(tool_calls=...)`` to make
-        this ``True``.
+        ``"unreadable_tool_call"``, but nothing runnable comes out of it.
         """
         return self._template.can_call_tools
 

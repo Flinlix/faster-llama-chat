@@ -41,13 +41,10 @@ _PROBE_TOOL = ToolSpec(name=_PROBE_FUNCTION, description="probe",
                        parameters={"type": "object", "properties": {}})
 
 class ResolvedTemplate:
-    """This model's chat template, recovered or supplied, and proven usable.
+    """This model's chat template, recovered and proven usable.
 
     Args:
         context: The cache context to read the model through.
-        tool_calls: Explicit call tags, and optionally the argument spelling
-            inside them, for a model whose template describes neither. Whatever
-            it leaves out is recovered from the model.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
@@ -55,7 +52,7 @@ class ResolvedTemplate:
             validation against the model.
     """
 
-    def __init__(self, context, *, tool_calls: ToolCallFragments | None = None) -> None:
+    def __init__(self, context) -> None:
         ensure_answers(context, MODEL_READER)
         self._context = context
         self._probe_render = refusing(context.render_with_model_template)
@@ -66,8 +63,7 @@ class ResolvedTemplate:
         self._validate_template()
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
-        self._tool_calls = (tool_calls if tool_calls is not None
-                            else extract_tool_fragments(self._render, self._fragments))
+        self._tool_calls = extract_tool_fragments(self._render, self._fragments)
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
@@ -223,12 +219,12 @@ class ResolvedTemplate:
         if not self._calls_marked and self._tool_calls is not None:
             raise ValueError(
                 "this model writes a tool call as plain text, without a tag "
-                "token of its own, so a call could not be told from a reply")
+                "token of its own, so a call could not be told from a reply; "
+                "its add-on file can say how it writes one")
         if not self._calls_marked:
             raise ValueError(
                 "this model's template describes no tool call, so a tool "
-                "could never be reached; supply the tags with "
-                "ChatWrapper(tool_calls=...)")
+                "could never be reached")
         if not self._can_declare_tools:
             raise ValueError(
                 "this model's template declares no tools, so the model would "
@@ -236,8 +232,7 @@ class ResolvedTemplate:
         if self._call_body is None:
             raise ValueError(
                 "this model's call format could not be recovered from its "
-                "template, so a call would be detected but never read; supply "
-                "it as the body of ChatWrapper(tool_calls=...)")
+                "template, so a call would be detected but never read")
         if not self._can_write_results:
             raise ValueError(
                 "this model's template renders no tool result, so a call could "
@@ -468,13 +463,11 @@ class ResolvedTemplate:
     def _resolve_call_body(self) -> CallBody | None:
         """This model's argument spelling, or ``None`` if it cannot be read.
 
-        A supplied one wins; a call stays detectable without either, and only
-        its contents cannot be read.
+        A call stays detectable without it, and only its contents cannot be
+        read.
         """
         if not self._calls_marked or self._tool_calls is None:
             return None
-        if self._tool_calls.body is not None:
-            return self._tool_calls.body
         if self._call_from_file:
             # The name ends where the file says; the arguments are read as written.
             return CallBody(name_close=self._context.addon_call()["name_close"], key_open="",

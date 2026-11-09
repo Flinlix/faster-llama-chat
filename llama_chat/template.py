@@ -38,9 +38,9 @@ class CallBoundary:
 class CallBody:
     """How a model spells a function name and its arguments between the tags.
 
-    Recovered from the model's own template, or supplied as the ``body`` of
-    ``ChatWrapper(tool_calls=...)``. See the README, "Tool calling", for the
-    shapes these fields take on real models.
+    Recovered from the model's own template, or built from its add-on file's
+    call. See the README, "Tool calling", for the shapes these fields take on
+    real models.
 
     Attributes:
         name_close: After the function name, before the arguments. Empty
@@ -94,7 +94,7 @@ class CallBody:
 
 @dataclass(frozen=True)
 class ToolCallFragments:
-    """How a model writes a tool call: the tags around it, and what is inside.
+    """How a model writes a tool call: the tags around it.
 
     The two tags are taken verbatim from a render, so either may carry fixed
     text past the tag itself. Narrowing one to the single tag it holds needs a
@@ -105,13 +105,10 @@ class ToolCallFragments:
             name of the function being called.
         call_close: What stands between a call's last argument and whatever
             follows the call.
-        body: How the name and the arguments are spelled between the tags, or
-            ``None`` to have it recovered from the model.
     """
 
     call_open: str
     call_close: str
-    body: CallBody | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +118,7 @@ class TemplateFragments:
     A turn renders as ``prefix + content + suffix``. Recovered from the model's
     own GGUF chat template, and read for what a generation holds: a thought,
     the end of a reply. What a tool call is wrapped in is
-    :class:`ToolCallFragments`, its own argument.
+    :class:`ToolCallFragments`.
 
     Attributes:
         user_prefix, user_suffix: Wrap a user turn.

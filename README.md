@@ -336,8 +336,6 @@ that request.
 
 `ChatWrapper` also takes, outside `Config` because none of them is a value to
 tune: `context=` (a [cache context of your own](#your-own-cache-context)),
-`tool_calls=` (see
-[a model without a usable template](#a-model-without-a-usable-template)),
 `on_message=`, and `on_load_progress=`, called with a fraction while the
 weights load, which must not raise.
 
@@ -366,11 +364,9 @@ closes it; it is refused where the template never writes that closing.
 
 A model that ships no chat template is refused when it loads: the template is
 what every conversation is written with. For one whose template writes no
-tool call it can be read from, `tool_calls=ToolCallFragments(call_open=...,
-call_close=..., body=CallBody(...))`, the body optional, or an
-[add-on file](#add-on-files). A reply's ending must begin with one of the
-model's own tags, or construction raises: a model could never stop on plain
-text.
+tool call it can be read from, its [add-on file](#add-on-files) says how the
+model writes one. A reply's ending must begin with one of the model's own tags,
+or construction raises: a model could never stop on plain text.
 
 **Special tokens in message content.** A caller's text (a message, a thought, a
 call's name and arguments) is tokenized with special-token parsing off, and the

@@ -292,11 +292,10 @@ def _constant_body_render(messages, **_options):
 
 
 def test_a_body_that_never_shows_a_key_has_no_body():
-    """Reached when the tags are supplied rather than extracted.
+    """The body probes refuse a template that writes no key, whatever tags they are given.
 
-    ``extract_tool_fragments`` refuses this template itself, so the tags come
-    from ``ChatWrapper(tool_calls=...)`` and the body probes run against a
-    template they were never screened for.
+    ``extract_tool_fragments`` refuses this template itself, so here the body
+    probes run against a template they were never screened for.
     """
     assert _tool_fragments(_constant_body_render) is None
     # `{}` is common to both probes, so `name_close` is found and its guard

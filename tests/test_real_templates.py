@@ -15,7 +15,7 @@ from llama_chat import ChatWrapper, Config
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
-from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 
 from .template_contexts import ConversationContext, TemplateContext, call_marks
 
@@ -255,6 +255,28 @@ def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
     boundary = ResolvedTemplate(context).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
+
+
+def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable():
+    # gpt-oss writes a call's opening as plain text its replies also hold.
+    fixture = json.loads((Path(__file__).parent / "templates" / "gpt-oss.json").read_text())
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "The time.", name="clock")
+
+    without = ConversationContext(fixture, ["Fine."])
+    without.addon_call = lambda: {}
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=without)
+    assert not chat.can_call_tools
+    with pytest.raises(ValueError, match="add-on file can say how it writes one"):
+        chat.begin("", tools=registry)
+
+    context = ConversationContext(fixture, ["Fine."])
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
+    assert chat.can_call_tools
+    chat.begin("", tools=registry)          # the whole chain is checked, and passes
+    # Read with the spelling the file gives.
+    written = "clock" + context.addon_call()["name_close"] + "{}"
+    assert chat._template.read_calls(written) == [ToolCall("clock", {})]
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():

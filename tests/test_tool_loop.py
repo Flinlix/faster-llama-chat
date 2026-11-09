@@ -5,20 +5,12 @@ import re
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.template import ToolCallFragments
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from llama_chat import ChatWrapper, ContextOverflowError
 from tests.fake_context import FakeContext
-from tests.wrappers import (FAKE_CALL_BODY, assert_consistent, cache_tokens, held_renders,
+from tests.wrappers import (assert_consistent, cache_tokens, held_renders,
                             newest_turn, system_turn, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
-
-
-# The same model's call tags, for the escape hatch: on their own where only the
-# spelling is unreadable, with the body where nothing could be recovered.
-FAKE_TAGS = ToolCallFragments(call_open="<call>fn:", call_close="}</call>")
-FAKE_CALLS = ToolCallFragments(call_open="<call>fn:", call_close="}</call>",
-                               body=FAKE_CALL_BODY)
 
 
 def _result_of(wrapper):
@@ -27,14 +19,15 @@ def _result_of(wrapper):
     return turn.split("<result>")[1].split("</result>")[0]
 
 
-class _ConstantBodyContext(FakeContext):
-    """Tags a caller supplied, over a template that never renders an argument."""
+class _KeylessCallContext(FakeContext):
+    """A template that writes a call's values without their keys: its tags are found, its spelling is not."""
 
     def render_with_model_template(self, messages, tools=None, **_options):
         rendered = super().render_with_model_template(messages, tools, **_options)
         if rendered is None:
             return None
-        return re.sub(r"(<call>fn:\w+)\{[^}]*\}", r"\1{}", rendered)
+        return re.sub(r"(<call>fn:\w+\{)([^}]*)\}",
+                      lambda call: call[1] + re.sub(r"\w+:", "", call[2]) + "}", rendered)
 
 
 class _SaysBeforeCalling(FakeContext):
@@ -421,9 +414,9 @@ def test_tags_without_a_readable_grammar_cannot_call_tools():
     Every call such a model makes is unreadable, so it is told so and answers in
     words. Reporting it as callable would promise a result that never arrives.
     """
-    fake = _ConstantBodyContext(calls_tools=True)
-    wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          tool_calls=FAKE_TAGS)
+    fake = _KeylessCallContext(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    assert wrapper._template.call_boundary().tool_tokens is not None  # the tags resolved
     assert wrapper._template._call_body is None  # the probes recovered nothing
     assert not wrapper.can_call_tools
 
@@ -432,13 +425,6 @@ def test_tags_without_a_readable_grammar_cannot_call_tools():
     reply = wrapper.reply("los").finish()
     assert reply.text == "reply"                 # it answered instead
     assert not wrapper.reply_open
-
-
-def test_a_supplied_grammar_makes_such_a_model_callable_again():
-    fake = _ConstantBodyContext(calls_tools=True)
-    wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          tool_calls=FAKE_CALLS)
-    assert wrapper.can_call_tools
 
 
 def test_an_oversized_result_is_clipped_and_keeps_its_tags():
@@ -990,13 +976,11 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     assert fake.cache == cache_tokens(wrapper)
 
 
-def test_tags_that_resolve_to_no_token_leave_tool_calling_off():
-    """ToolCallFragments can name tags this model's vocabulary does not have."""
-    from llama_chat.template import ToolCallFragments
-
-    wrapper = ChatWrapper(
-        Config(context_size=512), context=FakeContext(),
-        tool_calls=ToolCallFragments(call_open="OPEN:", call_close=":CLOSE"))
+def test_an_add_on_files_call_format_gives_no_calls_to_a_template_that_writes_none():
+    """An add-on file says how a call is written only where the template writes one."""
+    fake = FakeContext()
+    fake.addon_call = lambda: {"opening": "OPEN:", "name_close": "(", "closing": ":CLOSE"}
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
     assert not wrapper.can_call_tools
 
 
@@ -1050,26 +1034,22 @@ def test_can_call_tools_answers_for_the_whole_chain_at_startup():
     assert not ChatWrapper(Config(context_size=1024),
                            context=_NoDeclarations(calls_tools=True)
                            ).can_call_tools
-    assert not ChatWrapper(Config(context_size=1024), tool_calls=FAKE_TAGS,
-                           context=_ConstantBodyContext(calls_tools=True)
+    assert not ChatWrapper(Config(context_size=1024),
+                           context=_KeylessCallContext(calls_tools=True)
                            ).can_call_tools
     assert not ChatWrapper(Config(context_size=1024),
                            context=_NoResultBlock(calls_tools=True)
                            ).can_call_tools
     assert ChatWrapper(Config(context_size=1024),
                        context=FakeContext(calls_tools=True)).can_call_tools
-    # And the escape hatch still reaches it.
-    assert ChatWrapper(Config(context_size=1024), tool_calls=FAKE_CALLS,
-                       context=_ConstantBodyContext(calls_tools=True)
-                       ).can_call_tools
 
 
 @pytest.mark.parametrize("build", [
     lambda: ChatWrapper(Config(context_size=1024), context=FakeContext()),
     lambda: ChatWrapper(Config(context_size=1024),
                         context=_NoDeclarations(calls_tools=True)),
-    lambda: ChatWrapper(Config(context_size=1024), tool_calls=FAKE_TAGS,
-                        context=_ConstantBodyContext(calls_tools=True)),
+    lambda: ChatWrapper(Config(context_size=1024),
+                        context=_KeylessCallContext(calls_tools=True)),
     lambda: ChatWrapper(Config(context_size=1024),
                         context=_NoResultBlock(calls_tools=True)),
     lambda: ChatWrapper(Config(context_size=1024),
@@ -1145,9 +1125,8 @@ def test_declaring_refuses_a_model_that_could_never_call():
     with pytest.raises(ValueError, match="describes no tool call"):
         wrapper.begin("persona", tools=registry)
 
-    unreadable = _ConstantBodyContext(calls_tools=True)
-    wrapper = ChatWrapper(Config(context_size=1024), context=unreadable,
-                          tool_calls=FAKE_TAGS)
+    unreadable = _KeylessCallContext(calls_tools=True)
+    wrapper = ChatWrapper(Config(context_size=1024), context=unreadable)
     with pytest.raises(ValueError, match="call format could not be recovered"):
         wrapper.begin("persona", tools=registry)
 
@@ -1181,19 +1160,6 @@ def test_a_registry_handed_to_a_running_reply_is_checked_the_same_way():
     # was never promising anything either.
     assert wrapper.reply("hallo", calls=ToolRegistry()).finish().text == "reply"
     assert wrapper.reply("hallo").finish().text == "reply"
-
-
-def test_a_supplied_call_body_makes_the_declaration_go_through():
-    """The escape hatch has to reach the check, or it would not be one."""
-    registry = ToolRegistry()
-    registry.register(lambda: "12:00", "Die Zeit.", name="clock")
-    fake = _ConstantBodyContext(calls_tools=True)
-
-    wrapper = ChatWrapper(Config(context_size=1024), context=fake,
-                          tool_calls=FAKE_CALLS)
-    wrapper.begin("persona", tools=registry)          # must not raise
-
-    assert wrapper.can_call_tools
 
 
 def test_declaring_later_is_checked_the_same_way():

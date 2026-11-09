@@ -20,7 +20,7 @@ being recovered from that template.
 
 from .cache_context import CacheContext, Eviction, GenerationAccumulator, ModelReader
 from .config import Config, InvalidSettingError, Sampling
-from .template import CallBody, CallBoundary, ToolCallFragments
+from .template import CallBoundary
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import STOP_REASONS, ContextOverflowError, Reply, ReplyStream, StopReason
 from .wrapper import ChatWrapper
@@ -47,7 +47,4 @@ __all__ = [
     # Read and filled by the library's own generation loop.
     "GenerationAccumulator",
     "CallBoundary",
-    # For a model whose template writes no call it can be read from, ``tool_calls=``.
-    "ToolCallFragments",
-    "CallBody",
 ]

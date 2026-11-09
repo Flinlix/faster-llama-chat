@@ -6,12 +6,9 @@ import pytest
 
 from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.call_parsing import parse_calls
-from llama_chat.config import Config
-from llama_chat.template import CallBody, ToolCallFragments
+from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_fragments
 from llama_chat.tools import ToolCall
-from llama_chat.wrapper import ChatWrapper
-from tests.fake_context import FakeContext
 from tests.wrappers import FAKE_CALL_BODY
 
 
@@ -169,19 +166,6 @@ def test_every_shape_round_trips_through_recovery_and_parsing(shape, arguments):
 
     call, = parse_calls(emit("calendar_add", arguments), call_body, lead_in)
     assert call == ToolCall("calendar_add", arguments)
-
-
-def test_a_grammar_may_be_supplied_where_the_probes_cannot_recover_one():
-    # The same escape hatch `fragments=` is for a template that cannot be read.
-    fake = FakeContext(calls_tools=True)
-    spelled = CallBody(name_close="(", key_open="", key_close="=",
-                       pair_sep=",", body_close=")", empty_close=")",
-                       quote_open='"', quote_close='"')
-    wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          tool_calls=ToolCallFragments(
-                              call_open="<call>fn:", call_close="}</call>",
-                              body=spelled))
-    assert wrapper._template._call_body is spelled
 
 
 # ----- a model that writes a batch -----------------------------------------
