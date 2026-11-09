@@ -56,8 +56,7 @@ class KVContext:
             self._config = config = with_model_sampling(
                 config, lambda key: self._backend.metadata_value(self._model, key), addon)
             self._addon_call = addon["call"]
-            kv_type = (self._backend.kv_cache_type_id(config.kv_cache_type)
-                       if config.kv_cache_type else None)
+            kv_type = self._backend.kv_cache_type_id(config.kv_cache_type)
             self._engine_context = self._backend.new_context(
                 self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
                 flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type,

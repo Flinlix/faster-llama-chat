@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, fields, replace
 KV_CACHE_TYPES = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
 
 # The one type here that is not quantized, and so the only one usable without
-# flash attention. Naming it is the same as leaving kv_cache_type unset.
+# flash attention. It is kv_cache_type's default.
 UNQUANTIZED_KV_CACHE_TYPE = "f16"
 
 LOG_LEVELS = ("debug", "info", "warn", "error", "none")
@@ -88,9 +88,9 @@ class Config:
             prefill is chunked to this.
         flash_attention: Enable flash attention. Required by a quantized
             ``kv_cache_type``.
-        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``,
-            or ``None`` for llama.cpp's own default. Every one of them but
-            ``UNQUANTIZED_KV_CACHE_TYPE`` requires ``flash_attention=True``.
+        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``.
+            Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
+            requires ``flash_attention=True``.
         log_level: llama.cpp's own verbosity, one of ``LOG_LEVELS``. Applied
             process-wide before the model loads.
     """
@@ -129,7 +129,7 @@ class Config:
     prefill_threads: int | None = None
     max_batch_tokens: int = 2048
     flash_attention: bool = True
-    kv_cache_type: str | None = None
+    kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
 
     # Logging
 
@@ -177,17 +177,14 @@ class Config:
         if self.log_level not in LOG_LEVELS:
             raise InvalidSettingError("log_level",
                                       f"log_level must be one of {list(LOG_LEVELS)}")
-        if self.kv_cache_type is not None:
-            if self.kv_cache_type not in KV_CACHE_TYPES:
-                raise InvalidSettingError(
-                    "kv_cache_type",
-                    f"kv_cache_type must be None or one of {sorted(KV_CACHE_TYPES)}")
-            if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE \
-                    and not self.flash_attention:
-                raise InvalidSettingError(
-                    "kv_cache_type",
-                    f"kv_cache_type={self.kv_cache_type!r} is quantized and requires "
-                    f"flash_attention=True (only {UNQUANTIZED_KV_CACHE_TYPE!r} works without it)")
+        if self.kv_cache_type not in KV_CACHE_TYPES:
+            raise InvalidSettingError(
+                "kv_cache_type", f"kv_cache_type must be one of {sorted(KV_CACHE_TYPES)}")
+        if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE and not self.flash_attention:
+            raise InvalidSettingError(
+                "kv_cache_type",
+                f"kv_cache_type={self.kv_cache_type!r} is quantized and requires "
+                f"flash_attention=True (only {UNQUANTIZED_KV_CACHE_TYPE!r} works without it)")
 
     @property
     def evict_above_tokens(self) -> int:

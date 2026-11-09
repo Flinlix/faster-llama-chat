@@ -331,7 +331,7 @@ that request.
 | `prefill_threads` | `None` | CPU threads for prefill; `None` means as many as `decode_threads` |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
 | `flash_attention` | `True` | required by a quantized KV cache |
-| `kv_cache_type` | `None` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`, or `None` for llama.cpp's default; a quantized type requires `flash_attention` |
+| `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires `flash_attention` |
 | `log_level` | `"error"` | llama.cpp's own verbosity: `"debug"`, `"info"`, `"warn"`, `"error"` or `"none"`, applied process-wide before the model loads |
 
 `ChatWrapper` also takes, outside `Config` because none of them is a value to

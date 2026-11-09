@@ -14,6 +14,16 @@ def test_the_unquantized_kv_cache_type_needs_no_flash_attention():
     assert config.kv_cache_type == UNQUANTIZED_KV_CACHE_TYPE
 
 
+def test_the_kv_cache_type_defaults_to_the_unquantized_one():
+    from llama_chat.config import UNQUANTIZED_KV_CACHE_TYPE
+    assert Config(flash_attention=False).kv_cache_type == UNQUANTIZED_KV_CACHE_TYPE
+
+
+def test_the_kv_cache_type_has_no_unset_value():
+    with pytest.raises(ValueError, match="kv_cache_type"):
+        Config(kv_cache_type=None)
+
+
 @pytest.mark.parametrize("quantized", ["q8_0", "q5_1", "q5_0", "q4_1", "q4_0"])
 def test_every_quantized_kv_cache_type_requires_flash_attention(quantized):
     with pytest.raises(ValueError, match="flash_attention"):
