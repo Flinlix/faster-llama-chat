@@ -5,6 +5,7 @@ stand-in, one token per character and one per tag, so what is compared is the
 text.
 """
 
+import functools
 import json
 import re
 from pathlib import Path
@@ -15,9 +16,20 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 
 
+_TEMPLATES = Path(__file__).parent / "templates"
+# Every test template, by the name of its file.
+STEMS = sorted(path.stem for path in _TEMPLATES.glob("*.json"))
+
+
 def fixture(stem: str) -> dict:
     """The test template ``stem`` of ``tests/templates/``, as its file holds it."""
-    return json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
+    return json.loads((_TEMPLATES / f"{stem}.json").read_text())
+
+
+@functools.cache
+def _compiled(text: str, eos_text: str) -> ModelTemplate:
+    """A template's renderer, compiled once for every context over the same text."""
+    return ModelTemplate(text, eos_text)
 
 
 # What the template-wide tests ask, answer and call, the same in every file.
@@ -41,7 +53,7 @@ class TemplateContext:
     """
 
     def __init__(self, fixture: dict) -> None:
-        self._model = ModelTemplate(fixture["chat_template"], fixture["eos_token"])
+        self._model = _compiled(fixture["chat_template"], fixture["eos_token"])
         self._template = fixture["chat_template"]
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: list[str] = []

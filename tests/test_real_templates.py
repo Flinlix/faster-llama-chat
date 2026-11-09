@@ -1,92 +1,47 @@
-"""Real chat templates of many families, each encoded as it renders itself.
+"""Real chat templates of many families, each through the check a model meets at load, and what that load reads from it.
 
 ``tests/templates/`` holds one template per family, read from a published
 model file that each file names. The renderer is the one a model is loaded
 with; only the tokenizer is a stand-in, one token per character and one per
-tag, so what is compared is the text.
+tag, so what is compared is the text. Whole conversations on these templates
+are in ``test_conversations.py``.
 """
-
-import json
-from pathlib import Path
 
 import pytest
 
 from llama_chat import ChatWrapper, Config
+from llama_chat.addon_files import addon_file
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
-from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry
 
-from .template_contexts import ConversationContext, TemplateContext, call_marks
+from .template_contexts import (STEMS, WEATHER, ConversationContext, TemplateContext, call_marks,
+                                fixture)
 
-_TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
-_CONVERSATION = [("user", " ping "), ("assistant", " pong "), ("user", " again ")]
+_TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
+_REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
 
 
-def _load(path):
-    fixture = json.loads(path.read_text())
-    context = TemplateContext(fixture)
+def _load(stem):
+    context = TemplateContext(fixture(stem))
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
-    return fixture, context, ResolvedTemplate(context)
+    return context, ResolvedTemplate(context)
 
 
-@pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
-def test_the_template_loads_and_supports_what_it_is_known_to(path):
-    fixture, _context, template = _load(path)
-    assert (template.reasoning is not None) == fixture["marks_thought"]
-    assert template.can_reason == fixture["can_reason"]
-    assert (template._tool_calls is not None) == fixture["calls_tools"]
+@pytest.mark.parametrize("stem", STEMS)
+def test_the_template_loads_and_supports_what_it_is_known_to(stem):
+    known = fixture(stem)
+    _context, template = _load(stem)
+    assert (template.reasoning is not None) == known["marks_thought"]
+    assert template.can_reason == known["can_reason"]
+    assert (template._tool_calls is not None) == known["calls_tools"]
 
 
-def _held_before_the_reply(path, history, question, system=None, tools=None, reasoning=False):
-    """What a wrapper on ``path``'s template holds when it starts the reply to ``question``."""
-    context = ConversationContext(json.loads(path.read_text()), ["Fine."])
-    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    seen = []
-    context.before_reply = seen.append
-    if system is None:
-        system = "Be brief." if chat._template.has_system_turn else ""
-    chat.begin(system, history, tools=tools, reasoning=reasoning)
-    chat.reply(question).finish()
-    return seen[0], context, chat
-
-
-def _render(context, chat, messages, tools=None, reasoning=False):
-    prompt = chat.conversation()[0]
-    system = [{"role": "system", "content": prompt}] if prompt else []
-    return chat._template.render(
-        system + messages, [spec.as_declaration() for spec in tools] if tools else None,
-        generation_prompt=True, reasoning=reasoning)
-
-
-@pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
-def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(path):
-    try:
-        held, context, chat = _held_before_the_reply(path, [("user", " ping ")], " again ")
-    except ValueError as refused:
-        assert "two user turns" in str(refused)
-        return
-    assert held == _render(context, chat, [{"role": "user", "content": " ping "},
-                                           {"role": "user", "content": " again "}])
-
-
-@pytest.mark.parametrize("path", _TEMPLATES, ids=lambda p: p.stem)
-def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(path):
-    _fixture, _context, template = _load(path)
-    for reasoning in (False, True) if template.can_reason else (False,):
-        history = _CONVERSATION[:2]
-        held, context, chat = _held_before_the_reply(path, history, _CONVERSATION[2][1],
-                                                     system="", reasoning=reasoning)
-        messages = [{"role": r, "content": t} for r, t in _CONVERSATION]
-        assert held == _render(context, chat, messages, reasoning=reasoning), reasoning
-
-
-@pytest.mark.parametrize("path", [p for p in _TEMPLATES
-                                  if json.loads(p.read_text())["can_reason"]],
-                         ids=lambda p: p.stem)
-def test_a_reply_that_reasons_streams_only_its_answer(path):
-    _fixture, _context, template = _load(path)
+@pytest.mark.parametrize("stem", _REASONING_STEMS)
+def test_a_reply_that_reasons_streams_only_its_answer(stem):
+    _context, template = _load(stem)
     tags, prompt = template.reasoning, template.generation_prompt(True)
     inside = begins_in_thought(tags, prompt)
     generated = ("" if inside else tags.thought_open) + "Denken" \
@@ -100,25 +55,23 @@ def test_a_reply_that_reasons_streams_only_its_answer(path):
 @pytest.mark.parametrize("stem, first_tag", [("cohere-aya", "<|END_RESPONSE|>"),
                                              ("qwen-3.6", "<|im_end|>")])
 def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
-    fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = TemplateContext(fixture)
-    template = ResolvedTemplate(context)
+    context, template = _load(stem)
     assert context.token_text(template.turn_end_token) == first_tag
 
 
-@pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer", "qwen-3.6"])
+@pytest.mark.parametrize("stem", _REASONING_STEMS)
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
-    """gpt-oss closes a thought with the tag that also closes its turn."""
-    fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = TemplateContext(fixture)
-    template = ResolvedTemplate(context)
+    """A thought may close with the tag that also closes the turn, as gpt-oss's does; only the turn's own closing ends the reply."""
+    context, template = _load(stem)
     tags, turn_end = template.reasoning, template.turn_end_token
     prompt = template.generation_prompt(True)
     inside = begins_in_thought(tags, prompt)
     reply_text = ReplyText(tags, template.answer_opening(True), prompt, [])
-    ends = reply_text.turn_end_test(turn_end, context.token_text(turn_end))
-    reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close
-             + "Antwort." + template._fragments.assistant_suffix)
+    # A reply that ends at a text rather than a tag is ended by the generation loop.
+    ends = (reply_text.turn_end_test(turn_end, context.token_text(turn_end))
+            if turn_end is not None else lambda token: False)
+    reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close + "Antwort."
+             + (template.fragments.assistant_suffix if turn_end is not None else ""))
     shown = ""
     for token in context.tokenize(reply):
         if ends(token):
@@ -127,52 +80,9 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     assert shown + reply_text.finish("end_of_turn") == "Antwort."
 
 
-# Families whose calls cannot be read, so tools are refused, and why. A family
-# whose shipped add-on file says how it writes a call is not among them.
-_TOOL = ToolSpec(name="get_weather", description="Weather for a city",
-                 parameters={"type": "object", "properties": {"city": {"type": "string"}}})
-
-
-def _tool_templates():
-    for path in _TEMPLATES:
-        fixture = json.loads(path.read_text())
-        if fixture["calls_tools"]:
-            yield path
-
-
-def _reasoning_modes(template):
-    return (False, True) if template.can_reason else (False,)
-
-
-@pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
-def test_a_conversation_with_a_past_tool_turn_is_encoded_as_it_renders(path):
-    _fixture, _context, template = _load(path)
-    turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
-                     ToolResult("get_weather", "sunny"), "It is sunny."))
-    for reasoning in _reasoning_modes(template):
-        held, context, chat = _held_before_the_reply(path, [("user", "Weather?"), turn],
-                                                     "Thanks.", tools=[_TOOL],
-                                                     reasoning=reasoning)
-        assert held == _render(context, chat, _past_turn_messages("sunny") + [
-            {"role": "user", "content": "Thanks."}], [_TOOL], reasoning), reasoning
-
-
-def _past_turn_messages(result: str) -> list[dict]:
-    return [{"role": "user", "content": "Weather?"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "call00000", "type": "function", "function": {
-                    "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
-            {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
-             "content": result},
-            {"role": "assistant", "content": "It is sunny." if result == "sunny" else "Sunny."}]
-
-
-@pytest.mark.parametrize("path", list(_tool_templates()),
-                         ids=lambda p: p.stem)
-def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
-    fixture = json.loads(path.read_text())
-    context = TemplateContext(fixture)
-    template = ResolvedTemplate(context)
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
+    context, template = _load(stem)
     template.ensure_tools_usable()
     call = context.addon_call()
     if call:
@@ -185,17 +95,16 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
              {"role": "assistant", "content": "", "tool_calls": [
                  {"id": "call00000", "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
-            tools=[_TOOL.as_declaration()], reasoning=False)
+            tools=[WEATHER.as_declaration()], reasoning=False)
         opener, closer = call_marks(template, context)
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     assert template.read_calls(body) == [ToolCall("get_weather", {"city": "Berlin"})]
 
 
-@pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
-def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path):
-    context = TemplateContext(json.loads(path.read_text()))
-    template = ResolvedTemplate(context)
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem):
+    context, template = _load(stem)
     boundary = template.call_boundary()
     if boundary.call_texts is None:
         return
@@ -208,25 +117,15 @@ def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path)
 
 
 def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
-    context = TemplateContext(json.loads((Path(__file__).parent / "templates"
-                                           / "kimi-k3.json").read_text()))
-    template = ResolvedTemplate(context)
+    _context, template = _load("kimi-k3")
     assert template.call_boundary().turn_end_text == "<|close|>response<|sep|><|close|>"
     assert template.turn_end_token is None
     assert template._call_body.string_type == "string"
 
 
-@pytest.mark.parametrize("path", list(_tool_templates()),
-                         ids=lambda p: p.stem)
-def test_tools_without_a_system_prompt_open_as_the_template_opens_them(path):
-    held, context, chat = _held_before_the_reply(path, [], "Weather?", system="", tools=[_TOOL])
-    assert held == _render(context, chat, [{"role": "user", "content": "Weather?"}], [_TOOL])
-
-
-@pytest.mark.parametrize("path", [p for p in _TEMPLATES if p.stem in ("gpt-oss", "muse-glimmer")],
-                         ids=lambda p: p.stem)
-def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
-    _fixture, _context, template = _load(path)
+@pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer"])
+def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
+    _context, template = _load(stem)
     opening = template.answer_opening()
     assert opening
     generated = opening + "Antwort."
@@ -235,24 +134,9 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(path):
     assert shown == "Antwort."
 
 
-_QUOTED_RESULT = '{"weather": "sunny"}\nsecond line'
-
-
-@pytest.mark.parametrize("path", list(_tool_templates()),
-                         ids=lambda p: p.stem)
-def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
-    turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
-                     ToolResult("get_weather", _QUOTED_RESULT), "Sunny."))
-    held, context, chat = _held_before_the_reply(path, [("user", "Weather?"), turn], "Thanks.",
-                                                 tools=[_TOOL])
-    assert held == _render(context, chat, _past_turn_messages(_QUOTED_RESULT) + [
-        {"role": "user", "content": "Thanks."}], [_TOOL])
-
-
 def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
-    fixture = json.loads((Path(__file__).parent / "templates" / "qwen-3.6.json").read_text())
-    context = TemplateContext(fixture)
+    context = TemplateContext(fixture("qwen-3.6"))
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
     boundary = ResolvedTemplate(context).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
@@ -260,18 +144,18 @@ def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
 
 def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable():
     # gpt-oss writes a call's opening as plain text its replies also hold.
-    fixture = json.loads((Path(__file__).parent / "templates" / "gpt-oss.json").read_text())
+    known = fixture("gpt-oss")
     registry = ToolRegistry()
     registry.register(lambda: "12:00", "The time.", name="clock")
 
-    without = ConversationContext(fixture, ["Fine."])
+    without = ConversationContext(known, ["Fine."])
     without.addon_call = lambda: {}
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=without)
     assert not chat.can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
         chat.begin("", tools=registry)
 
-    context = ConversationContext(fixture, ["Fine."])
+    context = ConversationContext(known, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     assert chat.can_call_tools
     chat.begin("", tools=registry)          # the whole chain is checked, and passes
@@ -281,8 +165,7 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
-    fixture = json.loads((Path(__file__).parent / "templates" / "gpt-oss.json").read_text())
-    context = TemplateContext(fixture)
+    context = TemplateContext(fixture("gpt-oss"))
     context.addon_call = lambda: {"opening": "<|channel|>commentary to=functions.",
                                   "name_close": " <|constrain|>json<|message|>",
                                   "closing": "<|never|>"}
@@ -301,12 +184,10 @@ _LOST = {
 
 
 @pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
-@pytest.mark.parametrize("path", [p for p in _tool_templates()
-                                  if not TemplateContext(json.loads(p.read_text())).addon_call()],
-                         ids=lambda p: p.stem)
-def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, arguments):
-    context = TemplateContext(json.loads(path.read_text()))
-    template = ResolvedTemplate(context)
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_STEMS
+                                  if not addon_file(None, fixture(stem)["chat_template"])["call"]])
+def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, arguments):
+    context, template = _load(stem)
     rendered = context.render_with_model_template(
         [{"role": "user", "content": "x"},
          {"role": "assistant", "content": "", "tool_calls": [
@@ -315,7 +196,7 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, argument
     opener, closer = call_marks(template, context)
     body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     read = template.read_calls(body)
-    if any((path.stem, key) in _LOST for key in arguments):
+    if any((stem, key) in _LOST for key in arguments):
         assert read != [ToolCall("fn", arguments)], "now read back: drop it from _LOST"
     else:
         assert read == [ToolCall("fn", arguments)]

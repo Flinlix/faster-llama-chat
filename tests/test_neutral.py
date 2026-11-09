@@ -6,15 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from .template_contexts import STEMS, TAG, fixture
+
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 _ENGINE_MODULE, _ENGINE_WORDS = "_backend.py", {"llama", "llama-cpp-python"}
-_KNOWN_FILES = [*(Path(__file__).parent / "templates").glob("*.json"),
-                *(_PACKAGE / "addons").glob("*.json")]
+_ADDONS = sorted((_PACKAGE / "addons").glob("*.json"))
 
 
 def _families() -> set[str]:
     """The leading letters of each known file's name, such as ``qwen`` for ``qwen3-coder``."""
-    return {re.match("[a-z]+", path.stem.lower()).group() for path in _KNOWN_FILES}
+    return {re.match("[a-z]+", name.lower()).group()
+            for name in [*STEMS, *(path.stem for path in _ADDONS)]}
 
 
 # Publishers and chat formats the known files do not spell out themselves.
@@ -24,7 +26,8 @@ _NAMED = {"meta", "ibm", "microsoft", "alibaba", "moonshot", "zhipu", "google", 
 
 def _vendors() -> set[str]:
     """The publisher each known file's ``source`` names before its slash, and the names above."""
-    sources = (json.loads(path.read_text()).get("source", "") for path in _KNOWN_FILES)
+    sources = [*(fixture(stem).get("source", "") for stem in STEMS),
+               *(json.loads(path.read_text()).get("source", "") for path in _ADDONS)]
     return {source.split("/")[0].lower() for source in sources if "/" in source} | _NAMED
 
 
@@ -82,9 +85,7 @@ def test_the_library_and_its_engine_are_not_taken_for_a_model(word):
 
 
 def _template_tags() -> set[str]:
-    from .template_contexts import TAG
-    return {tag for path in (Path(__file__).parent / "templates").glob("*.json")
-            for tag in TAG.findall(json.loads(path.read_text())["chat_template"])}
+    return {tag for stem in STEMS for tag in TAG.findall(fixture(stem)["chat_template"])}
 
 
 @pytest.mark.parametrize("module", sorted(_PACKAGE.rglob("*.py")),

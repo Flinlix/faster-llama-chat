@@ -235,16 +235,12 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
 
 
 def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(monkeypatch):
-    import json
-    from pathlib import Path
-
     import llama_cpp.llama_chat_format as chat_format
 
-    from tests.template_contexts import ConversationContext
+    from tests.template_contexts import ConversationContext, fixture
     today = [real_datetime.datetime(2026, 11, 7, 23, 59)]
     monkeypatch.setattr(chat_format, "datetime", type("_Clock", (), {"now": staticmethod(lambda: today[0])}))
-    fixture = json.loads((Path(__file__).parent / "templates" / "llama-3.2.json").read_text())
-    context = ConversationContext(fixture, ["Eins.", "Zwei."])
+    context = ConversationContext(fixture("llama-3.2"), ["Eins.", "Zwei."])
     w = ChatWrapper(Config(context_size=400, min_reply_tokens=8), context=context)
     w.begin("Be brief.")
     w.reply("One?").finish()

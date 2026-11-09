@@ -17,7 +17,7 @@ from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_fragments, reasoning_switch
 
-from .template_contexts import TemplateContext, fixture
+from .template_contexts import STEMS, TemplateContext, fixture
 
 
 def _tool_fragments(render):
@@ -29,9 +29,6 @@ def _tool_fragments(render):
 def _real(stem):
     """The renderer the test template ``stem`` is loaded with."""
     return TemplateContext(fixture(stem)).render_with_model_template
-
-
-_STEMS = sorted(path.stem for path in (Path(__file__).parent / "templates").glob("*.json"))
 
 
 def test_gemma_user_assistant_fragments():
@@ -94,7 +91,7 @@ def test_a_tool_calling_template_yields_its_call_tags():
     assert tools.call_close == "}<tool_call|><|tool_response>"
 
 
-@pytest.mark.parametrize("stem", [stem for stem in _STEMS if not fixture(stem)["calls_tools"]])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if not fixture(stem)["calls_tools"]])
 def test_a_template_that_cannot_call_tools_has_no_tool_fragments(stem):
     assert _tool_fragments(_real(stem)) is None
 

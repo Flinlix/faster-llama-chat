@@ -11,9 +11,9 @@ template takes are driven too.
 """
 
 import datetime as real_datetime
+import itertools
 import json
 import math
-from pathlib import Path
 
 import pytest
 
@@ -21,11 +21,10 @@ from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
-from .template_contexts import (ANSWERS, QUESTIONS, WEATHER, ConversationContext, ScriptedCall,
-                                call_marks)
+from .template_contexts import (ANSWERS, QUESTIONS, STEMS, WEATHER, ConversationContext,
+                                ScriptedCall, call_marks, fixture)
 
-_TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
-_FIXTURES = {path.stem: json.loads(path.read_text()) for path in _TEMPLATES}
+_FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
 # prompt, so that no window of the conversation stands for the whole render. A
 # template that wrote anything of a message's text, its length say, beyond the
@@ -42,6 +41,11 @@ _TOOL_TEMPLATES = [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["calls_
 
 def _fixture(stem):
     return _FALLBACK if stem == "fallback" else _FIXTURES[stem]
+
+
+def _reasoning_modes(stem):
+    """Reasoning off, and on where the template can reason."""
+    return (False, True) if _fixture(stem)["can_reason"] else (False,)
 
 
 # ----- a conversation, and the render of what was sent ---------------------------
@@ -518,6 +522,31 @@ def test_a_template_that_writes_something_of_a_message_besides_its_text_is_refus
 
 
 # ----- histories, restarts, refusals ------------------------------------------------
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
+def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(stem):
+    sent = [{"role": "user", "content": " ping "}, {"role": "assistant", "content": " pong "},
+            {"role": "user", "content": " again "}]
+    for reasoning in _reasoning_modes(stem):
+        run = _Run(stem, reasoning=reasoning)
+        run.system = ""
+        run.begin([("user", " ping "), ("assistant", " pong ")])
+        run.chat.reply(" again ").finish()
+        assert run.seen[0] == run.render(sent), reasoning
+
+
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
+def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(stem):
+    run = _Run(stem)
+    try:
+        run.begin([("user", " ping ")])
+        run.chat.reply(" again ").finish()
+    except ValueError as refused:
+        assert "two user turns" in str(refused)
+        return
+    assert run.seen[0] == run.render([{"role": "user", "content": " ping "},
+                                      {"role": "user", "content": " again "}])
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_went_in(stem):
     run = _Run(stem)
@@ -635,21 +664,47 @@ def test_tools_declared_mid_conversation_are_written_where_the_template_writes_t
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_writes_them(stem):
+def test_tools_without_a_system_prompt_open_as_the_template_opens_them(stem):
     run = _Run(stem)
-    turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}),
-                     ToolResult("get_weather", '{"weather": "sunny"}'), "Sunny."))
+    run.system = ""
+    run.begin(tools=[WEATHER])
+    run.chat.reply("Weather?").finish()
+    assert run.seen[0] == run.render([{"role": "user", "content": "Weather?"}], [WEATHER])
+
+
+def _past_tool_turn(result):
+    """A past turn that called the weather tool, and the messages a template is given for it, written out here."""
+    turn = ToolTurn((ToolCall("get_weather", {"city": "Berlin"}), ToolResult("get_weather", result),
+                     "Sunny."))
+    return turn, [{"role": "user", "content": "Weather?"},
+                  {"role": "assistant", "content": "", "tool_calls": [
+                      {"id": "call00000", "type": "function", "function": {
+                          "name": "get_weather", "arguments": {"city": "Berlin"}}}]},
+                  {"role": "tool", "name": "get_weather", "tool_call_id": "call00000",
+                   "content": result},
+                  {"role": "assistant", "content": "Sunny."}]
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_writes_them(stem):
+    """In each reasoning mode, with a plain result and one holding quotes and a line break."""
     clock = ToolSpec(name="get_time", description="The time",
                      parameters={"type": "object", "properties": {}})
-    run.begin([("user", "Weather?"), turn], tools=[WEATHER])
-    run.chat.reply(QUESTIONS[0]).finish()
-    run.chat.declare_tools([clock])
-    run.chat.reply(QUESTIONS[1]).finish()
-    from llama_chat.messages import as_messages
-    sent = as_messages([("user", "Weather?"), turn]) + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1]), [])
-    assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}],
-                                      [WEATHER, clock])
-    assert isinstance(run.chat.conversation()[1][1], ToolTurn)
+    for reasoning, result in itertools.product(_reasoning_modes(stem),
+                                               ("sunny", '{"weather": "sunny"}\nsecond line')):
+        turn, messages = _past_tool_turn(result)
+        run = _Run(stem, reasoning=reasoning)
+        run.begin([("user", "Weather?"), turn], tools=[WEATHER])
+        run.chat.reply(QUESTIONS[0]).finish()
+        assert run.seen[0] == run.render(
+            messages + [{"role": "user", "content": QUESTIONS[0]}], [WEATHER]), (reasoning, result)
+        run.chat.declare_tools([clock])
+        run.chat.reply(QUESTIONS[1]).finish()
+        kept = _THOUGHT if reasoning and run.chat._template.reasoning.past_keeps_thought else None
+        sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
+        assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}],
+                                          [WEATHER, clock]), (reasoning, result)
+        assert isinstance(run.chat.conversation()[1][1], ToolTurn)
 
 
 def _call_body(run, arguments):

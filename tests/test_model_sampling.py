@@ -2,7 +2,6 @@
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
@@ -11,6 +10,7 @@ from llama_chat.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
 from llama_chat.config import Config
+from tests.template_contexts import STEMS, fixture
 
 _TEMPLATE = "{{ messages }}"
 
@@ -91,7 +91,6 @@ def test_an_add_on_file_with_an_incomplete_call_is_refused(tmp_path, call):
 
 
 def test_every_shipped_file_names_a_template_the_tests_run():
-    fixtures = {template_fingerprint(json.loads(p.read_text())["chat_template"])
-                for p in (Path(__file__).parent / "templates").glob("*.json")}
+    fixtures = {template_fingerprint(fixture(stem)["chat_template"]) for stem in STEMS}
     for path in SHIPPED_ADDONS.glob("*.json"):
         assert set(json.loads(path.read_text())["templates"]) & fixtures, path.name
