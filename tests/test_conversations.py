@@ -662,8 +662,9 @@ def _call_body(run, arguments):
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": WEATHER.name, "arguments": arguments}}]}], reasoning=False)
-    opener, closer = (template.call_texts if template.call_texts is not None
-                      else (run.context.token_text(t) for t in template.tool_tokens))
+    boundary = template.call_boundary()
+    opener, closer = (boundary.call_texts if boundary.call_texts is not None
+                      else (run.context.token_text(t) for t in boundary.tool_tokens))
     if template._call_from_file:
         # The template shows no call it could be read from; the model writes the add-on file's.
         return opener, WEATHER.name + run.context.addon_call()["name_close"] + json.dumps(
@@ -673,12 +674,9 @@ def _call_body(run, arguments):
 
 def _spaced(run, body):
     """``body`` spaced unlike the template writes it, where the call still reads back the same."""
-    from llama_chat.call_parsing import parse_calls
-    template = run.chat._template
     for spaced in (body.replace(": ", ":"), body.replace(":", ": "), body + " ", " " + body):
         try:
-            read = parse_calls((template.call_lead_in + spaced) if template.call_texts else spaced,
-                               template.call_body, template.call_lead_in)
+            read = run.chat._template.read_calls(spaced)
         except Exception:
             continue
         if spaced != body and read == [ToolCall(WEATHER.name, {"city": "Bonn"})]:

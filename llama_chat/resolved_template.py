@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 
 from .cache_context import MODEL_READER, ensure_answers
+from .call_parsing import parse_calls
 from .messages import call_id, calling_message, result_message
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFormatter,
                        TemplateFragments, ToolCallFragments, common_prefix_length,
@@ -150,36 +151,9 @@ class ResolvedTemplate:
     def tool_tokens(self) -> tuple[int, int] | None:
         """The ``(open, close)`` tokens bracketing a call, or ``None``.
 
-        ``None`` also where :attr:`call_texts` marks a call instead.
+        ``None`` also where a call is marked by its texts instead.
         """
         return self._boundary.tool_tokens
-
-    @property
-    def call_texts(self) -> tuple[str, str] | None:
-        """The texts that open and end a call, where a call has no tag of its own.
-
-        ``None`` where :attr:`tool_tokens` marks a call, or nothing does.
-        """
-        return self._boundary.call_texts
-
-    @property
-    def turn_end_text(self) -> str | None:
-        """Where a reply ends, where a call goes on from the start of its closing.
-
-        Such a reply ends once the text has passed the last point a call could
-        still begin from; ``None`` where :attr:`turn_end_token` says it.
-        """
-        return self._boundary.turn_end_text
-
-    @property
-    def call_lead_in(self) -> str:
-        """Fixed text this model writes between its call tag and the name."""
-        return self._call_lead_in
-
-    @property
-    def call_body(self) -> CallBody | None:
-        """How a call spells its arguments, or ``None`` if it cannot be read."""
-        return self._call_body
 
     @property
     def can_call_tools(self) -> bool:
@@ -396,11 +370,6 @@ class ResolvedTemplate:
         last = self._context.token_text(tags[-1]) if tags else ""
         return text.rpartition(last)[2] if last else text
 
-    @property
-    def call_opens_as_text(self) -> bool:
-        """Whether a call opens with plain text, which counts only after a tag or at the start."""
-        return self._boundary.opens_as_text
-
     def call_boundary(self, recognizes_calls: bool = True, withhold: bool = False) -> CallBoundary:
         """Where a generated call opens and closes and where a reply ends, as generation reads it.
 
@@ -415,6 +384,18 @@ class ResolvedTemplate:
         return CallBoundary(opens_as_text=self._boundary.opens_as_text,
                             turn_end_text=self._boundary.turn_end_text,
                             withheld_tokens=(tokens[0],) if tokens and withhold else ())
+
+    def read_calls(self, generated_call_text: str) -> list[ToolCall]:
+        """The calls in what a model generated between a call's opening and its closing.
+
+        Raises:
+            ValueError: If the text is not a call this model's format reads.
+            RecursionError: If its values nest deeper than the parser can follow.
+        """
+        text = generated_call_text
+        if self._boundary.call_texts is not None:
+            text = self._call_lead_in + text    # the opening text holds the lead-in's start
+        return parse_calls(text, self._call_body, self._call_lead_in)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
         """Whether a plain-text opening begins with text of a reply's own opening.

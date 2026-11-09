@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from llama_chat import ChatWrapper, Config
-from llama_chat.call_parsing import parse_calls
 from llama_chat.reply_text import ThoughtFilter, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
@@ -189,24 +188,25 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
                  {"id": "call00000", "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
             tools=[_TOOL.as_declaration()], reasoning=False)
-        opener, closer = (template.call_texts if template.call_texts is not None
-                          else (context.token_text(t) for t in template.tool_tokens))
+        boundary = template.call_boundary()
+        opener, closer = (boundary.call_texts if boundary.call_texts is not None
+                          else (context.token_text(t) for t in boundary.tool_tokens))
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
-    assert parse_calls(body, template.call_body, template.call_lead_in) == [
-        ToolCall("get_weather", {"city": "Berlin"})]
+    assert template.read_calls(body) == [ToolCall("get_weather", {"city": "Berlin"})]
 
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
 def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path):
     context = TaggedContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
-    if template.call_texts is None:
+    boundary = template.call_boundary()
+    if boundary.call_texts is None:
         return
-    assert template.tool_tokens is None
-    if template.call_opens_as_text:
+    assert boundary.tool_tokens is None
+    if boundary.opens_as_text:
         return                          # no tag at all
-    tag = context.token_text(context.first_special_token(template.call_texts[0]))
+    tag = context.token_text(context.first_special_token(boundary.call_texts[0]))
     reply = template.fragments
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
 
@@ -215,9 +215,9 @@ def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
     context = TaggedContext(json.loads((Path(__file__).parent / "templates"
                                          / "kimi-k3.json").read_text()))
     template = ResolvedTemplate(context)
-    assert template.turn_end_text == "<|close|>response<|sep|><|close|>"
+    assert template.call_boundary().turn_end_text == "<|close|>response<|sep|><|close|>"
     assert template.turn_end_token is None
-    assert template.call_body.string_type == "string"
+    assert template._call_body.string_type == "string"
 
 
 @pytest.mark.parametrize("path", list(_tool_templates()),
@@ -261,7 +261,7 @@ def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     context = TaggedContext(fixture)
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
     template = ResolvedTemplate(context)
-    assert template.tool_tokens is not None and template.call_texts is None
+    assert template.tool_tokens is not None and template.call_boundary().call_texts is None
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
@@ -296,10 +296,11 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, argument
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": "fn", "arguments": arguments}}]}], reasoning=False)
-    opener, closer = (template.call_texts if template.call_texts is not None
-                      else (context.token_text(t) for t in template.tool_tokens))
+    boundary = template.call_boundary()
+    opener, closer = (boundary.call_texts if boundary.call_texts is not None
+                      else (context.token_text(t) for t in boundary.tool_tokens))
     body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
-    read = parse_calls(body, template.call_body, template.call_lead_in)
+    read = template.read_calls(body)
     if any((path.stem, key) in _LOST for key in arguments):
         assert read != [ToolCall("fn", arguments)], "now read back: drop it from _LOST"
     else:

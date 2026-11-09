@@ -181,7 +181,7 @@ def test_a_grammar_may_be_supplied_where_the_probes_cannot_recover_one():
                           tool_calls=ToolCallFragments(
                               call_open="<call>fn:", call_close="}</call>",
                               body=spelled))
-    assert wrapper._template.call_body is spelled
+    assert wrapper._template._call_body is spelled
 
 
 # ----- a model that writes a batch -----------------------------------------

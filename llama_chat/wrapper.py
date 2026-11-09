@@ -14,7 +14,6 @@ import threading
 from collections.abc import Callable, Generator
 from dataclasses import replace
 
-from .call_parsing import parse_calls
 from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
 from .config import Config, Sampling
 from .context import KVContext
@@ -796,11 +795,8 @@ class ChatWrapper:
         """
         if generated.stop_reason != "tool_call":
             return []
-        body = generated.tool_call
-        if self._template.call_texts is not None:
-            body = self._template.call_lead_in + body   # the opening holds its start
         try:
-            return parse_calls(body, self._template.call_body, self._template.call_lead_in)
+            return self._template.read_calls(generated.tool_call)
         except (ValueError, RecursionError):
             return []
 

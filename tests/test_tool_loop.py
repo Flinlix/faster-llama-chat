@@ -412,7 +412,7 @@ def test_tags_without_a_readable_grammar_cannot_call_tools():
     fake = _ConstantBodyContext(calls_tools=True)
     wrapper = ChatWrapper(Config(context_size=512), context=fake,
                           tool_calls=FAKE_TAGS)
-    assert wrapper._template.call_body is None  # the probes recovered nothing
+    assert wrapper._template._call_body is None  # the probes recovered nothing
     assert not wrapper.can_call_tools
 
     wrapper.begin("persona")
@@ -1567,7 +1567,7 @@ def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whol
     def faulty(*args, **kwargs):
         raise TypeError("a fault in the library")
 
-    monkeypatch.setattr("llama_chat.wrapper.parse_calls", faulty)
+    monkeypatch.setattr("llama_chat.resolved_template.parse_calls", faulty)
     with pytest.raises(TypeError):
         wrapper.reply("wie spät?", calls="yield").finish()
     monkeypatch.undo()
