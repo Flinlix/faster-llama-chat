@@ -782,21 +782,20 @@ def test_a_decode_that_fails_halfway_is_repaired_by_the_next_action():
     assert [m["role"] for m in rows(w)][-2:] == ["user", "assistant"]
 
 
-# ----- the message log --------------------------------------------------------
-def test_the_message_log_holds_only_what_was_recorded_an_early_closed_reply_included():
-    seen = []
+# ----- what the conversation records -----------------------------------------
+def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_included():
     fake = FakeContext(gen_tokens=5)
     w = ChatWrapper(Config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=10),
-                    context=fake, on_message=lambda role, text: seen.append((role, text)))
+                    context=fake)
     w.begin("s")
     with pytest.raises(ContextOverflowError):
-        w.inject("x" * 200)                      # refused: never reported
+        w.inject("x" * 200)                      # refused: never recorded
     with pytest.raises(ContextOverflowError):
         w.reply("y" * 200).finish()
     stream = w.reply("hi")
     next(stream)
-    stream.close()                               # closed early: recorded, so reported
-    assert seen == [("user", "hi"), ("assistant", "r")]
+    stream.close()                               # closed early: recorded
+    assert w.conversation() == ("s", [("user", "hi"), ("assistant", "r")])
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
 
 

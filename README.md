@@ -273,12 +273,10 @@ saved = chat.conversation()
 chat.begin(*saved, tools=registry)
 ```
 
-To keep everything, older turns included, record messages as they are written:
-`ChatWrapper(on_message=callback)` is called with `(role, text)` for every new
-user, assistant and injected message: a request or an injected message before
-it is written, so a callback that raises refuses it with nothing changed, and
-a reply once it is recorded. A request whose generation fails before it says
-anything is taken back, its question with it, and no reply is reported for it.
+To keep everything, older turns included, keep each message as you send it
+and each reply as you read it. A request whose generation fails before it says
+anything is taken back, its question with it, so the conversation no longer
+holds that question.
 
 ## Configuration
 
@@ -334,10 +332,10 @@ that request.
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires `flash_attention` |
 | `log_level` | `"error"` | llama.cpp's own verbosity: `"debug"`, `"info"`, `"warn"`, `"error"` or `"none"`, applied process-wide before the model loads |
 
-`ChatWrapper` also takes, outside `Config` because none of them is a value to
-tune: `context=` (a [cache context of your own](#your-own-cache-context)),
-`on_message=`, and `on_load_progress=`, called with a fraction while the
-weights load, which must not raise.
+`ChatWrapper` also takes, outside `Config` because neither is a value to
+tune: `context=` (a [cache context of your own](#your-own-cache-context)) and
+`on_load_progress=`, called with a fraction while the weights load, which must
+not raise.
 
 ## Add-on files
 

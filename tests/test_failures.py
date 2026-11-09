@@ -292,16 +292,14 @@ def test_a_failed_generation_keeps_the_question_a_history_ends_on():
     assert w.history() == [("user", "aus der Geschichte")]
 
 
-def test_a_question_taken_back_after_a_failed_generation_has_no_reply_reported():
-    seen = []
+def test_a_question_taken_back_after_a_failed_generation_leaves_no_reply_recorded():
     fake = _Flaky(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake,
-                    on_message=lambda role, text: seen.append((role, text)))
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply("eins").finish()
-    assert seen == [("user", "eins")]
+    assert w.conversation() == ("s", [])
 
 
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():

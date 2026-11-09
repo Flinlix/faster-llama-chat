@@ -32,7 +32,6 @@ class ChatWrapper:
         config: Config | None = None,
         context=None,
         *,
-        on_message: Callable[[str, str], None] | None = None,
         on_load_progress: Callable[[float], None] | None = None,
     ) -> None:
         """Load the model, resolve the chat template, and validate it.
@@ -43,14 +42,6 @@ class ChatWrapper:
             context: A cache context of your own, in place of the one built
                 from ``config``. :meth:`close` closes it too; only a
                 construction that fails part-way leaves it alone.
-            on_message: Invoked with ``(role, text)`` for every genuine new
-                message, so not for the system prompt or a ``begin`` replay: a
-                question or an injected message once every check has passed
-                and before it is written, so that one that raises refuses it,
-                and a reply once it is recorded, an early close included. A
-                question whose generation fails before it says anything is
-                taken back, its reply never reported. Runs under the lock, so
-                it must not call back into the wrapper.
             on_load_progress: Invoked during model loading with a fraction in
                 ``[0.0, 1.0]``. Must not raise. Ignored when ``context`` is
                 supplied.
@@ -64,7 +55,6 @@ class ChatWrapper:
         """
         if config is None:
             config = Config()
-        self._on_message = on_message
         owns_context = context is None
         self._context = (
             KVContext(config, on_load_progress=on_load_progress)
@@ -190,7 +180,7 @@ class ChatWrapper:
         """
         with self._lock:
             self._ensure_open()
-            return self._conversation.add(role, text, accept=self._reporting(role, text))
+            return self._conversation.add(role, text)
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
@@ -642,7 +632,7 @@ class ChatWrapper:
         decoded_from = conversation.decoded
         n_evicted_messages = 0
         if text is not None:
-            n_evicted_messages = conversation.ask(text, accept=self._reporting("user", text))
+            n_evicted_messages = conversation.ask(text)
         elif not conversation.reply_open:
             conversation.prompt()
         cap = max_reply_tokens if max_reply_tokens is not None else self._config.max_reply_tokens
@@ -694,7 +684,7 @@ class ChatWrapper:
         """Record what one generation left and settle the cache after it; how many history items were evicted.
 
         A call that could not be read ends the generation as
-        ``"unreadable_tool_call"``. The reply is reported once it is recorded.
+        ``"unreadable_tool_call"``.
         """
         calls = self._read_calls(generated)
         called = generated.stop_reason == "tool_call"
@@ -703,8 +693,7 @@ class ChatWrapper:
         tags, answer = self._template.reasoning, reply_text.answer
         # Given to a template that writes a past reply's thought; another is written without it.
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
-        return self._conversation.record_reply(answer, kept_thought, calls, called,
-                                               recorded=self._reporting("assistant", answer))
+        return self._conversation.record_reply(answer, kept_thought, calls, called)
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
@@ -721,12 +710,6 @@ class ChatWrapper:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("ChatWrapper is closed")
-
-    def _reporting(self, role: str, text: str) -> Callable[[], None] | None:
-        """What tells ``on_message`` of a new message once every check on it has passed."""
-        if self._on_message is None:
-            return None
-        return lambda: self._on_message(role, text)
 
 
 def _specs_declared_at_begin(tools) -> list[ToolSpec] | None:

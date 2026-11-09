@@ -275,12 +275,8 @@ class RenderedCache:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
     # ----- adding messages --------------------------------------------------------------
-    def ask(self, text: str, accept=None) -> int:
+    def ask(self, text: str) -> int:
         """Decode ``text`` as the next question, with the generation prompt after it; how many history items were dropped for it.
-
-        Args:
-            accept: Called once every check has passed and before anything is
-                written; one that raises refuses the question.
 
         Raises:
             ValueError: If no conversation was begun, a reply is open, or the
@@ -298,8 +294,6 @@ class RenderedCache:
                 raise ContextOverflowError(
                     f"request needs {alone} tokens but only {room} fit beside room for the reply")
             self._ensure_writes("user", text, generation_prompt=True)
-            if accept is not None:
-                accept()
             before = list(self._memory.tokens)
             n_before = len(as_history(self._state.messages))
             if not self._splice(question, room):
@@ -334,16 +328,13 @@ class RenderedCache:
         self._note_prompt(ahead.after_question, self._memory.tokens)
         return True
 
-    def add(self, role: str, text: str, accept=None) -> int:
+    def add(self, role: str, text: str) -> int:
         """Decode a message without a reply after it; returns how many history items were dropped for it.
 
         A question is put in the stand-in's place as :meth:`ask` puts one, the
         generation prompt after it: within the room left for a reply, the
         conversation over ``evict_above_tokens`` until its reply settles, unless
         ``max_history_messages`` is reached first.
-
-        Args:
-            accept: As :meth:`ask`.
 
         Raises:
             ValueError: If no conversation was begun, a reply is open, or the
@@ -361,8 +352,6 @@ class RenderedCache:
                     f"injected message needs {alone} tokens but only {limit} fit beside the "
                     "system prompt")
             self._ensure_writes(role, text, generation_prompt=False)
-            if accept is not None:
-                accept()
             n_before = len(as_history(self._state.messages))
             room = self._max_prompt_tokens
             fits = (self._config.max_history_messages is None
@@ -432,7 +421,7 @@ class RenderedCache:
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
-                     called: bool, recorded=None) -> int:
+                     called: bool) -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -453,8 +442,6 @@ class RenderedCache:
                 write or leave out.
             calls: What it called, each owed a result.
             called: Whether it stopped on a call, read or not.
-            recorded: Called once a reply that closes its turn is recorded,
-                before the cache is settled after it.
 
         Returns:
             How many history items were dropped.
@@ -488,26 +475,18 @@ class RenderedCache:
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
         self._publish()
-
-        def report_closed():
-            if recorded is not None and not self.reply_open:
-                recorded()
-
         if not self._memory.is_known:
-            report_closed()
             return 0                # the generation failed: the next action decodes the cache again
         if unreadable:
             try:
                 written = self._write_unreadable()
             except BaseException:
                 self._forget_calls()        # the cache is decoded again by the next action
-                report_closed()
                 raise
             if not written:
                 self._forget_calls()
         if self.reply_open:
             return 0
-        report_closed()
         if not answer and not called and not resumed \
                 and writes_two_user_turns(self._rendering.render):
             # A reply all thought or cut before its answer leaves the question
@@ -620,7 +599,8 @@ class RenderedCache:
         """Add ``specs`` where the template declares tools; how many history items were dropped.
 
         Args:
-            accept: As :meth:`ask`.
+            accept: Called once the conversation is ready and before anything
+                is written; one that raises refuses the declarations.
 
         Raises:
             ValueError: If no conversation was begun or a reply is open.

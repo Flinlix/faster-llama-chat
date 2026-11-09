@@ -146,14 +146,11 @@ def test_the_held_back_tail_is_flushed_when_generation_runs_out():
 def test_a_resumed_reply_gathers_its_text_into_one_message():
     """One turn's text is what a reader saw, across both generations of it.
 
-    ``on_message`` fires once, when the turn finally closes, so whatever
-    persists the conversation is handed the resumed prose and not only what
-    came before the call.
+    Whatever persists the conversation reads it back with the resumed prose,
+    not only what came before the call.
     """
-    seen = []
     fake = FakeContext(calls_tools=True, gen_text="neun Uhr")
-    wrapper = ChatWrapper(Config(context_size=512), context=fake,
-                          on_message=lambda role, text: seen.append((role, text)))
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", calls="yield"))
@@ -169,5 +166,5 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     assert "09:00" not in row["text"]               # nor is the result
     held = fake.text_of(fake.cache)
     assert "clock" in held and "09:00" in held      # yet both reached the cache
-    assert ("assistant", resumed) in seen           # and that is what is handed on
+    assert wrapper.conversation()[1][-1].steps[-1] == resumed   # and that is what is read back
     assert fake.cache == cache_tokens(wrapper)
