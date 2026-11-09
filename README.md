@@ -426,6 +426,7 @@ tag; real token boundaries are checked by the load check and by
 |------|------|
 | `llama_chat/wrapper.py` | `ChatWrapper`: the conversation |
 | `llama_chat/rendered_cache.py` | the messages, and the cache kept as the template renders them: windows, the stand-in question, kept tool turns, the open turn and its owed calls |
+| `llama_chat/rendering.py` | a conversation's renders, split and tokenized as the cache holds them, each kept tool turn in its place |
 | `llama_chat/split_render.py` | a render split into the template's text and the caller's, each text placed by a render with markers |
 | `llama_chat/render_checks.py` | what a template's renders allow: the stand-in question, windows, history that stays written |
 | `llama_chat/reply.py` | `Reply`, `ReplyStream`, `ContextOverflowError`: what a request produces |

@@ -18,20 +18,20 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import json
 from dataclasses import dataclass, field, fields
 
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
-from .messages import as_history, as_messages, calling_message, exchange_starts, result_message
+from .messages import (as_history, as_messages, calling_message, exchange_starts, result_message,
+                       system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices, splices,
                             windows_are_exact, writes_two_user_turns)
+from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
 from .resolved_template import ResolvedTemplate
-from .split_render import SplitRender, split_render
+from .split_render import SplitRender
 from .template import common_prefix_length
-from .tokenizing import MemoTokenizer, tokenize_pieces
 from .tools import ToolCall, ToolSpec, result_text
 
 # The name a result carries where no real one is to be had: answering a call
@@ -64,16 +64,6 @@ class _Ahead:
     made_for: _MadeFor
 
 
-@dataclass(frozen=True, eq=False)
-class _Kept:
-    """A turn held as the tokens it was generated as, in place of the template's version of it."""
-
-    tokens: tuple[int, ...]
-    first: dict                           # its first message
-    last: dict                            # the message it ends with
-    on_call: bool                         # whether it ends on a call, else on a reply's text
-
-
 @dataclass
 class _ConversationState:
     """What a failed action puts back as it was, the cache's tokens besides."""
@@ -81,9 +71,9 @@ class _ConversationState:
     messages: list[dict] = field(default_factory=list)
     tools: list[ToolSpec] = field(default_factory=list)
     reasoning: bool = False
-    kept: list[_Kept] = field(default_factory=list)
+    kept: list[KeptTurn] = field(default_factory=list)
     # Where each placed kept turn starts in the cache.
-    kept_at: dict[_Kept, int] = field(default_factory=dict)
+    kept_at: dict[KeptTurn, int] = field(default_factory=dict)
     n_calls: int = 0
     splices: bool = False
     windows: bool = False                 # whether windows of the conversation stand for its render
@@ -119,17 +109,14 @@ class RenderedCache:
         self._context = context
         self._template = template
         self._config = config
-        self._reader = MemoTokenizer(context)
         self._memory = CacheSync(context)
         self._state = _ConversationState()
+        self._rendering = ConversationRendering(context, template, lambda: self._state)
         # Left as they are by a failed action. The newest generation: where it began,
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
         self._generation: tuple[int, bool, list[int] | None] = (0, False, None)
-        self._renders: dict = {}           # this action's renders and splits, by what was rendered
         self._published: tuple[tuple, str] = ((), "")
-        self._tag_tokens = {text: token for token in (template.tool_tokens or ())
-                            if (text := context.token_text(token))}
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -200,7 +187,7 @@ class RenderedCache:
         """
         with self._action():
             self._state.tools, self._state.reasoning = list(tools), reasoning
-            self._renders.clear()
+            self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history)
             self._state.kept, self._state.kept_at = [], {}
@@ -209,14 +196,14 @@ class RenderedCache:
             asks = any(m["role"] == "user" for m in self._state.messages)
             self._keep_newest_history(min(limit, self._config.context_size // 2))
             if any(m["role"] != "system" for m in self._state.messages) \
-                    and self._split(self._state.messages, self._ends_on_result()) is None:
+                    and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
-            self._state.splices = splices(self._render, system)
-            ensure_history_stays_written(self._render, system)
+            self._state.splices = splices(self._rendering.render, system)
+            ensure_history_stays_written(self._rendering.render, system)
             self._state.windows = self._state.splices and windows_are_exact(
-                self._render, system, self._tag_from)
+                self._rendering.render, system, self._rendering.tag_from)
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
-                         or self._length(self._state.messages, False) > limit):
+                         or self._rendering.length(self._state.messages, False) > limit):
                 raise ContextOverflowError(
                     "the newest exchange of the history, from its user message on, does not "
                     "fit beside the system prompt; shorten it or raise "
@@ -227,12 +214,12 @@ class RenderedCache:
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
             self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
-            self._state.opening = self._opening_render()
-            self._memory.pin(self._opening_length())
+            self._state.opening = self._rendering.opening_render(self._system_part())
+            self._memory.pin(self._rendering.opening_length(self._system_part()))
             if self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 self._sync(self._prompted())
             elif self.owed_calls:
-                self._sync(self._tokens(self._state.messages, generation_prompt=False))
+                self._sync(self._rendering.target(self._state.messages, generation_prompt=False))
             else:
                 self._render_ahead()
             self._memory.rest()
@@ -257,9 +244,9 @@ class RenderedCache:
 
         def fits(count: int) -> bool:
             kept = self._state.messages[:first] + self._state.messages[opens[-count]:]
-            if self._split(kept, kept[-1]["role"] == "tool") is None:
+            if self._rendering.split(kept, kept[-1]["role"] == "tool") is None:
                 raise self._refused_history(kept)
-            return self._length(kept, generation_prompt=False) <= bound
+            return self._rendering.length(kept, generation_prompt=False) <= bound
 
         kept, more = 1, 2
         while more < len(opens) and fits(more):
@@ -302,7 +289,7 @@ class RenderedCache:
             self._ensure_ready("start a request", "generate into")
             room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
-            alone = self._length(self._system_part() + [question], generation_prompt=True)
+            alone = self._rendering.length(self._system_part() + [question], generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
                     f"request needs {alone} tokens but only {room} fit beside room for the reply")
@@ -330,10 +317,10 @@ class RenderedCache:
         text = question["content"]
         if (ahead is None or not self._state.splices or not self._is_current(ahead.made_for)
                 or not _is_plain(text, self._context)
-                or not question_splices(self._render, self._system_part(), text)):
+                or not question_splices(self._rendering.render, self._system_part(), text)):
             return False
         rest = [(text if own and piece == STAND_IN else piece, own) for piece, own in ahead.rest]
-        tokens = self._tokenize(rest)
+        tokens = self._rendering.tokenize(rest)
         if len(self._memory.tokens) + len(tokens) > room:
             return False
         self._state.messages.append(question)
@@ -364,7 +351,7 @@ class RenderedCache:
             self._ensure_ready("inject", "inject into")
             message = {"role": role, "content": text}
             limit = self._config.evict_above_tokens
-            alone = self._length(self._system_part() + [message], generation_prompt=False)
+            alone = self._rendering.length(self._system_part() + [message], generation_prompt=False)
             if alone > limit:
                 raise ContextOverflowError(
                     f"injected message needs {alone} tokens but only {limit} fit beside the "
@@ -379,7 +366,7 @@ class RenderedCache:
             if role != "user" or not fits or not self._splice(message, room):
                 self._state.messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
-                self._sync(self._tokens(self._state.messages, generation_prompt=False),
+                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
             return n_before + 1 - len(as_history(self._state.messages))
@@ -403,7 +390,7 @@ class RenderedCache:
                 return          # spliced with the generation prompt after it, within the room
             self._sync(self._fitting_prompt())
 
-    def _fitting_prompt(self) -> list[int]:
+    def _fitting_prompt(self) -> Target:
         """The conversation with the generation prompt after it.
 
         Raises:
@@ -411,10 +398,10 @@ class RenderedCache:
         """
         target = self._prompted()
         room = self._max_prompt_tokens
-        if len(target) > room:
+        if len(target.tokens) > room:
             raise ContextOverflowError(
-                f"the conversation needs {len(target)} tokens but only {room} leave room "
-                "for the reply")
+                f"the conversation needs {len(target.tokens)} tokens but only {room} leave "
+                "room for the reply")
         return target
 
     # ----- generating -------------------------------------------------------------------
@@ -487,8 +474,8 @@ class RenderedCache:
                 # The whole turn is kept, its results and their prompt included.
                 self._state.kept.remove(open_turn)
                 start, first = min(start, self._state.kept_at.pop(open_turn)), open_turn.first
-            self._state.kept.append(_Kept(tuple(self._memory.tokens[start:]), first, message,
-                                          bool(asked)))
+            self._state.kept.append(KeptTurn(tuple(self._memory.tokens[start:]), first, message,
+                                             bool(asked)))
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
         self._publish()
@@ -513,13 +500,13 @@ class RenderedCache:
             return 0
         report_closed()
         if not answer and not called and not resumed \
-                and writes_two_user_turns(self._render):
+                and writes_two_user_turns(self._rendering.render):
             # A reply all thought or cut before its answer leaves the question
             # unanswered, as the next question then follows it.
             return self._remove_newest()
         return self._settle()
 
-    def _open_kept(self) -> _Kept | None:
+    def _open_kept(self) -> KeptTurn | None:
         """The kept turn the open reply goes on with: the one ending on its newest call, placed in the cache."""
         calling = next((m for m in reversed(self._state.messages) if m.get("tool_calls")), None)
         return next((k for k in self._state.kept if k.last is calling and k.on_call
@@ -538,7 +525,7 @@ class RenderedCache:
         newest = {k: v for k, v in self._state.messages[-1].items() if k != "tool_calls"}
         old = self._state.messages[-1]
         self._state.messages[-1] = newest
-        self._state.kept = [_Kept(k.tokens, newest if k.first is old else k.first, newest, False)
+        self._state.kept = [KeptTurn(k.tokens, newest if k.first is old else k.first, newest, False)
                             if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
         self._publish()
@@ -567,13 +554,13 @@ class RenderedCache:
                     "are owed in the order the model asked for them")
             text = result_text(result)
             message = result_message(name, owed_id, text)
-            if self._render(self._state.messages + [message], False) in (
-                    None, self._render(self._state.messages, False)):
+            if self._rendering.render(self._state.messages + [message], False) in (
+                    None, self._rendering.render(self._state.messages, False)):
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             room = self._max_prompt_tokens
             self._state.messages.append({**message, "content": ""})
-            if len(self._prompted()) > room:
+            if len(self._prompted().tokens) > room:
                 raise ContextOverflowError(
                     "the result wrapping alone leaves no room for the reply in what is left "
                     "of the context; this turn cannot be continued, start a new conversation "
@@ -588,7 +575,7 @@ class RenderedCache:
         while low < high:
             middle = (low + high + 1) // 2
             self._state.messages[-1] = {**message, "content": text[:middle]}
-            if len(self._prompted()) <= room:
+            if len(self._prompted().tokens) <= room:
                 low = middle
             else:
                 high = middle - 1
@@ -637,13 +624,13 @@ class RenderedCache:
             if accept is not None:
                 accept()
             self._state.tools = self._state.tools + list(specs)
-            self._renders.clear()
+            self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
             self._state.windows = self._state.splices and windows_are_exact(
-                self._render, self._system_part(), self._tag_from)
-            self._state.opening = self._opening_render()
-            self._memory.pin(self._opening_length())
+                self._rendering.render, self._system_part(), self._rendering.tag_from)
+            self._state.opening = self._rendering.opening_render(self._system_part())
+            self._memory.pin(self._rendering.opening_length(self._system_part()))
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._render_ahead(dropped=dropped)
@@ -660,7 +647,8 @@ class RenderedCache:
         # they are read from the newest exchange, not from a render of the whole conversation.
         starts = exchange_starts(self._state.messages)
         newest = self._system_part() + (self._state.messages[starts[-1]:] if starts else [])
-        if self._render(newest + [{"role": role, "content": text}], generation_prompt) is None:
+        if self._rendering.render(newest + [{"role": role, "content": text}],
+                                  generation_prompt) is None:
             raise ValueError(self._refusal(role))
 
     def _refusal(self, role: str) -> str:
@@ -703,22 +691,8 @@ class RenderedCache:
 
     def _with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
-        return self._length(self._system_part() + [{"role": "user", "content": "?"}],
-                            generation_prompt=True)
-
-    def _opening_length(self) -> int:
-        """How many tokens open the conversation whatever its oldest exchange: the system turn, its declarations and the sequence opener.
-
-        The tokens two renders share that differ only in the oldest question,
-        so that what a template writes there only once a question follows is
-        counted, and nothing that moves with the newest question is.
-        """
-        system = self._system_part()
-        first, second = (self._tokens(system + [
-            {"role": "user", "content": question}, {"role": "assistant", "content": "A reply."},
-            {"role": "user", "content": "Another question?"}], generation_prompt=True)
-            for question in ("Alpha one?", "Zulu two?"))
-        return common_prefix_length(first, second)
+        return self._rendering.length(self._system_part() + [{"role": "user", "content": "?"}],
+                                      generation_prompt=True)
 
     def _remove_newest(self) -> int:
         """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
@@ -727,8 +701,8 @@ class RenderedCache:
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
-            self._sync(self._tokens(self._state.messages, generation_prompt=False), logits=False,
-                       dropped=dropped)
+            self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                       logits=False, dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
 
@@ -750,7 +724,8 @@ class RenderedCache:
                 done = done and not (kept_until() + length > limit or self._too_many()
                                      or kept_until() + len(before) > self._config.context_size)
                 if done:
-                    self._sync(list(self._memory.tokens[:kept_until()]) + before, logits=False)
+                    self._sync(Target(list(self._memory.tokens[:kept_until()]) + before,
+                                      self._state.kept_at), logits=False)
                     self._note_ahead(split, run)
                 else:
                     self._drop_while_over(limit, generation_prompt=False, newest_too=True)
@@ -764,20 +739,20 @@ class RenderedCache:
     def _render_ahead(self, dropped: bool = False) -> None:
         """Decode the render for the next question up to where the question goes."""
         messages = self._state.messages + [{"role": "user", "content": STAND_IN}]
-        split = self._split(messages, generation_prompt=True)
-        run = (self._run_start(split, len(messages) - 1, 0)
+        split = self._rendering.split(messages, generation_prompt=True)
+        run = (self._rendering.run_start(split, len(messages) - 1, 0)
                if split is not None and split.text.count(STAND_IN) == 1 else None)
         if run is not None:
-            before = self._tokens(messages, generation_prompt=True, upto=run)
-            if len(before) <= self._config.context_size:
+            before = self._rendering.target(messages, generation_prompt=True, upto=run)
+            if len(before.tokens) <= self._config.context_size:
                 self._sync(before, logits=False, dropped=dropped)
                 self._note_ahead(split, run)
                 return
         # The next question will be rendered when it comes.
-        if self._state.messages and self._split(self._state.messages, False) is None:
+        if self._state.messages and self._rendering.split(self._state.messages, False) is None:
             return
-        self._sync(self._tokens(self._state.messages, generation_prompt=False), logits=False,
-                   dropped=dropped)
+        self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                   logits=False, dropped=dropped)
 
     # ----- windows --------------------------------------------------------------------
     def _window_ahead(self):
@@ -801,33 +776,34 @@ class RenderedCache:
         if spliced_at is None or len(starts) < 2 or not self._goes_on_from(spliced_at[2]) \
                 or self._state.messages[starts[-1]] is not spliced_at[2].messages[-1] or [
                 m["role"] for m in self._state.messages[starts[-2]:]] != ["user", "assistant"] * 2 \
-                or not self._template_writes(self._state.messages[starts[-2]:]):
+                or not self._rendering.template_writes(self._state.messages[starts[-2]:]):
             return _WHOLE
         system = self._system_part()
         window = (system + self._state.messages[starts[-2]:]
                   + [{"role": "user", "content": STAND_IN}])
-        split = self._split(window, generation_prompt=True)
+        split = self._rendering.split(window, generation_prompt=True)
         if split is None or split.text.count(STAND_IN) != 1:
             return _WHOLE
         older_reply = len(system) + 1
-        anchor = self._tag_after_content(split, older_reply)
-        run = self._run_start(split, older_reply + 1, anchor)
-        ahead_run = self._run_start(split, len(window) - 1, anchor)
+        anchor = self._rendering.tag_after_content(split, older_reply)
+        run = self._rendering.run_start(split, older_reply + 1, anchor)
+        ahead_run = self._rendering.run_start(split, len(window) - 1, anchor)
         if None in (anchor, run, ahead_run):
             return _WHOLE
-        to_question = self._tokenize(split.pieces(anchor, run))
-        before = self._tokenize(split.pieces(anchor, ahead_run))
+        to_question = self._rendering.tokenize(split.pieces(anchor, run))
+        before = self._rendering.tokenize(split.pieces(anchor, ahead_run))
         question_at, spliced, _ = spliced_at
         at = question_at - len(to_question)
         if at < 0 or list(self._memory.tokens[at:question_at]) != to_question \
                 or list(self._memory.tokens[question_at:question_at + len(spliced)]) != spliced \
                 or before[:len(to_question)] != to_question:
             return _WHOLE
-        # What counts against the limits, as :meth:`_length` counts it: the window without the stand-in.
-        plain = self._split(window[:-1], generation_prompt=False)
+        # What counts against the limits, as :meth:`ConversationRendering.length` counts it: the
+        # window without the stand-in.
+        plain = self._rendering.split(window[:-1], generation_prompt=False)
         if plain is None or plain.text[:anchor] != split.text[:anchor]:
             return _WHOLE
-        length = len(self._tokenize(plain.pieces(anchor)))
+        length = len(self._rendering.tokenize(plain.pieces(anchor)))
         return at, before, length, split, ahead_run
 
     def _drop_in_windows(self, kept_until, after: int) -> bool:
@@ -854,7 +830,7 @@ class RenderedCache:
                 break
             # The cache up to the tag after the second oldest exchange's reply, before the drop,
             # checked token for token, as no check at load covers it.
-            held = self._head(through=1)
+            held = self._rendering.head(self._state.messages, through=1)
             if held is None or list(self._memory.tokens[:len(held)]) != held:
                 return False
             if not self._drop_oldest_exchange(True):
@@ -871,7 +847,7 @@ class RenderedCache:
         the tag after the first one's reply, and everything after that tag is
         as before.
         """
-        wanted = self._head(through=0)
+        wanted = self._rendering.head(self._state.messages, through=0)
         if wanted is None:
             return False
         same = common_prefix_length(held, wanted)
@@ -883,73 +859,12 @@ class RenderedCache:
                                for k, at in self._state.kept_at.items()}
         return list(self._memory.tokens[:len(wanted)]) == wanted
 
-    def _head(self, through: int) -> list[int] | None:
-        """The render up to the first tag after the reply of oldest exchange ``through``, 0 or 1, from the system message and the oldest two exchanges; ``None`` where it cannot be told."""
-        starts = exchange_starts(self._state.messages)
-        if len(starts) <= through:
-            return None
-        bounds = starts[1:] + [len(self._state.messages)]
-        kept = self._state.messages[starts[0]:bounds[min(1, len(bounds) - 1)]]
-        if not self._template_writes(kept):
-            return None
-        system = self._system_part()
-        split = self._split(system + kept + [{"role": "user", "content": STAND_IN}],
-                            generation_prompt=True)
-        if split is None:
-            return None
-        anchor = self._tag_after_content(split, len(system) + bounds[through] - starts[0] - 1)
-        if anchor is None:
-            return None
-        return self._tokenize(split.pieces(0, anchor), add_special=True)
-
-    def _template_writes(self, messages: list[dict]) -> bool:
-        """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
-        kept = {id(m) for k in self._state.kept for m in (k.first, k.last)}
-        return not any(m["role"] == "tool" or m.get("tool_calls") or id(m) in kept
-                       for m in messages)
-
     def _system_part(self) -> list[dict]:
-        return [m for m in self._state.messages[:1] if m["role"] == "system"]
-
-    def _tag_after_content(self, split: SplitRender, index: int) -> int | None:
-        """Where the first tag after message ``index``'s content begins, before the next text of the caller's own."""
-        if split.contents[index] is None:
-            return None
-        return self._tag_from(split.text, split.contents[index][1], split)
-
-    def _tag_from(self, text: str, at: int, split: SplitRender | None = None) -> int | None:
-        """Where the first tag at or after ``at`` begins, before the next own text of ``split`` where given."""
-        end = next((s for s, _ in split.own if s >= at), len(text)) if split else len(text)
-        pieces = self._context.split_at_tags(text[at:end])
-        if pieces is None:
-            return None
-        for piece, is_tag in pieces:
-            if is_tag:
-                return at
-            at += len(piece)
-        return None
-
-    def _run_start(self, split: SplitRender | None, index: int, start: int | None) -> int | None:
-        """Where the run of text holding message ``index``'s content begins: after the last tag from ``start`` on."""
-        if split is None or start is None or split.contents[index] is None:
-            return None
-        run = None
-        for piece, own in split.pieces(start, split.contents[index][0]):
-            if own:
-                start += len(piece)
-                continue
-            pieces = self._context.split_at_tags(piece)
-            if pieces is None:
-                return None
-            for part, is_tag in pieces:
-                start += len(part)
-                if is_tag:
-                    run = start
-        return run
+        return system_part(self._state.messages)
 
     # ----- the cache against the target -----------------------------------------
-    def _sync(self, target: list[int], *, logits: bool = True, dropped: bool = False) -> None:
-        """Make the cache hold ``target``.
+    def _sync(self, target: Target, *, logits: bool = True, dropped: bool = False) -> None:
+        """Make the cache hold ``target``, and note where its kept turns begin there.
 
         Args:
             logits: A generation follows the decode at once.
@@ -959,117 +874,30 @@ class RenderedCache:
         # Declarations that move with the newest question leave a stretch behind, and the
         # next question's move back to where this cut is made, or past it.
         moves = self._moves_declarations()
-        self._memory.hold(target, want_logits=logits, find_dropped_stretch=dropped or moves,
-                          rest_at_cut=moves)
+        self._memory.hold(target.tokens, want_logits=logits,
+                          find_dropped_stretch=dropped or moves, rest_at_cut=moves)
+        self._state.kept_at = target.kept_at
 
     def _moves_declarations(self) -> bool:
         """Whether the declarations move with the newest question, leaving a stretch behind."""
         return bool(self._state.tools) and self._template.declares_before_newest_turn
 
-    def _prompted(self) -> list[int]:
+    def _prompted(self) -> Target:
         """The conversation with the generation prompt after it, noting the template text a reply follows."""
-        target = self._tokens(self._state.messages, generation_prompt=True)
-        split = self._split(self._state.messages, generation_prompt=True)
+        target = self._rendering.target(self._state.messages, generation_prompt=True)
+        split = self._rendering.split(self._state.messages, generation_prompt=True)
         last = max((end for _, end in split.own), default=0)
-        self._note_prompt(split.text[last:], target)
+        self._note_prompt(split.text[last:], target.tokens)
         return target
 
     def _note_prompt(self, prompt_text: str, target) -> None:
         """Note the template text a reply follows, and where it begins in ``target`` from its first tag on."""
         self._state.prompt_text = prompt_text
-        first = self._tag_from(prompt_text, 0)
-        tokens = self._tokenize([(prompt_text[first:], False)]) if first is not None else []
+        first = self._rendering.tag_from(prompt_text, 0)
+        tokens = (self._rendering.tokenize([(prompt_text[first:], False)])
+                  if first is not None else [])
         ends = tokens and list(target[-len(tokens):]) == tokens
         self._state.prompt_start = len(target) - (len(tokens) if ends else 0)
-
-    # ----- rendering ----------------------------------------------------------------
-    def _render(self, messages, generation_prompt: bool) -> str | None:
-        tools = [spec.as_declaration() for spec in self._state.tools] or None
-        key = ("render", json.dumps([messages, generation_prompt], sort_keys=True, default=str))
-        if key not in self._renders:
-            self._renders[key] = self._template.render(
-                messages, tools, generation_prompt=generation_prompt,
-                reasoning=self._state.reasoning)
-        return self._renders[key]
-
-    def _split(self, messages, generation_prompt: bool) -> SplitRender | None:
-        """``messages`` rendered and split into the template's text and the caller's.
-
-        Raises:
-            ValueError: If the template writes a text otherwise than as text in its place.
-        """
-        key = ("split", json.dumps([messages, generation_prompt], sort_keys=True, default=str))
-        if key not in self._renders:
-            self._renders[key] = split_render(lambda m: self._render(m, generation_prompt),
-                                              messages, self._template.fragments.content)
-        return self._renders[key]
-
-    def _tokens(self, messages, generation_prompt: bool, upto: int | None = None) -> list[int]:
-        """``messages`` as the cache holds them: their render tokenized, each kept turn as it was generated.
-
-        Args:
-            upto: Where in the render to stop.
-
-        Raises:
-            ValueError: If the template refuses to write them.
-        """
-        if not messages:
-            return self._tokenize([], add_special=True)   # the opener alone
-        split = self._split(messages, generation_prompt)
-        if split is None:
-            raise ValueError("the template refuses to write this conversation")
-        end = len(split.text) if upto is None else upto
-        placed = sorted(found for kept in self._state.kept
-                        if (found := self._place(kept, messages, split)) is not None
-                        and found[1] <= end)
-        tokens, at, kept_at = [], 0, {}
-        for start, stop, n in placed:
-            assert start >= at, "two kept turns overlap"
-            tokens += self._tokenize(split.pieces(at, start), add_special=not tokens and at == 0)
-            kept_at[self._state.kept[n]] = len(tokens)
-            tokens += self._state.kept[n].tokens
-            at = stop
-        tokens += self._tokenize(split.pieces(at, end), add_special=not tokens and at == 0)
-        own = self._state.messages
-        if messages is own or messages[:len(own)] == own:
-            self._state.kept_at = kept_at
-        return tokens
-
-    def _place(self, kept: _Kept, messages: list[dict], split: SplitRender):
-        """Where the template writes ``kept``'s turn in ``split``: from the first tag after the question's text to the end of its call or reply; ``None`` where it cannot be placed."""
-        first = next((i for i, m in enumerate(messages) if m is kept.first), None)
-        last = next((i for i, m in enumerate(messages) if m is kept.last), None)
-        if not first or last is None or split.contents[first - 1] is None:
-            return None
-        start = self._tag_after_content(split, first - 1)
-        if kept.on_call:
-            called = split.call_ends[last]
-            closing = self._template.call_close_text
-            found = split.text.find(closing, called) if called is not None and closing else -1
-            end = found + len(closing) if found >= 0 else None
-        elif split.contents[last] is not None:
-            end = split.contents[last][1]
-        else:
-            # A reply without text: it ends where the template's closing after it begins,
-            # the last before the next text of the caller's own, as the question has one too.
-            closing = self._template.fragments.assistant_suffix.strip()
-            following = next((s for s, _ in split.own if start is not None and s > start),
-                             len(split.text))
-            found = (split.text.rfind(closing, start, following)
-                     if closing and start is not None else -1)
-            end = found if found >= 0 else None
-        if start is None or end is None or end < start:
-            return None
-        return start, end, self._state.kept.index(kept)
-
-    def _tokenize(self, pieces: list[tuple[str, bool]], add_special: bool = False) -> list[int]:
-        """``pieces`` as a render tokenizes them, a call's tags as the single tokens a generated call holds."""
-        return tokenize_pieces(self._reader, pieces, add_special=add_special,
-                               tag_tokens=self._tag_tokens)
-
-    def _opening_render(self) -> str | None:
-        """How the template opens this conversation, which changes where it writes the date, say."""
-        return self._render(self._system_part() + [{"role": "user", "content": STAND_IN}], True)
 
     # ----- limits -------------------------------------------------------------------
     @property
@@ -1090,7 +918,7 @@ class RenderedCache:
                 nothing on purpose.
         """
         def over(bound):
-            return (self._length(self._state.messages, generation_prompt) > bound
+            return (self._rendering.length(self._state.messages, generation_prompt) > bound
                     or not tokens_only and self._too_many())
 
         if not over(limit):
@@ -1116,20 +944,6 @@ class RenderedCache:
         """Whether the history holds more items than ``max_history_messages``."""
         limit = self._config.max_history_messages
         return limit is not None and len(as_history(self._state.messages)) > limit
-
-    def _length(self, messages: list[dict], generation_prompt: bool) -> int:
-        """How many tokens the cache holds for ``messages``, each kept turn as it was generated.
-
-        Where the template refuses a conversation that ends on a reply, up to
-        where a question after it would go.
-        """
-        if not generation_prompt and messages and messages[-1]["role"] != "user" \
-                and self._render(messages, False) is None:
-            asked = messages + [{"role": "user", "content": STAND_IN}]
-            split = self._split(asked, True)
-            if split is not None and split.contents[-1] is not None:
-                return len(self._tokens(asked, True, upto=split.contents[-1][0]))
-        return len(self._tokens(messages, generation_prompt))
 
     def _drop_oldest_exchange(self, newest_too: bool = False) -> bool:
         """Drop the oldest question and everything up to the next; ``False`` where none can go.
@@ -1182,14 +996,14 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
-        self._renders.clear()
+        self._rendering.forget_renders()
         self._memory.repair()
         if self._state.begun:
-            opening = self._opening_render()
+            opening = self._rendering.opening_render(self._system_part())
             if opening != self._state.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._state.opening = opening
-                self._memory.pin(self._opening_length())
+                self._memory.pin(self._rendering.opening_length(self._system_part()))
         saved = self._state.copied()
         held = list(self._memory.tokens)
         try:

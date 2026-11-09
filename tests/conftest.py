@@ -37,10 +37,10 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
         assert any(_reads_as(held, render, kept) for render in renders), \
             "the cache does not read as the template renders the conversation"
         for render in (False, True):
-            split = conversation._split(messages, render)
+            split = conversation._rendering.split(messages, render)
             if split is not None:
                 for kept_turn in conversation._state.kept:
-                    placed = conversation._place(kept_turn, messages, split)
+                    placed = conversation._rendering.place(kept_turn, messages, split)
                     assert placed is not None, "a turn kept as generated was lost"
                     assert placed[0] < placed[1], \
                         "a turn kept as generated stands in for none of the template's text"

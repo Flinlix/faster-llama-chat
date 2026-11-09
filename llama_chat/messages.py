@@ -90,3 +90,8 @@ def exchange_starts(messages: list[dict]) -> list[int]:
     exchanges" under "Structure review: what changed and why".
     """
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
+
+
+def system_part(messages: list[dict]) -> list[dict]:
+    """The system message ``messages`` open with, alone in a list, or an empty list where they open otherwise."""
+    return [m for m in messages[:1] if m["role"] == "system"]

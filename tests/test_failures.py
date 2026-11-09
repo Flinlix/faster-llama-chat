@@ -233,13 +233,13 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     w, fake = tool_wrapper()
     w.begin("persona", [("user", "a"), ("assistant", "b")])
     seen = []
-    split = type(w._conversation)._split
+    split = type(w._conversation._rendering).split
 
     def reading(self, messages, generation_prompt):
         seen.append(len(w.history()))           # as another thread reads it, mid-action
         return split(self, messages, generation_prompt)
 
-    monkeypatch.setattr(type(w._conversation), "_split", reading)
+    monkeypatch.setattr(type(w._conversation._rendering), "split", reading)
     w.reply("c").finish()
     assert set(seen) <= {2, 4}
 
