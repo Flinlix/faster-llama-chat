@@ -1167,8 +1167,10 @@ second eviction trigger, stays at the user's word. Removing `calls="run"` and
 the registry `begin` keeps, and the smaller removals the rethink proposed, wait
 for the user's answer to an explanation of each: the eviction record's third
 field and the public `Eviction` type; `CacheContext.warmup` and the wrapper's
-warmed flag; unused defaults of `generate`; `ToolRegistry.__contains__`; and
-`result_text` in `tools.__all__`.
+warmed flag; `ToolRegistry.__contains__`; and `result_text` in
+`tools.__all__`. A fifth, the unused defaults of the cache context's
+`generate`, went with that member when the generation loop left the engine
+adapter.
 
 ## 2026-11-09: The README keeps to what a caller relies on
 
