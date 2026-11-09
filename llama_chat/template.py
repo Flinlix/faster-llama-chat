@@ -127,13 +127,6 @@ class TemplateFragments:
         user_prefix, user_suffix: Wrap a user turn.
         assistant_prefix, assistant_suffix: Wrap an assistant turn of the
             history, as the template writes a past reply.
-        trim_content: Strip surrounding whitespace from each message's content,
-            matching templates that apply Jinja ``| trim``. ``False`` emits it
-            verbatim.
-        reply_strip, system_strip: Which whitespace the template strips from
-            a reply's or a system prompt's content where that differs from a
-            user turn's: ``"both"``, ``"end"``, ``"start"`` or ``"none"``.
-            ``None`` follows ``trim_content``.
         generation_prompt: The whole generation prompt of a reply that does
             not reason, the assistant tag included, where it is more than the
             tag or differs from it, such as by an empty thought.
@@ -146,36 +139,17 @@ class TemplateFragments:
     user_suffix: str
     assistant_prefix: str
     assistant_suffix: str
-    trim_content: bool = True
-    reply_strip: str | None = None
-    system_strip: str | None = None
     generation_prompt: str = ""
     rewrites: tuple[tuple[str, str], ...] = ()
 
-    def __post_init__(self) -> None:
-        for name in ("reply_strip", "system_strip"):
-            if getattr(self, name) not in (None, *_STRIPS):
-                raise ValueError(f"{name} must be one of {sorted(_STRIPS)} or None, "
-                                 f"not {getattr(self, name)!r}")
-
-    def content(self, role: str, text: str) -> str:
-        """``text`` as the template writes it as ``role``'s content."""
-        strip = {"assistant": self.reply_strip, "system": self.system_strip}.get(role)
-        if strip is not None:
-            text = _STRIPS[strip](text)
-        elif self.trim_content:
-            text = text.strip()
+    def content(self, text: str) -> str:
+        """``text`` with ``rewrites`` applied: a content as the template writes it, apart from whitespace it strips."""
         if self.rewrites:
             written = dict(self.rewrites)
             # One pass, longest first, so nothing rewritten is rewritten again.
             pattern = "|".join(re.escape(old) for old in sorted(written, key=len, reverse=True))
             text = re.sub(pattern, lambda found: written[found.group()], text)
         return text
-
-
-# What each `reply_strip` and `system_strip` does to a content's text.
-_STRIPS = {"both": str.strip, "end": str.rstrip, "start": str.lstrip,
-           "none": lambda text: text}
 
 
 @dataclass(frozen=True)

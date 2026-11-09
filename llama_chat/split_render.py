@@ -56,14 +56,13 @@ class SplitRender:
 
 
 def split_render(render: Callable[[list[dict]], str | None], messages: list[dict],
-                 written: Callable[[str, str], str]) -> SplitRender | None:
+                 written: Callable[[str], str]) -> SplitRender | None:
     """``messages`` rendered and split; ``None`` where the template refuses them.
 
     Args:
         render: The template's render of a list of messages.
-        written: ``(role, text)`` to the text as the template writes it as
-            that role's content, its strip and escapes applied; tried after
-            the text itself.
+        written: A content's text with the template's rewrites applied, tried
+            on the text itself and on each of its stripped forms.
 
     Raises:
         ValueError: If the render is not the marked render with each marker
@@ -92,7 +91,6 @@ class _Value:
     text: str
     message: int
     kind: str                       # "content", "thought", "name" or "argument"
-    role: str
     call: int = -1                  # which of the message's calls a name or an argument is of
 
 
@@ -100,18 +98,18 @@ def _marked(messages: list[dict]) -> tuple[list[dict], dict[str, _Value]]:
     """The messages with a marker in place of each text of the caller's own, and what each marker stands for."""
     values: dict[str, _Value] = {}
 
-    def mark(text: str, index: int, kind: str, role: str, call: int = -1) -> str:
+    def mark(text: str, index: int, kind: str, call: int = -1) -> str:
         marker = f"QQ{len(values)}MQQ"
-        values[marker] = _Value(text, index, kind, role, call)
+        values[marker] = _Value(text, index, kind, call)
         return marker
 
-    def mark_arguments(value, index: int, role: str, call: int):
+    def mark_arguments(value, index: int, call: int):
         if isinstance(value, str):
-            return mark(value, index, "argument", role, call)
+            return mark(value, index, "argument", call)
         if isinstance(value, dict):
-            return {key: mark_arguments(item, index, role, call) for key, item in value.items()}
+            return {key: mark_arguments(item, index, call) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
-            return [mark_arguments(item, index, role, call) for item in value]
+            return [mark_arguments(item, index, call) for item in value]
         return value
 
     marked = []
@@ -120,14 +118,14 @@ def _marked(messages: list[dict]) -> tuple[list[dict], dict[str, _Value]]:
         content = message.get("content")
         # An empty reply is left as it is: a template may write a reply only where it has text.
         if isinstance(content, str) and (content or role in ("user", "tool")):
-            copy["content"] = mark(content, index, "content", role)
+            copy["content"] = mark(content, index, "content")
         if message.get("reasoning_content"):
-            copy["reasoning_content"] = mark(message["reasoning_content"], index, "thought", role)
+            copy["reasoning_content"] = mark(message["reasoning_content"], index, "thought")
         if message.get("tool_calls"):
             copy["tool_calls"] = [
                 {**call, "function": {
-                    "name": mark(call["function"]["name"], index, "name", role, n),
-                    "arguments": mark_arguments(call["function"]["arguments"], index, role, n)}}
+                    "name": mark(call["function"]["name"], index, "name", n),
+                    "arguments": mark_arguments(call["function"]["arguments"], index, n)}}
                 for n, call in enumerate(message["tool_calls"])]
         marked.append(copy)
     return marked, values
@@ -204,13 +202,13 @@ def _walk(rendered: str, parts: list[str], k: int, at: int, values, written, pla
 
 
 def _forms(value: _Value, written) -> list[str]:
-    """How the template may write ``value``: as it is, as a content of its role is written, trimmed, or inside a JSON string."""
+    """How the template may write ``value``: as it is, trimmed, with a content's rewrites, or inside a JSON string."""
     text = value.text
     forms = [text]
-    if value.kind == "content":
-        forms.append(written(value.role, text))
     if value.kind in ("content", "thought"):
         forms += [text.strip(), text.strip("\n"), text.rstrip(), text.lstrip()]
+    if value.kind == "content":
+        forms += [written(form) for form in forms]
     if value.kind != "name":
         quoted = json.dumps(text)[1:-1]
         forms += [quoted, json.dumps(text, ensure_ascii=False)[1:-1],

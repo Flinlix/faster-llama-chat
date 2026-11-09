@@ -48,18 +48,10 @@ def test_gemma_user_assistant_fragments():
     assert f.assistant_suffix == "<end_of_turn>\n"
 
 
-def test_gemma_trims_content():
-    assert extract_fragments(_gemma_render).trim_content is True
-
-
 def test_chatml_extracts_its_tags():
     f = extract_fragments(_chatml_render)
     assert f.user_prefix == "<|im_start|>user\n"
     assert f.assistant_prefix == "<|im_start|>assistant\n"
-
-
-def test_chatml_does_not_trim_content():
-    assert extract_fragments(_chatml_render).trim_content is False
 
 
 def test_no_template_returns_none():
@@ -370,19 +362,6 @@ def _no_tool_render(messages, **_options):
 
 def test_a_template_that_refuses_tool_calls_has_no_tool_fragments():
     assert _tool_fragments(_no_tool_render) is None
-
-
-def _no_padded_render(messages, **_options):
-    """A template that refuses content with surrounding whitespace."""
-    if any(m["content"] != m["content"].strip() for m in messages):
-        return None
-    return _chatml_render(messages)
-
-
-def test_a_template_that_refuses_the_trim_probe_is_assumed_to_trim():
-    # Nothing can be measured, and trimming is what most templates do; assuming
-    # verbatim instead would put stray whitespace into every prefill.
-    assert extract_fragments(_no_padded_render).trim_content is True
 
 
 def _dropped_assistant_render(messages, **_options):

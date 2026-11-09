@@ -166,9 +166,6 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
     return TemplateFragments(
         user_prefix=user_prefix, user_suffix=user_suffix,
         assistant_prefix=assistant_prefix, assistant_suffix=assistant_suffix,
-        trim_content=_trims_content(render),
-        reply_strip=_reply_strip(render, user_suffix, assistant_prefix),
-        system_strip=_system_strip(render),
         generation_prompt=_whole_prompt(render, assistant_prefix))
 
 
@@ -621,39 +618,6 @@ def _whole_prompt(render: Render, assistant_prefix: str) -> str:
     return "" if prompt in (None, assistant_prefix) else prompt
 
 
-def _reply_strip(render: Render, user_suffix: str, assistant_prefix: str) -> str | None:
-    """Which whitespace a past reply loses, where it differs from a user turn's."""
-    rendered = render([
-        {"role": "user", "content": _USER},
-        {"role": "assistant", "content": " " + _ASSISTANT + " "},
-        {"role": "user", "content": _USER2},
-    ], reasoning=False)
-    opened = _USER + user_suffix + assistant_prefix
-    if rendered is None or opened not in rendered or _ASSISTANT not in rendered:
-        return None
-    before, _, after = rendered.split(opened, 1)[1].partition(_ASSISTANT)
-    return _strip_unlike_user(render, before, after)
-
-
-def _system_strip(render: Render) -> str | None:
-    """Which whitespace a system prompt loses, where it differs from a user turn's."""
-    rendered = render([{"role": "system", "content": " " + _SYS + " "},
-                       {"role": "user", "content": _USER}], reasoning=False)
-    if rendered is None or _SYS not in rendered:
-        return None
-    before, _, after = rendered.partition(_SYS)
-    return _strip_unlike_user(render, before, after)
-
-
-def _strip_unlike_user(render: Render, before: str, after: str) -> str | None:
-    """The strip a content padded with spaces shows, ``None`` where a user turn's matches."""
-    keeps_start, keeps_end = before.endswith(" "), after.startswith(" ")
-    strip = {(False, False): "both", (True, False): "end",
-             (False, True): "start", (True, True): "none"}[keeps_start, keeps_end]
-    user_strip = "both" if _trims_content(render) else "none"
-    return None if strip == user_strip else strip
-
-
 def _thought_tags(render: Render, fragments: TemplateFragments,
                   tool_calls: ToolCallFragments | None
                   ) -> tuple[tuple[str, str], dict] | None:
@@ -745,12 +709,3 @@ def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ..
         if written != text:
             rewrites.append((text, written))
     return tuple(rewrites)
-
-
-def _trims_content(render: Render) -> bool:
-    """Whether the template strips surrounding whitespace from content."""
-    padded = render([{"role": "user", "content": " " + _USER + " "}], reasoning=False)
-    if padded is None or _USER not in padded:
-        return True
-    before, _, after = padded.partition(_USER)
-    return not (before.endswith(" ") and after.startswith(" "))

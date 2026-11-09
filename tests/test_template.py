@@ -10,13 +10,5 @@ def test_the_formatter_reads_the_prompt_and_the_closing_around_a_reply():
     assert fmt.assistant_close() == "</a>"
 
 
-def test_a_content_is_trimmed_where_the_template_trims():
-    assert fragments_with().content("user", "  hi\n") == "hi"
-
-
-def test_a_content_keeps_its_whitespace_where_the_template_keeps_it():
-    assert fragments_with(trim_content=False).content("user", "  hi\n") == "  hi\n"
-
-
 def test_a_tag_in_a_content_stays_in_it():
-    assert fragments_with().content("user", "hi <turn]> there") == "hi <turn]> there"
+    assert fragments_with().content("hi <turn]> there") == "hi <turn]> there"

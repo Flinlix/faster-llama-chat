@@ -40,7 +40,6 @@ SYSTEM_PREFIX, SYSTEM_SUFFIX = "<[turn>system\n", "<turn]>\n"
 DEFAULT_FRAGMENTS = TemplateFragments(
     user_prefix="<[turn>user\n", user_suffix="<turn]>\n",
     assistant_prefix="<[turn>model\n", assistant_suffix="<turn]>\n",
-    trim_content=True,
 )
 
 
@@ -248,7 +247,7 @@ class FakeContext:
             calls = m.get("tool_calls", ()) if self._calls_tools else ()
             if role == "model" and turn_open:
                 # Text after a result, and another round of calls, go on in the same turn.
-                out.append(frags.content("assistant", m["content"]))
+                out.append(m["content"].strip())
                 out.extend(_call_blocks(calls))
                 if not calls:
                     out.append(closing["model"])
@@ -263,7 +262,7 @@ class FakeContext:
             if (calls or self._keeps_thought) and self._can_reason and m.get("reasoning_content"):
                 out.append(THOUGHT_OPEN + m["reasoning_content"] + THOUGHT_CLOSE)
             out.extend(_call_blocks(calls))
-            out.append(frags.content(m["role"], m["content"]))
+            out.append(m["content"].strip())
             if role == "system" and not self._declares_in_newest_turn:
                 for declared in tools or ():
                     out.append(f"<decl>{declared['function']['name']}</decl>")
