@@ -1278,3 +1278,88 @@ slices by halving; the common suffix is the same function on reversed
 sequences. Probe and live messages are built by the same helpers, so their
 shapes agree by construction. A reply header is read only where both openings
 leave a reader between their shared ends.
+
+## 2026-11-09: One way to do each thing in the public interface (225A)
+
+The rethink found several second ways of doing one thing in the public
+interface. Each change below removes one; the service changed to match where
+it used one. Four of them revise a recorded decision, named at each.
+
+**One way to say how a call is written (P1).** This revises "How a call's
+format is recovered", which kept `ChatWrapper(tool_calls=...)` as a way out
+where the template cannot be read. The add-on file is now the one way to say
+how a model writes a call, as rule 2 states. A caller can no longer give tags
+a template never writes, nor the argument spelling of a call that has tags of
+its own; the add-on file cannot describe that spelling, so such a model would
+now be refused tools. All 41 test templates that write calls still call tools
+without it. `ToolCallFragments` and `CallBody` are internal again, and
+`ToolCallFragments.body` is removed.
+
+**One way to read the conversation (P3).** This reopens 215A ("One read of
+the system prompt and the history"), which kept `system_prompt` and
+`history()` beside `conversation()` for a caller that needs only one. All
+three read the same published copy, and two separate reads could pair the
+system prompt of one `begin` with the history of another. `conversation()` is
+now the only read, so a caller cannot make that mistake.
+
+**No message callback (P4).** This revises the first structure review ("The
+message callback runs before anything changes, or after everything has
+landed"). `ChatWrapper(on_message=...)` is removed: a caller already has every
+message it sends and every reply it reads, and `conversation()` reads back
+what the conversation holds, tool turns included. The hooks that ran it inside
+`ask`, `add` and `record_reply` went with it; a caller that wants to refuse a
+message does so before calling.
+
+**A request's sampling, checked once (P6).** A per-request `Sampling` held its
+own copy of the configuration's `top_p` check and applied itself through
+public members (`overrides`, `applied_to`). It is now checked by building a
+configuration from its settings, so a request is refused by exactly the rules
+the configuration is held to; a test pins that. `overrides` and `applied_to`
+are removed rather than made private, so that no module reaches into another's
+private name; one internal function, `with_request_sampling`, checks and
+applies a request. Checking against a default configuration is sound because
+the five sampling fields have only checks of their own, none tied to another
+setting.
+
+**A tool result answers the call itself (P7).** `inject_tool_result` takes
+only the `ToolCall` it answers; the name alone is no longer accepted, because
+results are owed in order and the call handed over already says which one is
+answered. The check compares the whole call, and a refusal shows both calls,
+so one with the right name and other arguments explains itself.
+
+**`declare_tools` (P8).** `declare_unknown_tools` is renamed `declare_tools`.
+The old name described how the method filters (it skips tools already
+declared) rather than what a caller gets; the filtering stays and is stated in
+the docstring.
+
+**The calls still owed a result (P9).** This revises "The public calls", which
+kept `reply_open` as the one state property. `ChatWrapper.owed_calls` lists
+the calls still waiting for a result, published with the conversation after
+each change, so a reader on any thread sees them as the newest finished change
+left them. A locked read was rejected: it would block a thread that reads it
+while its own stream holds the lock. The service keeps only its own call ids
+and pairs the newest ids with the owed calls; its copy of the owed calls is
+gone, and with it a defect in reading back a batch of calls only partly
+answered (see its design notes, 2026-11-09).
+
+**One cache type spelling (P10).** `kv_cache_type` defaults to `"f16"`, and
+`None` is no longer accepted. The documentation already said `None` meant the
+engine's default, which is f16, so one setting had two spellings. The setting
+now always holds the type the cache is built with, and the context always
+passes it to the engine.
+
+**A wrong state refused at once (P11).** This revises the contract that
+`reply()` is lazy and checks nothing until the first iteration. Holding or
+briefly taking the lock at call time was rejected: an unread stream never runs
+its `finally`, and a thread whose own stream is paused holds the lock and
+would deadlock on its next `reply()`. Instead the conversation publishes, with
+each change, whether it was begun, whether a reply is open, the owed calls and
+the newest role, and `reply()` refuses against that copy at once, without the
+lock. The same rule functions check the live conversation again at the first
+read, so a concurrent change can at most move a refusal to the read, as
+before; a wrong state is never accepted.
+
+**Kept.** `max_history_messages`, which the rethink proposed to remove as a
+second eviction trigger (P5), stays at the user's word. Removing
+`calls="run"` and the registry `begin` keeps (P2), and the smaller removals of
+P12, wait for the user's answer to an explanation of each.
