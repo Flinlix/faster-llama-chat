@@ -21,7 +21,7 @@ import llama_chat
 
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
-from llama_chat.tokenizing import tokenize_pieces
+from llama_chat.tokenizing import split_at_tags, tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.cache_context import GenerationAccumulator
 from llama_chat.context import KVContext
@@ -417,9 +417,22 @@ def test_with_calls_off_a_tag_in_a_reply_that_ends_in_text_is_shown():
 
 def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
     context = _merging_context()
-    assert context.split_at_tags("a <t>b c<e>") == [
+    assert split_at_tags(context, "a <t>b c<e>") == [
         ("a ", False), ("<t>", True), ("b c", False), ("<e>", True)]
-    assert context.split_at_tags("plain") == [("plain", False)]
+    assert split_at_tags(context, "plain") == [("plain", False)]
+
+
+def test_the_models_tags_are_the_tokens_the_engine_marks_read_once():
+    walked = []
+    context = object.__new__(KVContext)
+    context._vocab, context._special_tokens = None, None
+    context._backend = SimpleNamespace(
+        n_tokens=lambda vocab: 5,
+        is_special=lambda vocab, token: walked.append(token) or token in (1, 3))
+    assert context.special_tokens() == (1, 3)
+    assert context.special_tokens() == (1, 3)
+    assert walked == [0, 1, 2, 3, 4]
+    assert context.is_special(3) and not context.is_special(2)
 
 
 @pytest.mark.parametrize("max_batch_tokens, context_size, full", [(8, 32, 8), (64, 16, 16)])

@@ -32,6 +32,7 @@ from .reply import ContextOverflowError
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender
 from .template import common_prefix_length
+from .tokenizing import split_at_tags
 from .tools import ToolCall, ToolSpec, result_text
 
 # The name a result carries where no real one is to be had: answering a call
@@ -1055,5 +1056,5 @@ def _is_plain(text: str, reader) -> bool:
     """A question the stand-in may stand for: words without tags or surrounding space."""
     if not text or text != text.strip() or STAND_IN in text:
         return False
-    split = reader.split_at_tags(text)
+    split = split_at_tags(reader, text)
     return split is not None and not any(is_tag for _, is_tag in split)

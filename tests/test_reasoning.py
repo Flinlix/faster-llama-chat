@@ -142,7 +142,7 @@ def test_a_reply_cut_inside_a_thought_tag_keeps_none_of_it():
 
 
 def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shift():
-    config = Config(context_size=300, evict_above_fraction=0.5)
+    config = Config(context_size=200, evict_above_fraction=0.5)
     thought = "<thought>" + "x" * 60 + "</thought>ok"
     w, fake = reasoning_wrapper(config=config, gen_text=thought, gen_tokens=len(thought))
     for _ in range(3):

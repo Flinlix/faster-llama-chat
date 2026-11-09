@@ -2,8 +2,8 @@
 
 ``tests/templates/`` holds one template per family, read from a published
 model file that each file names. The renderer is the one a model is loaded
-with; only the tokenizer is a stand-in, one token per character, so what is
-compared is the text.
+with; only the tokenizer is a stand-in, one token per character and one per
+tag, so what is compared is the text.
 """
 
 import json
@@ -14,10 +14,10 @@ import pytest
 from llama_chat import ChatWrapper, Config
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
+from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
-from .template_contexts import (ConversationContext, TaggedContext, TagTokenizingContext,
-                                TemplateContext, call_marks)
+from .template_contexts import ConversationContext, TemplateContext, call_marks
 
 _TEMPLATES = sorted((Path(__file__).parent / "templates").glob("*.json"))
 _CONVERSATION = [("user", " ping "), ("assistant", " pong "), ("user", " again ")]
@@ -100,7 +100,7 @@ def test_a_reply_that_reasons_streams_only_its_answer(path):
                                              ("qwen-3.6", "<|im_end|>")])
 def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = TagTokenizingContext(fixture)
+    context = TemplateContext(fixture)
     template = ResolvedTemplate(context)
     assert context.token_text(template.turn_end_token) == first_tag
 
@@ -109,7 +109,7 @@ def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     """gpt-oss closes a thought with the tag that also closes its turn."""
     fixture = json.loads((Path(__file__).parent / "templates" / f"{stem}.json").read_text())
-    context = TagTokenizingContext(fixture)
+    context = TemplateContext(fixture)
     template = ResolvedTemplate(context)
     tags, turn_end = template.reasoning, template.turn_end_token
     prompt = template.generation_prompt(True)
@@ -170,7 +170,7 @@ def _past_turn_messages(result: str) -> list[dict]:
                          ids=lambda p: p.stem)
 def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
     fixture = json.loads(path.read_text())
-    context = TaggedContext(fixture)
+    context = TemplateContext(fixture)
     template = ResolvedTemplate(context)
     template.ensure_tools_usable()
     call = context.addon_call()
@@ -193,7 +193,7 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(path):
 
 @pytest.mark.parametrize("path", list(_tool_templates()), ids=lambda p: p.stem)
 def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path):
-    context = TaggedContext(json.loads(path.read_text()))
+    context = TemplateContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
     boundary = template.call_boundary()
     if boundary.call_texts is None:
@@ -201,14 +201,14 @@ def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(path)
     assert boundary.tool_tokens is None
     if boundary.opens_as_text:
         return                          # no tag at all
-    tag = context.token_text(context.first_special_token(boundary.call_texts[0]))
+    tag = context.token_text(first_special_token(context, boundary.call_texts[0]))
     reply = template.fragments
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
 
 
 def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
-    context = TaggedContext(json.loads((Path(__file__).parent / "templates"
-                                         / "kimi-k3.json").read_text()))
+    context = TemplateContext(json.loads((Path(__file__).parent / "templates"
+                                           / "kimi-k3.json").read_text()))
     template = ResolvedTemplate(context)
     assert template.call_boundary().turn_end_text == "<|close|>response<|sep|><|close|>"
     assert template.turn_end_token is None
@@ -251,7 +251,7 @@ def test_a_result_with_quotes_is_written_as_the_template_writes_it(path):
 def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
     fixture = json.loads((Path(__file__).parent / "templates" / "qwen-3.6.json").read_text())
-    context = TaggedContext(fixture)
+    context = TemplateContext(fixture)
     context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
     boundary = ResolvedTemplate(context).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
@@ -259,7 +259,7 @@ def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
     fixture = json.loads((Path(__file__).parent / "templates" / "gpt-oss.json").read_text())
-    context = TaggedContext(fixture)
+    context = TemplateContext(fixture)
     context.addon_call = lambda: {"opening": "<|channel|>commentary to=functions.",
                                   "name_close": " <|constrain|>json<|message|>",
                                   "closing": "<|never|>"}
@@ -279,10 +279,10 @@ _LOST = {
 
 @pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
 @pytest.mark.parametrize("path", [p for p in _tool_templates()
-                                  if not TaggedContext(json.loads(p.read_text())).addon_call()],
+                                  if not TemplateContext(json.loads(p.read_text())).addon_call()],
                          ids=lambda p: p.stem)
 def test_every_argument_shape_reads_back_as_the_template_wrote_it(path, arguments):
-    context = TaggedContext(json.loads(path.read_text()))
+    context = TemplateContext(json.loads(path.read_text()))
     template = ResolvedTemplate(context)
     rendered = context.render_with_model_template(
         [{"role": "user", "content": "x"},

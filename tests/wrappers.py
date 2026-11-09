@@ -4,6 +4,7 @@ import dataclasses
 
 from llama_chat.config import Config
 from llama_chat.template import CallBody
+from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import DEFAULT_FRAGMENTS, FakeContext
@@ -53,7 +54,7 @@ def held_renders(template, messages, tools=None, **options) -> list[str]:
     if ahead is not None and _STAND_IN in ahead:
         before = ahead[:ahead.index(_STAND_IN)]
         cut = len(before)
-        for piece, is_tag in reversed(template._context.split_at_tags(before) or []):
+        for piece, is_tag in reversed(split_at_tags(template._context, before) or []):
             if is_tag:
                 break
             cut -= len(piece)

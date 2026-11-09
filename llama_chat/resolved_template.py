@@ -19,6 +19,7 @@ from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
                        ToolCallFragments, common_prefix_length, shared_tags_length)
 from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_fragments,
                                extract_reasoning, extract_removed_thought, names_read, refusing)
+from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
 
 # Where the prompt and a tool result go in a render. Neither contains the
@@ -59,6 +60,7 @@ class ResolvedTemplate:
         self._context = context
         self._probe_render = refusing(context.render_with_model_template)
         self._variables: dict = {}      # template variables every render passes
+        self._tag_texts = tag_texts(context)
         self._fragments = self._resolve_fragments()
         self._has_system_turn = self._resolve_has_system_turn()
         self._validate_template()
@@ -250,7 +252,7 @@ class ResolvedTemplate:
                 "conversation with"
             )
         rewrites = extract_content_rewrites(self._context.render_with_model_template,
-                                            (*self._context.tags(), *ESCAPABLE))
+                                            (*self._tag_texts, *ESCAPABLE))
         return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
 
     def _validate_template(self) -> None:
@@ -261,7 +263,7 @@ class ResolvedTemplate:
         every generation.
         """
         terminator = self._fragments.assistant_suffix.strip()
-        pieces = self._context.split_at_tags(terminator) if terminator else None
+        pieces = split_at_tags(self._context, terminator) if terminator else None
         if terminator and not (pieces and pieces[0][1]):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
@@ -275,7 +277,7 @@ class ResolvedTemplate:
         terminator = self._fragments.assistant_suffix.strip()
         if not terminator:
             return None
-        first = self._context.first_special_token(terminator)
+        first = first_special_token(self._context, terminator)
         tokens = self._context.tokenize(terminator, add_special=False)
         return first if tokens and tokens[0] == first else None
 
@@ -308,7 +310,7 @@ class ResolvedTemplate:
         render = self._render
         found = extract_reasoning(render, self._fragments, self._tool_calls)
         if found is None:
-            found = extract_removed_thought(render, self._fragments, self._context.tags())
+            found = extract_removed_thought(render, self._fragments, self._tag_texts)
         return found
 
     def _resolve_tool_tokens(self) -> tuple[tuple[int, int] | None, str]:
@@ -316,7 +318,7 @@ class ResolvedTemplate:
         fragments = self._tool_calls
         if fragments is None:
             return None, ""
-        opener = self._context.first_special_token(fragments.call_open)
+        opener = first_special_token(self._context, fragments.call_open)
         closer = self._call_closer(fragments)
         if opener is None or closer is None:
             return None, ""
@@ -340,7 +342,7 @@ class ResolvedTemplate:
         tool_tokens, lead_in = self._resolve_tool_tokens()
         call_texts, from_file = (None, False) if tool_tokens is not None else self._resolve_call_texts()
         opens_as_text = (call_texts is not None
-                         and self._context.first_special_token(call_texts[0]) is None)
+                         and first_special_token(self._context, call_texts[0]) is None)
         if call_texts is not None:
             lead_in = self._text_after_last_tag(call_texts[0])
         turn_end_text = self._resolve_turn_end_text(call_texts)
@@ -371,7 +373,7 @@ class ResolvedTemplate:
         if self._tool_calls is None:
             return None
         call_open = self._tool_calls.call_open
-        if self._context.first_special_token(call_open) is None:
+        if first_special_token(self._context, call_open) is None:
             # Named in the header first: the call opens where the name is written again.
             opening = extract_named_twice_opening(self._render, call_open)
             if opening:
@@ -436,7 +438,7 @@ class ResolvedTemplate:
         shared = shared_tags_length(closing, call_open)
         if not shared:
             return None
-        tag = self._context.first_special_token(closing[shared:])
+        tag = first_special_token(self._context, closing[shared:])
         text = self._context.token_text(tag) if tag is not None else ""
         if not text or not closing[shared:].startswith(text):
             return None
@@ -455,12 +457,12 @@ class ResolvedTemplate:
         tags = self._tags_in(separator or "")
         if tags and self._context.token_text(tags[-1]) in fragments.call_close:
             return tags[-1]
-        return self._context.first_special_token(fragments.call_close)
+        return first_special_token(self._context, fragments.call_close)
 
     def _tags_in(self, text: str) -> list[int]:
         """The model's own tags in ``text``, in order."""
-        found = (self._context.first_special_token(piece)
-                 for piece, is_tag in self._context.split_at_tags(text) or () if is_tag)
+        found = (first_special_token(self._context, piece)
+                 for piece, is_tag in split_at_tags(self._context, text) or () if is_tag)
         return [tag for tag in found if tag is not None]
 
     def _resolve_call_body(self) -> CallBody | None:

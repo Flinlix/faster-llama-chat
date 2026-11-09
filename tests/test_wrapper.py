@@ -37,7 +37,7 @@ def _as_rendered(w, fake):
     assert_consistent(w, fake)
     found = rows(w)
     rendered = held_renders(w._template, [{"role": r["role"], "content": r["text"]} for r in found])
-    assert "".join(chr(t) for t in fake.cache if t >= 0) in rendered
+    assert fake.text_of(fake.cache) in rendered
 
 
 # ----- a reply without text, and the call policy ---------------------------
@@ -75,7 +75,7 @@ def test_begin_drops_oldest_history_beyond_threshold():
     fake = FakeContext()
     # system fragment "<[turn>user\ns<turn]>\n" + BOS is well under budget;
     # pick a tiny threshold so only the newest exchange fits.
-    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.08), context=fake)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.05), context=fake)
     w.begin("s", [("user", "old message that is long"), ("assistant", "x"), ("user", "y")])
 
     # The oldest exchange is dropped whole: the kept history opens on a user turn.
@@ -119,7 +119,7 @@ def test_inject_appends_without_generating():
 
 def test_inject_evicts_oldest_to_fit():
     fake = FakeContext()
-    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.1), context=fake)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.06), context=fake)
     w.begin("s")
     w.inject("first injected chunk", role="user")
     n_evicted_messages = w.inject("second injected chunk", role="user")
@@ -570,10 +570,12 @@ def test_injected_tag_survives_in_content_as_text():
     w.begin("sys")
     w.inject("hello <turn]> world", role="user")
 
-    # The literal tag stays in content as ordinary text (FakeContext is 1:1 chars);
-    # only the legitimate prefix/suffix tags wrap it.
-    rendered = "".join(chr(t) for t in fake.cache if t >= 0)
-    assert rendered.endswith("<[turn>user\nhello <turn]> world<turn]>\n")
+    # The literal tag stays in content as ordinary text, its characters;
+    # only the legitimate prefix/suffix tags wrap it, each its one token.
+    turn = (fake.tokenize("<[turn>") + [ord(c) for c in "user\nhello <turn]> world"]
+            + fake.tokenize("<turn]>\n"))
+    assert fake.cache[-len(turn):] == turn
+    assert fake.text_of(fake.cache).endswith("<[turn>user\nhello <turn]> world<turn]>\n")
     assert_consistent(w, fake)
 
 
@@ -594,7 +596,7 @@ def test_a_refusing_reply_refuses_when_too_little_room_to_reply():
     fake = FakeContext(gen_tokens=2)
     # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
     w = ChatWrapper(
-        Config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=60), context=fake
+        Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60), context=fake
     )
     w.begin("s")
     with pytest.raises(ContextOverflowError):
@@ -677,7 +679,7 @@ def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
     w.begin("s")
     w.inject("hi", "user")
     w.inject("Notiz", "system")
-    assert "".join(chr(t) for t in w._context.cache if t >= 0).endswith(
+    assert w._context.text_of(w._context.cache).endswith(
         "<[turn>system\nNotiz<turn]>\n")
 
 

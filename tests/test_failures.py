@@ -184,7 +184,7 @@ def test_a_question_whose_decode_fails_is_not_recorded(join):
 
 def test_a_question_without_room_for_its_reply_is_not_recorded():
     fake = FakeContext(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=120, evict_above_fraction=1.0, min_reply_tokens=60),
+    w = ChatWrapper(Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60),
                     context=fake)
     w.begin("s")
     with pytest.raises(ContextOverflowError):
@@ -327,7 +327,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
 
 
 def test_a_reply_kept_without_text_holds_the_replys_opening_once():
-    for size in range(200, 300):
+    for size in range(100, 300):
         fake = FakeContext(calls_tools=True, gen_tokens=6, gen_text="Hallo.")
         w = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0, min_reply_tokens=60),
                         context=fake)

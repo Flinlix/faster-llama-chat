@@ -395,7 +395,11 @@ types their members take: `Eviction`, `GenerationAccumulator` and
 `CallBoundary`, all from `llama_chat`. Nothing to subclass or register; the
 members are checked where the context is adopted, so a missing one is a
 `TypeError` from the constructor. What the template is read for comes from its
-renders alone. `tests/fake_context.py` is a worked one over a list of ints.
+renders alone, and where the model's tags lie in a text from its tokenizer
+alone: `special_tokens` lists the tags, `is_special` tells one among the tokens
+of a text, `tokenize` with special-token parsing on gives each tag in a text as
+its one token, and `token_text` spells that token as the text holds it.
+`tests/fake_context.py` is a worked one over a list of ints.
 
 ## Verify
 
@@ -436,7 +440,7 @@ tag; real token boundaries are checked by the load check and by
 | `llama_chat/_backend.py` | the adapter over llama-cpp-python; the only module that names it |
 | `llama_chat/cache_sync.py` | the tokens the cache should hold, and the one place that decodes into it: the comparison with a target, evictions, cuts, saved states, and repair after a failed decode |
 | `llama_chat/messages.py` | a history as `begin` takes it, and as the messages a template is given |
-| `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it |
+| `llama_chat/tokenizing.py` | text into tokens as a render of the whole conversation tokenizes it, and where the model's tags lie in a text |
 | `llama_chat/model_template.py` | a model's chat template, rendered with its reasoning switch |
 | `llama_chat/resolved_template.py` | one model's template read and checked, tool calling settled |
 | `llama_chat/template_extract.py` | the probes that read a template: the tags around a turn, a thought, what it writes otherwise in a message |

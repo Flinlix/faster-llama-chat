@@ -1,10 +1,47 @@
-"""Text into tokens as a render of the whole conversation tokenizes it."""
+"""Text into tokens as a render of the whole conversation tokenizes it, and the model's own tags found in a text."""
 
 from __future__ import annotations
 
 import re
 
 from .cache_context import ModelReader
+
+
+def split_at_tags(reader: ModelReader, text: str) -> list[tuple[str, bool]] | None:
+    """``text`` as the model's tags and the plain text between them, each marked whether a tag.
+
+    ``None`` where a tag the tokenizer finds cannot be located in the text.
+    """
+    pieces, at = [], 0
+    for token in reader.tokenize(text, parse_special=True):
+        if not reader.is_special(token):
+            continue
+        tag = reader.token_text(token)
+        start = text.find(tag, at)
+        if not tag or start < 0:
+            return None
+        if start > at:
+            pieces.append((text[at:start], False))
+        pieces.append((tag, True))
+        at = start + len(tag)
+    if at < len(text):
+        pieces.append((text[at:], False))
+    return pieces
+
+
+def first_special_token(reader: ModelReader, text: str) -> int | None:
+    """The first of the model's own tags in ``text``, or ``None``.
+
+    The first tag, not the first token: a recovered tool tag carries fixed
+    lead-in text.
+    """
+    return next((token for token in reader.tokenize(text, add_special=False, parse_special=True)
+                 if reader.is_special(token)), None)
+
+
+def tag_texts(reader: ModelReader) -> tuple[str, ...]:
+    """The texts of every one of the model's own tags."""
+    return tuple(reader.token_text(token) for token in reader.special_tokens())
 
 
 def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
@@ -54,7 +91,7 @@ def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
                     tokenize("", parse_special=True)    # the sequence opener alone
                 tokens.append(tag_tokens[part])
                 continue
-            split = reader.split_at_tags(part)
+            split = split_at_tags(reader, part)
             if split is None:           # a tag the tokenizer finds but cannot place
                 end_plain()
                 tokenize(part, parse_special=True)
@@ -89,5 +126,8 @@ class MemoTokenizer:
                                                      parse_special=parse_special)
         return self._known[key]
 
-    def split_at_tags(self, text):
-        return self._reader.split_at_tags(text)
+    def token_text(self, token):
+        return self._reader.token_text(token)
+
+    def is_special(self, token):
+        return self._reader.is_special(token)

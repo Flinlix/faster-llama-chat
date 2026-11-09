@@ -61,7 +61,7 @@ def test_the_tokens_that_stay_are_not_decoded_again():
     (start, n, _logits), = fake.prefill_calls[len(before):]
     # From the end of what stays: the closing and the next question's opening.
     assert fake.text_of(fake.cache[:start]).endswith("Eins.")
-    assert n == len("<turn]>\n<[turn>")
+    assert n == len(fake.tokenize("<turn]>\n<[turn>"))
 
 
 def test_keeping_the_whole_text_changes_nothing():

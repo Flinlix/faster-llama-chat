@@ -21,11 +21,25 @@ WEATHER = ToolSpec(name="get_weather", description="Weather for a city",
 
 
 class TemplateContext:
-    """A cache context reduced to rendering through one real template."""
+    """A model reader over one real template: its renderer, and a vocabulary that holds every tag-shaped text.
+
+    The tokenizer gives one token per character and, where special-token
+    parsing is on, one per tag-shaped text, each a token of its own from the
+    first time it is met: a stand-in for a vocabulary that holds every tag,
+    such as one closing each argument of a call. A tag typed into a message,
+    which is tokenized with parsing off, stays its characters and cannot
+    become the model's own. The tags it lists are those the template spells,
+    and the opening of each closing tag among them.
+    """
 
     def __init__(self, fixture: dict) -> None:
         self._model = ModelTemplate(fixture["chat_template"], fixture["eos_token"])
         self._template = fixture["chat_template"]
+        self._tag_ids: dict[str, int] = {}
+        self._tag_texts: list[str] = []
+        found = set(TAG.findall(self._template))
+        self._listed = tuple(self._tag_token(tag) for tag in sorted(
+            found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
 
     def render_with_model_template(self, messages, tools=None, *,
                                    generation_prompt=False, reasoning=None, **variables):
@@ -40,76 +54,33 @@ class TemplateContext:
         return addon_file(None, self._template)["call"]
 
     def tokenize(self, text, add_special=False, parse_special=True):
-        return [ord(c) for c in text]
-
-    def tags(self):
-        # As a vocabulary holds them: every tag-shaped text, and what each closer closes.
-        found = set(TAG.findall(self._template))
-        return tuple(sorted(found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
-
-    def split_at_tags(self, text):
-        pieces, at = [], 0
-        for found in TAG.finditer(text):
-            if found.start() > at:
-                pieces.append((text[at:found.start()], False))
-            pieces.append((found.group(), True))
-            at = found.end()
-        return pieces + ([(text[at:], False)] if at < len(text) else [])
-
-    def first_special_token(self, text):
-        return None             # no vocabulary, so no call tag resolves
-
-    def token_text(self, token):
-        return ""
-
-
-TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[A-Z_]+\]|<｜[^｜]+｜>|\]~!?[a-z][\[\]]|\[[a-z]~\[")
-
-
-class TaggedContext(TemplateContext):
-    """The same, with tags single tokens.
-
-    A stand-in for a vocabulary that holds every tag-shaped text, such as one
-    closing each argument of a call, and the tags that close those, spelled as
-    tags are paired (``<x>`` and ``</x>``, ``<|x>`` and ``<x|>``, ``start`` and
-    ``end``). The earliest of them in a text is its first tag.
-    """
-
-    def __init__(self, fixture: dict) -> None:
-        super().__init__(fixture)
-        self._tags: list[str] = []
-
-    def first_special_token(self, text):
-        # The earliest tag in the text, as a vocabulary finds it.
-        known = [(text.index(tag), tag) for tag in self._tags if tag in text]
-        found = TAG.search(text)
-        if found is not None and found.group() not in self._tags:
-            known.append((found.start(), found.group()))
-        if not known:
-            return None
-        tag = min(known)[1]
-        if tag not in self._tags:
-            self._tags += [tag] + [closer for closer in closers(tag)
-                                   if closer not in self._tags]
-        return self._id(tag)
-
-    def _id(self, tag):
-        return -1 - self._tags.index(tag)
-
-    def token_text(self, token):
-        return self._tags[-1 - token] if token < 0 else chr(token)
-
-
-class TagTokenizingContext(TaggedContext):
-    """The same, with each tag tokenized as the one token it resolves to."""
-
-    def tokenize(self, text, add_special=False, parse_special=True):
+        if not parse_special:
+            return [ord(c) for c in text]
         tokens, pos = [], 0
         for found in TAG.finditer(text):
             tokens += [ord(c) for c in text[pos:found.start()]]
-            tokens.append(self.first_special_token(found.group()))
+            tokens.append(self._tag_token(found.group()))
             pos = found.end()
         return tokens + [ord(c) for c in text[pos:]]
+
+    def _tag_token(self, tag):
+        """The one token ``tag`` is, given an id of its own the first time it is met."""
+        if tag not in self._tag_ids:
+            self._tag_ids[tag] = -1 - len(self._tag_texts)
+            self._tag_texts.append(tag)
+        return self._tag_ids[tag]
+
+    def is_special(self, token):
+        return token < 0
+
+    def special_tokens(self):
+        return self._listed
+
+    def token_text(self, token):
+        return self._tag_texts[-1 - token] if token < 0 else chr(token)
+
+
+TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[A-Z_]+\]|<｜[^｜]+｜>|\]~!?[a-z][\[\]]|\[[a-z]~\[")
 
 
 def call_marks(template, context) -> tuple[str, str]:
@@ -121,22 +92,12 @@ def call_marks(template, context) -> tuple[str, str]:
     return context.token_text(opener), context.token_text(closer)
 
 
-def closers(tag: str) -> list[str]:
-    """The tags that would close ``tag``."""
-    inner = tag.strip("<>[]")
-    return [f"</{inner}>", f"<{inner.lstrip('|')}|>", tag.replace("start", "end"),
-            tag.replace("<｜", "</｜", 1)]
-
-
-class ConversationContext(TagTokenizingContext):
+class ConversationContext(TemplateContext):
     """The same, with a cache a wrapper writes a whole conversation into.
 
     Each generation writes the next reply of ``replies``, one token per
     character, and first hands ``before_reply`` the cache's text, so a test can
     compare it with the template's render of the conversation at that moment.
-    A tag is tokenized as its token only where special-token parsing is on, so
-    a tag typed into a message, which is tokenized with it off, stays its
-    characters and cannot become the model's own.
     """
 
     def __init__(self, fixture: dict, replies: list[str], can_shift: bool = True) -> None:
@@ -152,11 +113,6 @@ class ConversationContext(TagTokenizingContext):
         self.rendered: list[int] = []            # how many messages each render was given
         self._replies = list(replies)
         self.before_reply = None
-
-    def tokenize(self, text, add_special=False, parse_special=True):
-        if not parse_special:
-            return [ord(c) for c in text]
-        return super().tokenize(text, add_special, parse_special)
 
     def render_with_model_template(self, messages, tools=None, *,
                                    generation_prompt=False, reasoning=None, **variables):

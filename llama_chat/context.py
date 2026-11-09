@@ -100,7 +100,7 @@ class KVContext:
             self._settle_cache_edits()
             self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
                                     if template else None)
-            self._tags = None
+            self._special_tokens = None
         except BaseException:
             # Free whatever was created before the failure.
             if self._engine_context is not None:
@@ -138,47 +138,16 @@ class KVContext:
                  parse_special: bool = True) -> list[int]:
         return self._backend.tokenize(self._vocab, text, add_special, parse_special)
 
-    def _tags_in(self, text: str) -> list[str]:
-        """The texts of the model's own tags in ``text``, in order."""
-        return [self.token_text(token) for token in self.tokenize(text, parse_special=True)
-                if self._backend.is_special(self._vocab, token)]
+    def is_special(self, token: int) -> bool:
+        """Whether ``token`` is one of the model's own tags."""
+        return self._backend.is_special(self._vocab, token)
 
-    def split_at_tags(self, text: str) -> list[tuple[str, bool]] | None:
-        """``text`` as the model's tags and the plain text between them, each marked whether a tag.
-
-        ``None`` where a tag the tokenizer finds cannot be located in the text.
-        """
-        pieces, at = [], 0
-        for tag in self._tags_in(text):
-            start = text.find(tag, at)
-            if not tag or start < 0:
-                return None
-            if start > at:
-                pieces.append((text[at:start], False))
-            pieces.append((tag, True))
-            at = start + len(tag)
-        if at < len(text):
-            pieces.append((text[at:], False))
-        return pieces
-
-    def tags(self) -> tuple[str, ...]:
-        """The texts of every one of the model's own tags, read once."""
-        if self._tags is None:
-            self._tags = tuple(self.token_text(token)
-                               for token in range(self._backend.n_tokens(self._vocab))
-                               if self._backend.is_special(self._vocab, token))
-        return self._tags
-
-    def first_special_token(self, text: str) -> int | None:
-        """The first of the model's own tags in ``text``, or ``None``.
-
-        The first tag, not the first token: a recovered tool tag carries fixed
-        lead-in text. See the README, "Tool calling".
-        """
-        for token in self.tokenize(text, add_special=False, parse_special=True):
-            if self._backend.is_special(self._vocab, token):
-                return token
-        return None
+    def special_tokens(self) -> tuple[int, ...]:
+        """Every token that is one of the model's own tags, read once."""
+        if self._special_tokens is None:
+            self._special_tokens = tuple(token for token in range(self._backend.n_tokens(self._vocab))
+                                         if self._backend.is_special(self._vocab, token))
+        return self._special_tokens
 
     def token_text(self, token: int) -> str:
         """The text a single token stands for, the model's own tags included."""

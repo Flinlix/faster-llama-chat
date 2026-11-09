@@ -71,15 +71,17 @@ class ModelReader(Protocol):
     """The model's tokenizer, its own tags, its chat template and its add-on file."""
 
     def tokenize(self, text: str, add_special: bool = False,
-                 parse_special: bool = True) -> list[int]: ...
+                 parse_special: bool = True) -> list[int]:
+        """With ``parse_special``, each of the model's tags in ``text`` is its one token."""
 
-    def tags(self) -> tuple[str, ...]: ...
+    def token_text(self, token: int) -> str:
+        """The text a single token stands for, a tag spelled as a text holds it."""
 
-    def split_at_tags(self, text: str) -> list[tuple[str, bool]] | None: ...
+    def is_special(self, token: int) -> bool:
+        """Whether ``token`` is one of the model's own tags."""
 
-    def first_special_token(self, text: str) -> int | None: ...
-
-    def token_text(self, token: int) -> str: ...
+    def special_tokens(self) -> tuple[int, ...]:
+        """Every token that is one of the model's own tags."""
 
     def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
                                    *, generation_prompt: bool = False,

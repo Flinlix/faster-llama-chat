@@ -95,7 +95,7 @@ def _as_rendered_with(w, fake, specs):
     assert_consistent(w, fake)
     rendered = held_renders(w._template, [{"role": r["role"], "content": r["text"]} for r in rows(w)],
                             tools=[spec.as_declaration() for spec in specs])
-    assert "".join(chr(t) for t in fake.cache if t >= 0) in rendered
+    assert fake.text_of(fake.cache) in rendered
 
 
 # ----- declaring -----------------------------------------------------------
@@ -440,7 +440,7 @@ def test_an_oversized_result_is_clipped_and_keeps_its_tags():
 
     # The turn still fits, and the block still ends where the template ends one.
     assert len(fake.cache) <= wrapper._config.context_size
-    written = "".join(chr(t) for t in fake.cache[before:] if t >= 0)
+    written = fake.text_of(fake.cache[before:])
     assert written.startswith("<result>clock(")
     assert written.endswith(")</result>")
     assert fake.cache == cache_tokens(wrapper)
@@ -510,7 +510,7 @@ def test_a_declaration_added_later_reaches_the_model():
 
     wrapper.declare_unknown_tools(registry.specs())
 
-    written = "".join(chr(t) for t in fake.cache if t >= 0)
+    written = fake.text_of(fake.cache)
     assert "<decl>clock</decl>" in written
     assert fake.cache == cache_tokens(wrapper)
 
@@ -901,7 +901,7 @@ def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
     before = len(fake.cache)
     wrapper.inject_tool_result("clock", "a")
     wrapper.inject_tool_result("other", "b")
-    written = "".join(chr(t) for t in fake.cache[before:])
+    written = fake.text_of(fake.cache[before:])
     assert written == "<result>clock(a)</result>\n<result>other(b)</result><done>"
     list(wrapper.reply(calls="yield"))
     assert fake.cache == cache_tokens(wrapper)
@@ -922,7 +922,7 @@ def test_a_model_needing_nothing_extra_gets_nothing():
     # What the generation holds is the sampled tokens, then the turn's closing
     # tag and the next question's opening, decoded ahead, and nothing in front.
     generated = fake._gen_tokens
-    closing = len("<turn]>\n<[turn>")
+    closing = len(fake.tokenize("<turn]>\n<[turn>"))
     assert len(fake.cache) - before == generated + closing
 
 

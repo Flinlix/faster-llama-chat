@@ -11,8 +11,11 @@ cache's end, after whatever cut, restore or rebuild put it there.
 Each cache edit asserts the ability it needs, so a wrapper that cuts a cache
 which cannot cut, or shifts one which cannot shift, fails here.
 
-Tokenizer: one token per character, with a BOS sentinel (``-1``) prepended when
-``add_special`` is set. Deterministic and easy to reason about.
+Tokenizer: one token per character and, where special-token parsing is on, one
+per tag, with a BOS sentinel (``-1``) prepended when ``add_special`` is set. A
+tag is any text spelled inside angle brackets, each a token of its own from
+the first time it is met; the tags this fake model lists are those its
+fragments hold. Deterministic and easy to reason about.
 """
 
 from __future__ import annotations
@@ -28,9 +31,10 @@ BOS = -1
 # Every tag this fake model writes is spelled inside angle brackets.
 _TAG = re.compile(r"<[^<>\s]+>")
 
-# Synthetic control tokens, outside the 1:1 char tokenizer's range so they can
-# never be produced by ordinary text.
+# Tag tokens, outside the characters' range so that ordinary text never
+# produces them: the call tags, and every other tag below _FIRST_TAG.
 TOOL_OPEN, TOOL_CLOSE = -10, -11
+_FIRST_TAG = -100
 # What this fake model writes between its call tag and the function's name.
 CALL_LEAD_IN = "fn:"
 
@@ -103,6 +107,11 @@ class FakeContext:
         if can_reason:
             self._fragments = replace(
                 fragments, generation_prompt=fragments.assistant_prefix + EMPTY_THOUGHT)
+        self._tag_ids: dict[str, int] = {"<call>": TOOL_OPEN, "</call>": TOOL_CLOSE}
+        self._tag_texts: dict[int, str] = {TOOL_OPEN: "<call>", TOOL_CLOSE: "</call>"}
+        self._listed = tuple(self._tag_token(tag) for tag in sorted(set(_TAG.findall("".join(
+            getattr(self._fragments, field.name) for field in fields(self._fragments)
+            if isinstance(getattr(self._fragments, field.name), str))))))
         self.tokenize_calls: list[tuple[str, bool]] = []  # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         self.evictions: list[Eviction] = []
@@ -125,26 +134,28 @@ class FakeContext:
     # ----- tokenization --------------------------------------------------
     def tokenize(self, text: str, add_special: bool = False,
                  parse_special: bool = True) -> list[int]:
-        # 1:1 char tokenizer: tokens never merge, so parse_special is a no-op
-        # here (a literal tag is the same char tokens either way). Recorded so
-        # tests can assert content is tokenized with parse_special off.
+        # Recorded so tests can assert content is tokenized with parse_special off.
         self.tokenize_calls.append((text, parse_special))
-        toks = [ord(c) for c in text]
+        toks, at = [], 0
+        for found in _TAG.finditer(text) if parse_special else ():
+            toks += [ord(c) for c in text[at:found.start()]]
+            toks.append(self._tag_token(found.group()))
+            at = found.end()
+        toks += [ord(c) for c in text[at:]]
         return [BOS] + toks if add_special else toks
 
-    def tags(self) -> tuple[str, ...]:
-        return tuple(sorted(set(_TAG.findall("".join(
-            getattr(self._fragments, field.name) for field in fields(self._fragments)
-            if isinstance(getattr(self._fragments, field.name), str))))))
+    def _tag_token(self, tag: str) -> int:
+        """The one token ``tag`` is, given an id of its own the first time it is met."""
+        if tag not in self._tag_ids:
+            token = _FIRST_TAG - len(self._tag_ids)
+            self._tag_ids[tag], self._tag_texts[token] = token, tag
+        return self._tag_ids[tag]
 
-    def split_at_tags(self, text: str) -> list[tuple[str, bool]]:
-        pieces, at = [], 0
-        for found in _TAG.finditer(text):
-            if found.start() > at:
-                pieces.append((text[at:found.start()], False))
-            pieces.append((found.group(), True))
-            at = found.end()
-        return pieces + ([(text[at:], False)] if at < len(text) else [])
+    def is_special(self, token: int) -> bool:
+        return token in self._tag_texts
+
+    def special_tokens(self) -> tuple[int, ...]:
+        return self._listed
 
     def chat_template_text(self) -> str | None:
         return None                 # the renders below stand in for one
@@ -190,22 +201,11 @@ class FakeContext:
         del self.cache[ev.remove_start:ev.remove_end]  # remove + implicit shift
         self.evictions.append(ev)
 
-    def first_special_token(self, text: str) -> int | None:
-        """Resolve this fake model's two tags; everything else is plain text.
-
-        Answering this here is why a wrong criterion in the real backend went
-        unnoticed; `tests/test_backend.py` pins that one directly.
-        """
-        for tag, token in (("<call>", TOOL_OPEN), ("</call>", TOOL_CLOSE)):
-            if tag in text:
-                return token
-        return None
-
     def token_text(self, token: int) -> str:
-        return {TOOL_OPEN: "<call>", TOOL_CLOSE: "</call>"}.get(token, "")
+        return self._tag_texts.get(token, "")
 
     def text_of(self, tokens: list[int]) -> str:
-        """What ``tokens`` spell: characters, the generated ones as they were generated, and the call tags."""
+        """What ``tokens`` spell: characters, the generated ones as they were generated, and the tags."""
         return "".join(self._generated_chars.get(t) or self.token_text(t)
                        or (chr(t) if 0 < t < 0x110000 else "") for t in tokens)
 

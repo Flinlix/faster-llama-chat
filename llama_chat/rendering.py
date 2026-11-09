@@ -17,7 +17,7 @@ from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
 from .template import common_prefix_length
-from .tokenizing import MemoTokenizer, tokenize_pieces
+from .tokenizing import MemoTokenizer, split_at_tags, tokenize_pieces
 from .tools import ToolSpec
 
 
@@ -222,7 +222,7 @@ class ConversationRendering:
     def tag_from(self, text: str, at: int, split: SplitRender | None = None) -> int | None:
         """Where the first tag at or after ``at`` begins, before the next own text of ``split`` where given."""
         end = next((s for s, _ in split.own if s >= at), len(text)) if split else len(text)
-        pieces = self._context.split_at_tags(text[at:end])
+        pieces = split_at_tags(self._context, text[at:end])
         if pieces is None:
             return None
         for piece, is_tag in pieces:
@@ -240,7 +240,7 @@ class ConversationRendering:
             if own:
                 start += len(piece)
                 continue
-            pieces = self._context.split_at_tags(piece)
+            pieces = split_at_tags(self._context, piece)
             if pieces is None:
                 return None
             for part, is_tag in pieces:
