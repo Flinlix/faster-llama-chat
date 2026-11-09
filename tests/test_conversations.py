@@ -121,6 +121,12 @@ def _assert_each_reply_followed_what_was_sent(run, questions, forms=(None,), fir
         oldest = found
 
 
+def _last_spliced(chat):
+    """The question last decoded in the stand-in's place, ``None`` where none was."""
+    spliced_at = chat._conversation._state.spliced_at
+    return None if spliced_at is None else spliced_at[2].messages[-1]["content"]
+
+
 def _exchange_length(run, question, answer):
     """About how many tokens one exchange takes in the middle of a conversation."""
     two = sum(_exchanges([question] * 2, [answer] * 2), [])
@@ -153,7 +159,7 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
         run.chat.reply().finish()
     else:
         run.chat.reply(QUESTIONS[3]).finish()
-    assert run.chat._conversation._state.splices
+    assert _last_spliced(run.chat) == QUESTIONS[3]
     # The question, the run of template text it joins, and what the template writes after it.
     assert run.decoded[-1] - waited <= (len(QUESTIONS[3]) + len(run.chat._conversation.prompt_text)
                                         + 40)
@@ -194,6 +200,28 @@ def test_a_question_the_stand_in_cannot_stand_for_is_rendered_as_it_comes(stem):
     for question in questions:
         run.chat.reply(question).finish()
     _assert_each_reply_followed_what_was_sent(run, questions)
+
+
+def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_as_it_comes():
+    # The template escapes a quote, so a question holding one cannot be put in the stand-in's place.
+    escaping = dict(_FALLBACK, chat_template=(
+        "{%- for m in messages -%}<|{{ m.role }}|>{{ m.content|e }}<|end|>{%- endfor -%}"
+        "{%- if add_generation_prompt -%}<|assistant|>{%- endif -%}"))
+    context = ConversationContext(escaping, ANSWERS)
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
+    chat.begin("")
+    assert chat._conversation._state.windows
+    seen, sent, spliced = [], [], []
+    context.before_reply = seen.append
+    questions = ["Plain first.", "It's late, isn't it?", "Plain again.", "Once more."]
+    for question, answer in zip(questions, ANSWERS):
+        sent.append({"role": "user", "content": question})
+        chat.reply(question).finish()
+        assert seen[-1] == chat._template.render(sent, None, generation_prompt=True,
+                                                 reasoning=False)
+        spliced.append(_last_spliced(chat) == question)
+        sent.append({"role": "assistant", "content": answer})
+    assert spliced == [True, False, True, True]
 
 
 # ----- evictions: whole exchanges, in place --------------------------------------

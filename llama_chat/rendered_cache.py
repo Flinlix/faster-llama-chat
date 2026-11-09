@@ -25,7 +25,7 @@ from .cache_sync import CacheSync
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_starts, result_message,
                        system_part)
-from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices, splices,
+from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
@@ -75,7 +75,6 @@ class _ConversationState:
     # Where each placed kept turn starts in the cache.
     kept_at: dict[KeptTurn, int] = field(default_factory=dict)
     n_calls: int = 0
-    splices: bool = False
     windows: bool = False                 # whether windows of the conversation stand for its render
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
@@ -198,10 +197,9 @@ class RenderedCache:
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
-            self._state.splices = splices(self._rendering.render, system)
             ensure_history_stays_written(self._rendering.render, system)
-            self._state.windows = self._state.splices and windows_are_exact(
-                self._rendering.render, system, self._rendering.tag_from)
+            self._state.windows = windows_are_exact(self._rendering.render, system,
+                                                    self._rendering.tag_from)
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
                          or self._rendering.length(self._state.messages, False) > limit):
                 raise ContextOverflowError(
@@ -315,7 +313,7 @@ class RenderedCache:
         """Add ``question``, decoded in the stand-in's place in the render made ahead, where that is exact; whether it was."""
         ahead = self._state.ahead
         text = question["content"]
-        if (ahead is None or not self._state.splices or not self._is_current(ahead.made_for)
+        if (ahead is None or not self._is_current(ahead.made_for)
                 or not _is_plain(text, self._context)
                 or not question_splices(self._rendering.render, self._system_part(), text)):
             return False
@@ -627,8 +625,8 @@ class RenderedCache:
             self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
-            self._state.windows = self._state.splices and windows_are_exact(
-                self._rendering.render, self._system_part(), self._rendering.tag_from)
+            self._state.windows = windows_are_exact(self._rendering.render, self._system_part(),
+                                                    self._rendering.tag_from)
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._memory.pin(self._rendering.opening_length(self._system_part()))
             n_before = len(as_history(self._state.messages))

@@ -14,8 +14,6 @@ Render = Callable[[list[dict], bool], "str | None"]
 
 # Stands where the next question will go in the render made ahead of it.
 STAND_IN = "QQSTANDINQQ"
-# Questions a template must write exactly as the stand-in for questions to be put in its place.
-_SPLICE_PROBES = ("Plain words here.", "Wie spät ist es?", "One more, please")
 # The exchanges a template must write the same in a window as in the whole render for windows to be used.
 _WINDOW_PROBES = tuple(
     [{"role": "user", "content": f"Question {n}, asked plainly."},
@@ -30,11 +28,6 @@ def question_splices(render: Render, system: list[dict], question: str) -> bool:
         return False
     return render(system + _SPLICE_BASE + [{"role": "user", "content": question}],
                   True) == ahead.replace(STAND_IN, question)
-
-
-def splices(render: Render, system: list[dict]) -> bool:
-    """Whether this template writes a plain question exactly where it writes the stand-in."""
-    return all(question_splices(render, system, probe) for probe in _SPLICE_PROBES)
 
 
 def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
