@@ -11,16 +11,6 @@ from tests.fake_context import EMPTY_THOUGHT, FakeContext, THINK_ON
 
 from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
-class _KeepsThought(FakeContext):
-    """A template that writes a past reply's thought into the conversation."""
-
-    def render_with_model_template(self, messages, tools=None, **options):
-        kept = [dict(m, content="<thought>" + m["reasoning_content"] + "</thought>"
-                     + m["content"]) if m.get("reasoning_content") and
-                not m.get("tool_calls") else m for m in messages]
-        return super().render_with_model_template(kept, tools, **options)
-
-
 # ----- reasoning, as the template turns it on ------------------------------
 def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     w, _fake = reasoning_wrapper()
@@ -181,25 +171,6 @@ def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
     assert reply.text == "Antwort." and reply.stop_reason == "stop_string"
     assert rows(w)[-1]["text"] == "Antwort."
     assert_consistent(w, fake)
-
-
-def test_a_reply_whose_template_keeps_its_thought_keeps_the_tokens_it_had():
-    fake = _KeepsThought(can_reason=True, calls_tools=True,
-                         gen_text=THOUGHTFUL, gen_tokens=len(THOUGHTFUL))
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    assert w._template.reasoning.past_keeps_thought
-    w.begin("s", reasoning=True)
-    w.reply("hi").finish()
-    assert rows(w)[-1]["text"] == "Antwort."
-    assert rendered_prompt(fake, reasoning=True) + THOUGHTFUL in held_text(w)
-    assert_consistent(w, fake)
-
-
-def test_a_reply_decoded_again_counts_what_was_decoded():
-    w, fake = reasoning_wrapper()
-    before = fake.total_prefilled()
-    reply = w.reply("hi").finish()
-    assert reply.n_prefilled_tokens == fake.total_prefilled() - before
 
 
 # ----- a reply kept with its thought ---------------------------------------

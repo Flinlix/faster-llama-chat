@@ -30,22 +30,17 @@ def test_every_quantized_kv_cache_type_requires_flash_attention(quantized):
         Config(kv_cache_type=quantized, flash_attention=False)
 
 
-def test_kv_cache_type_requires_flash_attn():
-    with pytest.raises(ValueError, match="flash_attention"):
-        Config(kv_cache_type="q8_0", flash_attention=False)
-
-
 def test_kv_cache_type_rejects_unknown_name():
     with pytest.raises(ValueError, match="kv_cache_type"):
         Config(kv_cache_type="bogus", flash_attention=True)
 
 
-def test_kv_cache_type_accepts_known_type_with_flash_attn():
+def test_kv_cache_type_accepts_known_type_with_flash_attention():
     cfg = Config(kv_cache_type="q8_0", flash_attention=True)
     assert cfg.kv_cache_type == "q8_0"
 
 
-def test_offload_kqv_to_gpu_defaults_off():
+def test_kv_cache_on_gpu_defaults_off():
     # KV cache stays in host RAM unless explicitly offloaded to the GPU.
     assert Config().kv_cache_on_gpu is False
 
@@ -102,12 +97,6 @@ def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
         Sampling(**bad)
     assert (by_request.value.field, str(by_request.value)) == \
         (by_config.value.field, str(by_config.value))
-
-
-@pytest.mark.parametrize("bad", [{"top_p": 0.0}, {"top_p": 1.5}])
-def test_an_impossible_top_p_is_refused_where_it_is_built(bad):
-    with pytest.raises(ValueError):
-        Sampling(**bad)
 
 
 @pytest.mark.parametrize("settings, field", [

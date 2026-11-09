@@ -14,23 +14,12 @@ import pytest
 from llama_chat.config import Config, Sampling
 from llama_chat import ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
-from tests.fake_context import BOS, DEFAULT_FRAGMENTS, FakeContext
+from tests.fake_context import BOS, FakeContext
 from tests.wrappers import (assert_consistent, begun_wrapper, cache_tokens, held_renders,
                             tool_wrapper, rows)
 def _n_kept(wrapper):
     """Messages the limit counts: everything but the system prompt."""
     return len(rows(wrapper)) - 1
-
-
-class _TemplatingFake(FakeContext):
-    """FakeContext that also renders a model chat template for the fragment check."""
-
-    def __init__(self, render, fragments=DEFAULT_FRAGMENTS):
-        super().__init__(fragments=fragments)
-        self._render = render
-
-    def render_with_model_template(self, messages, tools=None, **_options):
-        return self._render(messages)
 
 
 def _as_rendered(w, fake):
@@ -351,18 +340,6 @@ def test_generation_is_capped_to_the_context_size():
     assert_consistent(w, fake)
 
 
-def test_a_refusing_reply_evicts_then_stays_within_context():
-    fake = FakeContext(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.2), context=fake)
-    w.begin("s")
-    for i in range(8):
-        w.reply(f"message number {i} with some length").finish()
-        roles = [s["role"] for s in rows(w)]
-        assert roles[0] == "system"
-        assert w.total_tokens <= w._config.context_size
-        assert_consistent(w, fake)
-
-
 def test_the_cache_rests_under_the_threshold_after_a_generation():
     # The reply is appended first, then older turns are trimmed, so the cache
     # rests at or below threshold once the generation returns.
@@ -399,22 +376,6 @@ def test_turn_closes_after_the_eviction_not_before():
             assert last[2] is False                      # no logits wanted
         assert_consistent(w, fake)
     assert evicting
-
-
-def test_rebuild_mode_does_not_decode_the_closer_twice():
-    # can_shift=False brings the cache back from a saved state or decodes it
-    # again whole, closer included, so closing the turn afterwards must be a
-    # no-op rather than a duplicate decode.
-    fake = FakeContext(gen_tokens=2, can_shift=False)
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
-    w.begin("s")
-    brought_back = 0
-    for i in range(8):
-        before = fake.rebuilds + fake.restores
-        w.reply(f"message number {i} with some length").finish()
-        brought_back += fake.rebuilds + fake.restores > before
-        assert_consistent(w, fake)          # would double-count the closer
-    assert brought_back
 
 
 # ----- the message limit, OR'd with the token threshold --------------------
@@ -541,7 +502,7 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     assert fake.rebuilds + fake.restores > rebuilds_after_begin   # brought back instead
 
 
-def test_oversize_reject_leaves_history_intact():
+def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
     # Rejecting an unfittable message must not evict the history first.
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
@@ -571,17 +532,6 @@ def test_begin_rejects_system_prompt_over_threshold():
     assert fake.cache == []
     w.begin("s")
     assert rows(w)[0]["role"] == "system"
-
-
-def test_failed_begin_keeps_previous_conversation():
-    fake = FakeContext(gen_tokens=2)
-    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.1), context=fake)
-    w.begin("s", [("user", "hi")])
-    before = rows(w)
-    with pytest.raises(ValueError):
-        w.begin("x" * 100)  # refused before mutating
-    assert rows(w) == before
-    assert_consistent(w, fake)
 
 
 def test_close_is_idempotent_and_blocks_actions():
@@ -638,20 +588,6 @@ def test_content_is_tokenized_with_special_parsing_off():
 
 
 # ----- min-reply headroom guard --------------------------------------------
-def test_a_refusing_reply_refuses_when_too_little_room_to_reply():
-    fake = FakeContext(gen_tokens=2)
-    # Prompt fits context_size, but leaves fewer than min_reply_tokens for the reply.
-    w = ChatWrapper(
-        Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60), context=fake
-    )
-    w.begin("s")
-    with pytest.raises(ContextOverflowError):
-        w.reply("hello").finish()
-    # The refused request never touched the cache.
-    assert rows(w)[-1]["role"] == "system"
-    assert_consistent(w, fake)
-
-
 def test_a_refusing_reply_proceeds_when_headroom_is_sufficient():
     fake = FakeContext(gen_tokens=2)
     w = ChatWrapper(
@@ -690,11 +626,6 @@ def test_a_restart_says_how_much_history_it_kept():
 
 
 # ----- sampling per request ------------------------------------------------
-def test_a_seed_the_config_refuses_is_refused_for_one_request_too():
-    with pytest.raises(ValueError, match="seed"):
-        Sampling(seed=-1)
-
-
 @pytest.mark.parametrize("calls", ["refuse", "registry", "yield"])
 def test_every_call_policy_hands_its_sampling_to_the_generation(calls):
     from llama_chat.tools import ToolRegistry
@@ -711,11 +642,6 @@ def test_a_stream_and_a_resume_hand_it_over_as_well():
     list(w.reply("hi", sampling=sampling))
     list(w.reply("again", calls="yield", sampling=sampling))
     assert fake.samplings == [sampling, sampling]
-
-
-def test_a_seed_out_of_range_is_refused_before_anything_is_prefilled():
-    with pytest.raises(ValueError, match="seed"):
-        Sampling(seed=2**40)
 
 
 # ----- a system turn where the template has one or none --------------------

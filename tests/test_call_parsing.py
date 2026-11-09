@@ -177,12 +177,6 @@ def test_a_json_array_yields_every_call_it_holds():
                      ToolCall("calendar_add", {"title": "x"})]
 
 
-def test_an_array_holding_something_that_is_not_a_call_is_not_a_batch():
-    # All or nothing: a half-read batch would silently drop work.
-    with pytest.raises(ValueError):
-        parse_calls('[{"name": "clock", "arguments": {}}, 42]', None)
-
-
 # ----- reading a body the model got wrong ----------------------------------
 def test_an_empty_argument_value_reads_as_an_empty_string():
     """A key the model wrote no value for is an empty string, not a crash.

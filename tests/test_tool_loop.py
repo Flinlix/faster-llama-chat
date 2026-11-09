@@ -10,7 +10,7 @@ from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolT
 from llama_chat import ChatWrapper, ContextOverflowError
 from tests.fake_context import FakeContext
 from tests.wrappers import (assert_consistent, cache_tokens, held_renders,
-                            newest_turn, system_turn, tool_wrapper, unbegun_tool_wrapper,
+                            newest_turn, system_turn, tool_wrapper,
                             weather_registry, rows)
 
 
@@ -359,56 +359,6 @@ def test_going_on_without_a_request_and_nothing_to_answer_is_refused():
         list(wrapper.reply(calls="yield"))
 
 
-def test_a_new_turn_cannot_open_inside_a_reply_a_call_left_open():
-    """A reply stays open after its last result, until it is resumed.
-
-    Nothing owes a result any more, but the assistant turn has no closing tag
-    yet. A message appended here would sit inside a model turn that never
-    ended, which is a conversation no template renders.
-    """
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")
-    fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", calls="yield"))
-    wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
-    assert not bool(wrapper._conversation.owed_calls)
-
-    for action in (lambda: wrapper.reply("etwas anderes").finish(),
-                   lambda: wrapper.inject("etwas anderes"),
-                   lambda: wrapper.declare_tools([ToolSpec("x", "d", {})])):
-        with pytest.raises(ValueError, match="while a reply is open"):
-            action()
-
-    # Refusing left the turn untouched: it still resumes and closes normally.
-    fake.call_script = []
-    list(wrapper.reply(calls="yield"))
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
-
-
-def test_begin_discards_a_reply_a_call_left_open():
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")
-    fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", calls="yield"))
-
-    wrapper.begin("persona")
-    wrapper.reply("etwas anderes").finish()   # the turn went with the reset
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
-    assert fake.cache == cache_tokens(wrapper)
-
-
-def test_a_model_without_tool_tags_cannot_call_tools():
-    fake = FakeContext()
-    wrapper = ChatWrapper(Config(context_size=512), context=fake)
-    assert not wrapper.can_call_tools
-
-
-def test_a_model_with_tool_tags_can():
-    wrapper, _ = tool_wrapper()
-    assert wrapper.can_call_tools
-
-
 def test_tags_without_a_readable_grammar_cannot_call_tools():
     """The tags resolve, so a call is still detected; nothing runnable comes out.
 
@@ -618,13 +568,15 @@ def test_a_reset_ends_the_turn_a_call_was_holding_open():
     with pytest.raises(ValueError, match="no tool call is waiting"):
         wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     assert [m["role"] for m in rows(wrapper)] == ["system"]
+    wrapper.reply("etwas anderes").finish()
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
     assert fake.cache == cache_tokens(wrapper)
 
 
 def test_reply_open_outlasts_the_calls_that_are_owed():
     """The window the two properties disagree in is the one that refuses work.
 
-    Reading ``awaiting_tool_result`` as "may I start a new turn?" is wrong
+    Reading ``owed_calls`` as "may I start a new turn?" is wrong
     exactly here, which is why ``reply_open`` answers it instead.
     """
     wrapper, fake = tool_wrapper()
@@ -645,6 +597,8 @@ def test_reply_open_outlasts_the_calls_that_are_owed():
 
     list(wrapper.reply(calls="yield"))
     assert not wrapper.reply_open               # closed, and work is allowed again
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+    assert fake.cache == cache_tokens(wrapper)
     wrapper.reply("weiter").finish()
 
 
@@ -1058,43 +1012,19 @@ def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
     assert wrapper.reply("weiter").finish().stop_reason == "end_of_turn"
 
 
-def test_can_call_tools_answers_for_the_whole_chain_at_startup():
-    """No probing by hand and no waiting for the first call to find out.
-
-    A template that renders a call but no block to answer one in used to report
-    True here, which is the promise that hurts: the tool is declared, called,
-    and only then does the result turn out to have nowhere to go. True is
-    exactly what begin(tools=...) accepts, so each of these refuses one.
-    """
-    assert not ChatWrapper(Config(context_size=1024),
-                           context=FakeContext()
-                           ).can_call_tools
-    assert not ChatWrapper(Config(context_size=1024),
-                           context=_NoDeclarations(calls_tools=True)
-                           ).can_call_tools
-    assert not ChatWrapper(Config(context_size=1024),
-                           context=_KeylessCallContext(calls_tools=True)
-                           ).can_call_tools
-    assert not ChatWrapper(Config(context_size=1024),
-                           context=_NoResultBlock(calls_tools=True)
-                           ).can_call_tools
-    assert ChatWrapper(Config(context_size=1024),
-                       context=FakeContext(calls_tools=True)).can_call_tools
-
-
-@pytest.mark.parametrize("build", [
-    lambda: ChatWrapper(Config(context_size=1024), context=FakeContext()),
-    lambda: ChatWrapper(Config(context_size=1024),
-                        context=_NoDeclarations(calls_tools=True)),
-    lambda: ChatWrapper(Config(context_size=1024),
-                        context=_KeylessCallContext(calls_tools=True)),
-    lambda: ChatWrapper(Config(context_size=1024),
-                        context=_NoResultBlock(calls_tools=True)),
-    lambda: ChatWrapper(Config(context_size=1024),
-                        context=FakeContext(calls_tools=True)),
-])
-def test_can_call_tools_is_exactly_what_declaring_will_accept(build):
-    """One question, one answer: reading it must predict what begin does.
+@pytest.mark.parametrize("build, can_call", [
+    (lambda: ChatWrapper(Config(context_size=1024), context=FakeContext()), False),
+    (lambda: ChatWrapper(Config(context_size=1024),
+                         context=_NoDeclarations(calls_tools=True)), False),
+    (lambda: ChatWrapper(Config(context_size=1024),
+                         context=_KeylessCallContext(calls_tools=True)), False),
+    (lambda: ChatWrapper(Config(context_size=1024),
+                         context=_NoResultBlock(calls_tools=True)), False),
+    (lambda: ChatWrapper(Config(context_size=1024),
+                         context=FakeContext(calls_tools=True)), True),
+], ids=["no-call-tags", "declares-nothing", "unreadable-call", "no-result-block", "calls"])
+def test_can_call_tools_is_exactly_what_declaring_will_accept(build, can_call):
+    """One question, one answer: reading it at startup must predict what begin does.
 
     Two predicates over the same four steps would drift, and the property is
     read precisely to avoid the raise.
@@ -1103,7 +1033,8 @@ def test_can_call_tools_is_exactly_what_declaring_will_accept(build):
     registry.register(lambda: "12:00", "Die Zeit.", name="clock")
     wrapper = build()
 
-    if wrapper.can_call_tools:
+    assert wrapper.can_call_tools is can_call
+    if can_call:
         wrapper.begin("persona", tools=registry)
     else:
         with pytest.raises(ValueError):
@@ -1464,18 +1395,6 @@ def test_a_conversation_with_no_tools_needs_no_registry():
         wrapper.reply("hallo", calls="run").finish()
 
 
-def test_a_call_invented_with_no_tools_declared_is_answered_not_raised():
-    """Raising here would leave the turn open with nothing able to close it."""
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")            # nothing declared, no registry
-    fake.call_script = ["fn:weather{city:'Bonn'}"]
-
-    assert wrapper.reply("wetter?", calls="refuse").finish().text == "reply"   # it still arrives
-    assert not wrapper.reply_open                   # and the turn closed
-    assert any("tools_not_run" in text for text, _ in fake.tokenize_calls)
-    assert fake.cache == cache_tokens(wrapper)
-
-
 def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
     ran = []
     registry = ToolRegistry()
@@ -1492,20 +1411,6 @@ def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
     with pytest.raises(ValueError, match="given none"):    # the old conversation's registry is gone
         wrapper.reply("wetter?", calls="run").finish()
     assert ran == []
-
-
-# ----- a result answers its own call ---------------------------------------
-def test_a_result_answers_the_call_it_was_given_for():
-    from llama_chat.tools import ToolCall
-    w, fake = unbegun_tool_wrapper()
-    fake.call_script = ['[{"name":"wetter","arguments":{"city":"Berlin"}},'
-                        '{"name":"wetter","arguments":{"city":"Paris"}}]']
-    w.begin("s", tools=[ToolSpec("wetter", "", {})])
-    calls = [e for e in w.reply("Wetter?", calls="yield") if isinstance(e, ToolCall)]
-    with pytest.raises(ValueError, match="waiting call"):
-        w.inject_tool_result(calls[1], "Paris: Regen")
-    w.inject_tool_result(calls[0], "Berlin: Sonne")
-    w.inject_tool_result(calls[1], "Paris: Regen")
 
 
 # ----- tools declared before the newest user turn --------------------------

@@ -53,12 +53,13 @@ def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
 
 
 def test_the_held_back_tail_is_released_when_a_call_opens():
-    """A stop string holds text back; the call is not what it was waiting for."""
+    """The text a reply ends with holds text back; the call is not what it was waiting for."""
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
     # "ZZZZ" is longer than "hi ", so nothing can be emitted before the call.
-    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc,
+                      boundary=CallBoundary(tool_tokens=_TAGS, turn_end_text="ZZZZ"))
     assert list(stream) == ["hi "]
     assert acc.text == "hi "            # nothing of the reply was lost
 
@@ -72,7 +73,8 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
+    stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc,
+                      boundary=CallBoundary(tool_tokens=_TAGS, turn_end_text="ZZZZ"))
     assert next(stream) == "hi "
     stream.close()
     assert acc.stop_reason == "interrupted"
@@ -135,9 +137,10 @@ def test_the_held_back_tail_is_flushed_when_generation_runs_out():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    # A stop string this long holds back three characters at every step, so
+    # A closing text this long holds back three characters at every step, so
     # without the final flush the reply would end short.
-    stream = generate(_generating({0: b"abc", 1: b"def"}, [0, 1]), 0, 2, out=acc)
+    stream = generate(_generating({0: b"abc", 1: b"def"}, [0, 1]), 0, 2, out=acc,
+                      boundary=CallBoundary(turn_end_text="ZZZZ"))
     assert "".join(stream) == "abcdef"
     assert acc.stop_reason == "token_limit"
     assert acc.text == "abcdef"

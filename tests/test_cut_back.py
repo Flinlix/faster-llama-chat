@@ -18,18 +18,11 @@ def _without_restore(fake):
 
 
 # ----- cutting the newest reply --------------------------------------------
-def test_a_cut_keeps_the_prefix_and_the_cache_agrees():
+def test_a_cut_keeps_the_prefix_and_the_next_request_appends_at_the_cache_end():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply("hi").finish()
     w.truncate_last_reply("Eins.")
     assert rows(w)[-1]["text"] == "Eins."
-    assert_consistent(w, fake)
-
-
-def test_after_a_cut_the_next_request_appends_at_the_cache_end():
-    w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
-    w.reply("hi").finish()
-    w.truncate_last_reply("Eins.")
     w.reply("weiter").finish()
     assert_consistent(w, fake)
 
@@ -180,8 +173,9 @@ def test_a_cut_leaves_a_state_for_the_next_reply():
     assert fake.saved_states == saved + 1
 
 
-def test_what_a_cache_that_cannot_shift_decodes_again_is_counted():
-    w, fake = reasoning_wrapper(can_shift=False)
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+def test_what_a_reply_decodes_again_is_counted(can_shift):
+    w, fake = reasoning_wrapper(can_shift=can_shift)
     before = fake.total_prefilled()
     reply = w.reply("hi").finish()
     assert reply.n_prefilled_tokens == fake.total_prefilled() - before

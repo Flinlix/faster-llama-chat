@@ -480,7 +480,7 @@ def _set_flash_attn(cparams, enable, llama_cpp=None):
     Backend._set_flash_attn(SimpleNamespace(_llama_cpp=llama_cpp), cparams, enable)
 
 
-def _set_offload(cparams, enable):
+def _set_kv_cache_on_gpu(cparams, enable):
     """Drive Backend._set_kv_cache_on_gpu with fakes, bypassing llama_cpp import."""
     from types import SimpleNamespace
     from llama_chat._backend import Backend
@@ -552,26 +552,26 @@ def test_set_flash_attn_enable_on_unsupported_build_raises():
 
 
 @pytest.mark.parametrize("enable", [True, False])
-def test_set_offload_kqv_bool_build(enable):
+def test_set_kv_cache_on_gpu_bool_build(enable):
     from types import SimpleNamespace
 
     cparams = SimpleNamespace(offload_kqv=None)
-    _set_offload(cparams, enable)
+    _set_kv_cache_on_gpu(cparams, enable)
     assert cparams.offload_kqv is enable
 
 
-def test_set_offload_kqv_enable_on_unsupported_build_is_noop():
+def test_set_kv_cache_on_gpu_enable_on_unsupported_build_is_noop():
     from types import SimpleNamespace
 
     # GPU placement is llama.cpp's own default, so a missing param is harmless.
-    _set_offload(SimpleNamespace(), True)  # must not raise
+    _set_kv_cache_on_gpu(SimpleNamespace(), True)  # must not raise
 
 
-def test_set_offload_kqv_disable_on_unsupported_build_raises():
+def test_set_kv_cache_on_gpu_disable_on_unsupported_build_raises():
     from types import SimpleNamespace
 
     with pytest.raises(RuntimeError, match="KV-offload"):
-        _set_offload(SimpleNamespace(), False)
+        _set_kv_cache_on_gpu(SimpleNamespace(), False)
 
 
 # ----- the sampler chain per generation ------------------------------------
