@@ -366,7 +366,7 @@ def test_a_new_turn_cannot_open_inside_a_reply_a_call_left_open():
 
     for action in (lambda: wrapper.reply("etwas anderes").finish(),
                    lambda: wrapper.inject("etwas anderes"),
-                   lambda: wrapper.declare_unknown_tools([ToolSpec("x", "d", {})])):
+                   lambda: wrapper.declare_tools([ToolSpec("x", "d", {})])):
         with pytest.raises(ValueError, match="while a reply is open"):
             action()
 
@@ -505,7 +505,7 @@ def test_a_declaration_added_later_reaches_the_model():
     registry = ToolRegistry()
     registry.register(lambda: {}, "Sagt die Zeit.", name="clock")
 
-    wrapper.declare_unknown_tools(registry.specs())
+    wrapper.declare_tools(registry.specs())
 
     written = fake.text_of(fake.cache)
     assert "<decl>clock</decl>" in written
@@ -516,7 +516,7 @@ def test_declaring_nothing_writes_nothing():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     before = list(fake.cache)
-    assert wrapper.declare_unknown_tools([]) == 0
+    assert wrapper.declare_tools([]) == 0
     assert fake.cache == before
 
 
@@ -531,7 +531,7 @@ def test_declarations_too_large_to_fit_are_refused_rather_than_truncated():
         registry.register(lambda: {}, "…", name=f"tool_with_a_long_name_{i}")
 
     with pytest.raises(ValueError, match="declare fewer tools"):
-        wrapper.declare_unknown_tools(registry.specs())
+        wrapper.declare_tools(registry.specs())
 
     # A refused declaration leaves the conversation exactly as it was.
     assert fake.cache == before
@@ -556,7 +556,7 @@ def test_declaring_before_a_conversation_is_refused():
     # `begin` would reset the conversation and throw the declaration away, so writing
     # it here would be a silent loss rather than a declaration.
     with pytest.raises(ValueError, match="no conversation to declare into"):
-        wrapper.declare_unknown_tools(registry.specs())
+        wrapper.declare_tools(registry.specs())
 
     assert fake.cache == []
 
@@ -567,7 +567,7 @@ def test_a_model_without_tool_support_still_reports_the_missing_conversation():
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     spec = ToolSpec("clock", "…", {"type": "object", "properties": {}})
     with pytest.raises(ValueError, match="no conversation to declare into"):
-        wrapper.declare_unknown_tools([spec])
+        wrapper.declare_tools([spec])
 
 
 def test_a_call_this_parser_cannot_read_still_closes_the_turn():
@@ -636,7 +636,7 @@ def test_reply_open_outlasts_the_calls_that_are_owed():
     assert wrapper.reply_open                   # but the turn has not closed
     for action in (lambda: wrapper.reply("weiter").finish(),
                    lambda: wrapper.inject("kontext"),
-                   lambda: wrapper.declare_unknown_tools(
+                   lambda: wrapper.declare_tools(
                        [ToolSpec("x", "d", {"type": "object", "properties": {}})])):
         with pytest.raises(ValueError, match="while a reply is open"):
             action()
@@ -935,7 +935,7 @@ def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction
     wrapper = ChatWrapper(Config(context_size=200, evict_above_fraction=0.5),
                           context=fake)
     wrapper.begin("persona")
-    wrapper.declare_unknown_tools(registry.specs())
+    wrapper.declare_tools(registry.specs())
     assert [m["role"] for m in rows(wrapper)] == ["system"]
 
     for i in range(6):
@@ -943,7 +943,7 @@ def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction
 
     # The system turn is pinned, so the declaration in it is never evicted.
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
-    assert wrapper.declare_unknown_tools(registry) == 0
+    assert wrapper.declare_tools(registry) == 0
     assert fake.cache == cache_tokens(wrapper)
 
 
@@ -996,7 +996,7 @@ def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
     # And afterwards, where they would be a message of their own.
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="declares no tools"):
-        wrapper.declare_unknown_tools([spec])
+        wrapper.declare_tools([spec])
 
 
 def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
@@ -1186,7 +1186,7 @@ def test_declaring_later_is_checked_the_same_way():
     wrapper = ChatWrapper(Config(context_size=1024), context=fake)
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="renders no tool result"):
-        wrapper.declare_unknown_tools(
+        wrapper.declare_tools(
             [ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})])
 
 
@@ -1285,7 +1285,7 @@ def test_declaring_takes_a_registry_the_way_begin_does():
 
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
-    wrapper.declare_unknown_tools(registry)
+    wrapper.declare_tools(registry)
 
     declared = system_turn(wrapper)
     assert "<decl>clock</decl>" in declared
@@ -1314,7 +1314,7 @@ def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert "<decl>weather</decl>" not in _declared_in(wrapper, 0)
 
-    wrapper.declare_unknown_tools(registry)          # the rest, where the template puts them
+    wrapper.declare_tools(registry)          # the rest, where the template puts them
 
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert "<decl>weather</decl>" in _declared_in(wrapper, 0)
@@ -1332,11 +1332,11 @@ def test_declaring_the_same_registry_again_writes_nothing():
 
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona", tools=registry)
-    wrapper.declare_unknown_tools(registry)
+    wrapper.declare_tools(registry)
     once = rows(wrapper)
 
-    wrapper.declare_unknown_tools(registry)
-    wrapper.declare_unknown_tools(registry)
+    wrapper.declare_tools(registry)
+    wrapper.declare_tools(registry)
 
     assert rows(wrapper) == once
     assert fake.cache == cache_tokens(wrapper)
@@ -1354,19 +1354,19 @@ def test_declaring_skips_what_the_system_turn_already_holds():
     wrapper.begin("persona", tools=registry)
     before = rows(wrapper)
 
-    assert wrapper.declare_unknown_tools(registry) == 0
+    assert wrapper.declare_tools(registry) == 0
     assert rows(wrapper) == before          # nothing was written at all
 
     @registry.tool("Sagt das Wetter.")
     def weather(city: str) -> dict:
         return {}
 
-    wrapper.declare_unknown_tools(registry)              # only the one it has not heard
+    wrapper.declare_tools(registry)              # only the one it has not heard
     declared = _declared_in(wrapper, 0)
     assert declared.count("<decl>clock</decl>") == 1 and "<decl>weather</decl>" in declared
 
     wrapper.begin("persona")                     # a reset forgets what was said
-    wrapper.declare_unknown_tools(registry)
+    wrapper.declare_tools(registry)
     assert "<decl>clock</decl>" in _declared_in(wrapper, 0)
     assert fake.cache == cache_tokens(wrapper)
 
@@ -1518,7 +1518,7 @@ def test_a_later_declaration_joins_the_newest_user_turn():
     w, fake = _moving()
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
     w.reply("eins").finish()
-    assert w.declare_unknown_tools([ToolSpec("wetter", "", {})]) == 0
+    assert w.declare_tools([ToolSpec("wetter", "", {})]) == 0
     both = [ToolSpec("uhr", "", {}), ToolSpec("wetter", "", {})]
     _as_rendered_with(w, fake, both)
     w.reply("zwei").finish()

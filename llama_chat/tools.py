@@ -130,7 +130,7 @@ class ToolRegistry:
     """The tools this process can run, by the name the model calls them.
 
     Registering makes a tool runnable at once and says when the model is to be
-    told about it: by ``begin``, or later by ``declare_unknown_tools``. Nothing
+    told about it: by ``begin``, or later by ``declare_tools``. Nothing
     here writes to a model, so nothing here learns what the conversation still
     holds. See the README, "Tool calling".
     """
@@ -154,7 +154,7 @@ class ToolRegistry:
             declare_at_begin: When the model is told about it. ``True``
                 declares it as :meth:`~llama_chat.wrapper.ChatWrapper.begin`
                 writes the conversation; ``False`` leaves it for
-                :meth:`~llama_chat.wrapper.ChatWrapper.declare_unknown_tools`.
+                :meth:`~llama_chat.wrapper.ChatWrapper.declare_tools`.
                 Either way the declaration goes where the template writes
                 declarations. It is runnable either way, from the moment it is
                 registered.

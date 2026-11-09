@@ -126,7 +126,7 @@ class ChatWrapper:
             tools: Tools to declare, written where this model's template
                 declares them. From a whole
                 :class:`~llama_chat.tools.ToolRegistry`, what it marks to be
-                declared at begin; the rest waits for :meth:`declare_unknown_tools`.
+                declared at begin; the rest waits for :meth:`declare_tools`.
                 A registry is also kept, so :meth:`reply` running calls needs
                 none of its own; a list of specs is declared and not kept.
                 Refused up front where this model could not use them, rather
@@ -351,7 +351,7 @@ class ChatWrapper:
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
-    def declare_unknown_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
+    def declare_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
         Written where the template declares tools, never as a message of its
@@ -484,7 +484,7 @@ class ChatWrapper:
 
         True from a call until :meth:`reply` closes the turn, the results in
         between included. While it is, :meth:`reply` with a request,
-        :meth:`inject` and :meth:`declare_unknown_tools` refuse.
+        :meth:`inject` and :meth:`declare_tools` refuse.
         """
         return self._conversation.reply_open
 

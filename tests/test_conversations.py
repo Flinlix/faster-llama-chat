@@ -628,7 +628,7 @@ def test_tools_declared_mid_conversation_are_written_where_the_template_writes_t
     assert run.chat.can_call_tools
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    run.chat.declare_unknown_tools([WEATHER])
+    run.chat.declare_tools([WEATHER])
     run.chat.reply(QUESTIONS[1]).finish()
     sent = sum(_exchanges(QUESTIONS[:1], ANSWERS[:1]), [])
     assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER])
@@ -643,7 +643,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
                      parameters={"type": "object", "properties": {}})
     run.begin([("user", "Weather?"), turn], tools=[WEATHER])
     run.chat.reply(QUESTIONS[0]).finish()
-    run.chat.declare_unknown_tools([clock])
+    run.chat.declare_tools([clock])
     run.chat.reply(QUESTIONS[1]).finish()
     from llama_chat.messages import as_messages
     sent = as_messages([("user", "Weather?"), turn]) + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1]), [])

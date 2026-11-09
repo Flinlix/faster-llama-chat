@@ -124,7 +124,7 @@ model and makes later actions raise.
 | adding context | `inject(text, role="user")`: prefilled, no reply; returns how many messages went. A question is put where the next question was prepared for, as `reply(text)` puts one, and is evicted for after its reply, so `inject(text)` then `reply()` waits no longer than `reply(text)`. Any other message, or a question where `max_history_messages` is reached, evicts first |
 | asking | `reply(text, *, calls="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open |
 | answering a call yourself | `inject_tool_result(call, result)`, then `reply(calls="yield")` |
-| telling the model about more tools | `declare_unknown_tools(registry_or_specs)` |
+| telling the model about more tools | `declare_tools(registry_or_specs)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. `system_prompt` and `history()` read each alone. Safe from any thread, while a reply runs too: each reads the conversation as the newest finished change left it, and `conversation()` reads both from the same one |
 | where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `wait_idle(timeout_s)` |
@@ -203,7 +203,7 @@ every generation of the exchange, and `tool_limit_reached` says whether a
 `max_calls` ceiling ran out.
 
 **Tools a model could not use are refused where you hand them over**, by
-`begin(tools=...)`, `declare_unknown_tools` and a running `reply`, naming what
+`begin(tools=...)`, `declare_tools` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
 readable argument spelling, and a block for the result. `can_call_tools`
 answers the same question up front.
@@ -216,7 +216,7 @@ elsewhere. A `ToolSpec` declares a tool that this process does not run.
 
 **When the model is told.** `declare_at_begin=True`, the default, declares a
 tool when `begin` writes the conversation; `declare_at_begin=False` leaves it
-for `declare_unknown_tools`, which adds it later. Either way the declaration
+for `declare_tools`, which adds it later. Either way the declaration
 goes where the template writes declarations: into the system turn, with the
 conversation after it decoded again once, or, for a template that declares
 tools right before the newest user turn, into what that turn carries, where it
