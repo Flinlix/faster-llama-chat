@@ -1349,3 +1349,9 @@ prompt is empty where it is only the assistant tag, so four places read "the
 generation prompt, or else the tag". That reading is now one property,
 `TemplateFragments.generation_prompt_without_reasoning`, which all four use.
 No behaviour changed.
+
+**Two exports fewer.** `GenerationAccumulator` and `CallBoundary` are no
+longer exported from `llama_chat`. They were exported for a cache context that
+ran its own generation; since the generation loop moved inside the library
+("Restructured inside the library"), a context only answers the four steps
+the loop asks for, and no caller builds or reads either type.
