@@ -1326,3 +1326,11 @@ removed. Its third field, the cache's length before the removal, only bounded
 the shift of what follows, and the engine shifts everything after the stretch
 when given no end; a stand-in knows its own length. A type for two integers
 was one more public name for a context's author to learn.
+
+**The engine context warms itself.** `CacheContext.warmup` and the wrapper's
+flag that called it once at the first `begin` are removed. The engine context
+decodes its full batch and its single token at the end of loading, so loading
+takes one warm-up longer and the first `begin` that much less. Warming is a
+property of the engine, not of a conversation: a stand-in needs none, and a
+context of one's own warms itself where it needs to, so the protocol no longer
+asks every context for a member only one of them uses.

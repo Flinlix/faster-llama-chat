@@ -64,6 +64,7 @@ class KVContext:
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
+            self._warm_up()
             self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
                                     if template else None)
             self._special_tokens = None
@@ -149,7 +150,7 @@ class KVContext:
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         self._backend.decode(self._engine_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
-    def warmup(self) -> None:
+    def _warm_up(self) -> None:
         """Decode a full batch and a single token, then clear the cache again.
 
         The engine prepares each size of batch the first time it decodes one,

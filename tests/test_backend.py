@@ -396,22 +396,30 @@ def test_the_models_tags_are_the_tokens_the_engine_marks_read_once():
 
 
 @pytest.mark.parametrize("max_batch_tokens, context_size, full", [(8, 32, 8), (64, 16, 16)])
-def test_warming_up_decodes_a_full_batch_and_a_single_token_and_leaves_the_cache_empty(
-        max_batch_tokens, context_size, full):
+def test_loading_ends_by_decoding_a_full_batch_and_a_single_token_and_leaves_the_cache_empty(
+        tmp_path, monkeypatch, max_batch_tokens, context_size, full):
     performed = []
-    context = object.__new__(KVContext)
-    context._engine_context, context._vocab = "ctx", None
-    context._max_batch_tokens = max_batch_tokens
-    context._config = SimpleNamespace(context_size=context_size)
-    context._backend = SimpleNamespace(
+    backend = SimpleNamespace(
+        load_model=lambda path, layers, progress: "model",
+        metadata_value=lambda model, key: None,
+        kv_cache_type_id=lambda name: 0,
+        new_context=lambda *args, **kwargs: "ctx",
+        vocab=lambda model: None,
         token_eos=lambda vocab: 2,
+        can_shift=lambda ctx: True,
+        kv_seq_rm=lambda ctx, seq, p0, p1: True,
+        kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
         decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", len(tokens), pos)),
         kv_clear=lambda ctx: performed.append(("clear",)),
     )
+    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    model = tmp_path / "model.gguf"
+    model.touch()
 
-    context.warmup()
+    KVContext(Config(model_path=str(model), context_size=context_size,
+                     max_batch_tokens=max_batch_tokens, min_reply_tokens=0))
 
-    assert performed == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
+    assert performed[-4:] == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
 
 
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():

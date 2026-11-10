@@ -76,7 +76,6 @@ class ChatWrapper:
             raise
         self._conversation = RenderedCache(self._context, self._template, config)
         self._registry = None
-        self._warmed = False
         self._closed = False
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
@@ -88,10 +87,8 @@ class ChatWrapper:
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
-        The first call also warms the model for every size of batch it will
-        decode, so the first request streams without a cold start. Every other
-        action refuses until this has run, because only this prefills the
-        sequence opener and the system prompt.
+        Every other action refuses until this has run, because only this
+        prefills the sequence opener and the system prompt.
 
         Args:
             system_prompt: Always kept, never evicted. Empty, it is no system
@@ -151,9 +148,6 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
-            if not self._warmed:
-                self._context.warmup()
-                self._warmed = True
             kept = self._conversation.start(system_prompt, messages, specs, reasoning)
             self._registry = registry
             return kept

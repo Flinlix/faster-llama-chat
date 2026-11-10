@@ -127,15 +127,6 @@ def test_begin_has_bos_only_at_start():
     assert fake.cache.count(BOS) == 1
 
 
-def test_begin_warms_up_once():
-    fake = FakeContext(PLAIN)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [("user", "u")])
-    w.begin("s", [("user", "u")])
-    # Warmed on the first begin only; later begins skip the redundant decode.
-    assert fake.warmups == 1
-
-
 # ----- inject --------------------------------------------------------------
 def test_inject_appends_without_generating():
     fake = FakeContext(PLAIN)

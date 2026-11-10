@@ -159,7 +159,6 @@ class FakeContext:
         self.edits: list[tuple] = []
         self.samplings = []                      # the sampling each generation was handed
         self.resets = 0
-        self.warmups = 0
         self.saved_states = 0
 
     # ----- the model as it is read ---------------------------------------------
@@ -231,10 +230,6 @@ class FakeContext:
     def reset(self) -> None:
         self.cache = []
         self.resets += 1
-
-    def warmup(self) -> None:
-        # A real warmup nets to an empty cache; begin calls it after a reset.
-        self.warmups += 1
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         assert start_pos == len(self.cache), (
