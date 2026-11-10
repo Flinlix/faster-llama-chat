@@ -94,12 +94,12 @@ running state losing those tokens.
   rests, the last two in RAM, from before and after the newest reply, each the
   size of the model's state, not of the conversation's; a reply kept in another
   form than generated, a cut and a removed reply then go back to the earlier
-  one and decode only what follows. Where the build saves no state, or the
-  newest reply lies before both, the conversation is decoded again. Such a
+  one and decode only what follows. Where the cache context saves no state, or
+  the newest reply lies before both, the conversation is decoded again. Such a
   cache is never asked to shift, not even at load.
 
-`_backend.py` uses the `llama_memory_*` calls where present, else the older
-`llama_kv_self_*` and `llama_kv_cache_*` names.
+`_backend.py` requires llama-cpp-python 0.3.23 or later and uses the
+`llama_memory_*` calls; see "The oldest llama-cpp-python supported is 0.3.23".
 
 **Memory and quality settings.** On a GPU, `flash_attention=True` with
 `kv_cache_type="q8_0"` roughly halves the KV cache's memory at a small cost in
@@ -904,6 +904,28 @@ refused only for what would be kept.
   it to be raised instead of the turn to close.
 - A `ToolTurn` whose result answers no earlier call of the turn is refused when
   it is built, instead of being written with an invented call id.
+
+## 2026-11-08: The oldest llama-cpp-python supported is 0.3.23
+
+The adapter looked every C symbol up under each name llama.cpp had given it
+since 0.3.0: the `llama_kv_self_*` and `llama_kv_cache_*` cache edits beside
+`llama_memory_*`, `llama_load_model_from_file`, the `llama_token_*` vocabulary
+calls, a missing vocabulary handle, the boolean `flash_attn` beside
+`flash_attn_type`, and builds without saved states. Checked against each
+release's `llama_cpp.py`: 0.3.10 adds the memory API, 0.3.23 the
+`llama_state_seq_*_ext` calls with `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY` that
+the saved states rest on, and every other name the adapter calls is present
+from 0.3.9 on; the machines this runs on use 0.3.36. The floor is now 0.3.23
+in pyproject.toml, install.sh, the README and the server's image, every symbol
+is required under its one current name, and the fallbacks went with
+`Backend.can_edit_cache` and `Backend.can_save_state`, which could no longer
+answer anything but yes. install.sh now checks the build by constructing the
+adapter, which raises where a symbol is missing. The lookup under several
+names stays for the next rename.
+
+The penalties call still differs inside the supported range: 0.3.23 to 0.3.34
+declare four parameters, 0.3.35 on five, the vocabulary size first, so
+`_penalties_take_vocab_size` stays.
 
 ## 2026-11-08: A system prompt is kept wherever no later question moves it
 

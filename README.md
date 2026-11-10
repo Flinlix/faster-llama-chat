@@ -72,8 +72,8 @@ own kernels or the CUDA backend.
 The same by hand:
 
 ```bash
-CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"   # CPU
-CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.0"     # Nvidia GPU
+CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.23"   # CPU
+CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.23"     # Nvidia GPU
 pip install -e ".[test]"
 ```
 

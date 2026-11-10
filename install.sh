@@ -51,7 +51,7 @@ fi
 echo "Building llama-cpp-python from source ($BACKEND backend: $CMAKE_ARGS)..."
 CMAKE_ARGS="$CMAKE_ARGS" \
 CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
-    "$PIP" install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.0"
+    "$PIP" install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
 
 # Install llama_chat itself (editable) so `import llama_chat` and the demo work
 # without setting PYTHONPATH. Pass --dev to also install test dependencies.
@@ -64,25 +64,17 @@ fi
 
 echo "Verifying the build and the llama.cpp symbols the package relies on..."
 "$PYTHON" - <<'PY'
-import sys, llama_cpp
+import llama_cpp
 
-# The backend's own symbol resolution is the source of truth: constructing it runs
-# every required-symbol lookup (with the version fallbacks it supports) and raises
-# if a mandatory call is genuinely absent.
+# The backend's own symbol resolution is the source of truth: constructing it
+# looks up every symbol the package calls, the cache edits included, and raises
+# if this build lacks one.
 from llama_chat._backend import Backend
-b = Backend()
-
-# The evict-and-shift core needs one working path per cache edit. Which names
-# count as one is the backend's own business, so ask it rather than repeat the
-# list here, where it would go stale without anything failing.
-kv_ok = b.can_edit_cache
+Backend()
 
 print("llama-cpp-python", llama_cpp.__version__)
 print("required symbols:", "OK")
-print("KV-cache eviction ops:", "OK" if kv_ok else "MISSING")
 print("system info:", llama_cpp.llama_print_system_info().decode().strip())
-if not kv_ok:
-    sys.exit(1)
 PY
 
 echo "Done."

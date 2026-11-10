@@ -1,8 +1,8 @@
 """Adapter over llama-cpp-python's low-level API, resolved once per build.
 
-llama.cpp has renamed C symbols across releases, so each one is looked up under
-every name it has had and the rest of the package uses a single name for it.
-Only the primitives the wrapper needs are exposed.
+Each C symbol is resolved once, under the names it has had since the oldest
+release the package supports, and the rest of the package uses a single name
+for it. Only the primitives the wrapper needs are exposed.
 """
 
 from __future__ import annotations
@@ -53,15 +53,6 @@ def template_renderer(template: str, eos_token: str, generation_prompt: bool = F
                                add_generation_prompt=generation_prompt)
 
 
-def _optional_symbol(*names: str):
-    """Return the first of ``names`` this build defines, or ``None``."""
-    for name in names:
-        fn = getattr(llama_cpp, name, None)
-        if fn is not None:
-            return fn
-    return None
-
-
 def _parameter_count(fn) -> int:
     """How many arguments a binding takes, from its ctypes types or its signature."""
     argtypes = getattr(fn, "argtypes", None)
@@ -76,7 +67,7 @@ def _required_symbol(*names: str):
     Raises:
         AttributeError: If it defines none of them.
     """
-    fn = _optional_symbol(*names)
+    fn = next((getattr(llama_cpp, name) for name in names if hasattr(llama_cpp, name)), None)
     if fn is None:
         raise AttributeError(
             f"none of {names} found in llama_cpp (version {getattr(llama_cpp, '__version__', '?')})"
@@ -88,39 +79,33 @@ class Backend:
     """Version-stable handles for the low-level calls this package makes."""
 
     # Control tokens and the ones a fine-tune added. Both count as tags; see
-    # the README, "Tool calling". Defaults let import survive an older build.
-    _TAG_ATTRS = (getattr(llama_cpp, "LLAMA_TOKEN_ATTR_CONTROL", 1 << 3)
-                  | getattr(llama_cpp, "LLAMA_TOKEN_ATTR_USER_DEFINED", 1 << 4))
+    # the README, "Tool calling".
+    _TAG_ATTRS = llama_cpp.LLAMA_TOKEN_ATTR_CONTROL | llama_cpp.LLAMA_TOKEN_ATTR_USER_DEFINED
 
     def __init__(self) -> None:
         self._llama_cpp = llama_cpp
-        self._load_model = _required_symbol("llama_model_load_from_file", "llama_load_model_from_file")
-        self._free_model = _required_symbol("llama_model_free", "llama_free_model")
-        self._new_ctx = _required_symbol("llama_init_from_model", "llama_new_context_with_model")
-        self._get_vocab = _optional_symbol("llama_model_get_vocab")
+        self._load_model = _required_symbol("llama_model_load_from_file")
+        self._free_model = _required_symbol("llama_model_free")
+        self._new_ctx = _required_symbol("llama_init_from_model")
+        self._get_vocab = _required_symbol("llama_model_get_vocab")
 
-        # Memory / KV-cache handle ops, newest-API-first.
-        self._get_memory = _optional_symbol("llama_get_memory")
-        self._mem_clear = _optional_symbol("llama_memory_clear")
-        self._mem_rm = _optional_symbol("llama_memory_seq_rm")
-        self._mem_add = _optional_symbol("llama_memory_seq_add")
-        self._mem_can_shift = _optional_symbol("llama_memory_can_shift")
-        self._state_size = _optional_symbol("llama_state_seq_get_size_ext")
-        self._state_get = _optional_symbol("llama_state_seq_get_data_ext")
-        self._state_set = _optional_symbol("llama_state_seq_set_data_ext")
+        self._get_memory = _required_symbol("llama_get_memory")
+        self._mem_clear = _required_symbol("llama_memory_clear")
+        self._mem_rm = _required_symbol("llama_memory_seq_rm")
+        self._mem_add = _required_symbol("llama_memory_seq_add")
+        self._mem_can_shift = _required_symbol("llama_memory_can_shift")
+        self._state_size = _required_symbol("llama_state_seq_get_size_ext")
+        self._state_get = _required_symbol("llama_state_seq_get_data_ext")
+        self._state_set = _required_symbol("llama_state_seq_set_data_ext")
         # Only the part of a sequence's state that cannot be cut back; the
         # rest is cut with a removal after the restore.
-        self._state_flags = getattr(llama_cpp, "LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY", 1)
-        self._kv_clear = _optional_symbol("llama_kv_self_clear", "llama_kv_cache_clear")
-        self._kv_rm = _optional_symbol("llama_kv_self_seq_rm", "llama_kv_cache_seq_rm")
-        self._kv_add = _optional_symbol("llama_kv_self_seq_add", "llama_kv_cache_seq_add")
+        self._state_flags = llama_cpp.LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY
 
-        self._is_eog = _required_symbol("llama_vocab_is_eog", "llama_token_is_eog")
-        self._token_eos = _required_symbol("llama_vocab_eos", "llama_token_eos")
+        self._is_eog = _required_symbol("llama_vocab_is_eog")
+        self._token_eos = _required_symbol("llama_vocab_eos")
         self._token_to_piece = _required_symbol("llama_token_to_piece")
-        self._is_control = _optional_symbol("llama_vocab_is_control")
-        self._get_attr = _optional_symbol("llama_vocab_get_attr", "llama_token_get_attr")
-        self._meta_val_str = _optional_symbol("llama_model_meta_val_str")
+        self._get_attr = _required_symbol("llama_vocab_get_attr")
+        self._meta_val_str = _required_symbol("llama_model_meta_val_str")
 
         # Sampler chain: one name each so far, resolved here anyway so a build
         # missing one is refused at construction like every other symbol.
@@ -131,7 +116,7 @@ class Backend:
         # Releases differ in whether the vocabulary size comes first; one that
         # asks for it must also say it.
         self._penalties_take_vocab_size = _parameter_count(self._init_penalties) == 5
-        self._vocab_n_tokens = _required_symbol("llama_vocab_n_tokens", "llama_n_vocab")
+        self._vocab_n_tokens = _required_symbol("llama_vocab_n_tokens")
         self._init_greedy = _required_symbol("llama_sampler_init_greedy")
         self._init_top_k = _required_symbol("llama_sampler_init_top_k")
         self._init_top_p = _required_symbol("llama_sampler_init_top_p")
@@ -188,37 +173,16 @@ class Backend:
         return ctx
 
     def _set_kv_cache_on_gpu(self, cparams, enable: bool) -> None:
-        """Place the KV cache in VRAM (``True``) or in host RAM (``False``).
-
-        Raises:
-            RuntimeError: If ``False`` is asked of a build with no such param,
-                whose own default is VRAM.
-        """
-        if hasattr(cparams, "offload_kqv"):
-            cparams.offload_kqv = enable
-        elif not enable:
-            raise RuntimeError(
-                "this llama_cpp build exposes no KV-offload context param, so the "
-                "KV cache cannot be kept in RAM (kv_cache_on_gpu=False)")
+        """Place the KV cache in VRAM (``True``) or in host RAM (``False``)."""
+        cparams.offload_kqv = enable
 
     def _set_flash_attn(self, cparams, enable: bool) -> None:
-        """Set flash attention explicitly, whichever param this build exposes.
-
-        Raises:
-            RuntimeError: If ``True`` is asked of a build that has neither param.
-        """
-        if hasattr(cparams, "flash_attn"):
-            cparams.flash_attn = enable
-        elif hasattr(cparams, "flash_attn_type"):
-            name = ("LLAMA_FLASH_ATTN_TYPE_ENABLED" if enable
-                    else "LLAMA_FLASH_ATTN_TYPE_DISABLED")
-            cparams.flash_attn_type = getattr(self._llama_cpp, name, 1 if enable else 0)
-        elif enable:
-            raise RuntimeError(
-                "this llama_cpp build exposes no flash-attention context param")
+        """Set flash attention explicitly on or off."""
+        cparams.flash_attn_type = (self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED if enable
+                                   else self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_DISABLED)
 
     def vocab(self, model):
-        return self._get_vocab(model) if self._get_vocab else model
+        return self._get_vocab(model)
 
     def kv_cache_type_id(self, name: str) -> int:
         """The type id this build gives the KV-cache quantization ``name``.
@@ -230,8 +194,6 @@ class Backend:
 
     def metadata_value(self, model, key: str) -> str | None:
         """Return the GGUF metadata string for ``key``, or ``None`` if absent."""
-        if self._meta_val_str is None:
-            return None
         size = 8192
         buf = ctypes.create_string_buffer(size)
         n = self._meta_val_str(model, key.encode("utf-8"), buf, size)
@@ -306,11 +268,7 @@ class Backend:
 
     def is_special(self, vocab, token: int) -> bool:
         """Whether the tokenizer resolves ``token`` as a tag rather than as text."""
-        if self._get_attr is not None:
-            return bool(self._get_attr(vocab, token) & self._TAG_ATTRS)
-        if self._is_control is None:
-            return False
-        return bool(self._is_control(vocab, token))
+        return bool(self._get_attr(vocab, token) & self._TAG_ATTRS)
 
     # ----- sampler -------------------------------------------------------
     # Each of these adds one stage to a chain, in the order the caller adds
@@ -380,56 +338,15 @@ class Backend:
         self._sampler_free(sampler)
 
     # ----- KV / memory edits --------------------------------------------
-    def _mem(self, ctx):
-        return self._get_memory(ctx) if self._get_memory else None
-
     def kv_clear(self, ctx) -> None:
-        mem = self._mem(ctx)
-        if mem is not None and self._mem_clear is not None:
-            self._mem_clear(mem, True)
-        elif self._kv_clear is not None:
-            self._kv_clear(ctx)
-        else:
-            raise RuntimeError("no KV-cache clear function available in this llama_cpp build")
+        self._mem_clear(self._get_memory(ctx), True)
 
     def kv_seq_rm(self, ctx, seq: int, p0: int, p1: int) -> bool:
         """Remove positions ``[p0, p1)``; ``False`` where the cache refused."""
-        mem = self._mem(ctx)
-        if mem is not None and self._mem_rm is not None:
-            return self._mem_rm(mem, seq, p0, p1) is not False
-        elif self._kv_rm is not None:
-            return self._kv_rm(ctx, seq, p0, p1) is not False
-        else:
-            raise RuntimeError("no KV-cache seq_rm function available in this llama_cpp build")
+        return self._mem_rm(self._get_memory(ctx), seq, p0, p1) is not False
 
     def kv_seq_add(self, ctx, seq: int, p0: int, p1: int, delta: int) -> None:
-        mem = self._mem(ctx)
-        if mem is not None and self._mem_add is not None:
-            self._mem_add(mem, seq, p0, p1, delta)
-        elif self._kv_add is not None:
-            self._kv_add(ctx, seq, p0, p1, delta)
-        else:
-            raise RuntimeError("no KV-cache seq_add function available in this llama_cpp build")
-
-    @property
-    def can_edit_cache(self) -> bool:
-        """Whether this build defines a function for each cache edit.
-
-        The symbols only: a build can define them and still hand out a context
-        whose memory handle answers none, which performing each edit once on a
-        real context settles.
-        """
-        return all(
-            (self._get_memory is not None and memory_op is not None)
-            or legacy_op is not None
-            for memory_op, legacy_op in ((self._mem_clear, self._kv_clear),
-                                         (self._mem_rm, self._kv_rm),
-                                         (self._mem_add, self._kv_add)))
-
-    @property
-    def can_save_state(self) -> bool:
-        """Whether this build saves and restores the part of a sequence a cut cannot reach."""
-        return None not in (self._state_size, self._state_get, self._state_set)
+        self._mem_add(self._get_memory(ctx), seq, p0, p1, delta)
 
     def save_state(self, ctx, seq: int):
         """The part of ``seq``'s state a cut cannot reach, as a host buffer.
@@ -453,15 +370,8 @@ class Backend:
             raise RuntimeError("the cache refused the saved state")
 
     def can_shift(self, ctx) -> bool:
-        """Whether the cache supports in-place position shifting after removal.
-
-        ``True`` where the build cannot answer, which is where the question does
-        not arise.
-        """
-        mem = self._mem(ctx)
-        if mem is None or self._mem_can_shift is None:
-            return True
-        return bool(self._mem_can_shift(mem))
+        """Whether the cache supports in-place position shifting after removal."""
+        return bool(self._mem_can_shift(self._get_memory(ctx)))
 
     # ----- decode / batch ------------------------------------------------
     def decode(self, ctx, token_ids: list[int], start_pos: int, seq: int,
