@@ -15,7 +15,7 @@ StopReason = Literal["end_of_turn", "stop_string", "token_limit", "interrupted",
 STOP_REASONS: tuple[str, ...] = get_args(StopReason)
 
 # What becomes of a call the model makes, where a request names it rather than passing a registry.
-CALL_POLICIES: tuple[str, ...] = ("withhold", "refuse", "yield", "run")
+CALL_POLICIES: tuple[str, ...] = ("withhold", "refuse", "yield")
 
 
 class ContextOverflowError(ValueError):

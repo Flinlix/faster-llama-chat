@@ -129,7 +129,7 @@ def test_the_refusal_does_not_deny_a_tool_the_model_was_told_about():
     registry.register(lambda: "12:00", "Die Zeit.", name="clock")
 
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
     wrapper.reply("wie spät?").finish()
 
@@ -140,24 +140,21 @@ def test_the_refusal_does_not_deny_a_tool_the_model_was_told_about():
     assert "tools_not_run" in turn
 
 
-def test_a_refusing_reply_runs_none_even_one_begin_was_given():
-    """The tool-free entry point runs nothing; a registry runs under the other.
-
-    Even the registry ``begin`` was handed, which this conversation has.
-    """
+def test_a_refusing_reply_runs_none_even_of_a_declared_tool():
+    """The tool-free entry point runs nothing; a registry runs under the other."""
     registry = ToolRegistry()
     ran = []
     registry.register(lambda: ran.append("ran") or "12:00", "Die Zeit.",
                       name="clock")
 
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
     wrapper.reply("wie spät?").finish()
     assert ran == []
 
     fake.call_script = ["fn:clock{}"]
-    wrapper.reply("wie spät?", calls="run").finish()
+    wrapper.reply("wie spät?", calls=registry).finish()
     assert ran == ["ran"]
 
 
@@ -877,7 +874,7 @@ def test_a_declaration_written_later_joins_the_system_turn_and_outlives_eviction
 
     # The system turn is pinned, so the declaration in it is never evicted.
     assert "<decl>clock</decl>" in _declared_in(fake, 0)
-    assert wrapper.declare_tools(registry) == 0
+    assert wrapper.declare_tools(registry.specs()) == 0
 
 
 # ----- what a model that cannot do this looks like -------------------------
@@ -973,10 +970,10 @@ def test_can_call_tools_is_exactly_what_declaring_will_accept(build, can_call):
 
     assert wrapper.can_call_tools is can_call
     if can_call:
-        wrapper.begin("persona", tools=registry)
+        wrapper.begin("persona", tools=registry.specs())
     else:
         with pytest.raises(ValueError):
-            wrapper.begin("persona", tools=registry)
+            wrapper.begin("persona", tools=registry.specs())
 
 
 @pytest.mark.parametrize("throws_on", [
@@ -1024,17 +1021,17 @@ def test_declaring_refuses_a_model_that_could_never_call():
     no_calls = FakeContext(PLAIN)
     wrapper = ChatWrapper(Config(context_size=1024), context=no_calls)
     with pytest.raises(ValueError, match="describes no tool call"):
-        wrapper.begin("persona", tools=registry)
+        wrapper.begin("persona", tools=registry.specs())
 
     unreadable = FakeContext(KEYLESS_CALLS)
     wrapper = ChatWrapper(Config(context_size=1024), context=unreadable)
     with pytest.raises(ValueError, match="call format could not be recovered"):
-        wrapper.begin("persona", tools=registry)
+        wrapper.begin("persona", tools=registry.specs())
 
     no_result = FakeContext(NO_RESULT_BLOCK)
     wrapper = ChatWrapper(Config(context_size=1024), context=no_result)
     with pytest.raises(ValueError, match="renders no tool result"):
-        wrapper.begin("persona", tools=registry)
+        wrapper.begin("persona", tools=registry.specs())
 
 
 def test_a_registry_handed_to_a_running_reply_is_checked_the_same_way():
@@ -1083,7 +1080,7 @@ def test_a_refused_declaration_leaves_the_conversation_alone():
     before = rows(wrapper)
 
     with pytest.raises(ValueError, match="renders no tool result"):
-        wrapper.begin("zweite persona", tools=registry)
+        wrapper.begin("zweite persona", tools=registry.specs())
 
     assert rows(wrapper) == before
 
@@ -1125,17 +1122,6 @@ def test_the_decorator_registers_and_declares_in_one_step():
     assert registry.call(ToolCall("clock", {"city": "Bonn"}))["city"] == "Bonn"
 
 
-def test_the_decorator_can_leave_a_tool_for_the_later_door():
-    registry = ToolRegistry()
-
-    @registry.tool("Sagt die Zeit.", declare_at_begin=False)
-    def clock() -> dict:
-        return {}
-
-    assert registry.specs_declared_at_begin() == []      # not at begin
-    assert [spec.name for spec in registry.specs()] == ["clock"]
-
-
 def test_a_result_is_injected_under_the_call_it_answers():
     """The call you were handed is what you hand back, not its name spelled out."""
     registry = ToolRegistry()
@@ -1152,67 +1138,47 @@ def test_a_result_is_injected_under_the_call_it_answers():
     assert "12:00" in _result_of(fake)
 
 
-def test_declaring_takes_a_registry_the_way_begin_does():
-    """One shape for both entry points, since both are handed the same thing."""
+def test_a_tool_left_out_at_begin_is_declared_later_beside_the_others():
+    """One registry for both: begin takes the specs it is given, declaring adds the rest."""
     registry = ToolRegistry()
 
     @registry.tool("Sagt die Zeit.")
     def clock() -> dict:
         return {}
 
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")
-    wrapper.declare_tools(registry)
-
-    declared = system_turn(fake)
-    assert "<decl>clock</decl>" in declared
-    assert fake.cache == held_tokens(wrapper)
-    # Read, not kept: which registry a turn runs against stays begin's decision,
-    # so this one has to be handed over again to be run from.
-    with pytest.raises(ValueError, match="given none"):
-        wrapper.reply("wie spät?", calls="run").finish()
-
-
-def test_the_two_entry_points_split_a_registry_by_where_each_tool_belongs():
-    """One registry for both: begin takes its half, declaring adds the rest."""
-    registry = ToolRegistry()
-
-    @registry.tool("Sagt die Zeit.")
-    def clock() -> dict:
-        return {}
-
-    @registry.tool("Sagt das Wetter.", declare_at_begin=False)
+    @registry.tool("Sagt das Wetter.")
     def weather(city: str) -> dict:
         return {}
 
+    clock_spec, weather_spec = registry.specs()
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=[clock_spec])
 
     assert "<decl>clock</decl>" in _declared_in(fake, 0)
     assert "<decl>weather</decl>" not in _declared_in(fake, 0)
 
-    wrapper.declare_tools(registry)          # the rest, where the template puts them
+    wrapper.declare_tools([weather_spec])          # the rest, where the template puts them
 
     assert "<decl>clock</decl>" in _declared_in(fake, 0)
     assert "<decl>weather</decl>" in _declared_in(fake, 0)
     assert [m["role"] for m in rows(wrapper)] == ["system"]
 
 
-def test_declaring_the_same_registry_again_writes_nothing():
+def test_declaring_the_same_tools_again_writes_nothing():
     """What the conversation already says is not worth a second prefill."""
     registry = ToolRegistry()
 
-    @registry.tool("Sagt die Zeit.", declare_at_begin=False)
+    @registry.tool("Sagt die Zeit.")
     def clock() -> dict:
         return {}
 
     wrapper, _ = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
-    wrapper.declare_tools(registry)
+    wrapper.begin("persona")
+    wrapper.declare_tools(registry.specs())
     once = rows(wrapper)
 
-    wrapper.declare_tools(registry)
-    wrapper.declare_tools(registry)
+    wrapper.declare_tools(registry.specs())
+    wrapper.declare_tools(registry.specs())
 
     assert rows(wrapper) == once
 
@@ -1226,22 +1192,22 @@ def test_declaring_skips_what_the_system_turn_already_holds():
         return {}
 
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     before = rows(wrapper)
 
-    assert wrapper.declare_tools(registry) == 0
+    assert wrapper.declare_tools(registry.specs()) == 0
     assert rows(wrapper) == before          # nothing was written at all
 
     @registry.tool("Sagt das Wetter.")
     def weather(city: str) -> dict:
         return {}
 
-    wrapper.declare_tools(registry)              # only the one it has not heard
+    wrapper.declare_tools(registry.specs())      # only the one it has not heard
     declared = _declared_in(fake, 0)
     assert declared.count("<decl>clock</decl>") == 1 and "<decl>weather</decl>" in declared
 
     wrapper.begin("persona")                     # a reset forgets what was said
-    wrapper.declare_tools(registry)
+    wrapper.declare_tools(registry.specs())
     assert "<decl>clock</decl>" in _declared_in(fake, 0)
 
 
@@ -1274,37 +1240,14 @@ def test_a_stream_of_calls_hands_back_its_reply_too():
     assert events.reply.tool_calls == calls
 
 
-# ----- the registry the wrapper remembers ----------------------------------
-def test_begin_keeps_the_registry_it_declared_from():
-    """One registry, handed over once: what is declared is what can run."""
-    registry = weather_registry()
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
-    fake.call_script = ["fn:weather{city:'Bonn'}"]
-
-    assert "".join(wrapper.reply("wetter?", calls="run")) == "reply"
-
-
+# ----- a registry handed to a reply ----------------------------------------
 def test_a_running_reply_is_its_own_stream_drained():
     registry = weather_registry()
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
 
-    assert wrapper.reply("wetter?", calls="run").finish().text == "reply"
-
-
-def test_a_registry_passed_here_beats_the_remembered_one():
-    other = ToolRegistry()
-    other.register(lambda city: "aus der anderen", "Wetter.", name="weather",
-                   parameters={"type": "object",
-                               "properties": {"city": {"type": "string"}}})
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=weather_registry())
-    fake.call_script = ["fn:weather{city:'Bonn'}"]
-
-    wrapper.reply("wetter?", calls=other).finish()
-    assert any("aus der anderen" in text for text, _ in fake.tokenize_calls)
+    assert wrapper.reply("wetter?", calls=registry).finish().text == "reply"
 
 
 def test_a_conversation_with_no_tools_needs_no_registry():
@@ -1313,26 +1256,6 @@ def test_a_conversation_with_no_tools_needs_no_registry():
     wrapper.begin("persona")
     assert wrapper.reply("hallo", calls=ToolRegistry()).finish().text == "reply"
     assert fake.cache == held_tokens(wrapper)
-    with pytest.raises(ValueError, match="given none"):     # nothing to run: said, not refused silently
-        wrapper.reply("hallo", calls="run").finish()
-
-
-def test_begin_forgets_the_registry_of_the_conversation_it_replaced():
-    ran = []
-    registry = ToolRegistry()
-    registry.register(lambda city: ran.append(1) or "09:00", "Wetter.",
-                      name="weather",
-                      parameters={"type": "object",
-                                  "properties": {"city": {"type": "string"}}})
-
-    wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
-    wrapper.begin("persona")            # a reset drops it with everything else
-    fake.call_script = ["fn:weather{city:'Bonn'}"]
-
-    with pytest.raises(ValueError, match="given none"):    # the old conversation's registry is gone
-        wrapper.reply("wetter?", calls="run").finish()
-    assert ran == []
 
 
 # ----- tools declared before the newest user turn --------------------------
@@ -1386,15 +1309,15 @@ def test_a_running_exchange_holds_the_wrapper_while_its_tool_runs():
         return {"city": city}
 
     registry.register(weather, "Wetter.")
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
-    assert wrapper.reply("wetter?", calls="run").finish().text == "Sonnig"
+    assert wrapper.reply("wetter?", calls=registry).finish().text == "Sonnig"
     assert seen == [False]
 
 
 def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
     wrapper, fake = tool_wrapper(gen_tokens=6, gen_text="Sonnig")
-    wrapper.begin("persona", tools=weather_registry())
+    wrapper.begin("persona", tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     reply = wrapper.reply("wetter?", calls="withhold").finish()
     assert (reply.text, reply.stop_reason, reply.tool_calls) == ("Sonnig", "end_of_turn", [])

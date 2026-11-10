@@ -907,10 +907,11 @@ def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limit
     fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Sonnig")
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
                        context=fake)
-    chat.begin("persona", tools=weather_registry())
+    registry = weather_registry()
+    chat.begin("persona", tools=registry.specs())
     for n in range(8):
         fake.call_script = ["fn:weather{city:" + " " * 60 + "'Bonn'}"]      # far wider than written
-        reply = chat.reply(f"Wetter {n}?", calls="run").finish()
+        reply = chat.reply(f"Wetter {n}?", calls=registry).finish()
         assert reply.text == "Sonnig"
         assert chat.total_tokens <= chat.config.evict_above_tokens
     assert len(chat.conversation()[1]) < 8

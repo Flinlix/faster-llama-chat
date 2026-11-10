@@ -88,14 +88,14 @@ _CALL, _CALLED = "fn:uhr{}", ToolCall("uhr", {})
 _CALENDAR = ToolSpec("kalender", "Die Termine.", {"type": "object", "properties": {}})
 _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
            "neither": dict(can_shift=False, can_cut_tail=False)}
+_CLOCK = ToolRegistry()
+_CLOCK.register(lambda: "12:00", "Die Zeit.", name="uhr")
 
 
 def _begin(*history):
     """A step that begins the conversation on ``history``, a clock its one tool."""
     def begin(w, fake):
-        tools = ToolRegistry()
-        tools.register(lambda: "12:00", "Die Zeit.", name="uhr")
-        w.begin("persona", list(history), tools=tools)
+        w.begin("persona", list(history), tools=_CLOCK.specs())
     return begin
 
 
@@ -143,7 +143,7 @@ _ACTIONS = {
     "reply to the question a history ends on": (
         _begin(("user", "alt"), ("assistant", "älter"), ("user", "Und?")), _replying(), []),
     "reply refusing a call": (_exchanged, _replying("Wetter?", _CALL), [_CALLED]),
-    "reply running a call": (_exchanged, _replying("Wetter?", _CALL, calls="run"), [_CALLED]),
+    "reply running a call": (_exchanged, _replying("Wetter?", _CALL, calls=_CLOCK), [_CALLED]),
     "reply yielding a call": (_exchanged, _replying("Wetter?", _CALL, calls="yield"), [_CALLED]),
     "reply going on after a result": (_answered, _replying(calls="yield"), []),
 }
@@ -307,9 +307,9 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
     registry.register(lambda: real_datetime.date(2026, 11, 8), "Das Datum.", name="clock",
                       parameters={"type": "object", "properties": {}})
     w, fake = tool_wrapper()
-    w.begin("persona", tools=registry)
+    w.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
-    reply = w.reply("welcher Tag?", calls="run").finish()
+    reply = w.reply("welcher Tag?", calls=registry).finish()
     assert reply.stop_reason == "end_of_turn" and not w.reply_open
     assert "unwritable_result" in held_text(fake)
 
@@ -373,7 +373,7 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
 def test_a_call_ceiling_where_no_call_is_run_is_refused():
     w, fake = tool_wrapper()
     w.begin("persona")
-    for calls in (policy for policy in CALL_POLICIES if policy != "run"):
+    for calls in CALL_POLICIES:
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", calls=calls, max_calls=2)
     assert w.conversation()[1] == []
@@ -382,7 +382,7 @@ def test_a_call_ceiling_where_no_call_is_run_is_refused():
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
     fake = _Flaky(TOOLS, gen_tokens=3)
     w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
-    w.begin("s", tools=weather_registry())
+    w.begin("s", tools=weather_registry().specs())
     fake.call_script.append("fn:@@@ kein Aufruf @@@")
     sampled = fake.sampled_tokens
 
@@ -407,7 +407,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
         w = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0, min_reply_tokens=60),
                         context=fake)
         try:
-            w.begin("s", tools=weather_registry())
+            w.begin("s", tools=weather_registry().specs())
             w.reply("eins").finish()
             fake.call_script.append("fn:@@@ kein Aufruf @@@")
             reply = w.reply("Wetter?", calls="yield").finish()

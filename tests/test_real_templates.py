@@ -171,12 +171,12 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=without)
     assert not chat.can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
-        chat.begin("", tools=registry)
+        chat.begin("", tools=registry.specs())
 
     context = FakeContext(known, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     assert chat.can_call_tools
-    chat.begin("", tools=registry)          # the whole chain is checked, and passes
+    chat.begin("", tools=registry.specs())      # the whole chain is checked, and passes
     # Read with the spelling the file gives.
     written = "clock" + context.addon_call()["name_close"] + "{}"
     assert ResolvedTemplate(context).read_calls(written) == [ToolCall("clock", {})]

@@ -172,8 +172,8 @@ def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
 
 chat = ChatWrapper(Config(model_path="model.gguf"))
-chat.begin("You are a terse assistant.", tools=registry)
-print(chat.reply("What is the weather in Munich?", calls="run").finish().text)
+chat.begin("You are a terse assistant.", tools=registry.specs())
+print(chat.reply("What is the weather in Munich?", calls=registry).finish().text)
 ```
 
 `calls` says what becomes of a call the model makes, whether or not tools
@@ -183,9 +183,9 @@ were declared, since a model may write a call tag unasked. It is one of
 | `calls=` | what happens | what the stream yields |
 |------|------|------|
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool | text |
-| `"refuse"` (the default) | nothing runs, not even a tool `begin` was given. The model is told no tool can be run and answers in words | text |
+| `"refuse"` (the default) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
 | `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply(calls="yield")` again | text, then each `ToolCall` |
-| `"run"`, or a `ToolRegistry` | each call runs against the registry `begin` was given, or the one passed, until the model answers; `"run"` where `begin` was given none is refused. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `calls=` | text |
+| a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `calls=` | text |
 
 ```python
 with chat.reply("What is the weather in Munich?", calls="yield") as stream:
@@ -210,17 +210,21 @@ is missing: a template that describes a call, renders the declarations, has a
 readable argument spelling, and a block for the result. `can_call_tools`
 answers the same question up front.
 
-**Registering.** `@registry.tool(description)` declares a function and makes it
-runnable; the parameters come from its annotations, postponed ones included,
-and `parameters=` takes an explicit JSON Schema where they cannot be described.
-`registry.register(fn, description)` is the same for a function written
-elsewhere. A `ToolSpec` declares a tool that this process does not run.
+**Registering.** `@registry.tool(description)` makes a function runnable and
+describes it; the parameters come from its annotations, postponed ones
+included, and `parameters=` takes an explicit JSON Schema where they cannot be
+described. `registry.register(fn, description)` is the same for a function
+written elsewhere. `registry.specs()` gives each tool's `ToolSpec`, the
+declaration the model is told; a `ToolSpec` of your own declares a tool that
+this process does not run.
 
-**When the model is told.** `declare_at_begin=True`, the default, declares a
-tool when `begin` writes the conversation; `declare_at_begin=False` leaves it
-for `declare_tools`, which adds it later. Either way the declaration goes
-where the template writes declarations. Where that is the system turn, a later
-declaration decodes the conversation after it again once.
+**When the model is told.** `begin(tools=...)` declares the specs it is given
+when it writes the conversation, and `declare_tools` adds more later, skipping
+those already declared; a tool to be declared later is left out of the list
+`begin` is given. Either way the declaration goes where the template writes
+declarations. Where that is the system turn, a later declaration decodes the
+conversation after it again once. Neither keeps a registry: a request whose
+calls are to run is handed one.
 
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
@@ -271,7 +275,7 @@ conversation saved from it and begun again from it reads in as it was:
 ```python
 saved = chat.conversation()
 ...
-chat.begin(*saved, tools=registry)
+chat.begin(*saved, tools=registry.specs())
 ```
 
 To keep everything, older turns included, keep each message as you send it

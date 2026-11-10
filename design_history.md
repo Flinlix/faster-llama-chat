@@ -253,6 +253,9 @@ written before the round settles the budget.
 
 ## 2026-11-07: Structure review: what changed and why
 
+Revised by "The rethink's remaining decisions": `"run"` is no longer a call
+policy.
+
 Five fresh reviewers each read one part: modules, public API, the template
 approach, the engine and cache layer, tests and documentation. The user chose
 all of it except the two items marked rejected.
@@ -1110,7 +1113,8 @@ leave a reader between their shared ends.
 ## 2026-11-09: One way to do each thing in the public interface
 
 Revised by "The rethink's remaining decisions": the four smaller removals that
-the "Kept" paragraph leaves to the user's answer were made.
+the "Kept" paragraph leaves to the user's answer were made, and so was the
+removal of `calls="run"` and of the registry `begin` keeps.
 
 The rethink found several second ways of doing one thing in the public
 interface. Each change below removes one; the service changed to match where
@@ -1432,3 +1436,15 @@ renderer sets itself; `functions`, `function_call` and `tool_choice`, which it
 also takes, pass through to the template when given, so they stay
 searchable. No test template's reasoning switch or declaration variable
 changed.
+
+**One way to run tool calls.** `reply(calls="run")`, which ran calls against
+the registry `begin` kept, is removed, and so is that kept registry: a request
+whose calls are to run is handed the registry itself. `begin(tools=...)` and
+`declare_tools` take only a list of `ToolSpec`, which `registry.specs()` gives,
+declare it and keep nothing. `ToolRegistry`'s `declare_at_begin` and
+`specs_declared_at_begin` are removed: a tool to be declared later is left out
+of the list `begin` is given, and passed to `declare_tools` then. Each was a
+second way to do what the remaining call does. The library no longer holds
+the caller's functions from one call to the next, so what runs is always what
+the request names, and the error for `"run"` where `begin` was given no
+registry went with the case it reported.

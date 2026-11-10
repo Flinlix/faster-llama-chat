@@ -14,10 +14,10 @@ from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
 def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     registry = weather_registry()
     live, fake = tool_wrapper(context_size=2048)
-    live.begin("persona", tools=registry)
+    live.begin("persona", tools=registry.specs())
     live.reply("hallo").finish()
     fake.call_script = ["fn:weather{city:'Bonn'}"]
-    live.reply("wetter?", calls="run").finish()
+    live.reply("wetter?", calls=registry).finish()
     live.reply("danke").finish()
     history = live.conversation()[1]
     assert [type(item).__name__ for item in history] == [
@@ -26,7 +26,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
 
     again, fake_again = tool_wrapper(context_size=2048)
-    again.begin("persona", history, tools=registry)
+    again.begin("persona", history, tools=registry.specs())
     assert fake_again.cache == fake.cache
     assert again.conversation()[1] == history
 
@@ -104,10 +104,10 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
 
 def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_the_same():
     live, fake = tool_wrapper()
-    live.begin("persona", tools=weather_registry())
+    live.begin("persona", tools=weather_registry().specs())
     live.reply("hallo").finish()
     again, fake_again = tool_wrapper()
-    again.begin(*live.conversation(), tools=weather_registry())
+    again.begin(*live.conversation(), tools=weather_registry().specs())
     assert live.conversation()[0] == "persona"
     assert fake_again.cache == fake.cache
 
@@ -115,14 +115,14 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
 # ----- what a caller is handed ---------------------------------------------
 def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     w, fake = tool_wrapper()
-    w.begin("persona", tools=weather_registry())
+    w.begin("persona", tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", calls="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
     w.conversation()[1][-1].steps[-1].arguments["city"] = "Rom"
     assert w.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
     again, _ = tool_wrapper()
-    again.begin("persona", w.conversation()[1], tools=weather_registry())
+    again.begin("persona", w.conversation()[1], tools=weather_registry().specs())
     owed_calls_held(again)[0].arguments["city"] = "Rom"
     assert again.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
 

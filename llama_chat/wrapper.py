@@ -75,7 +75,6 @@ class ChatWrapper:
                 self._context.close()
             raise
         self._conversation = RenderedCache(self._context, self._template, config)
-        self._registry = None
         self._closed = False
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
@@ -83,7 +82,7 @@ class ChatWrapper:
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
-              tools: ToolRegistry | list[ToolSpec] | None = None, *,
+              tools: list[ToolSpec] | None = None, *,
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
@@ -105,13 +104,9 @@ class ChatWrapper:
                 than ``max_history_messages``. Older ones are dropped
                 unrendered.
             tools: Tools to declare, written where this model's template
-                declares them. From a whole
-                :class:`~llama_chat.tools.ToolRegistry`, what it marks to be
-                declared at begin; the rest waits for :meth:`declare_tools`.
-                A registry is also kept, so :meth:`reply` running calls needs
-                none of its own; a list of specs is declared and not kept.
-                Refused up front where this model could not use them, rather
-                than at the first call.
+                declares them; nothing else of them is kept. Refused up front
+                where this model could not use them, rather than at the first
+                call.
             reasoning: Whether the model reasons before each answer, as its
                 template turns that on. It belongs to the conversation, so it
                 changes only here. Every reply's thought is kept out of what
@@ -137,8 +132,7 @@ class ChatWrapper:
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
-            registry = tools if isinstance(tools, ToolRegistry) else None
-            specs = list(_specs_declared_at_begin(tools) or [])
+            specs = list(tools or [])
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 self._template.ensure_tools_usable()
             if reasoning:
@@ -148,9 +142,7 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
-            kept = self._conversation.start(system_prompt, messages, specs, reasoning)
-            self._registry = registry
-            return kept
+            return self._conversation.start(system_prompt, messages, specs, reasoning)
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
@@ -207,8 +199,8 @@ class ChatWrapper:
                   token that opens one is never drawn, so the reply is text. A
                   model that wanted to call may then write something else
                   entirely; see design_history.md, "Second structure review".
-                * ``"refuse"``: nothing is run, not even a tool :meth:`begin`
-                  was given. The call is kept out of the text, the model is
+                * ``"refuse"``: nothing is run, not even a tool that was
+                  declared. The call is kept out of the text, the model is
                   told no tool can be run, and the reply goes on, a blank line
                   parting the text before the call from the text after it
                   where they would join without whitespace.
@@ -216,15 +208,14 @@ class ChatWrapper:
                   :class:`~llama_chat.tools.ToolCall` after the text, and the
                   turn stays open. Answer each with :meth:`inject_tool_result`,
                   in order, then call this again without ``text``.
-                * ``"run"``, or a :class:`~llama_chat.tools.ToolRegistry`:
-                  each call is run, against the registry :meth:`begin` was
-                  given or the one passed, its result written, and the reply
-                  goes on until the model answers. In the last permitted round
-                  a call the model writes is not recognized and stays text,
-                  so the turn always closes.
-            max_calls: Where calls are run, how many one turn may use. ``None``
-                sets no ceiling; a call past one is answered with an error
-                result rather than run. Only where calls are run.
+                * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
+                  against it, its result written, and the reply goes on until
+                  the model answers. In the last permitted round a call the
+                  model writes is not recognized and stays text, so the turn
+                  always closes.
+            max_calls: Where a registry is given, how many calls one turn may
+                use. ``None`` sets no ceiling; a call past one is answered with
+                an error result rather than run. Only with a registry.
             max_reply_tokens: Override for the per-generation cap.
             stop: Stop strings for this request, added to the config's,
                 matched against the answer only.
@@ -242,8 +233,7 @@ class ChatWrapper:
             ValueError: At once, if no conversation has been begun; if a tool
                 call has left a reply open and ``text`` is given, or a result
                 is still owed; if ``text`` is ``None`` with nothing to answer;
-                if ``"run"`` is asked where :meth:`begin` kept no registry; or
-                if ``max_calls`` is given where no call is run. At the first
+                or if ``max_calls`` is given without a registry. At the first
                 iteration, if a registry holding tools is given to a model
                 that could never call one.
             RuntimeError: At once, if the wrapper is closed.
@@ -253,9 +243,8 @@ class ChatWrapper:
         """
         options = dict(max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                        sampling=sampling)
-        runs = calls == "run" or isinstance(calls, ToolRegistry)
-        if not runs and not isinstance(calls, str) or isinstance(calls, str) \
-                and calls not in CALL_POLICIES:
+        runs = isinstance(calls, ToolRegistry)
+        if not runs and calls not in CALL_POLICIES:
             raise ValueError(f"calls must be {', '.join(map(repr, CALL_POLICIES))} or a "
                              f"ToolRegistry, not {calls!r}")
         if max_calls is not None and not runs:
@@ -268,17 +257,8 @@ class ChatWrapper:
         if calls == "withhold":
             return ReplyStream(self._until_call(text, recognizes_calls=False, withhold=True,
                                                 **options))
-        if calls == "refuse":
-            registry = None
-        elif calls == "run":
-            if self._registry is None:
-                raise ValueError("calls='run' runs the registry begin() was given, and it was "
-                                 "given none; pass the registry itself as calls")
-            registry = self._registry
-        else:
-            registry = calls
         return ReplyStream(self._generate_until_answered(
-            text, registry=registry, max_calls=max_calls, **options))
+            text, registry=calls if runs else None, max_calls=max_calls, **options))
 
     def _until_call(self, text: str | None,
                     **options) -> Generator[str | ToolCall, None, Reply]:
@@ -336,20 +316,15 @@ class ChatWrapper:
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
-    def declare_tools(self, tools: ToolRegistry | list[ToolSpec]) -> int:
+    def declare_tools(self, tools: list[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
         Written where the template declares tools, never as a message of its
         own; the cache is decoded again from where the declarations change it.
 
         Args:
-            tools: What to declare: a whole
-                :class:`~llama_chat.tools.ToolRegistry`, of which everything it
-                holds is taken, or the specs themselves. Nothing to declare does
-                nothing, and neither does a tool the conversation already
-                declares. The registry is not kept, unlike ``begin``'s: which
-                one a turn runs against is that method's decision, and a
-                declaration adds names rather than replacing what can run.
+            tools: What to declare. Nothing to declare does nothing, and
+                neither does a tool the conversation already declares.
 
         Returns:
             How many messages were evicted to make room.
@@ -365,7 +340,7 @@ class ChatWrapper:
         with self._lock:
             self._ensure_open()
             known = {spec.name for spec in self._conversation.tools}
-            specs = [spec for spec in _all_specs(tools) or [] if spec.name not in known]
+            specs = [spec for spec in tools if spec.name not in known]
             if not specs:
                 return 0
             return self._conversation.declare(specs, accept=self._template.ensure_tools_usable)
@@ -494,10 +469,8 @@ class ChatWrapper:
         """Generate, settle whatever the model calls, and go on until it answers.
 
         Args:
-            registry: What to run calls against, already resolved. ``None``
-                refuses every call with an error result rather than falling back
-                to anything, which is what makes a tool-free entry point
-                tool-free.
+            registry: What to run calls against. ``None`` refuses every call
+                with an error result.
             max_calls: How many tools one turn may use, ``None`` for no
                 ceiling. Nothing is run where ``registry`` is ``None``, so it
                 does not bind there.
@@ -709,20 +682,6 @@ class ChatWrapper:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("ChatWrapper is closed")
-
-
-def _specs_declared_at_begin(tools) -> list[ToolSpec] | None:
-    """What ``tools`` declares at begin, registry or plain list."""
-    if isinstance(tools, ToolRegistry):
-        return tools.specs_declared_at_begin()
-    return tools
-
-
-def _all_specs(tools) -> list[ToolSpec] | None:
-    """Every declaration ``tools`` holds, registry or plain list."""
-    if isinstance(tools, ToolRegistry):
-        return tools.specs()
-    return tools
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:

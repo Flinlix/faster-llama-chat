@@ -52,19 +52,6 @@ def test_a_tool_may_be_called_something_other_than_its_function():
     assert [spec.name for spec in registry.specs()] == ["calendar_add"]
 
 
-def test_the_flag_says_where_a_declaration_lands_not_whether():
-    """Every registered tool is meant to be told; the flag picks where."""
-    registry = ToolRegistry()
-    registry.register(lambda: {}, "gleich", name="early")
-    registry.register(lambda: {}, "später", name="late", declare_at_begin=False)
-
-    assert [s.name for s in registry.specs_declared_at_begin()] == ["early"]
-    assert sorted(s.name for s in registry.specs()) == ["early", "late"]
-    assert [s.description for s in registry.specs() if s.name == "late"] == ["später"]
-    # Runnable from the moment it is registered, wherever it is declared.
-    assert registry.call(ToolCall("late", {})) == {}
-
-
 def test_a_tool_runs_with_the_arguments_the_model_gave():
     registry = ToolRegistry()
 
@@ -144,17 +131,14 @@ def test_register_takes_the_parameters_from_the_signature():
     assert registry.call(ToolCall("clock", {"city": "Bonn"})) == "09:00"
 
 
-def test_registering_a_name_again_replaces_it_and_where_it_is_declared():
+def test_registering_a_name_again_replaces_it():
     registry = ToolRegistry()
-    registry.register(lambda: "first", "Erste.", name="clock",
-                      declare_at_begin=False)
+    registry.register(lambda: "first", "Erste.", name="clock")
     assert registry.specs()[0].description == "Erste."
-    assert registry.specs_declared_at_begin() == []
 
     registry.register(lambda: "second", "Zweite.", name="clock")
     assert len(registry) == 1
-    # The placement was replaced along with the rest of it.
-    assert [s.name for s in registry.specs_declared_at_begin()] == ["clock"]
+    assert [s.description for s in registry.specs()] == ["Zweite."]
     assert registry.call(ToolCall("clock", {})) == "second"
 
 

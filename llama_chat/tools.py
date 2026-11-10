@@ -116,22 +116,17 @@ class ToolTurn:
 
 @dataclass
 class _RegisteredTool:
-    """One registered tool, and when the model is to be told about it.
-
-    ``declare_at_begin`` is an intent, not a record of what the model has been
-    told.
-    """
+    """One registered tool: its declaration, and the function that runs."""
 
     spec: ToolSpec
     function: Callable
-    declare_at_begin: bool
 
 
 class ToolRegistry:
     """The tools this process can run, by the name the model calls them.
 
-    Registering makes a tool runnable at once and says when the model is to be
-    told about it: by ``begin``, or later by ``declare_tools``. Nothing
+    Registering makes a tool runnable at once; :meth:`specs` gives the
+    declarations that ``begin`` and ``declare_tools`` tell the model. Nothing
     here writes to a model, so nothing here learns what the conversation still
     holds. See the README, "Tool calling".
     """
@@ -140,11 +135,10 @@ class ToolRegistry:
         self._entries: dict[str, _RegisteredTool] = {}
 
     def register(self, function: Callable, description: str, *,
-                 name: str | None = None, parameters: dict | None = None,
-                 declare_at_begin: bool = True) -> str:
+                 name: str | None = None, parameters: dict | None = None) -> str:
         """Make ``function`` callable by the model, and return the name it uses.
 
-        A name already registered is replaced, when it is declared included.
+        A name already registered is replaced, its declaration included.
 
         Args:
             function: What runs. Called by keyword with the model's arguments.
@@ -152,13 +146,6 @@ class ToolRegistry:
             name: The name the model calls, where that is not the function's own.
             parameters: An explicit JSON Schema object, for a signature whose
                 annotations cannot be described. Derived from them when omitted.
-            declare_at_begin: When the model is told about it. ``True``
-                declares it as :meth:`~llama_chat.wrapper.ChatWrapper.begin`
-                writes the conversation; ``False`` leaves it for
-                :meth:`~llama_chat.wrapper.ChatWrapper.declare_tools`.
-                Either way the declaration goes where the template writes
-                declarations. It is runnable either way, from the moment it is
-                registered.
 
         Returns:
             The name the model calls it by, which is also how :meth:`call`
@@ -172,36 +159,28 @@ class ToolRegistry:
         spec = ToolSpec(name=name or _callable_name(function), description=description,
                         parameters=(parameters if parameters is not None
                                     else _parameters_of(function)))
-        self._entries[spec.name] = _RegisteredTool(spec, function, declare_at_begin)
+        self._entries[spec.name] = _RegisteredTool(spec, function)
         return spec.name
 
     def tool(self, description: str, *, name: str | None = None,
-             parameters: dict | None = None,
-             declare_at_begin: bool = True) -> Callable:
+             parameters: dict | None = None) -> Callable:
         """Register the function this decorates, and return it unchanged.
 
         :meth:`register` in the form the function is written in.
 
         Args:
-            description, name, parameters, declare_at_begin: As
-                :meth:`register`.
+            description, name, parameters: As :meth:`register`.
 
         Raises:
             TypeError: As :meth:`register`.
         """
         def attach(function: Callable) -> Callable:
-            self.register(function, description, name=name,
-                          parameters=parameters,
-                          declare_at_begin=declare_at_begin)
+            self.register(function, description, name=name, parameters=parameters)
             return function
         return attach
 
-    def specs_declared_at_begin(self) -> list[ToolSpec]:
-        """The declarations :meth:`~llama_chat.wrapper.ChatWrapper.begin` writes when it is handed this registry."""
-        return [e.spec for e in self._entries.values() if e.declare_at_begin]
-
     def specs(self) -> list[ToolSpec]:
-        """Every declaration, wherever it belongs.
+        """Every registered tool's declaration.
 
         What ought to be declared, not what the model currently knows.
         """
