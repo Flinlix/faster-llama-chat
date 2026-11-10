@@ -175,7 +175,8 @@ print(chat.reply("What is the weather in Munich?", calls="run").finish().text)
 ```
 
 `calls` says what becomes of a call the model makes, whether or not tools
-were declared, since a model may write a call tag unasked:
+were declared, since a model may write a call tag unasked. It is one of
+`CALL_POLICIES` or a `ToolRegistry`:
 
 | `calls=` | what happens | what the stream yields |
 |------|------|------|

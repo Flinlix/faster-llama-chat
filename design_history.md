@@ -1368,3 +1368,9 @@ README section that does not hold what they named: the eviction ordering a
 wrapper test pins, the shapes of `CallBody`'s fields, and what counts as a
 tag. They now name the design-history sections "How eviction works" and "How
 a call's format is recovered".
+
+**The call policies by name.** `CALL_POLICIES`, beside `STOP_REASONS` and
+exported the same way, lists the values `reply(calls=...)` takes besides a
+registry. The check in `reply` and its error message read it, and so do the
+tests that went through the policies by hand; one of them had left out
+`"withhold"` and `"run"`, which now hand their sampling over under test too.

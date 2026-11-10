@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from llama_chat import ChatWrapper, Config, ContextOverflowError
+from llama_chat import CALL_POLICIES, ChatWrapper, Config, ContextOverflowError
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 from tests.fake_context import FakeContext
@@ -373,7 +373,7 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
 def test_a_call_ceiling_where_no_call_is_run_is_refused():
     w, fake = tool_wrapper()
     w.begin("persona")
-    for calls in ("refuse", "yield", "withhold"):
+    for calls in (policy for policy in CALL_POLICIES if policy != "run"):
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", calls=calls, max_calls=2)
     assert w.conversation()[1] == []

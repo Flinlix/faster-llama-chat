@@ -17,7 +17,7 @@ from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
 from .config import Config, Sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
-from .reply import Reply, ReplyStream
+from .reply import CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
@@ -255,9 +255,9 @@ class ChatWrapper:
                        sampling=sampling)
         runs = calls == "run" or isinstance(calls, ToolRegistry)
         if not runs and not isinstance(calls, str) or isinstance(calls, str) \
-                and calls not in ("withhold", "refuse", "yield", "run"):
-            raise ValueError(f"calls must be 'withhold', 'refuse', 'yield', 'run' or a ToolRegistry, "
-                             f"not {calls!r}")
+                and calls not in CALL_POLICIES:
+            raise ValueError(f"calls must be {', '.join(map(repr, CALL_POLICIES))} or a "
+                             f"ToolRegistry, not {calls!r}")
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and calls={calls!r} runs none")
         self._ensure_open()

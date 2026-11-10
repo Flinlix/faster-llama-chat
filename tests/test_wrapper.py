@@ -12,7 +12,7 @@ import threading
 import pytest
 
 from llama_chat.config import Config, Sampling
-from llama_chat import ChatWrapper, ContextOverflowError
+from llama_chat import CALL_POLICIES, ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
@@ -591,10 +591,11 @@ def test_a_restart_says_how_much_history_it_kept():
 
 
 # ----- sampling per request ------------------------------------------------
-@pytest.mark.parametrize("calls", ["refuse", "registry", "yield"])
+@pytest.mark.parametrize("calls", [*CALL_POLICIES, "registry"])
 def test_every_call_policy_hands_its_sampling_to_the_generation(calls):
     from llama_chat.tools import ToolRegistry
     w, fake = begun_wrapper()
+    w.begin("s", tools=ToolRegistry())      # a registry kept, for "run"
     sampling = Sampling(temperature=0.1)
     w.reply("hi", calls=ToolRegistry() if calls == "registry" else calls,
             sampling=sampling).finish()
