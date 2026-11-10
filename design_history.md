@@ -556,6 +556,10 @@ templates do.
 
 ## 2026-11-08: Every text placed by a marker render, and the review's fixes
 
+Revised by "The rethink's remaining decisions": `declare_at_begin=`,
+`specs_declared_at_begin()` and `calls="run"` are gone, and the parameter is
+`tool_calls`.
+
 The structure review of the replacement found nineteen faults it brought in,
 four the old code had, eight holes in the tests and a set of restructures. The
 user chose to fix them all; close every test hole and merge the two
