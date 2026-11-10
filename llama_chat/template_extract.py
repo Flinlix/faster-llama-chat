@@ -51,8 +51,9 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     ``enable_thinking``, the variable chat templates share for it, or, where
     that changes nothing, ``reasoning_effort``. Off is ``"none"`` where that
     changes what follows the user turn compared with the template's own
-    default, else the default; on is ``"high"`` where that differs there from
-    off, else the default. Where on and off are the same, there is no switch.
+    default, and the default is then on; otherwise the default is off, and on
+    is ``"high"`` where that differs there from it. Where on and off are the
+    same, there is no switch.
 
     Args:
         render_variables: Renders ``messages`` with ``generation_prompt`` and the
@@ -73,7 +74,7 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     if rendered(thinking[True]) == rendered(thinking[False]):
         none, high = {"reasoning_effort": "none"}, {"reasoning_effort": "high"}
         off = none if after_user_turn_differs(none, {}) else {}
-        on = high if after_user_turn_differs(high, off) else {}
+        on = {} if off else high if after_user_turn_differs(high, {}) else {}
         if on != off:
             thinking = {True: on, False: off}
     return lambda reasoning: {} if reasoning is None else thinking[reasoning]

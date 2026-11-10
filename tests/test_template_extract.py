@@ -414,13 +414,14 @@ def _rendering(open_thought):
     # Reads only an effort, and that opens the thought: the effort is the switch.
     (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>",
      {"reasoning_effort": "high"}, {}),
-    # Reasons unless the effort is none: none is off, and high, which differs from it, is on.
+    # Reasons unless the effort is none: none is off, and the template's own default is on.
     (lambda v: "<think></think>" if v.get("reasoning_effort") == "none" else "<think>",
-     {"reasoning_effort": "high"}, {"reasoning_effort": "none"}),
-    # Reasons by default, writes more for high, and stops only for none: none is off.
+     {}, {"reasoning_effort": "none"}),
+    # Reasons by default, writes more for high, and stops only for none: the default
+    # stays on rather than the higher effort.
     (lambda v: {"none": "<think></think>", "high": "<effort><think>"}.get(
         v.get("reasoning_effort"), "<think>"),
-     {"reasoning_effort": "high"}, {"reasoning_effort": "none"}),
+     {}, {"reasoning_effort": "none"}),
     # An effort that changes nothing after the user turn is not a switch.
     (lambda v: "", {"enable_thinking": True}, {"enable_thinking": False}),
 ])

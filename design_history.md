@@ -1405,6 +1405,17 @@ Where on and off are the same, there is no switch. Of the 52 test templates,
 only cohere-2's on changed, from the default to `"high"`, which it renders
 alike, so no render changed.
 
+The review then found that this picks `"high"` as the on even where the
+template's own default already reasons, so such a template would reason harder
+than its default when reasoning is asked for. At the user's choice, where
+`"none"` is the off the template's default is the on, since that default is
+what the template writes when it reasons; where the default is the off, the on
+is `"high"` as before. Cohere-2's on is the default again. A template whose
+default does not reason and that still writes something of its own for
+`"none"` would get its default, so no reasoning, when reasoning is asked for.
+No test template has that shape, and the renders alone cannot tell it from a
+default that reasons, so it waits until such a template appears.
+
 **Four more pointers to the design history.** Four comments pointed to the
 README's "Tool calling", which holds none of what they named: how a call's
 format is recovered, how nested values are read, what counts as one of the
