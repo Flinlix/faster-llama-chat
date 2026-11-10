@@ -96,7 +96,7 @@ def test_a_reply_that_called_a_tool_cannot_be_cut():
     w, fake = begun_wrapper(TOOLS)
     fake.call_script.append("fn:uhr{}")
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for _event in w.reply("wie spät?", tool_calls="yield"):
+    for _event in w.reply("wie spät?", tool_call_policy="yield"):
         pass
     with pytest.raises(ValueError, match="tool call"):
         w.truncate_last_reply("")

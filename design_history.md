@@ -558,7 +558,7 @@ templates do.
 
 Revised by "The rethink's remaining decisions": `declare_at_begin=`,
 `specs_declared_at_begin()` and `calls="run"` are gone, and the parameter is
-`tool_calls`.
+`tool_call_policy`.
 
 The structure review of the replacement found nineteen faults it brought in,
 four the old code had, eight holes in the tests and a set of restructures. The
@@ -1464,4 +1464,7 @@ the caller's functions from one call to the next, so what runs is always what
 the request names, and the error for `"run"` where `begin` was given no
 registry went with the case it reported.
 At the user's request, `reply`'s parameter `calls` is renamed `tool_calls`,
-and its error messages and the README's table name it so.
+and its error messages and the README's table name it so. At the user's next
+answer it became `tool_call_policy`, so that it no longer shares its name with
+`Reply.tool_calls`, the calls a reply made, and `CALL_POLICIES` became
+`TOOL_CALL_POLICIES` with it.

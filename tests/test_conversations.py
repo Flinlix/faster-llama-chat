@@ -491,7 +491,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
                                   min_reply_tokens=120), context=context)
         try:
             chat.begin("Be brief.", tools=[WEATHER])
-            reply = chat.reply("Weather?", tool_calls="yield").finish()
+            reply = chat.reply("Weather?", tool_call_policy="yield").finish()
         except ContextOverflowError:
             continue
         if reply.stop_reason == "unreadable_tool_call" and not chat.reply_open:
@@ -764,7 +764,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     run.context.replies = [ScriptedCall(body)] + _as_generated(
         probe.template, ["Sunny in Bonn.", "You are welcome."], False)
     run.begin(tools=[WEATHER])
-    events = list(run.chat.reply("Weather in Bonn?", tool_calls="yield"))
+    events = list(run.chat.reply("Weather in Bonn?", tool_call_policy="yield"))
     call, = [event for event in events if isinstance(event, ToolCall)]
     assert call == ToolCall(WEATHER.name, {"city": "Bonn"})
     run.chat.inject_tool_result(call, '{"weather": "sunny"}')
@@ -772,7 +772,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
             and not run.context.replies[0].startswith(tags.thought_close):
         run.context.replies[0] = tags.thought_close + run.context.replies[0]   # the model closes it
-    assert run.chat.reply(tool_calls="yield").finish().text == "Sunny in Bonn."
+    assert run.chat.reply(tool_call_policy="yield").finish().text == "Sunny in Bonn."
     run.chat.inject("Thanks.")
     run.chat.reply().finish()
     generated, answer = opener + body + closer, "Sunny in Bonn."
@@ -891,9 +891,9 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     run.context.replies = [ScriptedCall(body), ScriptedCall(body, before=before),
                             "Sunny twice.", "Bye."]
     run.begin(tools=[WEATHER])
-    calls = [e for e in run.chat.reply("Weather in Bonn?", tool_calls="yield") if isinstance(e, ToolCall)]
+    calls = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     run.chat.inject_tool_result(calls[0], "sunny")
-    calls = [e for e in run.chat.reply(tool_calls="yield") if isinstance(e, ToolCall)]
+    calls = [e for e in run.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert calls == [ToolCall(WEATHER.name, {"city": "Bonn"})]
     run.chat.inject_tool_result(calls[0], "sunny")
     assert run.chat.reply().finish().text == "Sunny twice."
@@ -911,7 +911,7 @@ def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limit
     chat.begin("persona", tools=registry.specs())
     for n in range(8):
         fake.call_script = ["fn:weather{city:" + " " * 60 + "'Bonn'}"]      # far wider than written
-        reply = chat.reply(f"Wetter {n}?", tool_calls=registry).finish()
+        reply = chat.reply(f"Wetter {n}?", tool_call_policy=registry).finish()
         assert reply.text == "Sonnig"
         assert chat.total_tokens <= chat.config.evict_above_tokens
     assert len(chat.conversation()[1]) < 8

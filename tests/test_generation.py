@@ -157,12 +157,12 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", tool_calls="yield"))
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
     assert rows(wrapper)[-1]["text"] == ""     # nothing visible yet
 
     wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     fake.call_script = []
-    resumed = "".join(e for e in wrapper.reply(tool_calls="yield") if isinstance(e, str))
+    resumed = "".join(e for e in wrapper.reply(tool_call_policy="yield") if isinstance(e, str))
 
     row = rows(wrapper)[-1]
     assert resumed and row["text"] == resumed       # every visible delta, once

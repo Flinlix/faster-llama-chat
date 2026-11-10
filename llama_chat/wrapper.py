@@ -17,7 +17,7 @@ from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
 from .config import Config, Sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
-from .reply import CALL_POLICIES, Reply, ReplyStream
+from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
@@ -170,7 +170,7 @@ class ChatWrapper:
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
-              tool_calls: str | ToolRegistry = "refuse",
+              tool_call_policy: str | ToolRegistry = "refuse",
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
               stop: list[str] | None = None,
@@ -193,7 +193,7 @@ class ChatWrapper:
                 See the README, "Special tokens in message content". ``None``
                 answers the newest message, a user message already written, or
                 goes on with a turn a call left open once every result is in.
-            tool_calls: What becomes of a tool call the model makes.
+            tool_call_policy: What becomes of a tool call the model makes.
 
                 * ``"withhold"``: the model cannot write a call at all; the
                   token that opens one is never drawn, so the reply is text. A
@@ -243,23 +243,24 @@ class ChatWrapper:
         """
         options = dict(max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
                        sampling=sampling)
-        runs = isinstance(tool_calls, ToolRegistry)
-        if not runs and tool_calls not in CALL_POLICIES:
-            raise ValueError(f"tool_calls must be {', '.join(map(repr, CALL_POLICIES))} or a "
-                             f"ToolRegistry, not {tool_calls!r}")
+        runs = isinstance(tool_call_policy, ToolRegistry)
+        if not runs and tool_call_policy not in TOOL_CALL_POLICIES:
+            raise ValueError(f"tool_call_policy must be "
+                             f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a "
+                             f"ToolRegistry, not {tool_call_policy!r}")
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and "
-                             f"tool_calls={tool_calls!r} runs none")
+                             f"tool_call_policy={tool_call_policy!r} runs none")
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        if tool_calls == "yield":
+        if tool_call_policy == "yield":
             return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
-        if tool_calls == "withhold":
+        if tool_call_policy == "withhold":
             return ReplyStream(self._until_call(text, recognizes_calls=False, withhold=True,
                                                 **options))
         return ReplyStream(self._generate_until_answered(
-            text, registry=tool_calls if runs else None, max_calls=max_calls, **options))
+            text, registry=tool_call_policy if runs else None, max_calls=max_calls, **options))
 
     def _until_call(self, text: str | None,
                     **options) -> Generator[str | ToolCall, None, Reply]:
