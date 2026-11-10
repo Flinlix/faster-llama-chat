@@ -34,7 +34,7 @@ def _as_rendered(w, fake):
     assert fake.text_of(fake.cache) in rendered
 
 
-# ----- a reply without text, and the call policy ---------------------------
+# ----- a reply without text, and the tool call policy ----------------------
 def test_a_reply_without_text_answers_the_newest_user_message():
     wrapper, _ = tool_wrapper()
     wrapper.begin("persona")
@@ -44,7 +44,7 @@ def test_a_reply_without_text_answers_the_newest_user_message():
     assert reply.text == rows(wrapper)[-1]["text"]
 
 
-def test_an_unknown_call_policy_is_refused():
+def test_an_unknown_tool_call_policy_is_refused():
     wrapper, _ = tool_wrapper()
     wrapper.begin("persona")
     with pytest.raises(ValueError, match="tool_call_policy must be"):
@@ -651,7 +651,7 @@ def test_a_restart_says_how_much_history_it_kept():
 
 # ----- sampling per request ------------------------------------------------
 @pytest.mark.parametrize("tool_call_policy", [*TOOL_CALL_POLICIES, "registry"])
-def test_every_call_policy_hands_its_sampling_to_the_generation(tool_call_policy):
+def test_every_tool_call_policy_hands_its_sampling_to_the_generation(tool_call_policy):
     w, fake = begun_wrapper()
     sampling = Sampling(temperature=0.1)
     w.reply("hi", tool_call_policy=ToolRegistry() if tool_call_policy == "registry" else tool_call_policy,
