@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn", "result_text"]
+__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn"]
 
 # Anything not here has to be spelled out by passing `parameters` explicitly.
 _JSON_TYPES = {str: "string", int: "integer", float: "number",

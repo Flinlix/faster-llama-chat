@@ -1338,3 +1338,8 @@ asks every context for a member only one of them uses.
 **No membership test on the registry.** `ToolRegistry.__contains__` is
 removed: only tests asked whether a name was registered, and a caller reads
 that from `specs()`, which the tests now do.
+
+**`result_text` is internal.** It leaves `tools.__all__`. It writes a tool's
+result as the text a template is given, which only the library does; the
+modules that use it still import it by name, since no module imports a
+sibling's private name.
