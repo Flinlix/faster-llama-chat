@@ -144,8 +144,8 @@ each reasoning mode, went with the pieces.
 
 Revised by "What a template is read for, and refused for": `can_reason` means
 the template marks a thought, and the switch is the template's. Revised by
-"The rethink's remaining decisions": where `"high"` changes nothing,
-`reasoning_effort: "none"` is tried as the switch's off.
+"The rethink's remaining decisions": `reasoning_effort: "none"` is the
+switch's off wherever it changes what follows the user turn.
 
 `enable_thinking` is the switch where it changes the render; otherwise
 `reasoning_effort` is, if it changes what follows the user turn, `"high"` for on
@@ -1385,3 +1385,14 @@ calls have tags of their own but whose template does not show how it spells
 the arguments is refused tools, since `tool_calls=` went ("One way to do each
 thing in the public interface"). The user decided to wait until such a model
 appears, and then let its add-on file carry the spelling.
+
+**`"none"` is the off wherever it changes the prompt.** The switch above
+still took `"high"` and the default first. A template that reasons by
+default, writes something more for `"high"`, and stops reasoning only for
+`"none"` got the default as its off, and the default reasons. Where
+`enable_thinking` changes nothing, the off is now `"none"` wherever it changes
+what follows the user turn compared with the default, else the default; the
+on is `"high"` wherever it differs there from that off, else the default.
+Where on and off are the same, there is no switch. Of the 52 test templates,
+only cohere-2's on changed, from the default to `"high"`, which it renders
+alike, so no render changed.

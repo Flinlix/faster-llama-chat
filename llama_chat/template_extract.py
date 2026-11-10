@@ -49,9 +49,10 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     """The template variables that turn reasoning on or off, as a render reads them.
 
     ``enable_thinking``, the variable chat templates share for it, or, where
-    that changes nothing, ``reasoning_effort`` where its setting changes what
-    follows the user turn: ``"high"`` for on and the template's own default
-    for off, or else the template's own default for on and ``"none"`` for off.
+    that changes nothing, ``reasoning_effort``. Off is ``"none"`` where that
+    changes what follows the user turn compared with the template's own
+    default, else the default; on is ``"high"`` where that differs there from
+    off, else the default. Where on and off are the same, there is no switch.
 
     Args:
         render_variables: Renders ``messages`` with ``generation_prompt`` and
@@ -70,10 +71,11 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
 
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
     if rendered(**thinking[True]) == rendered(**thinking[False]):
-        for on, off in (({"reasoning_effort": "high"}, {}), ({}, {"reasoning_effort": "none"})):
-            if after_user_turn_differs(on, off):
-                thinking = {True: on, False: off}
-                break
+        none, high = {"reasoning_effort": "none"}, {"reasoning_effort": "high"}
+        off = none if after_user_turn_differs(none, {}) else {}
+        on = high if after_user_turn_differs(high, off) else {}
+        if on != off:
+            thinking = {True: on, False: off}
     return lambda reasoning: {} if reasoning is None else thinking[reasoning]
 
 
