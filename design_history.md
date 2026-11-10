@@ -56,8 +56,10 @@ holds.
 ### How eviction works
 
 Superseded in part by "The render is the conversation's encoding": the message
-table is gone, and the target is the template's render. The triggers, the
-cache operations and the choice between them still hold.
+table is gone, and the target is the template's render. Revised by "The
+rethink's remaining decisions": the survivors' shift runs to the cache's end
+(`-1`) instead of to `total`. The triggers, the cache operations and the
+choice between them still hold.
 
 Two triggers, OR'd: more than `evict_above_fraction × context_size` tokens, and
 more than `max_history_messages` non-system messages (off by default), so a
@@ -1106,6 +1108,9 @@ shapes agree by construction. A reply header is read only where both openings
 leave a reader between their shared ends.
 
 ## 2026-11-09: One way to do each thing in the public interface
+
+Revised by "The rethink's remaining decisions": the four smaller removals that
+the "Kept" paragraph leaves to the user's answer were made.
 
 The rethink found several second ways of doing one thing in the public
 interface. Each change below removes one; the service changed to match where
