@@ -79,7 +79,7 @@ class Backend:
     """Version-stable handles for the low-level calls this package makes."""
 
     # Control tokens and the ones a fine-tune added. Both count as tags; see
-    # the README, "Tool calling".
+    # design_history.md, "How a call's format is recovered".
     _TAG_ATTRS = llama_cpp.LLAMA_TOKEN_ATTR_CONTROL | llama_cpp.LLAMA_TOKEN_ATTR_USER_DEFINED
 
     def __init__(self) -> None:

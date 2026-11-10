@@ -1362,3 +1362,9 @@ the wrapper loads the model itself, and with a cache context of one's own
 `config` is the configuration as passed, as its docstring says. The task table
 now names `declare_tools`'s parameter `tools`, and shows that `reply`'s `text`
 defaults to `None`.
+
+**Pointers to the document that holds the text.** Three comments pointed to a
+README section that does not hold what they named: the eviction ordering a
+wrapper test pins, the shapes of `CallBody`'s fields, and what counts as a
+tag. They now name the design-history sections "How eviction works" and "How
+a call's format is recovered".

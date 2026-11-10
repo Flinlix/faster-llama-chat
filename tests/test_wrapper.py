@@ -334,7 +334,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
 def test_turn_closes_after_the_eviction_not_before():
     # An eviction's K-shift lands on whatever decodes next, so the closer is
     # decoded last and carries it instead of the next generation's prefill.
-    # The assertion is what pins that ordering. See the README,
+    # The assertion is what pins that ordering. See design_history.md,
     # "How eviction works".
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)

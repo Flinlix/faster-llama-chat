@@ -39,8 +39,8 @@ class CallBody:
     """How a model spells a function name and its arguments between the tags.
 
     Recovered from the model's own template, or built from its add-on file's
-    call. See the README, "Tool calling", for the shapes these fields take on
-    real models.
+    call. See design_history.md, "How a call's format is recovered", for the
+    shapes these fields take on real models.
 
     Attributes:
         name_close: After the function name, before the arguments. Empty
