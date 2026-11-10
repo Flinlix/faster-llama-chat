@@ -64,9 +64,9 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
         return render(probe, generation_prompt=True, **variables)
 
     def after_user_turn_differs(on: dict, off: dict) -> bool:
-        on, off = rendered(**on), rendered(**off)
-        return None not in (on, off) \
-            and on.split(USER_SENTINEL, 1)[-1] != off.split(USER_SENTINEL, 1)[-1]
+        on_render, off_render = rendered(**on), rendered(**off)
+        return None not in (on_render, off_render) \
+            and on_render.split(USER_SENTINEL, 1)[-1] != off_render.split(USER_SENTINEL, 1)[-1]
 
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
     if rendered(**thinking[True]) == rendered(**thinking[False]):
