@@ -21,7 +21,7 @@ being recovered from that template.
 from .cache_context import CacheContext, ModelReader
 from .config import Config, InvalidSettingError, Sampling
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from .reply import (TOOL_CALL_POLICIES, STOP_REASONS, ContextOverflowError, Reply, ReplyStream,
+from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
                     StopReason)
 from .wrapper import ChatWrapper
 
