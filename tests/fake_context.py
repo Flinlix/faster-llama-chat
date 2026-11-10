@@ -30,12 +30,12 @@ class _Renders:
         self._known: dict = {}
 
     def render(self, messages, tools=None, *, generation_prompt=False, reasoning=None,
-               **variables) -> str | None:
-        key = self._key(messages, tools, generation_prompt, reasoning, variables)
+               variables=None) -> str | None:
+        key = self._key(messages, tools, generation_prompt, reasoning, variables or {})
         if key is not None and key in self._known:
             return self._known[key]
         rendered = self._model.render(messages, tools, generation_prompt=generation_prompt,
-                                      reasoning=reasoning, **variables)
+                                      reasoning=reasoning, variables=variables)
         if key is not None:
             if len(self._known) > self._BOUND:
                 self._known.clear()
@@ -209,15 +209,16 @@ class FakeContext:
     def render_with_model_template(self, messages: list[dict],
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
-                                   reasoning: bool | None = None, **variables) -> str | None:
+                                   reasoning: bool | None = None,
+                                   variables: dict | None = None) -> str | None:
         self.rendered.append(len(messages))
         return self._model.render(messages, tools, generation_prompt=generation_prompt,
-                                  reasoning=reasoning, **variables)
+                                  reasoning=reasoning, variables=variables)
 
     def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
         """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded."""
         return self._model.render(messages, tools, generation_prompt=generation_prompt,
-                                  reasoning=None, **self._stated["on" if reasoning else "off"])
+                                  reasoning=None, variables=self._stated["on" if reasoning else "off"])
 
     def chat_template_text(self) -> str | None:
         return self._template

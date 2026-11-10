@@ -1416,3 +1416,19 @@ injected question decoded with its generation prompt and a turn resumed after
 a result report the cache as the model sees it. Where calls run, it is the
 last generation's, not a sum: a sum would count the conversation once per
 generation, which is no prompt any generation read.
+
+**Template variables as one mapping.** The render member of a cache context
+took the template's variables as loose keywords beside its own
+`generation_prompt` and `reasoning`, so a template variable of either name
+could never reach the template, and the search for the variable that moves
+declarations into the system turn had to leave both names out. The member,
+the bundled renderer, the test stand-in, the reasoning switch's render and the
+probes' render now take the variables as one mapping, `variables`. Every name
+a template reads can be passed except those the renderer sets for every
+template, which `RENDERER_VARIABLES` in `cache_context.py` lists: `messages`,
+`tools`, `add_generation_prompt`, the beginning and end tokens,
+`raise_exception` and `strftime_now`. These are the names the bundled
+renderer sets itself; `functions`, `function_call` and `tool_choice`, which it
+also takes, pass through to the template when given, so they stay
+searchable. No test template's reasoning switch or declaration variable
+changed.

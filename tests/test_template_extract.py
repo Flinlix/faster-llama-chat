@@ -401,9 +401,9 @@ def test_no_render_makes_body_extraction_raise():
 
 def _rendering(open_thought):
     """A render of the probe conversation whose ending ``open_thought(variables)`` decides."""
-    def render(messages, generation_prompt=False, **variables):
+    def render(messages, generation_prompt=False, variables=None):
         text = "".join(f"<{m['role']}>{m['content']}" for m in messages)
-        return text + (open_thought(variables) if generation_prompt else "")
+        return text + (open_thought(variables or {}) if generation_prompt else "")
     return render
 
 
@@ -429,6 +429,15 @@ def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, swi
     assert switch(True) == switch_on
     assert switch(False) == switch_off
     assert switch(None) == {}
+
+
+def test_a_variable_named_as_a_render_argument_reaches_the_template():
+    context = FakeContext({"chat_template": "{{ reasoning }}/{{ generation_prompt }}",
+                           "eos_token": "", "render_variables": {"off": {}}})
+    rendered = context.render_with_model_template(
+        [], generation_prompt=True, reasoning=False,
+        variables={"reasoning": "deep", "generation_prompt": "given"})
+    assert rendered == "deep/given"
 
 
 # ----- probe sentinels -----------------------------------------------------

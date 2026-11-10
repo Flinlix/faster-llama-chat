@@ -55,22 +55,22 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     off, else the default. Where on and off are the same, there is no switch.
 
     Args:
-        render_variables: Renders ``messages`` with ``generation_prompt`` and
-            template variables as keywords, raising where the template does.
+        render_variables: Renders ``messages`` with ``generation_prompt`` and the
+            template variables in ``variables``, raising where the template does.
     """
     probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     render = refusing(render_variables)
 
-    def rendered(**variables):
-        return render(probe, generation_prompt=True, **variables)
+    def rendered(variables: dict):
+        return render(probe, generation_prompt=True, variables=variables)
 
     def after_user_turn_differs(on: dict, off: dict) -> bool:
-        on_render, off_render = rendered(**on), rendered(**off)
+        on_render, off_render = rendered(on), rendered(off)
         return None not in (on_render, off_render) \
             and on_render.split(USER_SENTINEL, 1)[-1] != off_render.split(USER_SENTINEL, 1)[-1]
 
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
-    if rendered(**thinking[True]) == rendered(**thinking[False]):
+    if rendered(thinking[True]) == rendered(thinking[False]):
         none, high = {"reasoning_effort": "none"}, {"reasoning_effort": "high"}
         off = none if after_user_turn_differs(none, {}) else {}
         on = high if after_user_turn_differs(high, off) else {}

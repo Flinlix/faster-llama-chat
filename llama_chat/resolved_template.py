@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from .cache_context import MODEL_READER, ensure_answers
+from .cache_context import MODEL_READER, RENDERER_VARIABLES, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
                           extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
@@ -86,11 +86,12 @@ class ResolvedTemplate:
         """``messages`` as the model's template writes them, ``None`` where it refuses that shape."""
         return self._context.render_with_model_template(
             messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
-            **self._variables)
+            variables=self._variables)
 
-    def _render(self, messages, tools=None, **options):
+    def _render(self, messages, tools=None, *, variables=None, **options):
         """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
-        return self._probe_render(messages, tools, **self._variables, **options)
+        return self._probe_render(messages, tools, **options,
+                                  variables={**self._variables, **(variables or {})})
 
     # ----- what the wrapper reads ----------------------------------------------
     @property
@@ -500,11 +501,10 @@ class ResolvedTemplate:
         conversation = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
         plain = self._render(conversation)
         names = names_read(self._context.chat_template_text() or "")
-        for name in sorted(names - {"messages", "tools", "add_generation_prompt",
-                                    "generation_prompt", "reasoning"}):
+        for name in sorted(names - RENDERER_VARIABLES):
             for value in (False, True):
                 self._variables = {}
-                if self._render(conversation, **{name: value}) != plain:
+                if self._render(conversation, variables={name: value}) != plain:
                     continue
                 self._variables = {name: value}
                 if self._declares_in_system_turn():

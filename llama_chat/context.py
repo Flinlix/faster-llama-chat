@@ -8,7 +8,7 @@ by :mod:`llama_chat.generation`.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from ._backend import Backend, set_log_level
 from .config import Config, Sampling, with_request_sampling
@@ -124,7 +124,7 @@ class KVContext:
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   **variables) -> str | None:
+                                   variables: Mapping[str, object] | None = None) -> str | None:
         """Render ``messages`` with the model's own chat template; see :meth:`ModelTemplate.render`.
 
         ``None`` where the model ships no template or the template rejects
@@ -134,7 +134,7 @@ class KVContext:
         if self._model_template is None:
             return None
         return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
-                                           reasoning=reasoning, **variables)
+                                           reasoning=reasoning, variables=variables)
 
     def addon_call(self) -> dict:
         """How the model's add-on file says a generated call is written, if it says."""

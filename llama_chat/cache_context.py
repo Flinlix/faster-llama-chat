@@ -9,10 +9,15 @@ finds a member missing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from typing import Protocol
 
 from .config import Sampling
+
+# The template variables a renderer sets for every template itself, so that no
+# render's ``variables`` holds one of them.
+RENDERER_VARIABLES = frozenset({"messages", "tools", "add_generation_prompt", "bos_token",
+                                "eos_token", "raise_exception", "strftime_now"})
 
 
 @dataclass
@@ -61,8 +66,12 @@ class ModelReader(Protocol):
     def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
                                    *, generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   **variables) -> str | None:
-        """``None`` where the model ships no template or it refuses the shape."""
+                                   variables: Mapping[str, object] | None = None) -> str | None:
+        """``None`` where the model ships no template or it refuses the shape.
+
+        ``variables`` reach the template by name, any name it reads but those of
+        :data:`RENDERER_VARIABLES`.
+        """
 
     def chat_template_text(self) -> str | None: ...
 

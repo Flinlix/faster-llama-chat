@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ._backend import template_renderer
 from .template_extract import reasoning_switch
 
@@ -18,13 +20,13 @@ class ModelTemplate:
         self.text = text
         self._renderers = {prompted: template_renderer(text, eos_text, prompted)
                            for prompted in (False, True)}
-        self._switch = reasoning_switch(lambda messages, generation_prompt=False, **variables:
+        self._switch = reasoning_switch(lambda messages, generation_prompt, variables:
                                         self._renderers[generation_prompt](
                                             messages=messages, **variables).prompt)
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None,
-               **variables) -> str | None:
+               variables: Mapping[str, object] | None = None) -> str | None:
         """``messages`` as the template writes them, or ``None`` where it refuses that shape.
 
         Args:
@@ -36,6 +38,7 @@ class ModelTemplate:
         """
         try:
             return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **self._switch(reasoning), **variables).prompt
+                messages=messages, tools=tools, **self._switch(reasoning),
+                **(variables or {})).prompt
         except Exception:
             return None
