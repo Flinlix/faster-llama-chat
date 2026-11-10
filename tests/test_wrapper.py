@@ -234,6 +234,16 @@ def test_a_reply_to_an_injected_question_reports_the_tokens_the_question_left():
     assert reply.n_prompt_tokens == held[-1][0]
 
 
+def test_a_reply_that_decodes_its_own_opening_reports_the_opening_too():
+    w, fake = begun_wrapper()
+    w.inject(" what's up? ")                # space around it: decoded without the opening
+    decodes = len(fake.prefill_calls)
+    held = _held_at_each_generation(fake)
+    reply = w.reply().finish()
+    assert held[-1][1] > decodes            # the reply decoded its opening itself
+    assert reply.n_prompt_tokens == held[-1][0]
+
+
 def test_a_reply_resumed_after_a_result_reports_the_tokens_the_result_left():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
