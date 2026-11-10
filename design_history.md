@@ -1390,9 +1390,9 @@ tests that went through the policies by hand; one of them had left out
 
 **A call whose argument spelling the template does not show.** A model whose
 calls have tags of their own but whose template does not show how it spells
-the arguments is refused tools, since `tool_calls=` went ("One way to do each
-thing in the public interface"). The user decided to wait until such a model
-appears, and then let its add-on file carry the spelling.
+the arguments is refused tools, since `ChatWrapper(tool_calls=...)` went ("One
+way to do each thing in the public interface"). The user decided to wait until
+such a model appears, and then let its add-on file carry the spelling.
 
 **`"none"` is the off wherever it changes the prompt.** The switch above
 still took `"high"` and the default first. A template that reasons by
