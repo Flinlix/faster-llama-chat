@@ -47,8 +47,8 @@ def test_a_reply_without_text_answers_the_newest_user_message():
 def test_an_unknown_call_policy_is_refused():
     wrapper, _ = tool_wrapper()
     wrapper.begin("persona")
-    with pytest.raises(ValueError, match="calls must be"):
-        wrapper.reply("x", calls="sometimes")
+    with pytest.raises(ValueError, match="tool_calls must be"):
+        wrapper.reply("x", tool_calls="sometimes")
 
 
 # ----- a reply the conversation cannot take ---------------------------------
@@ -61,10 +61,10 @@ def test_a_reply_the_conversation_cannot_take_is_refused_when_it_is_asked_for():
     with pytest.raises(ValueError, match="nothing to answer"):
         wrapper.reply()
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", calls="yield"))
-    for calls in ("yield", "refuse"):
+    list(wrapper.reply("wie spät?", tool_calls="yield"))
+    for tool_calls in ("yield", "refuse"):
         with pytest.raises(ValueError, match="1 call"):
-            wrapper.reply(calls=calls)
+            wrapper.reply(tool_calls=tool_calls)
     with pytest.raises(ValueError, match="while a reply is open"):
         wrapper.reply("etwas anderes")
     wrapper.close()
@@ -238,10 +238,10 @@ def test_a_reply_resumed_after_a_result_reports_the_tokens_the_result_left():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", calls="yield"))
+    list(wrapper.reply("wie spät?", tool_calls="yield"))
     wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     held = _held_at_each_generation(fake)
-    reply = wrapper.reply(calls="yield").finish()
+    reply = wrapper.reply(tool_calls="yield").finish()
     assert reply.n_prompt_tokens == held[-1][0]
 
 
@@ -252,7 +252,7 @@ def test_a_request_that_ran_calls_reports_its_last_generations_tokens():
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     held = _held_at_each_generation(fake)
-    reply = wrapper.reply("los", calls=registry).finish()
+    reply = wrapper.reply("los", tool_calls=registry).finish()
     assert len(held) == 2 and held[0][0] < held[1][0]
     assert reply.n_prompt_tokens == held[-1][0]
 
@@ -640,11 +640,11 @@ def test_a_restart_says_how_much_history_it_kept():
 
 
 # ----- sampling per request ------------------------------------------------
-@pytest.mark.parametrize("calls", [*CALL_POLICIES, "registry"])
-def test_every_call_policy_hands_its_sampling_to_the_generation(calls):
+@pytest.mark.parametrize("tool_calls", [*CALL_POLICIES, "registry"])
+def test_every_call_policy_hands_its_sampling_to_the_generation(tool_calls):
     w, fake = begun_wrapper()
     sampling = Sampling(temperature=0.1)
-    w.reply("hi", calls=ToolRegistry() if calls == "registry" else calls,
+    w.reply("hi", tool_calls=ToolRegistry() if tool_calls == "registry" else tool_calls,
             sampling=sampling).finish()
     assert fake.samplings == [sampling]
 
@@ -653,7 +653,7 @@ def test_a_stream_and_a_resume_hand_it_over_as_well():
     w, fake = begun_wrapper()
     sampling = Sampling(top_p=0.5)
     list(w.reply("hi", sampling=sampling))
-    list(w.reply("again", calls="yield", sampling=sampling))
+    list(w.reply("again", tool_calls="yield", sampling=sampling))
     assert fake.samplings == [sampling, sampling]
 
 

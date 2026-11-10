@@ -26,9 +26,9 @@ def _with_a_kept_turn():
     w, fake = tool_wrapper()
     w.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    call, = [e for e in w.reply("wie spät?", calls="yield") if isinstance(e, ToolCall)]
+    call, = [e for e in w.reply("wie spät?", tool_calls="yield") if isinstance(e, ToolCall)]
     w.inject_tool_result(call, "12:00")
-    w.reply(calls="yield").finish()
+    w.reply(tool_calls="yield").finish()
     w.reply("und?").finish()
     return w, fake
 

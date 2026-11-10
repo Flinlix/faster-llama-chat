@@ -1448,3 +1448,5 @@ second way to do what the remaining call does. The library no longer holds
 the caller's functions from one call to the next, so what runs is always what
 the request names, and the error for `"run"` where `begin` was given no
 registry went with the case it reported.
+At the user's request, `reply`'s parameter `calls` is renamed `tool_calls`,
+and its error messages and the README's table name it so.

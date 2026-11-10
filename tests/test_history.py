@@ -17,7 +17,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     live.begin("persona", tools=registry.specs())
     live.reply("hallo").finish()
     fake.call_script = ["fn:weather{city:'Bonn'}"]
-    live.reply("wetter?", calls=registry).finish()
+    live.reply("wetter?", tool_calls=registry).finish()
     live.reply("danke").finish()
     history = live.conversation()[1]
     assert [type(item).__name__ for item in history] == [
@@ -36,10 +36,10 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     live, fake = unbegun_tool_wrapper()
     fake.call_script.append("fn:uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for event in live.reply("wie spät?", calls="yield"):
+    for event in live.reply("wie spät?", tool_calls="yield"):
         call = event
     live.inject_tool_result(call, {"zeit": "12:00"})
-    for _event in live.reply(calls="yield"):
+    for _event in live.reply(tool_calls="yield"):
         pass
 
     past, past_fake = unbegun_tool_wrapper()
@@ -84,10 +84,10 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
     live, fake = unbegun_tool_wrapper()
     fake.call_script.append("fn:uhr{}")
     live.begin("s", tools=[ToolSpec("uhr", "", {})])
-    for event in live.reply("wie spät?", calls="yield"):
+    for event in live.reply("wie spät?", tool_calls="yield"):
         call = event
     live.inject_tool_result(call, {"zeit": "12:00"})
-    for _event in live.reply(calls="yield"):
+    for _event in live.reply(tool_calls="yield"):
         pass
 
     past, past_fake = (unbegun_tool_wrapper(TOOLS_CLOSING_OPEN_TURNS) if closes_turn_before_next
@@ -97,7 +97,7 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
                tools=[ToolSpec("uhr", "", {})])
     *_, (_start, _n, want_logits) = past_fake.prefill_calls
     assert want_logits      # the reply is sampled straight from the read-in's end
-    for _event in past.reply(calls="yield"):
+    for _event in past.reply(tool_calls="yield"):
         pass
     assert past_fake.cache == fake.cache
 
@@ -117,7 +117,7 @@ def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     w, fake = tool_wrapper()
     w.begin("persona", tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
-    call, = [e for e in w.reply("wetter?", calls="yield") if isinstance(e, ToolCall)]
+    call, = [e for e in w.reply("wetter?", tool_calls="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
     w.conversation()[1][-1].steps[-1].arguments["city"] = "Rom"
     assert w.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
