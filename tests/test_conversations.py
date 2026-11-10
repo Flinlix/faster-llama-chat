@@ -50,26 +50,9 @@ def _reasoning_modes(stem):
     return (False, True) if _fixture(stem)["can_reason"] else (False,)
 
 
-# Templates whose reasoning-off switch the library does not find, so that a check of
-# their reasoning-off prompt is expected to fail until it does.
-_OFF_SWITCH_MISSED = {"cohere-2"}
-_OFF_PROMPT_IS_NOT_THE_TEMPLATES = pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "the library's reasoning-off switch never tries reasoning_effort \"none\", so the "
-    "prompt is the template's reasoning-on prompt"))
-
-
-def _off(stem, *rest):
-    """One case with reasoning off, marked as expected to fail where the library misses the template's off switch."""
-    if stem not in _OFF_SWITCH_MISSED:
-        return (stem, *rest) if rest else stem
-    return pytest.param(stem, *rest, marks=_OFF_PROMPT_IS_NOT_THE_TEMPLATES)
-
-
 def _each_mode(stems):
-    """``(stem, reasoning)`` for each reasoning mode of each of ``stems``, reasoning off marked as :func:`_off` marks it."""
-    return [pytest.param(stem, reasoning, id=f"{stem}-reasoning-{'on' if reasoning else 'off'}",
-                         marks=[_OFF_PROMPT_IS_NOT_THE_TEMPLATES]
-                         if not reasoning and stem in _OFF_SWITCH_MISSED else [])
+    """``(stem, reasoning)`` for each reasoning mode of each of ``stems``."""
+    return [pytest.param(stem, reasoning, id=f"{stem}-reasoning-{'on' if reasoning else 'off'}")
             for stem in stems for reasoning in _reasoning_modes(stem)]
 
 
@@ -168,7 +151,7 @@ def _exchange_length(run, question, answer):
 
 
 # ----- every reply starts from the render ---------------------------------------
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 def test_every_reply_starts_from_the_templates_render_of_what_was_sent(stem):
     run = _Run(stem)
     run.begin()
@@ -224,7 +207,7 @@ def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts
     assert reply.n_evicted_messages
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_question_the_stand_in_cannot_stand_for_is_rendered_as_it_comes(stem):
     run = _Run(stem)
     run.begin()
@@ -256,7 +239,7 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
 
 
 # ----- evictions: whole exchanges, in place --------------------------------------
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_shift):
     probe = _Run(stem)
@@ -287,7 +270,7 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
         assert len(over) <= math.ceil(len(questions) / 3)
 
 
-@pytest.mark.parametrize("stem, tools", [_off(stem, None) for stem in _EVERY]
+@pytest.mark.parametrize("stem, tools", [(stem, None) for stem in _EVERY]
                          + [(stem, [WEATHER]) for stem in _TOOL_TEMPLATES])
 def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest_question(stem, tools):
     long_system = "Be brief. " + "Keep to the facts and leave out what was not asked. " * 6
@@ -387,7 +370,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     assert evicted
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)
     run.begin()
@@ -398,7 +381,7 @@ def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decod
     assert run.context.resets == resets
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in sorted(_FIXTURES)])
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):
     probe = _Run(stem)
@@ -475,7 +458,7 @@ def test_a_reply_that_fails_part_way_is_kept_or_taken_back_and_the_next_follows_
     assert (QUESTIONS[2] in run.context.text_of(run.context.cache)) == asked
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in sorted(_FIXTURES)])
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render(stem):
     run = _Run(stem)
     run.begin()
@@ -561,7 +544,7 @@ def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(s
                                       {"role": "user", "content": " again "}])
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in sorted(_FIXTURES)])
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(stem):
     run = _Run(stem)
     try:
@@ -574,7 +557,7 @@ def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refu
                                       {"role": "user", "content": " again "}])
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_went_in(stem):
     run = _Run(stem)
     history = [item for pair in zip(QUESTIONS[:3], ANSWERS) for item in
@@ -586,7 +569,7 @@ def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_wen
     assert run.chat.conversation()[1][:6] == history
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _EVERY])
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_restart_keeps_only_the_newest_history_that_fits(stem):
     probe = _Run(stem)
     probe.begin()
@@ -678,7 +661,7 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
 
 
 # ----- tools ------------------------------------------------------------------------
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _TOOL_TEMPLATES])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_tools_declared_mid_conversation_are_written_where_the_template_writes_them(stem):
     run = _Run(stem)
     assert run.chat.can_call_tools
@@ -690,7 +673,7 @@ def test_tools_declared_mid_conversation_are_written_where_the_template_writes_t
     assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER])
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _TOOL_TEMPLATES])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_tools_without_a_system_prompt_open_as_the_template_opens_them(stem):
     run = _Run(stem)
     run.system = ""
@@ -772,7 +755,7 @@ def _rendered_turn(run, *after):
          "content": '{"weather": "sunny"}'}, *after], [WEATHER])
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in _TOOL_TEMPLATES])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_template_writes_it(stem):
     probe = _Run(stem)
     opener, written_body, closer = _call_body(probe, {"city": "Bonn"})
@@ -852,7 +835,7 @@ def _expected_tokens(run, messages, tools=None):
     return tokens
 
 
-@pytest.mark.parametrize("stem", [_off(stem) for stem in sorted(_FIXTURES)])
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(stem):
     run = _Run(stem)
     forged = run.fixture["eos_token"]

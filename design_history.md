@@ -141,7 +141,9 @@ each reasoning mode, went with the pieces.
 ### How reasoning is read
 
 Revised by "What a template is read for, and refused for": `can_reason` means
-the template marks a thought, and the switch is the template's.
+the template marks a thought, and the switch is the template's. Revised by
+"The rethink's remaining decisions": where `"high"` changes nothing,
+`reasoning_effort: "none"` is tried as the switch's off.
 
 `enable_thinking` is the switch where it changes the render; otherwise
 `reasoning_effort` is, if it changes what follows the user turn, `"high"` for on
@@ -1301,3 +1303,19 @@ call or the final flush is removed. Test names that spoke of old settings use
 the current ones.
 
 The contract's verification text now lists, for each rule, one line per test file and what that file tries to break.
+
+## 2026-11-10: The rethink's remaining decisions
+
+The user decided the items the rethink left open. Each change below is a
+commit of its own.
+
+**Reasoning off where a template reasons by default.** This revises "How
+reasoning is read". The switch tried `enable_thinking`, then
+`reasoning_effort` with `"high"` for on and the template's default for off.
+A template that reasons by default and turns reasoning off only with
+`reasoning_effort: "none"` renders `"high"` and its default alike, so its
+switch had off equal to on, and a reply asked without reasoning was generated
+after the reasoning-on prompt. Where neither of the first two changes what
+follows the user turn, the switch now tries the default for on and `"none"`
+for off. The 18 cases of cohere-2 that were expected failures pass, and no
+other test template's switch changed.

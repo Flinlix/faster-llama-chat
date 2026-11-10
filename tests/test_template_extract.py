@@ -407,19 +407,23 @@ def _rendering(open_thought):
     return render
 
 
-@pytest.mark.parametrize("ending, switch_on", [
+@pytest.mark.parametrize("ending, switch_on, switch_off", [
     # Reads the shared variable: it stays the switch.
     (lambda v: "<think>" if v.get("enable_thinking") else "<think></think>",
-     {"enable_thinking": True}),
+     {"enable_thinking": True}, {"enable_thinking": False}),
     # Reads only an effort, and that opens the thought: the effort is the switch.
     (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>",
-     {"reasoning_effort": "high"}),
+     {"reasoning_effort": "high"}, {}),
+    # Reasons unless the effort is none: the default is on, and none is off.
+    (lambda v: "<think></think>" if v.get("reasoning_effort") == "none" else "<think>",
+     {}, {"reasoning_effort": "none"}),
     # An effort that changes nothing after the user turn is not a switch.
-    (lambda v: "", {"enable_thinking": True}),
+    (lambda v: "", {"enable_thinking": True}, {"enable_thinking": False}),
 ])
-def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, switch_on):
+def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, switch_on, switch_off):
     switch = reasoning_switch(_rendering(ending))
     assert switch(True) == switch_on
+    assert switch(False) == switch_off
     assert switch(None) == {}
 
 

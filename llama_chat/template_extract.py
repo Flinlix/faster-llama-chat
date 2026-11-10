@@ -50,8 +50,8 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
 
     ``enable_thinking``, the variable chat templates share for it, or, where
     that changes nothing, ``reasoning_effort`` where its setting changes what
-    follows the user turn: ``"high"`` for on, the template's own default for
-    off.
+    follows the user turn: ``"high"`` for on and the template's own default
+    for off, or else the template's own default for on and ``"none"`` for off.
 
     Args:
         render_variables: Renders ``messages`` with ``generation_prompt`` and
@@ -63,12 +63,17 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     def rendered(**variables):
         return render(probe, generation_prompt=True, **variables)
 
+    def after_user_turn_differs(on: dict, off: dict) -> bool:
+        on, off = rendered(**on), rendered(**off)
+        return None not in (on, off) \
+            and on.split(USER_SENTINEL, 1)[-1] != off.split(USER_SENTINEL, 1)[-1]
+
     thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
     if rendered(**thinking[True]) == rendered(**thinking[False]):
-        on, off = rendered(reasoning_effort="high"), rendered()
-        if None not in (on, off) \
-                and on.split(USER_SENTINEL, 1)[-1] != off.split(USER_SENTINEL, 1)[-1]:
-            thinking = {True: {"reasoning_effort": "high"}, False: {}}
+        for on, off in (({"reasoning_effort": "high"}, {}), ({}, {"reasoning_effort": "none"})):
+            if after_user_turn_differs(on, off):
+                thinking = {True: on, False: off}
+                break
     return lambda reasoning: {} if reasoning is None else thinking[reasoning]
 
 
