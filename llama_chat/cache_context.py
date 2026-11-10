@@ -105,7 +105,7 @@ class CacheContext(ModelReader, Protocol):
         """The bytes ``token`` stands for, which may hold part of a character."""
 
     def apply_eviction(self, start: int, end: int) -> None:
-        """Remove the tokens at ``start`` up to, not including, ``end``, those after them moving down."""
+        """Remove the tokens from ``start`` to just before ``end``, those after them moving down."""
 
     def remove_from(self, pos: int) -> None: ...
 
