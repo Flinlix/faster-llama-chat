@@ -150,7 +150,7 @@ class ResolvedTemplate:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
         if not reasoning:
-            return self._fragments.generation_prompt or self._fragments.assistant_prefix
+            return self._fragments.generation_prompt_without_reasoning
         self.ensure_can_reason()
         return self._reasoning.generation_prompt
 

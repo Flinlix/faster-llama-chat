@@ -184,7 +184,7 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
     if found is None:
         return None
     tags, reply_with_thought = found
-    prompt = fragments.generation_prompt or fragments.assistant_prefix
+    prompt = fragments.generation_prompt_without_reasoning
     messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     on = render(messages, generation_prompt=True, reasoning=True)
     off = render(messages, generation_prompt=True, reasoning=False)
@@ -216,8 +216,7 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
                            {"role": "user", "content": _USER2}], reasoning=False)
         if rendered is not None and ASSISTANT_SENTINEL in rendered and _THOUGHT not in rendered:
             return Reasoning(thought_open=opening, thought_close=close,
-                             generation_prompt=fragments.generation_prompt
-                             or fragments.assistant_prefix)
+                             generation_prompt=fragments.generation_prompt_without_reasoning)
     return None
 
 
@@ -345,7 +344,7 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
     thought, it is the last tag before the thought.
     """
     opened = USER_SENTINEL + fragments.user_suffix
-    prompt = fragments.generation_prompt or fragments.assistant_prefix
+    prompt = fragments.generation_prompt_without_reasoning
     probes = []
     replies = [{"role": "assistant", "content": ASSISTANT_SENTINEL, field: _THOUGHT}
                for field in _THOUGHT_FIELDS]

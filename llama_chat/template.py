@@ -139,6 +139,11 @@ class TemplateFragments:
     generation_prompt: str = ""
     rewrites: tuple[tuple[str, str], ...] = ()
 
+    @property
+    def generation_prompt_without_reasoning(self) -> str:
+        """The generation prompt of a reply that does not reason: ``generation_prompt``, or else the assistant tag."""
+        return self.generation_prompt or self.assistant_prefix
+
     def content(self, text: str) -> str:
         """``text`` with ``rewrites`` applied: a content as the template writes it, apart from whitespace it strips."""
         if self.rewrites:

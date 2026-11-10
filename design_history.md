@@ -1343,3 +1343,9 @@ that from `specs()`, which the tests now do.
 result as the text a template is given, which only the library does; the
 modules that use it still import it by name, since no module imports a
 sibling's private name.
+
+**One reading of the plain generation prompt.** The fragments' generation
+prompt is empty where it is only the assistant tag, so four places read "the
+generation prompt, or else the tag". That reading is now one property,
+`TemplateFragments.generation_prompt_without_reasoning`, which all four use.
+No behaviour changed.
