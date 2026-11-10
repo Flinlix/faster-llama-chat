@@ -634,6 +634,7 @@ class ChatWrapper:
             conversation.prompt()
         cap = max_reply_tokens if max_reply_tokens is not None else self._config.max_reply_tokens
         stops = list(self._config.stop_strings) + list(stop or [])
+        n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
         reply_text = ReplyText(self._template.reasoning,
@@ -662,6 +663,7 @@ class ChatWrapper:
         return Reply(
             text=reply_text.answer,
             n_prefilled_tokens=conversation.decoded - decoded_from,
+            n_prompt_tokens=n_prompt_tokens,
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
@@ -728,6 +730,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
     return Reply(
         text="".join(t.text for t in generations),
         n_prefilled_tokens=sum(t.n_prefilled_tokens for t in generations),
+        n_prompt_tokens=generations[-1].n_prompt_tokens,
         n_generated_tokens=sum(t.n_generated_tokens for t in generations),
         n_evicted_messages=sum(t.n_evicted_messages for t in generations),
         stop_reason=generations[-1].stop_reason,

@@ -139,7 +139,9 @@ model and makes later actions raise.
 | `"tool_call"` | the reply stopped on a call, and the turn is open for its result |
 | `"unreadable_tool_call"` | it stopped on a call whose body could not be read; the model is told, and this is the final reason only where calls are handed to you, or where the template has no result block |
 
-`Reply` also carries `text`, `n_prefilled_tokens`, `n_generated_tokens`,
+`Reply` also carries `text`, `n_prefilled_tokens`, `n_prompt_tokens` (the
+tokens the cache held when the reply's last generation drew its first, which
+is all that generation was conditioned on), `n_generated_tokens`,
 `n_evicted_messages`, `tool_calls`, `tool_limit_reached` and
 `n_reasoning_tokens`. A stream closed early has no `Reply`; what it generated
 is recorded all the same.
@@ -198,8 +200,9 @@ rest = chat.reply(calls="yield").finish()        # the turn stays open until thi
 A call never appears in the reply text, though its tokens reach the cache,
 since the model reads its own call back. Every call is reported on
 `Reply.tool_calls`, whatever became of it. Where calls run, the `Reply` sums
-every generation of the exchange, and `tool_limit_reached` says whether a
-`max_calls` ceiling ran out.
+every generation of the exchange, `n_prompt_tokens` aside, which is the last
+generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
+out.
 
 **Tools a model could not use are refused where you hand them over**, by
 `begin(tools=...)`, `declare_tools` and a running `reply`, naming what

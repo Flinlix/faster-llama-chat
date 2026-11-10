@@ -12,6 +12,7 @@ import threading
 import pytest
 
 from llama_chat.config import Config, Sampling
+from llama_chat.tools import ToolCall, ToolRegistry
 from llama_chat import CALL_POLICIES, ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
@@ -206,6 +207,54 @@ def test_a_second_generation_does_not_reprefill_history():
     assert fake.total_prefilled() - mark == reply.n_prefilled_tokens
     assert all(start >= held - len("reply<turn]>\n<[turn>") for start, _, _ in
                fake.prefill_calls[calls:])
+
+
+# ----- the tokens a reply was generated from --------------------------------
+def _held_at_each_generation(fake):
+    """The cache's length and the decodes made so far, recorded before each generation's first token."""
+    held = []
+    fake.before_reply = lambda _: held.append((len(fake.cache), len(fake.prefill_calls)))
+    return held
+
+
+def test_a_reply_reports_the_tokens_its_question_left_in_the_cache():
+    w, fake = begun_wrapper()
+    held = _held_at_each_generation(fake)
+    reply = w.reply("what's up?").finish()
+    assert reply.n_prompt_tokens == held[-1][0]
+
+
+def test_a_reply_to_an_injected_question_reports_the_tokens_the_question_left():
+    w, fake = begun_wrapper()
+    w.inject("what's up?")
+    decodes = len(fake.prefill_calls)
+    held = _held_at_each_generation(fake)
+    reply = w.reply().finish()
+    assert held[-1][1] == decodes           # its generation prompt was decoded with it
+    assert reply.n_prompt_tokens == held[-1][0]
+
+
+def test_a_reply_resumed_after_a_result_reports_the_tokens_the_result_left():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", calls="yield"))
+    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
+    held = _held_at_each_generation(fake)
+    reply = wrapper.reply(calls="yield").finish()
+    assert reply.n_prompt_tokens == held[-1][0]
+
+
+def test_a_request_that_ran_calls_reports_its_last_generations_tokens():
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "The time.", name="clock")
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    held = _held_at_each_generation(fake)
+    reply = wrapper.reply("los", calls=registry).finish()
+    assert len(held) == 2 and held[0][0] < held[1][0]
+    assert reply.n_prompt_tokens == held[-1][0]
 
 
 # ----- streaming -----------------------------------------------------------

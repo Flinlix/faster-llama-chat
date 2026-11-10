@@ -1405,3 +1405,14 @@ first three now name "How a call's format is recovered" and "Nested values in
 a model's own elements, and tests by module". No section records the reason
 for the fourth; its comment names "Restructured inside the library", which
 records how a generated call is read.
+
+**The tokens a reply was generated from.** `Reply.n_prompt_tokens` is the
+cache's length when the reply's last generation drew its first token: what
+that generation was conditioned on, its generation prompt included.
+`n_prefilled_tokens` counts only what the request decoded, so a caller could
+not tell how long a prompt the model read. It is read where a generation
+starts, after the question or the generation prompt is decoded, so an
+injected question decoded with its generation prompt and a turn resumed after
+a result report the cache as the model sees it. Where calls run, it is the
+last generation's, not a sum: a sum would count the conversation once per
+generation, which is no prompt any generation read.

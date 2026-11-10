@@ -27,13 +27,17 @@ class Reply:
     """What one request produced.
 
     One generation, or, where the request took several, all of them: the counts
-    are then sums and ``stop_reason`` is the last one's.
+    are then sums, and ``n_prompt_tokens`` and ``stop_reason`` are the last
+    one's.
 
     Attributes:
         text: The assistant's reply, trimmed at any stop string, its thought
             left out.
         n_prefilled_tokens: Tokens decoded for the request, the opening of
             each resumption, and a reply decoded again as a past reply.
+        n_prompt_tokens: Tokens the cache held when the last generation drew
+            its first token: everything it was generated from, its generation
+            prompt included.
         n_generated_tokens: Tokens sampled.
         n_evicted_messages: Messages evicted to bring the cache back inside both
             eviction limits.
@@ -52,6 +56,7 @@ class Reply:
 
     text: str
     n_prefilled_tokens: int
+    n_prompt_tokens: int
     n_generated_tokens: int
     n_evicted_messages: int
     stop_reason: StopReason
