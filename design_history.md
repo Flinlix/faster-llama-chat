@@ -1334,3 +1334,7 @@ takes one warm-up longer and the first `begin` that much less. Warming is a
 property of the engine, not of a conversation: a stand-in needs none, and a
 context of one's own warms itself where it needs to, so the protocol no longer
 asks every context for a member only one of them uses.
+
+**No membership test on the registry.** `ToolRegistry.__contains__` is
+removed: only tests asked whether a name was registered, and a caller reads
+that from `specs()`, which the tests now do.

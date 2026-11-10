@@ -237,9 +237,6 @@ class ToolRegistry:
             return {"error": "unwritable_result", "message": str(e)}
         return returned
 
-    def __contains__(self, name: object) -> bool:
-        return name in self._entries
-
     def __len__(self) -> int:
         return len(self._entries)
 

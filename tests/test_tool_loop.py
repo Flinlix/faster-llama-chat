@@ -1117,7 +1117,6 @@ def test_the_decorator_registers_and_declares_in_one_step():
     def clock(city: str) -> dict:
         return {"time": "12:00", "city": city}
 
-    assert "clock" in registry
     assert [spec.name for spec in registry.specs()] == ["clock"]
     assert registry.specs()[0].parameters["properties"] == {
         "city": {"type": "string"}}
@@ -1133,7 +1132,6 @@ def test_the_decorator_can_leave_a_tool_for_the_later_door():
     def clock() -> dict:
         return {}
 
-    assert "clock" in registry
     assert registry.specs_declared_at_begin() == []      # not at begin
     assert [spec.name for spec in registry.specs()] == ["clock"]
 

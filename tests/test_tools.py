@@ -39,7 +39,7 @@ def test_registering_returns_the_name_the_model_calls():
         return {"ok": True}
 
     assert registry.register(calendar_add, "Trägt ein.") == "calendar_add"
-    assert "calendar_add" in registry
+    assert [spec.name for spec in registry.specs()] == ["calendar_add"]
 
 
 def test_a_tool_may_be_called_something_other_than_its_function():
@@ -49,7 +49,7 @@ def test_a_tool_may_be_called_something_other_than_its_function():
         return {"ok": True}
 
     assert registry.register(_add_v2, "…", name="calendar_add") == "calendar_add"
-    assert "calendar_add" in registry and "_add_v2" not in registry
+    assert [spec.name for spec in registry.specs()] == ["calendar_add"]
 
 
 def test_the_flag_says_where_a_declaration_lands_not_whether():
@@ -140,7 +140,7 @@ def test_register_takes_the_parameters_from_the_signature():
     spec = registry.specs()[0]
     assert spec.description == "Sagt die Zeit."
     assert spec.parameters["properties"] == {"city": {"type": "string"}}
-    assert len(registry) == 1 and "clock" in registry
+    assert len(registry) == 1 and spec.name == "clock"
     assert registry.call(ToolCall("clock", {"city": "Bonn"})) == "09:00"
 
 
