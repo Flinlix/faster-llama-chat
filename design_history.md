@@ -1355,3 +1355,10 @@ longer exported from `llama_chat`. They were exported for a cache context that
 ran its own generation; since the generation loop moved inside the library
 ("Restructured inside the library"), a context only answers the four steps
 the loop asks for, and no caller builds or reads either type.
+
+**README corrections.** The Configuration text said every unset sampling
+setting in `ChatWrapper.config` holds the model's value; that holds only where
+the wrapper loads the model itself, and with a cache context of one's own
+`config` is the configuration as passed, as its docstring says. The task table
+now names `declare_tools`'s parameter `tools`, and shows that `reply`'s `text`
+defaults to `None`.
