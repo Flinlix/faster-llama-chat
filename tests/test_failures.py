@@ -47,10 +47,10 @@ class _Flaky(FakeContext):
             raise RuntimeError("the cache refused to remove its tokens")
         super().remove_from(pos)
 
-    def apply_eviction(self, ev):
+    def apply_eviction(self, start, end):
         if self._fails():
             raise RuntimeError("the cache refused to shift")
-        super().apply_eviction(ev)
+        super().apply_eviction(start, end)
 
     def reset(self):
         if self._fails():

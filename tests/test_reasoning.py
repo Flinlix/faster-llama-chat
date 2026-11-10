@@ -138,7 +138,8 @@ def test_the_eviction_comes_before_the_past_reply_so_its_decode_carries_the_shif
         w.inject("hist", "assistant")
     evictions, at_eviction = fake.edit_count("shift"), []
     evict = fake.apply_eviction
-    fake.apply_eviction = lambda ev: (at_eviction.append(len(fake.prefill_calls)), evict(ev))
+    fake.apply_eviction = lambda start, end: (at_eviction.append(len(fake.prefill_calls)),
+                                              evict(start, end))
     w.reply("hi").finish()
     assert fake.edit_count("shift") > evictions
     # The last cache edit is a decode after the eviction, which carries its shift.

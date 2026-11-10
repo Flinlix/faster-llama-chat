@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .cache_context import CacheContext, Eviction, GenerationAccumulator
+from .cache_context import CacheContext, GenerationAccumulator
 from .generation import generate
 from .template import common_prefix_length
 
@@ -107,14 +107,14 @@ class CacheSync:
         """Take the tokens from ``start`` to ``end`` out, those after them moving down."""
         if start >= end:
             return
-        eviction = Eviction(start, end, len(self._tokens))
+        total = len(self._tokens)
         del self._tokens[start:end]
         self.version += 1
         self._forget_states_after(start)
         self._logits = False
-        if self._end == self._valid == eviction.old_total and self._context.can_shift:
+        if self._end == self._valid == total and self._context.can_shift:
             try:
-                self._context.apply_eviction(eviction)  # one removal and one shift
+                self._context.apply_eviction(start, end)  # one removal and one shift
             except BaseException:
                 self._end = None
                 raise

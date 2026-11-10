@@ -12,7 +12,6 @@ from collections.abc import Callable
 
 from ._backend import Backend, set_log_level
 from .config import Config, Sampling, with_request_sampling
-from .cache_context import Eviction
 from .addon_files import addon_file, with_model_sampling
 from .model_template import ModelTemplate
 
@@ -165,21 +164,16 @@ class KVContext:
             self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
             self.reset()  # kv_clear -> cache empty again for the real prefill
 
-    def apply_eviction(self, ev: Eviction) -> None:
+    def apply_eviction(self, start: int, end: int) -> None:
         """Remove the evicted tokens, then shift survivors to close the gap.
 
         Raises:
             RuntimeError: If the cache refuses the removal, which a cache that
                 can shift does only when it is corrupted.
         """
-        if not self._backend.kv_seq_rm(self._engine_context, SEQ, ev.remove_start,
-                                       ev.remove_end):
-            raise RuntimeError(f"the cache refused to remove tokens "
-                               f"{ev.remove_start} to {ev.remove_end}")
-        if ev.remove_end < ev.old_total:
-            self._backend.kv_seq_add(
-                self._engine_context, SEQ, ev.remove_end, ev.old_total, -ev.shift_delta
-            )
+        if not self._backend.kv_seq_rm(self._engine_context, SEQ, start, end):
+            raise RuntimeError(f"the cache refused to remove tokens {start} to {end}")
+        self._backend.kv_seq_add(self._engine_context, SEQ, end, -1, start - end)
 
     def save_state(self):
         """What a cache that cannot shift needs to be put back to where it rests now."""

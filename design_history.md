@@ -1319,3 +1319,10 @@ after the reasoning-on prompt. Where neither of the first two changes what
 follows the user turn, the switch now tries the default for on and `"none"`
 for off. The 18 cases of cohere-2 that were expected failures pass, and no
 other test template's switch changed.
+
+**The eviction record goes.** A cache context's `apply_eviction` takes the
+start and end of the stretch it removes, and the public `Eviction` type is
+removed. Its third field, the cache's length before the removal, only bounded
+the shift of what follows, and the engine shifts everything after the stretch
+when given no end; a stand-in knows its own length. A type for two integers
+was one more public name for a context's author to learn.

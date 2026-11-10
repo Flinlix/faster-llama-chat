@@ -16,29 +16,6 @@ from .config import Sampling
 
 
 @dataclass
-class Eviction:
-    """One physical cache edit: remove a token range, then close the gap.
-
-    Remove ``[remove_start, remove_end)``, then shift every surviving token in
-    ``[remove_end, old_total)`` down by ``shift_delta``.
-
-    Attributes:
-        remove_start: Inclusive start of the removed token range.
-        remove_end: Exclusive end of the removed token range.
-        old_total: Total tokens in the cache before removal; marks the right
-            boundary of the shift range.
-    """
-
-    remove_start: int
-    remove_end: int
-    old_total: int
-
-    @property
-    def shift_delta(self) -> int:
-        return self.remove_end - self.remove_start
-
-
-@dataclass
 class GenerationAccumulator:
     """What one generation has produced so far, filled as tokens stream in.
 
@@ -129,7 +106,8 @@ class CacheContext(ModelReader, Protocol):
     def token_bytes(self, token: int) -> bytes:
         """The bytes ``token`` stands for, which may hold part of a character."""
 
-    def apply_eviction(self, ev: Eviction) -> None: ...
+    def apply_eviction(self, start: int, end: int) -> None:
+        """Remove the tokens from ``start`` to ``end``, those after them moving down."""
 
     def remove_from(self, pos: int) -> None: ...
 

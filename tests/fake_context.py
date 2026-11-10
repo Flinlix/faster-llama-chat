@@ -259,11 +259,11 @@ class FakeContext:
         self.edits.append(("cut", pos))
         del self.cache[pos:]
 
-    def apply_eviction(self, ev) -> None:
+    def apply_eviction(self, start: int, end: int) -> None:
         assert self.can_shift, "a cache that cannot shift was shifted"
-        assert len(self.cache) == ev.old_total
-        self.edits.append(("shift", ev.remove_start, ev.shift_delta))
-        del self.cache[ev.remove_start:ev.remove_end]  # remove, then close the gap
+        assert 0 <= start < end <= len(self.cache), (start, end, len(self.cache))
+        self.edits.append(("shift", start, end - start))
+        del self.cache[start:end]  # remove, then close the gap
 
     def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
         assert start_pos == len(self.cache), (start_pos, len(self.cache))

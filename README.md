@@ -380,8 +380,8 @@ past midnight is decoded again once, from the date on.
 `ChatWrapper(context=...)` takes any object that answers the two protocols
 `ModelReader` (its tokenizer, tags, chat template and add-on file) and
 `CacheContext` (that, and the cache a conversation is decoded into), with the
-types their members take: `Eviction` and `Sampling`, both from
-`llama_chat`. Nothing to subclass or register; the
+type one of its members takes: `Sampling`, from `llama_chat`. Nothing to
+subclass or register; the
 members are checked where the context is adopted, so a missing one is a
 `TypeError` from the constructor. What the template is read for comes from its
 renders alone, and where the model's tags lie in a text from its tokenizer

@@ -1,12 +1,7 @@
 """A history as begin takes it, and as the messages a template is given."""
 
-from llama_chat.cache_context import Eviction
 from llama_chat.messages import as_history, as_messages, exchange_starts
 from llama_chat.tools import ToolCall, ToolResult, ToolTurn
-
-
-def test_an_eviction_shifts_what_follows_by_what_it_removes():
-    assert Eviction(remove_start=4, remove_end=10, old_total=30).shift_delta == 6
 
 
 def test_kept_history_opens_on_each_user_turn():

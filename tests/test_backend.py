@@ -94,6 +94,13 @@ def test_a_cache_that_refuses_a_cut_at_its_end_is_never_shifted_whatever_it_repo
     assert performed[-1] == ("clear",)
 
 
+def test_an_eviction_removes_its_stretch_and_moves_everything_after_it_down_by_its_length():
+    context, performed = _probed_context(reports_shift=True, cuts_tail=True)
+    performed.clear()
+    context.apply_eviction(4, 10)
+    assert performed == [("seq_rm", 4, 10), ("seq_add", 10, -1, -6)]    # -1: to the end
+
+
 @pytest.mark.parametrize("reports_shift", (True, False))
 def test_a_cache_that_takes_the_cut_shifts_as_it_reports(reports_shift):
     context, _performed = _probed_context(reports_shift, cuts_tail=True)
