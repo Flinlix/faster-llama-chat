@@ -1374,3 +1374,9 @@ exported the same way, lists the values `reply(calls=...)` takes besides a
 registry. The check in `reply` and its error message read it, and so do the
 tests that went through the policies by hand; one of them had left out
 `"withhold"` and `"run"`, which now hand their sampling over under test too.
+
+**A call whose argument spelling the template does not show.** A model whose
+calls have tags of their own but whose template does not show how it spells
+the arguments is refused tools, since `tool_calls=` went ("One way to do each
+thing in the public interface"). The user decided to wait until such a model
+appears, and then let its add-on file carry the spelling.
