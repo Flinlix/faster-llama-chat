@@ -1396,3 +1396,12 @@ on is `"high"` wherever it differs there from that off, else the default.
 Where on and off are the same, there is no switch. Of the 52 test templates,
 only cohere-2's on changed, from the default to `"high"`, which it renders
 alike, so no render changed.
+
+**Four more pointers to the design history.** Four comments pointed to the
+README's "Tool calling", which holds none of what they named: how a call's
+format is recovered, how nested values are read, what counts as one of the
+model's own tags, and why reading a call and running one are separate. The
+first three now name "How a call's format is recovered" and "Nested values in
+a model's own elements, and tests by module". No section records the reason
+for the fourth; its comment names "Restructured inside the library", which
+records how a generated call is read.

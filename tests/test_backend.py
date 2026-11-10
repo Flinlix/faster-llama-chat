@@ -5,7 +5,7 @@ rather than llama.cpp's answers: what counts as one of the model's own tags,
 and which cache edits are performed while loading rather than at the first
 eviction. The first is pinned here rather than through the fake context used
 everywhere else, which answers that question itself and so cannot test it. See
-the README, "Tool calling".
+design_history.md, "How a call's format is recovered".
 """
 
 import inspect

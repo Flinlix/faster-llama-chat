@@ -2,7 +2,8 @@
 
 Reading a call back is the other half and lives in
 :mod:`llama_chat.call_parsing`: an engine reached over a wire emits calls it
-cannot run, so the two are separate. See the README, "Tool calling".
+cannot run, so the two are separate. See design_history.md, "Restructured
+inside the library".
 """
 
 from __future__ import annotations

@@ -2,7 +2,8 @@
 
 The tags a generated call sits between, what separates and closes calls, and
 how a call spells its name and arguments. Where a comparison proves nothing the
-answer is ``None`` rather than a guess. See the README, "Tool calling".
+answer is ``None`` rather than a guess. See design_history.md, "How a call's
+format is recovered".
 """
 
 from __future__ import annotations
@@ -117,7 +118,9 @@ def extract_call_body(render: Render, call_open: str,
 
     Four renders: no arguments, one string, one number, and two strings. Every
     delimiter falls out of comparing them, and three more recover how nested
-    values are written. See the README, "Tool calling".
+    values are written. See design_history.md, "How a call's format is
+    recovered" and "Nested values in a model's own elements, and tests by
+    module".
 
     Args:
         render: As :func:`~llama_chat.template_extract.extract_fragments`.
