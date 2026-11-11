@@ -4,69 +4,83 @@ from __future__ import annotations
 
 import copy
 
-from .tools import ToolCall, ToolResult, ToolTurn, result_text
+from .tools import Thought, ToolCall, ToolResult, ToolTurn, result_text
 
 
 # The roles a message of the caller's takes: a question and a reply.
 MESSAGE_ROLES = ("user", "assistant")
+# Where a message holds a reply's thought, which the template is handed in the form it reads.
+THOUGHT_KEY = "reasoning_content"
 
 
 def as_messages(history) -> list[dict]:
     """``begin``'s history as the messages a template is given.
 
     A tool turn becomes its assistant messages, each holding the calls made
-    before a result, and the results after them, each answering its own call.
+    before a result and the thought before them, and the results after them,
+    each answering its own call.
 
     Raises:
         TypeError: If an item is neither a ``(role, text)`` pair, a message
             dictionary nor a :class:`~llama_chat.tools.ToolTurn`, or a text
-            is not a ``str``.
-        ValueError: If a dictionary holds other keys than ``role`` and
-            ``content``, or a role is not one of :data:`MESSAGE_ROLES`.
+            or a thought is not a ``str``.
+        ValueError: If a dictionary holds other keys than ``role``,
+            ``content`` and, for a reply, :data:`THOUGHT_KEY`, or a role is
+            not one of :data:`MESSAGE_ROLES`.
     """
     messages, n = [], 0
     for item in history:
         if not isinstance(item, ToolTurn):
-            role, text = _role_and_text(item)
-            messages.append({"role": role, "content": text})
+            messages.append(_history_message(item))
             continue
-        text, calls, owed = "", [], []          # owed: the ids of the calls still to be answered
+        text, thought, calls, owed = "", "", [], []    # owed: the ids of the calls still to be answered
         for step in item.steps:
             if isinstance(step, str):
                 text += step
+            elif isinstance(step, Thought):
+                ensure_text(step.text, "a thought")
+                thought += step.text
             elif isinstance(step, ToolCall):
                 calls.append(step)
             elif isinstance(step, ToolResult):
                 if calls:
-                    messages.append(calling_message(text, calls, n))
+                    messages.append(_with_thought(calling_message(text, calls, n), thought))
                     owed += [call_id(n + k) for k in range(len(calls))]
-                    n, text, calls = n + len(calls), "", []
+                    n, text, thought, calls = n + len(calls), "", "", []
                 answered = owed.pop(0) if owed else call_id(n - 1)
                 messages.append(result_message(step.name, answered, result_text(step.result)))
         if calls:                       # called, and not answered yet
-            messages.append(calling_message(text, calls, n))
+            messages.append(_with_thought(calling_message(text, calls, n), thought))
             n += len(calls)
-        elif text or not (item.steps and isinstance(item.steps[-1], ToolResult)):
-            messages.append({"role": "assistant", "content": text})     # a result ends it open
+        elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
+            messages.append(_with_thought({"role": "assistant", "content": text},  # a result ends it open
+                                          thought))
     return messages
 
 
-def _role_and_text(item) -> tuple[str, str]:
-    """A history message's role and text, from a ``(role, text)`` pair or a ``{"role", "content"}`` dictionary."""
+def _history_message(item) -> dict:
+    """A history message from a ``(role, text)`` pair or a ``{"role", "content"}`` dictionary, a reply's thought included."""
     if isinstance(item, dict):
-        other = sorted(set(item) - {"role", "content"})
-        if other or "content" not in item:
-            raise ValueError(f"a history message holds 'role' and 'content' and nothing else, "
-                             f"not {sorted(item)}; a turn that called tools is a ToolTurn")
-        role, text = item.get("role"), item["content"]
+        allowed = {"role", "content"} | ({THOUGHT_KEY} if item.get("role") == "assistant" else set())
+        if set(item) - allowed or "content" not in item:
+            raise ValueError(f"a history message holds 'role' and 'content', and a reply also "
+                             f"{THOUGHT_KEY!r}, but nothing else, not {sorted(item)}; a turn "
+                             "that called tools is a ToolTurn")
+        role, text, thought = item.get("role"), item["content"], item.get(THOUGHT_KEY, "")
     elif isinstance(item, (tuple, list)) and len(item) == 2:
-        role, text = item
+        (role, text), thought = item, ""
     else:
         raise TypeError(f"a history message is a (role, text) pair, a dict with 'role' and "
                         f"'content', or a ToolTurn, not the {type(item).__name__} {item!r}")
     ensure_role(role)
     ensure_text(text, "a history message's text")
-    return role, text
+    ensure_text(thought, "a thought")
+    return _with_thought({"role": role, "content": text}, thought)
+
+
+def _with_thought(message: dict, thought: str) -> dict:
+    """``message``, holding ``thought`` under :data:`THOUGHT_KEY` where there is one."""
+    return {**message, THOUGHT_KEY: thought} if thought else message
 
 
 def ensure_text(text, what: str) -> None:
@@ -115,7 +129,7 @@ def result_message(name: str, tool_call_id: str, text: str) -> dict:
 
 # The forms chat templates read a reply's thought in: a field of its own under
 # either of two names, or a content block of its own ahead of the text.
-THOUGHT_FORMS = ("reasoning_content", "thinking", "content_block")
+THOUGHT_FORMS = (THOUGHT_KEY, "thinking", "content_block")
 
 
 def with_thought_as(message: dict, form: str) -> dict:
@@ -131,22 +145,26 @@ def with_thought_as(message: dict, form: str) -> dict:
 
 
 def as_history(messages: list[dict]) -> list:
-    """The messages back as ``begin`` takes them."""
+    """The messages back as ``begin`` takes them: a reply that holds a thought as a dictionary, a tool turn's thoughts as its steps."""
     history, steps = [], []
     for message in messages:
         role = message["role"]
         if role == "system":
             continue
+        said = ([Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []) \
+            + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
-            if message["content"]:
-                steps.append(message["content"])
-            steps += [ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]))
-                      for c in message["tool_calls"]]
+            steps += said + [ToolCall(c["function"]["name"],
+                                      copy.deepcopy(c["function"]["arguments"]))
+                             for c in message["tool_calls"]]
         elif role == "tool":
             steps.append(ToolResult(message["name"], message["content"]))
         elif role == "assistant" and steps:
-            history.append(ToolTurn(tuple(steps + ([message["content"]] if message["content"] else []))))
+            history.append(ToolTurn(tuple(steps + said)))
             steps = []
+        elif message.get(THOUGHT_KEY):
+            history.append({"role": role, "content": message["content"],
+                            THOUGHT_KEY: message[THOUGHT_KEY]})
         else:
             history.append((role, message["content"]))
     if steps:                           # a turn still open

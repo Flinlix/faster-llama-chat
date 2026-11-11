@@ -2,9 +2,13 @@
 
 import pytest
 
-from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
+from llama_chat.config import Config
+from llama_chat.tools import Thought, ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.wrapper import ChatWrapper
+from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
-from tests.invented_templates import CALL_TAGS, TOOLS_CLOSING_OPEN_TURNS
+from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS,
+                                      TOOLS_CLOSING_OPEN_TURNS)
 
 from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
@@ -19,7 +23,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     live.reply("wetter?", tool_call_policy=registry).finish()
     live.reply("danke").finish()
-    history = live.conversation()[1]
+    history = live.conversation()["messages"]
     assert [type(item).__name__ for item in history] == [
         "tuple", "tuple", "tuple", "ToolTurn", "tuple", "tuple"]
     turn = history[3]
@@ -28,7 +32,38 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     again, fake_again = tool_wrapper(context_size=2048)
     again.begin("persona", history, tools=registry.specs())
     assert fake_again.cache == fake.cache
-    assert again.conversation()[1] == history
+    assert again.conversation()["messages"] == history
+
+
+def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reasoning():
+    """Nothing is passed again by hand: the declarations, the reasoning switch and every thought the template keeps come back."""
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Uhrzeit.", name="uhr", parameters={"type": "object"})
+    later = ToolSpec("datum", "Datum.", {"type": "object"})
+    replies = ["<thought>Gruss</thought>Hallo.",
+               ScriptedCall("fn:uhr{}", before="<thought>Erst fragen</thought>"),
+               "<thought>Jetzt antworten</thought>Zwölf."]
+    live_fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=list(replies))
+    live = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=live_fake)
+    live.begin("persona", tools=registry.specs(), reasoning=True)
+    live.reply("hallo").finish()
+    live.declare_tools([later])
+    live.reply("wie spät?", tool_call_policy=registry).finish()
+    saved = live.conversation()
+    assert saved["system_prompt"] == "persona" and saved["reasoning"] is True
+    assert [spec.name for spec in saved["tools"]] == ["uhr", "datum"]
+    assert saved["messages"][1] == {"role": "assistant", "content": "Hallo.",
+                                    "reasoning_content": "Gruss"}
+    assert saved["messages"][3].steps[0] == Thought("Erst fragen")
+
+    again_fake = FakeContext(REASONING_KEEPING_THOUGHTS)
+    again = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=again_fake)
+    again.begin(**saved)
+    assert again.conversation() == saved
+    # Written where the template writes a past thought, which a plain history would leave out.
+    held = again_fake.text_of(again_fake.cache)
+    assert '<thought>Gruss</thought>Hallo.' in held and '<thought>Erst fragen</thought>' in held
+    assert held.startswith(live_fake.text_of(live_fake.cache).split('<call>')[0])
 
 
 # ----- a history that called tools -----------------------------------------
@@ -46,7 +81,7 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     past.begin("s", [("user", "wie spät?"), ToolTurn((
         ToolCall("uhr", {}), ToolResult("uhr", {"zeit": "12:00"}), "Gleich."))],
         tools=[ToolSpec("uhr", "", {})])
-    assert past.conversation()[1][-1].text == "Gleich."
+    assert past.conversation()["messages"][-1].text == "Gleich."
     # The live turn opens with the generation prompt, a past one as the template
     # writes it; this template makes the two the same.
     assert past_fake.cache == fake.cache
@@ -107,8 +142,8 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
     live.begin("persona", tools=weather_registry().specs())
     live.reply("hallo").finish()
     again, fake_again = tool_wrapper()
-    again.begin(*live.conversation(), tools=weather_registry().specs())
-    assert live.conversation()[0] == "persona"
+    again.begin(**live.conversation())
+    assert live.conversation()["system_prompt"] == "persona"
     assert fake_again.cache == fake.cache
 
 
@@ -119,20 +154,22 @@ def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
-    w.conversation()[1][-1].steps[-1].arguments["city"] = "Rom"
-    assert w.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
+    w.conversation()["messages"][-1].steps[-1].arguments["city"] = "Rom"
+    assert w.conversation()["messages"][-1].steps[-1].arguments == {"city": "Bonn"}
     again, _ = tool_wrapper()
-    again.begin("persona", w.conversation()[1], tools=weather_registry().specs())
+    again.begin("persona", w.conversation()["messages"], tools=weather_registry().specs())
     pending_calls_held(again)[0].arguments["city"] = "Rom"
-    assert again.conversation()[1][-1].steps[-1].arguments == {"city": "Bonn"}
+    assert again.conversation()["messages"][-1].steps[-1].arguments == {"city": "Bonn"}
 
 
 def test_the_conversation_reads_back_as_begin_takes_it():
     w, _ = tool_wrapper()
     w.begin("eins", [("user", "a"), ("assistant", "b")])
-    assert w.conversation() == ("eins", [("user", "a"), ("assistant", "b")])
+    assert w.conversation() == {"system_prompt": "eins",
+                                "messages": [("user", "a"), ("assistant", "b")],
+                                "tools": [], "reasoning": False}
     again, _ = tool_wrapper()
-    again.begin(*w.conversation())
+    again.begin(**w.conversation())
     assert again.conversation() == w.conversation()
 
 
@@ -164,10 +201,12 @@ def test_a_history_in_the_usual_dictionaries_reads_in_as_the_same_pairs():
     (("tool", "12:00"), ValueError, "ToolTurn"),
     ({"role": "user"}, ValueError, "content"),
     ({"role": "user", "content": "Hallo", "name": "Ada"}, ValueError, "'name'"),
+    ({"role": "user", "content": "Hallo", "reasoning_content": "x"}, ValueError,
+     "a reply also"),
     ("Hallo", TypeError, "str"),
     (("user", "Hallo", "zu viel"), TypeError, "tuple"),
 ], ids=["unknown-role", "unknown-role-dict", "system", "tool", "no-content", "other-key",
-        "bare-text", "three-values"])
+        "thought-of-a-question", "bare-text", "three-values"])
 def test_a_history_message_of_another_form_or_role_is_refused_naming_it(item, error, cause):
     w, fake = begun_wrapper()
     w.reply("eins").finish()

@@ -106,6 +106,8 @@ class _Published:
 
     system_prompt: str = ""
     history: tuple = ()
+    tools: tuple = ()
+    reasoning: bool = False
     pending_calls: tuple = ()
     begun: bool = False
     turn_open: bool = False
@@ -143,10 +145,12 @@ class RenderedCache:
         """The conversation as the template is given it; not to be changed by the caller."""
         return self._state.messages
 
-    def conversation(self) -> tuple[str, list]:
-        """The system prompt and the history as ``begin`` takes them, from one publication, the caller's to change; safe to read unlocked."""
+    def conversation(self) -> dict:
+        """Everything ``begin`` takes to begin the conversation again, by its parameter names, from one publication, the caller's to change; safe to read unlocked."""
         published = self._published
-        return published.system_prompt, copy.deepcopy(list(published.history))
+        return {"system_prompt": published.system_prompt,
+                "messages": copy.deepcopy(list(published.history)),
+                "tools": copy.deepcopy(list(published.tools)), "reasoning": published.reasoning}
 
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
@@ -1032,7 +1036,8 @@ class RenderedCache:
         system = self._system_part()
         self._published = _Published(
             system_prompt=system[0]["content"] if system else "",
-            history=tuple(as_history(self._state.messages)), pending_calls=tuple(self.pending_calls),
+            history=tuple(as_history(self._state.messages)), tools=tuple(self._state.tools),
+            reasoning=self._state.reasoning, pending_calls=tuple(self.pending_calls),
             begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role)
 
 

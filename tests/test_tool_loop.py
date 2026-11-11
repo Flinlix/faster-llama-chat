@@ -899,7 +899,7 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     list(wrapper.reply("frage", tool_call_policy=registry, max_calls=1))
 
     assert len(ran) == 1                       # only the permitted one ran
-    written = [step.result for step in wrapper.conversation()[1][-1].steps
+    written = [step.result for step in wrapper.conversation()["messages"][-1].steps
                if isinstance(step, ToolResult)]
     refusals = [str(result) for result in written if "tool_limit_reached" in str(result)]
     assert len(refusals) == 2                  # the other two were answered

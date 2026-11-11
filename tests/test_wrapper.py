@@ -898,7 +898,7 @@ def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_inc
     stream = w.reply("hi")
     next(stream)
     stream.close()                               # closed early: recorded
-    assert w.conversation() == ("s", [("user", "hi"), ("assistant", "r")])
+    assert w.conversation()["messages"] == [("user", "hi"), ("assistant", "r")]
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
 
 

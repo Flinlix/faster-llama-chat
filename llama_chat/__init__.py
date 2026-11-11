@@ -9,8 +9,8 @@ The core actions, each prefilling as little as possible:
   refusing, handing over or running the tool calls the model makes.
 * :meth:`ChatWrapper.truncate_last_reply`: shorten the newest reply to what was
   read or heard of it.
-* :meth:`ChatWrapper.conversation`: the system prompt and the history the
-  cache holds, tool turns included, as :meth:`ChatWrapper.begin` takes them.
+* :meth:`ChatWrapper.conversation`: everything :meth:`ChatWrapper.begin`
+  takes to begin the conversation the cache holds again.
 
 Crossing either eviction limit removes the oldest exchanges and shifts the
 survivors down, reusing their KV without re-prefilling. A model whose own
@@ -20,7 +20,7 @@ being recovered from that template.
 
 from .cache_context import CacheContext
 from .config import Config, InvalidSettingError, Sampling
-from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from .tools import Thought, ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
                     StopReason)
 from .wrapper import ChatWrapper
@@ -39,6 +39,7 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "ToolTurn",
+    "Thought",
     "ToolSpec",
     "ToolRegistry",
     # For a cache context of one's own, ``ChatWrapper(context=...)``.

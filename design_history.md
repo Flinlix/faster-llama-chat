@@ -2001,3 +2001,26 @@ thought. A request that took several generations, around tool calls, joins
 each generation's thought in order, with a blank line between two.
 The stream still yields the answer alone, so a caller who shows only the
 answer changes nothing.
+
+**268.11: `conversation()` holds everything `begin` takes.** It returned the
+system prompt and the history, so a caller beginning again passed the tools
+and the reasoning switch by hand, and every thought the template keeps was
+lost: a past reply's thought was held in the conversation's messages but left
+out of the history. `conversation()` now returns a dictionary keyed by
+`begin`'s parameter names, `system_prompt`, `messages`, `tools` and
+`reasoning`, so `begin(**chat.conversation())` begins again in one step;
+`tools` holds every declaration, those `declare_tools` added later included,
+which `begin` then writes from the start, where the template writes
+declarations anyway. A dictionary was chosen over a record type of its own
+because it unpacks into `begin` as it is and adds no name to the interface. A
+thought the template keeps comes back in the form that the field already
+uses: a reply as `{"role": "assistant", "content": ..., "reasoning_content":
+...}`, which `begin` now takes too (a question with that key is refused), and
+a tool turn's thought as a `Thought` step, a new public type in `tools.py`,
+before the text and the calls of the message it belongs to. A reply without a
+thought stays a `(role, text)` pair. Sixteen of the test templates write a
+past tool turn's thought, so a tool turn needs it as much as a plain reply.
+The template still decides what is written: the invented template that keeps
+thoughts leaves out the thought of a reply that closes a tool turn, which the
+live turn held as generated, so a conversation begun again holds that turn as
+the template writes it, as any past tool turn.

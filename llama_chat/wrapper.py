@@ -108,7 +108,8 @@ class ChatWrapper:
                 opens one without.
             messages: Optional history, oldest first: ``(role, text)`` pairs
                 or ``{"role": role, "content": text}`` dictionaries, the role
-                ``"user"`` or ``"assistant"``, and a
+                ``"user"`` or ``"assistant"``, a reply's dictionary with its
+                thought under ``"reasoning_content"`` where it has one, and a
                 :class:`~llama_chat.tools.ToolTurn` for an assistant turn that
                 called tools, written as this model's template writes one.
                 A history that ends on a tool turn's result leaves that turn
@@ -431,16 +432,20 @@ class ChatWrapper:
         self._lock.release()
         return True
 
-    def conversation(self) -> tuple[str, list[tuple[str, str] | ToolTurn]]:
-        """The system prompt and the history the cache holds, as :meth:`begin` takes them.
+    def conversation(self) -> dict:
+        """Everything :meth:`begin` takes to begin the conversation the cache holds again, by its parameter names.
 
-        The history is every message after the system prompt, oldest first:
-        ``(role, text)`` pairs, and a :class:`~llama_chat.tools.ToolTurn` for
-        an assistant turn that called tools, with its calls and results.
-        ``begin(*chat.conversation())``, with the same tools, begins again as
-        the template writes it, a call still owed a result owed again. Safe
-        from any thread, including while another is mid-generation: both are
-        read as the newest finished change left them.
+        ``system_prompt``, ``messages``, ``tools`` and ``reasoning``, so that
+        ``begin(**chat.conversation())`` begins again as it was, a call still
+        owed a result owed again. ``messages`` is every message after the
+        system prompt, oldest first: a ``(role, text)`` pair, a reply whose
+        thought the template keeps as ``{"role", "content",
+        "reasoning_content"}``, and a :class:`~llama_chat.tools.ToolTurn` for
+        an assistant turn that called tools, with its thoughts, calls and
+        results. ``tools`` is every declaration, those of
+        :meth:`declare_tools` included. Safe from any thread, including while
+        another is mid-generation: all of it is read as the newest finished
+        change left it.
         """
         return self._conversation.conversation()
 
