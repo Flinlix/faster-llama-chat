@@ -314,3 +314,21 @@ def test_a_wrapper_takes_reasoning_on_from_the_add_on_file_next_to_the_model(tmp
                            evict_above_fraction=1.0), context=fake)
     w.begin("s", [("user", "hi")], reasoning=True)
     assert held_text(fake).endswith("<|assistant|><think>")
+
+
+@pytest.mark.parametrize("addon, recommended, cause", [
+    ({"sampler": {}}, {}, "may hold only"),
+    ({"reasoning_on": {"reasoning_effort": "none"}}, {}, "reasoning_on"),
+    ({}, {"top_p": 2.0}, "the model's own recommendation"),
+], ids=["malformed-file", "reasoning-on-as-off", "refused-gguf-sampling"])
+def test_the_add_on_file_and_the_models_own_sampling_are_refused_by_the_constructor(
+        tmp_path, addon, recommended, cause):
+    """The refusals the constructor's docstring names reach its caller as ValueError."""
+    fingerprint = template_fingerprint(_DEFAULT_WITHOUT_THOUGHT["chat_template"])
+    (tmp_path / "m.json").write_text(json.dumps({"templates": [fingerprint], **addon}))
+    (tmp_path / "m.gguf").touch()
+    fake = FakeContext(_DEFAULT_WITHOUT_THOUGHT)
+    fake.recommended = recommended
+    with pytest.raises(ValueError, match=cause):
+        ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
+                           evict_above_fraction=1.0), context=fake)

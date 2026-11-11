@@ -2405,3 +2405,13 @@ so the cache stays the template's render. Where no room is left for a result,
 it is not written and the call stays owed, since the caller's own result
 would find no room either; that is the one case where a call that ran is
 still owed.
+
+**R14: the constructor names the refusals of the add-on file.** Reading the
+add-on file and the sampling the GGUF recommends moved into the constructor,
+which then raised three `ValueError`s its docstring left out: an add-on file
+that names the model's template but is malformed, a `reasoning_on` that writes
+the prompt as reasoning off does, and a recommended sampling value the
+settings refuse where nothing replaces it. The docstring now names them, and
+a test pins that each one reaches the caller of the constructor. A file next
+to the model that is not JSON, or names another template, is still not used
+and only warned about, since it may belong to something else.

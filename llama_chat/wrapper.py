@@ -61,7 +61,11 @@ class ChatWrapper:
             ValueError: If the model ships no chat template, if its template
                 fails validation against the model, if ``config`` asks for
                 a larger context than ``context`` holds, or if ``context`` can
-                neither shift its cache, cut its end nor save a state.
+                neither shift its cache, cut its end nor save a state. Also if
+                the model's add-on file names its template but is malformed,
+                if its ``reasoning_on`` writes the prompt as reasoning off
+                does, or if a sampling value the model's GGUF recommends, which
+                neither ``config`` nor the add-on file replaces, is refused.
         """
         if config is None:
             config = Config()
