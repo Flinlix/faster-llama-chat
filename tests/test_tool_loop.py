@@ -87,6 +87,19 @@ def test_a_call_ends_the_stream_and_holds_the_turn_open():
     assert rows(wrapper)[-1]["text"] == ""
 
 
+def test_a_call_whose_turn_ends_before_its_closing_tag_is_handed_over_closed():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.replies = [ScriptedCall("fn:clock{}", closes=False)]
+
+    events = list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+
+    assert without_ids(events) == [ToolCall(name="clock", arguments={})]
+    assert newest_turn(fake).endswith("<call>fn:clock{}</call>")
+    wrapper.inject_tool_result(events[0], "12:00")
+    assert wrapper.reply(tool_call_policy="yield").finish().text == "reply"
+
+
 def test_a_call_refused_without_tools_still_lets_the_reply_go_on():
     """The model is told there are no tools, not left with its call ignored.
 

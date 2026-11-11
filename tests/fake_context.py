@@ -76,11 +76,15 @@ _FIRST_GENERATED = sys.maxunicode + 1
 
 
 class ScriptedCall:
-    """A call the context's model writes in place of a reply, ``body`` between its tags, ``before`` it as reply text."""
+    """A call the context's model writes in place of a reply, ``body`` between its tags, ``before`` it as reply text.
 
-    def __init__(self, body: str, before: str = "") -> None:
+    Without ``closes`` the model ends its turn where the call's closing would follow.
+    """
+
+    def __init__(self, body: str, before: str = "", closes: bool = True) -> None:
         self.body = body
         self.before = before
+        self.closes = closes
 
 
 def shipped_addon_call(template_text: str) -> dict:
@@ -338,7 +342,7 @@ class FakeContext:
         """The scripted call as the model writes it: its ``before``, then its opening, its body, its closing."""
         opening, closing = self._call_marks()
         return (self._tokens(call.before, parse_special=True) + opening
-                + [self._generated(ch) for ch in call.body] + closing)
+                + [self._generated(ch) for ch in call.body] + (closing if call.closes else []))
 
     def _call_marks(self) -> tuple[list[int], list[int]]:
         """The template's own call tags as tokens, else its call texts as characters."""

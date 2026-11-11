@@ -77,7 +77,8 @@ def generate(
         boundary: Where a call opens and closes and where a reply ends in
             text. A call is recognized where it opens, none of it is
             yielded, and generation ends where it closes with
-            ``stop_reason == "tool_call"``; one the token cap cuts short is
+            ``stop_reason == "tool_call"``, or where the turn ends inside it,
+            closed as the template closes one; one the token cap cuts short is
             dropped, and the reply ends with ``"token_limit"``.
 
     Yields:
@@ -125,15 +126,16 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         closes_call = call is not None and (tok == call_close or (
             close_text is not None and close_text in "".join(call)
             + context.token_bytes(tok).decode("utf-8", errors="replace")))
-        if ends and not closes_call and call is not None and close_text is not None:
+        if ends and not closes_call and call is not None:
             # Ended inside a call: the call ends here, closed as the template closes one.
-            closing = context.tokenize(boundary.call_texts[1], add_special=False,
-                                       parse_special=True)
+            closing = ([call_close] if close_text is None else
+                       context.tokenize(boundary.call_texts[1], add_special=False,
+                                        parse_special=True))
             context.decode_generated(closing, pos)
             pos += len(closing)
             generated.token_ids.extend(closing)
             generated.stop_reason = "tool_call"
-            generated.tool_call = "".join(call).strip()
+            generated.tool_call = "".join(call) if close_text is None else "".join(call).strip()
             break
         if ends and not closes_call:
             generated.stop_reason = "end_of_turn"

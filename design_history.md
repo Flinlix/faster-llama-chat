@@ -1993,3 +1993,11 @@ reason and can read the id from what the library returns instead.
 `inject_tool_result` still takes a call built by hand without an id, matched
 by its name and arguments, as before; a call that carries an id must carry
 the owed call's.
+
+**270.6: a turn that ends inside a call closed by a tag.** Where a call
+closes with text, a turn that ended inside the call had the call closed as the
+template closes one, and the call was read. Where it closes with a tag of its
+own, the same turn ended as `"end_of_turn"`, and the call was dropped without
+a word, its tokens left in the cache. The closing tag is now decoded after the
+call's last token, and the call is read and answered as any other, so both
+kinds of closing end the same.

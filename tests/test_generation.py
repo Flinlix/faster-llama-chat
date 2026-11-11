@@ -93,6 +93,19 @@ def test_a_call_the_token_cap_cuts_short_is_dropped():
     assert acc.text == "hi "            # and none of it leaked into the reply
 
 
+def test_a_turn_that_ends_inside_a_call_closed_by_a_tag_closes_the_call_with_that_tag():
+    """The model ends its turn before the call's closing tag: the call is closed as the template closes one."""
+    from llama_chat.cache_context import GenerationAccumulator
+
+    acc = GenerationAccumulator()
+    stream = generate(_generating(_PIECES, [0, 1, 2, 5], eog=5), 0, 10, out=acc,
+                      boundary=CallBoundary(tool_tokens=_TAGS))
+    assert list(stream) == ["hi "]
+    assert acc.stop_reason == "tool_call"
+    assert acc.tool_call == "fn:clock{}"
+    assert acc.token_ids == [0, 1, 2, 3]       # the closing tag reached the cache
+
+
 def test_without_tool_tokens_a_call_tag_is_ordinary_text():
     """A model that cannot call tools has its tags yielded like any other text."""
     from llama_chat.cache_context import GenerationAccumulator
