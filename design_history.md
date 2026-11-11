@@ -1481,3 +1481,28 @@ and `{% generation %}`, so the plain parse failed on 7 of the 52 test
 templates and returned no names at all. The names are now parsed by the
 renderer's own environment, so every template the renderer can render has its
 names read. No test template's declaration variable changed.
+
+**264.3: The reasoning switch among the names a template reads.** This
+revises "How reasoning is read". The switch was looked for only in
+`enable_thinking` and `reasoning_effort`; templates also switch reasoning
+with `thinking`, `thinking_mode`, `thinking_option`, `reasoning_strength` or
+`reasoning`, and the test templates that do worked only because they read one
+of the two as well. The two are still tried first, by their rules as before.
+After them comes each other name the template reads that holds "think" or
+"reason": first as a flag, `True` for on and `False` for off, then by the
+effort's rule, `"none"` for off where it changes what follows the user turn.
+A discovered name counts only where it changes what follows the user turn.
+Both limits keep out variables that change the prompt for another purpose:
+over the 52 test templates, every name read was tried as a flag and as an
+effort, and `low_effort`, `medium_effort` and `tool_choice` (`"none"`) each
+change what follows the user turn without being a reasoning switch. No test
+template's switch changed. A caller's variable of the switch's name now
+replaces the switch's value instead of making the render fail, since a
+discovered switch may share its name with a variable a caller passes.
+
+A switch whose values are words of the template's own, such as
+`thinking_option` (`"on"` and `"off"`) or `thinking_mode` (`"thinking"` and
+`"chat"`), is found by neither rule. The words could be read from the
+comparisons in the template's source, but nothing in a render tells which of
+them is off where the template's default does not reason; this waits for the
+user's decision.

@@ -27,7 +27,8 @@ class ModelTemplate:
                            for prompted in (False, True)}
         self._switch = reasoning_switch(lambda messages, generation_prompt, variables:
                                         self._renderers[generation_prompt](
-                                            messages=messages, **variables).prompt)
+                                            messages=messages, **variables).prompt,
+                                        template_names_read(self._renderers[False]))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None,
@@ -39,11 +40,12 @@ class ModelTemplate:
             reasoning: Turn the template's reasoning switch on or off, as
                 :func:`~llama_chat.template_extract.reasoning_switch` reads it.
                 ``None`` leaves it unset.
-            variables: Further template variables, by name.
+            variables: Further template variables, by name, each in place of
+                the switch's own value where it names the switch.
         """
         try:
             return self._renderers[generation_prompt](
-                messages=messages, tools=tools, **self._switch(reasoning),
-                **(variables or {})).prompt
+                messages=messages, tools=tools,
+                **{**self._switch(reasoning), **(variables or {})}).prompt
         except Exception:
             return None

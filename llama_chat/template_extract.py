@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Callable
 
 from .messages import calling_message
@@ -25,6 +26,10 @@ from .tools import ToolCall
 
 # The fields chat templates read a reply's thought from.
 _THOUGHT_FIELDS = ("reasoning_content", "thinking")
+# The variables chat templates share for the reasoning switch, a flag and an
+# effort, and the words the name of another such variable holds.
+_SWITCH_NAMES = ("enable_thinking", "reasoning_effort")
+_SWITCH_WORDS = ("think", "reason")
 
 # Message content, one per role, a second user turn, and a thought. These and the
 # probe texts below are plain alphanumerics: they survive Jinja `| trim` and are
@@ -45,19 +50,24 @@ _MARK = "QQMARK"
 Render = Callable[..., "str | None"]
 
 
-def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | None], dict]:
+def reasoning_switch(render_variables: Callable[..., str],
+                     names: Iterable[str]) -> Callable[[bool | None], dict]:
     """The template variables that turn reasoning on or off, as a render reads them.
 
-    ``enable_thinking``, the variable chat templates share for it, or, where
-    that changes nothing, ``reasoning_effort``. Off is ``"none"`` where that
-    changes what follows the user turn compared with the template's own
-    default, and the default is then on; otherwise the default is off, and on
-    is ``"high"`` where that differs there from it. Where on and off are the
-    same, there is no switch.
+    ``enable_thinking``, the variable chat templates share for it, where it
+    changes the render; else ``reasoning_effort``; else the first of ``names``
+    whose name speaks of thinking or reasoning and that changes what follows
+    the user turn. A variable other than ``enable_thinking`` is read as a
+    flag first, ``True`` for on and ``False`` for off, then as an effort: off
+    is ``"none"`` where that changes what follows the user turn compared with
+    the template's own default, and the default is then on; otherwise the
+    default is off, and on is ``"high"`` where that differs there from it.
+    Where on and off are the same, there is no switch.
 
     Args:
         render_variables: Renders ``messages`` with ``generation_prompt`` and the
             template variables in ``variables``, raising where the template does.
+        names: The names the template reads.
     """
     probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     render = refusing(render_variables)
@@ -65,19 +75,30 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
     def rendered(variables: dict):
         return render(probe, generation_prompt=True, variables=variables)
 
+    def render_differs(on: dict, off: dict) -> bool:
+        return rendered(on) != rendered(off)
+
     def after_user_turn_differs(on: dict, off: dict) -> bool:
         on_render, off_render = rendered(on), rendered(off)
         return None not in (on_render, off_render) \
             and on_render.split(USER_SENTINEL, 1)[-1] != off_render.split(USER_SENTINEL, 1)[-1]
 
-    thinking = {True: {"enable_thinking": True}, False: {"enable_thinking": False}}
-    if rendered(thinking[True]) == rendered(thinking[False]):
-        none, high = {"reasoning_effort": "none"}, {"reasoning_effort": "high"}
+    def as_flag(name: str, differs) -> tuple[dict, dict] | None:
+        on, off = {name: True}, {name: False}
+        return (on, off) if differs(on, off) else None
+
+    def as_effort(name: str) -> tuple[dict, dict] | None:
+        none, high = {name: "none"}, {name: "high"}
         off = none if after_user_turn_differs(none, {}) else {}
         on = {} if off else high if after_user_turn_differs(high, {}) else {}
-        if on != off:
-            thinking = {True: on, False: off}
-    return lambda reasoning: {} if reasoning is None else thinking[reasoning]
+        return (on, off) if on != off else None
+
+    found = as_flag(_SWITCH_NAMES[0], render_differs) or as_effort(_SWITCH_NAMES[1])
+    for name in sorted(set(names) - set(_SWITCH_NAMES)):
+        if any(word in name for word in _SWITCH_WORDS):
+            found = found or as_flag(name, after_user_turn_differs) or as_effort(name)
+    on, off = found or ({_SWITCH_NAMES[0]: True}, {_SWITCH_NAMES[0]: False})
+    return lambda reasoning: {} if reasoning is None else on if reasoning else off
 
 
 def refusing(render: Render) -> Render:

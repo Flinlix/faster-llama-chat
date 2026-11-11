@@ -408,26 +408,44 @@ def _rendering(open_thought):
     return render
 
 
-@pytest.mark.parametrize("ending, switch_on, switch_off", [
+_SHARED_FLAG = ({"enable_thinking": True}, {"enable_thinking": False})
+
+
+@pytest.mark.parametrize("ending, names, switch_on, switch_off", [
     # Reads the shared variable: it stays the switch.
-    (lambda v: "<think>" if v.get("enable_thinking") else "<think></think>",
-     {"enable_thinking": True}, {"enable_thinking": False}),
+    (lambda v: "<think>" if v.get("enable_thinking") else "<think></think>", (), *_SHARED_FLAG),
     # Reads only an effort, and that opens the thought: the effort is the switch.
-    (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>",
+    (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>", (),
      {"reasoning_effort": "high"}, {}),
     # Reasons unless the effort is none: none is off, and the template's own default is on.
-    (lambda v: "<think></think>" if v.get("reasoning_effort") == "none" else "<think>",
+    (lambda v: "<think></think>" if v.get("reasoning_effort") == "none" else "<think>", (),
      {}, {"reasoning_effort": "none"}),
     # Reasons by default, writes more for high, and stops only for none: the default
     # stays on rather than the higher effort.
     (lambda v: {"none": "<think></think>", "high": "<effort><think>"}.get(
-        v.get("reasoning_effort"), "<think>"),
+        v.get("reasoning_effort"), "<think>"), (),
      {}, {"reasoning_effort": "none"}),
     # An effort that changes nothing after the user turn is not a switch.
-    (lambda v: "", {"enable_thinking": True}, {"enable_thinking": False}),
+    (lambda v: "", (), *_SHARED_FLAG),
+    # A flag of another name that opens the thought is the switch.
+    (lambda v: "<think>" if v.get("thinking") is True else "<think></think>",
+     ("messages", "thinking"), {"thinking": True}, {"thinking": False}),
+    # An effort of another name is read by the effort's rule.
+    (lambda v: "<think></think>" if v.get("reasoning_strength") == "none" else "<think>",
+     ("reasoning_strength",), {}, {"reasoning_strength": "none"}),
+    # The shared variable is tried first, where the template reads another as well.
+    (lambda v: "<think>" if v.get("enable_thinking") or v.get("thinking") else "<think></think>",
+     ("thinking",), *_SHARED_FLAG),
+    # A variable whose name speaks of neither thinking nor reasoning is no switch,
+    # however it changes what follows the user turn.
+    (lambda v: "<think>" if v.get("low_effort") is False else "<think></think>",
+     ("low_effort",), *_SHARED_FLAG),
+    # Nor is one that speaks of thinking and changes nothing after the user turn.
+    (lambda v: "", ("keep_thinking",), *_SHARED_FLAG),
 ])
-def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, switch_on, switch_off):
-    switch = reasoning_switch(_rendering(ending))
+def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, names, switch_on,
+                                                                     switch_off):
+    switch = reasoning_switch(_rendering(ending), names)
     assert switch(True) == switch_on
     assert switch(False) == switch_off
     assert switch(None) == {}
