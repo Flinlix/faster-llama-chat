@@ -123,7 +123,10 @@ past reply may close with a tag that only a following turn shows, and the next
 user turn's tag then starts where the role tags' shared opening last occurs, or
 is the longest end of what follows the reply that a first user turn's opening
 also ends with; what a template writes once after the last message, such as an
-end-of-text token, belongs to no turn; every probe renders with reasoning off;
+end-of-text token, belongs to no turn; every probe renders with reasoning off
+(2026-11-11: true of the probes for the turn tags only; the probes for a
+thought, and the load check of the generation prompt and of the closing after
+a reply, render in each reasoning mode);
 an empty system prompt is no system message, and the conversation opens as the
 template opens one without, tools declared where it declares them then.
 Replaced since: a system
@@ -679,7 +682,9 @@ leaves `conversation()` as the one read and adds `owed_calls`.
 ### Faults the old code had
 
 - Llama 3.2 writes `<|python_tag|>` before a call its template opens with plain
-  text; such a tag is held back while a call may follow, and is never shown.
+  text; such a tag is held back while a call may follow, and is never shown
+  (2026-11-11: no longer true: where the text after it cannot begin a call,
+  it is shown as the reply's text).
 - A tool result JSON cannot write is an error result, and refused by
   `inject_tool_result`.
 - The README promised `"interrupted"` for a stream closed early, which has no
@@ -1058,7 +1063,9 @@ one from a history given to begin already was. The records made ahead (the
 render for the next question, the splice note and the question an ask added)
 each carry the conversation and the cache version they were made for, and are
 used only while both are unchanged, or, for the window, while the
-conversation continues from theirs; no action clears them. The cache length
+conversation continues from theirs; no action clears them (2026-11-11: no
+longer true: `begin` clears all three, and a generation clears the record of
+the question its request asked). The cache length
 alone was rejected, because two different targets of one conversation can
 have the same length; `CacheSync.version` changes with every change to the
 token list, checked by a random test of 3000 operations with injected
@@ -2104,3 +2111,20 @@ system prompt, or to raise `context_size` or `evict_above_fraction`; and a
 conversation that an eviction leaves without room for the reply, which a
 threshold close to the context size allows, asks to lower
 `evict_above_fraction` or `min_reply_tokens`, or to raise `context_size`.
+
+**270.24: texts that no longer held.** Three sentences of this history
+described the code as it no longer is, and each now carries a dated note
+where it stands: not every probe renders with reasoning off, only those for
+the turn tags; `begin` and a generation clear the records made ahead, which
+"no action clears them" denied; and a tag held back while a call may follow
+is shown as reply text where none follows. The README left four things out,
+each now stated and pinned by a test. `"withhold"` keeps a call's opening tag
+from being drawn, so a call that opens with plain text, as one model's
+template writes it, cannot be withheld and stays in the reply's text. The
+answer to an unreadable call says that it failed and could not be read, and
+gives no instruction to try again or not. A result handed to
+`inject_tool_result` is written as given, a dict carrying `error` included,
+without the sentence a registry's failure gets. And a context of one's own
+must keep its token ids from -65,536 to 1,048,575: the search for a dropped
+stretch spells each id as one character, offset by 65,536, and Python's
+characters end at 1,114,111.

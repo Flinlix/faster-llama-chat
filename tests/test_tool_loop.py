@@ -1331,6 +1331,41 @@ def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
     assert not wrapper.turn_open
 
 
+def test_a_call_that_opens_with_plain_text_cannot_be_withheld_and_stays_text():
+    """No token opens it, so none can be kept from being drawn."""
+    from tests.chat_templates import WEATHER, fixture
+    fake = FakeContext(fixture("llama-3.2"))
+    wrapper = ChatWrapper(Config(context_size=8192), context=fake)
+    wrapper.begin("", tools=[WEATHER])
+    fake.replies = [ScriptedCall('get_weather", "parameters": {"city": "Bonn"}}')]
+    reply = wrapper.reply("Wetter?", tool_call_policy="withhold").finish()
+    assert reply.text.startswith('{"name": "get_weather"')
+    assert (reply.tool_calls, wrapper.turn_open) == ([], False)
+
+
+def test_the_answer_to_an_unreadable_call_says_why_and_gives_no_instruction():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"]
+    wrapper.reply("los", tool_call_policy="refuse").finish()
+    turn = newest_turn(fake)
+    assert "the call could not be read" in turn
+    assert "try again" not in turn and "do not call again" not in turn
+
+
+def test_an_error_result_of_the_callers_own_is_written_as_given():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=weather_registry().specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    call, = [e for e in wrapper.reply("wetter?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    own = {"error": "offline", "message": "kein Netz"}
+    wrapper.inject_tool_result(call, own)
+    turn = newest_turn(fake)
+    assert json.dumps(own) in turn and "the tool call failed" not in turn
+    wrapper.reply(tool_call_policy="yield").finish()
+
+
 def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whole(monkeypatch):
     """Only what a written call can cause counts as an unreadable call; a fault in the library is raised."""
     wrapper, fake = tool_wrapper()

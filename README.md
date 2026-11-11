@@ -185,7 +185,7 @@ tools were declared, since a model may write a call tag unasked. It is one of
 
 | `tool_call_policy=` | what happens | what the stream yields |
 |------|------|------|
-| `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool | text |
+| `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool. Where the template's call opens with plain text rather than one of the model's tags, no token can be withheld: a call the model writes is not recognized and stays in the reply's text | text |
 | `"refuse"` (the default) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
 | `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply(tool_call_policy="yield")` again | text, then each `ToolCall` |
 | a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`, and where it is not a whole number of at least 0 | text |
@@ -244,10 +244,13 @@ the default template.
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
 arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
-that the call failed, why, and `try again` or `do not call again`. A result
-that is a dict carrying `error` counts as a failure too, and so does a tool
-that returns what JSON cannot write. Handed to `inject_tool_result`, such a
-result is refused, and the call stays owed.
+that the call failed, why, and `try again` or `do not call again`, except the
+answer to an unreadable call, which says only that the call failed and could
+not be read. A result that a registered tool returns as a dict carrying
+`error` counts as a failure too, and so does one that JSON cannot write. A
+result handed to `inject_tool_result` is written as given, a dict carrying
+`error` included, with nothing added to it; one that JSON cannot write is
+refused there, and the call stays owed.
 
 **Nothing is evicted while a turn is open**, since that would cut into the turn
 being written, so a turn of many calls grows towards `context_size`. A result
@@ -479,7 +482,9 @@ ships, such as `TOOL_USE_TEMPLATE` from `llama_chat.cache_context`; a name the
 model ships no template of answers `None`. A context whose `chat_template_text()`
 answers `None` is refused where it is adopted, as a model that ships no chat
 template is, whatever it renders.
-`tests/fake_context.py` is a worked one over a list of ints.
+Its token ids must lie from -65,536 to 1,048,575: an eviction searches the
+cache's tokens for the stretch it dropped, and an id outside that range fails
+that search. `tests/fake_context.py` is a worked one over a list of ints.
 
 ## Verify
 

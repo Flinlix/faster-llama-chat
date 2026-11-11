@@ -569,6 +569,17 @@ def test_eviction_shift_mode_does_not_rebuild():
     assert fake.resets == resets_after_begin  # but never via rebuild
 
 
+def test_a_dropped_stretch_is_found_among_token_ids_up_to_the_bound_the_readme_names():
+    from llama_chat.cache_sync import CacheSync
+    fake = FakeContext(PLAIN)
+    memory = CacheSync(fake)
+    low, high = -0x10000, 0xFFFFF                   # -65,536 and 1,048,575
+    dropped, kept = [high] * 4, [low, high] * 5
+    memory.decode([1] + dropped + kept)
+    memory.hold([1] + kept, find_dropped_stretch=True)
+    assert fake.edits == [("shift", 1, 4)] and fake.cache == [1] + kept
+
+
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
     # Cache cannot shift: eviction drops oldest from bookkeeping and re-prefills.
     fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
