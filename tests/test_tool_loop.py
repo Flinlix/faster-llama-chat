@@ -175,6 +175,50 @@ def test_a_refusing_reply_runs_none_even_of_a_declared_tool():
     assert ran == ["ran"]
 
 
+def test_a_call_the_library_runs_is_handed_over_in_the_stream_before_it_runs():
+    """An app can say what is being looked up while the tool runs."""
+    seen = []
+    registry = ToolRegistry()
+    registry.tool(lambda: seen.append("ran") or "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    # The second call is past the ceiling, so it does not run, and is not handed over.
+    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+
+    stream = wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1)
+    for event in stream:
+        if not isinstance(event, str):
+            seen.append(("handed", event.name))
+        elif seen[-1:] != ["text"]:
+            seen.append("text")
+
+    assert seen == [("handed", "clock"), "ran", "text"]
+    assert stream.reply.text == "reply" and len(stream.reply.tool_calls) == 2
+
+
+def test_a_stream_closed_at_a_call_handed_over_leaves_it_owed_and_unrun():
+    ran = []
+    registry = ToolRegistry()
+    registry.tool(lambda: ran.append(1) or "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+
+    with wrapper.reply("wie spät?", tool_call_policy=registry) as stream:
+        call = next(event for event in stream if isinstance(event, ToolCall))
+
+    assert ran == [] and wrapper.pending_calls == [call]
+    wrapper.inject_tool_result(call, "12:00")
+    assert wrapper.reply().finish().text == "reply" and not wrapper.turn_open
+
+
+def test_a_refusing_reply_hands_over_no_call():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    assert "".join(wrapper.reply("wie spät?")) == "reply"
+
+
 def test_the_reported_calls_are_not_the_wrappers_own_list():
     """A Reply that aliased ``_pending_calls`` would empty as results arrive."""
     wrapper, fake = tool_wrapper()
@@ -420,7 +464,7 @@ def test_an_oversized_result_is_clipped_and_keeps_its_tags():
 
 
 # ----- the local loop ------------------------------------------------------
-def test_a_running_reply_runs_the_tool_and_yields_only_prose():
+def test_a_running_reply_runs_the_tool_and_yields_its_call_then_prose():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     registry = ToolRegistry()
@@ -429,10 +473,11 @@ def test_a_running_reply_runs_the_tool_and_yields_only_prose():
                   description="Sagt die Zeit.", name="clock")
     fake.call_script = ["fn:clock{}"]
 
-    out = "".join(wrapper.reply("wie spät?", tool_call_policy=registry))
+    events = list(wrapper.reply("wie spät?", tool_call_policy=registry))
 
     assert seen == ["ran"]
-    assert out                        # the reply after the result
+    assert without_ids(events[:1]) == [ToolCall("clock", {})]
+    assert "".join(events[1:])        # the reply after the result
     assert not bool(wrapper.pending_calls)
 
 
@@ -923,7 +968,7 @@ def test_the_streamed_deltas_join_into_the_exchange_text():
         except StopIteration as ended:
             reply = ended.value
             break
-    assert "".join(deltas) == reply.text
+    assert "".join(d for d in deltas if isinstance(d, str)) == reply.text
 
 
 # ----- an action on the thread whose reply is still being read ------------

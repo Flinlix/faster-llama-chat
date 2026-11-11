@@ -235,9 +235,10 @@ class ChatWrapper:
                   ``"refuse"``.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
-                  the model answers. In the last permitted round a call the
-                  model writes is not recognized and stays text, so the turn
-                  always closes.
+                  the model answers. Each call that runs is handed over in the
+                  stream just before it runs. In the last permitted round a
+                  call the model writes is not recognized and stays text, so
+                  the turn always closes.
             max_calls: Where a registry is given, how many calls one turn may
                 use. ``None`` sets no ceiling; a call past one is answered with
                 an error result rather than run. Only with a registry.
@@ -252,9 +253,10 @@ class ChatWrapper:
                 config's for the fields it sets.
 
         Returns:
-            A :class:`ReplyStream` of the text deltas, and with ``"yield"`` the
-            calls after them; its ``reply`` is the :class:`Reply` once it has
-            ended, summing every generation where calls were run.
+            A :class:`ReplyStream` of the text deltas, with ``"yield"`` the
+            calls after them, and with a registry each call before it runs;
+            its ``reply`` is the :class:`Reply` once it has ended, summing
+            every generation where calls were run.
 
         Raises:
             ValueError: At once, if no conversation has been begun; if a tool
@@ -536,8 +538,10 @@ class ChatWrapper:
     def _generate_until_answered(
         self, text: str, *, registry: ToolRegistry | None,
         max_calls: int | None = None,
-        **kwargs) -> Generator[str, None, Reply]:
+        **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
+
+        Each call that runs is handed over in the stream before it runs.
 
         Args:
             registry: What to run calls against. ``None`` refuses every call
@@ -594,7 +598,7 @@ class ChatWrapper:
                         return _sum_generations(generations,
                                                 any_call_asked and calls_left == 0)
                     any_call_asked = True
-                    settled, calls_left = self._settle_calls(
+                    settled, calls_left = yield from self._settle_calls(
                         _answerable(generation.tool_calls), registry, calls_left, max_calls)
                     may_call_again = registry is not None and calls_left > 0
                     try:
@@ -646,7 +650,7 @@ class ChatWrapper:
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):
-        """Decide what every call of one round gets back, running what may run.
+        """Decide what every call of one round gets back, running what may run, and hand over each call that runs before it runs.
 
         Settled before any of it is written, because what a failure tells the
         model to do next depends on the budget the last call leaves. In the
@@ -663,6 +667,7 @@ class ChatWrapper:
                 result = {"error": "tools_not_run",
                           "message": "no tool can be run for this request"}
             elif calls_left > 0:
+                yield call
                 result = registry.call(call)
                 calls_left -= 1
             else:

@@ -193,7 +193,7 @@ keeps its turn's policy unless it is given another:
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool | text |
 | `"refuse"` (the default for a new turn) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
 | `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again | text, then each `ToolCall` |
-| a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=` | text |
+| a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`. A stream closed at a call handed over leaves that call unrun and owed, as under `"yield"` | text, and each `ToolCall` that runs, just before it runs |
 
 ```python
 with chat.reply("What is the weather in Munich?", tool_call_policy="yield") as stream:

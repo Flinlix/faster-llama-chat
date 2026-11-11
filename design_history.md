@@ -2069,3 +2069,17 @@ The related find is fixed with it: answering an unreadable call took every
 its call, so a refusal to place a kept turn took that quiet path too. The
 template's result block is now checked before the answer is written, and only
 `ContextOverflowError` counts as no room; any other refusal is raised.
+
+**268.9: a call the library runs is handed over before it runs.** Where a
+registry runs the calls, the stream held only text, so an app could not show
+what was being looked up while a tool ran. Each call that runs is now handed
+over in the stream as its `ToolCall` just before it runs, so the stream holds
+calls besides text in that mode too, as it does under `"yield"`. A call that
+does not run, refused for a spent `max_calls`, is not handed over, since
+nothing is being looked up for it; it is reported on `Reply.tool_calls` as
+before. A stream closed at a call handed over leaves that call unrun and owed
+a result, as under `"yield"`, and the reply that goes on after its result
+keeps the registry (268.2). Verified on the CPU with MiniCPM5-2B Q4_K_M and a
+tool registered by the bare decorator: the call was handed over before the
+tool ran, and the stream, `Reply.tool_calls` and `conversation()` carried the
+same id; the exchange took 1.9 s.
