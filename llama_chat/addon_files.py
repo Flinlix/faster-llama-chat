@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
 from .config import Config
+
+_log = logging.getLogger(__name__)
 
 SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty",
@@ -35,23 +38,47 @@ def template_fingerprint(template: str) -> str:
 def addon_file(model_path: str | None, template: str | None) -> dict:
     """A model's add-on file, with ``sampling`` and ``call`` always present, possibly empty.
 
-    The file next to the model with its name and ``.json`` comes first, then a
-    file shipped in :data:`SHIPPED_ADDONS` that names the model's template.
+    The file next to the model with its name and ``.json`` comes first, where
+    it names the model's template; one that does not is not used, and a
+    warning says why. Then a file shipped in :data:`SHIPPED_ADDONS` that names
+    the template.
 
     Raises:
         ValueError: If the file found is malformed.
     """
+    fingerprint = template_fingerprint(template) if template is not None else None
     own = Path(model_path).with_suffix(".json") if model_path else None
     if own is not None and own.is_file():
-        return read_addon_file(own)
-    if template is None:
+        unused_because = _not_naming(own, fingerprint)
+        if unused_because is None:
+            return read_addon_file(own)
+        _log.warning("%s is not used as the add-on file of %s: %s", own, model_path,
+                     unused_because)
+    if fingerprint is None:
         return read_addon_file(None)
-    fingerprint = template_fingerprint(template)
     for path in sorted(SHIPPED_ADDONS.glob("*.json")):
         found = read_addon_file(path)
         if fingerprint in found["templates"]:
             return found
     return read_addon_file(None)
+
+
+def _not_naming(path: Path, fingerprint: str | None) -> str | None:
+    """Why the file at ``path`` is not the add-on file of the template ``fingerprint`` names; ``None`` where it is."""
+    if fingerprint is None:
+        return "the model ships no chat template for it to name"
+    try:
+        found = json.loads(path.read_text())
+    except ValueError:
+        return "it is not JSON"
+    if not isinstance(found, dict):
+        return "it is not a JSON object"
+    named = found.get("templates")
+    if not isinstance(named, list) or not named:
+        return "it names no template: its templates is no list of fingerprints"
+    if fingerprint not in named:
+        return f"it names other templates than this model's ({fingerprint})"
+    return None
 
 
 def read_addon_file(path: Path | None) -> dict:

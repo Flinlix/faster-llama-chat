@@ -364,7 +364,10 @@ for the whole process, a model loaded by other code included.
 
 What a model needs beyond its chat template comes from a JSON add-on file,
 never from code: the one next to the GGUF with its name and `.json`, else one
-shipped in `llama_chat/addons/` that names the model's template by its SHA-256.
+shipped in `llama_chat/addons/`, each used only where it names the model's
+template by its SHA-256. A file next to the GGUF that names no template, or
+another one, or is no JSON object, is not used, and a warning on the logger
+`llama_chat` says why.
 It fills in only what the template cannot tell; what the template states, the
 template decides. It is checked when the model loads, and anything else in it
 is refused.

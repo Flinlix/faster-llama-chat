@@ -15,12 +15,18 @@ from tests.chat_templates import STEMS, fixture
 _TEMPLATE = "{{ messages }}"
 
 
+def _own_file(tmp_path, contents) -> str:
+    """The path of a model whose own add-on file holds ``contents``, as JSON where it is not text."""
+    (tmp_path / "m.json").write_text(contents if isinstance(contents, str) else json.dumps(contents))
+    return str(tmp_path / "m.gguf")
+
+
 def test_what_the_caller_sets_wins_over_everything_the_model_recommends(tmp_path):
-    model = tmp_path / "m.gguf"
-    (tmp_path / "m.json").write_text(json.dumps({"sampling": {"temperature": 0.3}}))
+    model = _own_file(tmp_path, {"templates": [template_fingerprint(_TEMPLATE)],
+                                 "sampling": {"temperature": 0.3}})
     config = with_model_sampling(
-        Config(model_path=str(model), temperature=0.9),
-        {"temperature": 0.6}, addon_file(model, None))
+        Config(model_path=model, temperature=0.9),
+        {"temperature": 0.6}, addon_file(model, _TEMPLATE))
     assert config.temperature == 0.9
 
 
@@ -64,15 +70,51 @@ def test_a_shipped_file_applies_to_the_template_it_names(tmp_path, monkeypatch):
     assert addon_file(None, "another template")["sampling"] == {}
 
 
-@pytest.mark.parametrize("contents", ["not json", json.dumps({"sampler": {}}),
-                                      json.dumps({"sampling": {"top_p": 2.0}}),
-                                      json.dumps({"sampling": {"seed": 1}})])
-def test_a_malformed_add_on_file_is_refused_when_the_model_loads(tmp_path, contents):
-    (tmp_path / "m.json").write_text(contents)
+@pytest.mark.parametrize("rest", [{"sampler": {}}, {"sampling": {"top_p": 2.0}},
+                                  {"sampling": {"seed": 1}}])
+def test_a_malformed_add_on_file_that_names_the_template_is_refused_when_the_model_loads(
+        tmp_path, rest):
+    model = _own_file(tmp_path, {"templates": [template_fingerprint(_TEMPLATE)], **rest})
     with pytest.raises(ValueError):
-        with_model_sampling(
-        Config(model_path=str(tmp_path / "m.gguf")),
-        {}, addon_file(tmp_path / "m.gguf", None))
+        addon_file(model, _TEMPLATE)
+
+
+@pytest.mark.parametrize("contents, why", [
+    ({"templates": ["0" * 64], "sampling": {"top_p": 0.5}}, "names other templates"),
+    ({"sampling": {"top_p": 0.5}}, "names no template"),
+    ("not json", "is not JSON"),
+    ('["a list"]', "is not a JSON object"),
+    ({"templates": "abc", "sampling": {"top_p": 2.0}}, "names no template"),
+])
+def test_a_file_next_to_the_model_that_does_not_name_its_template_is_not_used(
+        tmp_path, monkeypatch, caplog, contents, why):
+    monkeypatch.setattr(addon_files, "SHIPPED_ADDONS", tmp_path / "shipped")
+    (tmp_path / "shipped").mkdir()
+    (tmp_path / "shipped" / "family.json").write_text(json.dumps(
+        {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
+    model = _own_file(tmp_path, contents)
+    with caplog.at_level("WARNING", logger="llama_chat"):
+        assert addon_file(model, _TEMPLATE)["sampling"] == {"top_p": 0.8}
+    assert len(caplog.records) == 1 and why in caplog.records[0].getMessage()
+    assert str(tmp_path / "m.json") in caplog.records[0].getMessage()
+
+
+def test_a_file_next_to_a_model_without_a_template_is_not_used(tmp_path, caplog):
+    model = _own_file(tmp_path, {"templates": ["0" * 64], "sampling": {"top_p": 0.5}})
+    with caplog.at_level("WARNING", logger="llama_chat"):
+        assert addon_file(model, None)["sampling"] == {}
+    assert "ships no chat template" in caplog.records[0].getMessage()
+
+
+def test_a_file_next_to_the_model_that_names_its_template_comes_before_a_shipped_one(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(addon_files, "SHIPPED_ADDONS", tmp_path / "shipped")
+    (tmp_path / "shipped").mkdir()
+    (tmp_path / "shipped" / "family.json").write_text(json.dumps(
+        {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
+    model = _own_file(tmp_path, {"templates": ["0" * 64, template_fingerprint(_TEMPLATE)],
+                                 "sampling": {"top_p": 0.5}})
+    assert addon_file(model, _TEMPLATE)["sampling"] == {"top_p": 0.5}
 
 
 @pytest.mark.parametrize("path", sorted(SHIPPED_ADDONS.glob("*.json")), ids=lambda p: p.stem)

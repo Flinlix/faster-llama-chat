@@ -1671,3 +1671,19 @@ holds 1.5, cited from the card's Best Practices for thinking mode on general
 tasks, the mode whose other values it already held. Verified on the CPU with
 Qwen3.5-9B Q4_K_M: the wrapper ran with presence penalty 1.5 and the file's
 other values and answered.
+
+**265.4: a file next to the GGUF is used only where it names the template.**
+Any file with the model's name and `.json` was taken as its add-on file, even
+one written for another template, and an unrelated file of that name (another
+tool's settings, say) stopped the model from loading. It is now used only
+where its `templates` names this model's template, as a shipped file must.
+Otherwise it is not used, the shipped file for the template applies, and a
+warning on `llama_chat.addon_files` names the file and the reason: not JSON,
+not an object, no list of templates, other templates, or a model without a
+template to name. A warning rather than an error, since such a file may be
+another program's; a warning rather than information, since a person who
+wrote one with a wrong fingerprint needs to see it, and Python shows warnings
+without any logging configured. A file that does name the template is checked
+whole, and refused where malformed, as before. Run on the CPU with gemma-3-1b and a
+file of another program's settings beside it: the warning named the file and
+the reason, and the model loaded with its shipped file's values and answered.
