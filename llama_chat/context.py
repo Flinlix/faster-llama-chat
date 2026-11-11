@@ -239,6 +239,30 @@ class KVContext:
         # Shifted by nothing, so a build missing the shift fails at load, not at an eviction.
         if self._can_shift:
             self._backend.kv_seq_add(self._engine_context, SEQ, 0, 0, 0)
+        if not self._can_cut_tail:
+            self._probe_saved_state()
+
+    def _probe_saved_state(self) -> None:
+        """Save the state one decoded token leaves, decode two more, and go back to it, cleared either way.
+
+        Raises:
+            RuntimeError: If this build cannot save a state or go back to one,
+                which a cache that cannot be cut goes back with.
+        """
+        token = max(self._backend.token_eos(self._vocab), 0)
+        try:
+            self._backend.decode(self._engine_context, [token], 0, SEQ, False,
+                                 self._max_batch_tokens)
+            state = self.save_state()
+            self._backend.decode(self._engine_context, [token] * 2, 1, SEQ, False,
+                                 self._max_batch_tokens)
+            self.restore_state(state, 1)
+        except RuntimeError as error:
+            raise RuntimeError(f"this build cannot save and restore the state of a cache "
+                               f"that cannot be cut, which it is brought back with: {error}"
+                               ) from error
+        finally:
+            self._backend.kv_clear(self._engine_context)
 
     def _probe_tail_cut(self) -> bool:
         """Whether three decoded tokens can be cut back to one, cleared either way."""

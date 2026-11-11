@@ -1617,3 +1617,16 @@ template that rewrites older exchanges only with tools declared, or only on a
 later date, is refused there rather than kept by a check made for other
 inputs. The test records that both checks run at each of the three, since none
 of the 52 test templates rewrites an older exchange under either change.
+
+**270.22: Saving and restoring a state is tried at load.** A cache that
+cannot be cut at its end, such as one with a running state, is brought back
+to an earlier point from a state saved there, and decodes the whole
+conversation again where none can be saved. Loading tried the cut and the
+shift but not the save and the restore, so a build that cannot do either was
+found only at the first reply that needed it, and then decoded everything
+again without a word. Where the cache cannot be cut, loading now decodes one
+token, saves the state, decodes two more, and goes back to the saved state
+through the same restore a conversation uses, then clears the cache; a build
+that cannot is refused there with a `RuntimeError`, as one missing the shift
+is. Measured on Qwen 3.5 9B on the CPU, whose cache cannot be cut: the probe
+passes at load and the model answers as before.
