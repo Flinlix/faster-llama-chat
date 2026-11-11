@@ -241,10 +241,11 @@ class RenderedCache:
             self._state.tools, self._state.reasoning = list(tools), reasoning
             self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
-            self._state.messages = system + as_messages(history)
-            # Counted before the oldest are dropped, so that no later call takes the id of one.
-            self._state.n_calls = next_call_number(
-                c["id"] for m in self._state.messages for c in m.get("tool_calls") or ())
+            self._state.messages = system + as_messages(history, self._state.n_calls)
+            # Counted before the oldest are dropped, and never back, so that no later call
+            # takes the id of one dropped, or of one this conversation held before.
+            self._state.n_calls = max(self._state.n_calls, next_call_number(
+                c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()))
             self._state.kept, self._state.kept_at = [], {}
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")

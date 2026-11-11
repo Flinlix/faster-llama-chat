@@ -2325,3 +2325,11 @@ its result, and `begin(**chat.conversation())` began it open: the round trip
 compared equal while `turn_open` differed. The reply that closes a tool turn is
 now always the turn's last step, an empty `str` where it wrote nothing, and
 `begin` already read a trailing text as the closing reply.
+
+**R3: no id is given twice within one wrapper.** `begin` numbered new calls
+from the ids of the history it was given. After every tool turn had been
+evicted, `begin(**chat.conversation())` held no call, so numbering began at
+the first id again and a new call took the id of one the caller had already
+seen. The count of ids written now only goes up within one `ChatWrapper`, and
+a call of the history given without an id is numbered from it too. A failed
+`begin` puts the count back with the rest of the conversation.

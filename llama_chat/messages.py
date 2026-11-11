@@ -17,14 +17,14 @@ MESSAGE_ROLES = ("user", "assistant")
 THOUGHT_KEY = "reasoning_content"
 
 
-def as_messages(history) -> list[dict]:
+def as_messages(history, min_call_number: int = 0) -> list[dict]:
     """``begin``'s history as the messages a template is given.
 
     A tool turn becomes its assistant messages, each holding the calls made
     before a result and the thought before them, and the results after them,
     each answering its own call. A call keeps the id it carries; one without
-    takes the next id this library writes after every id of the history, so
-    no two calls share one.
+    takes the next id this library writes after every id of the history, and
+    numbered from ``min_call_number`` at least, so no two calls share one.
 
     Raises:
         TypeError: If an item is neither a ``(role, text)`` pair, a message
@@ -41,7 +41,7 @@ def as_messages(history) -> list[dict]:
     if repeated is not None:
         raise ValueError(f"two calls of the history carry the id {repeated!r}; "
                          "give each call an id of its own")
-    numbered = itertools.count(next_call_number(given))
+    numbered = itertools.count(max(min_call_number, next_call_number(given)))
     messages = []
     for item in history:
         if not isinstance(item, ToolTurn):

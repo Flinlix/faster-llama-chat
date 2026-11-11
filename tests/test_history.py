@@ -290,3 +290,27 @@ def test_a_tool_turn_closed_by_an_empty_answer_begins_again_closed():
     assert not again.turn_open
     assert again.conversation() == saved
     again.reply("danke").finish()           # a question follows the closed turn
+
+
+def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
+    """Within one wrapper no two calls share an id, whether made by the model or given to begin without one."""
+    from tests.invented_templates import TOOLS
+    registry = weather_registry()
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=2048, evict_above_fraction=0.9, max_history_exchanges=1),
+                    context=fake)
+    w.begin("persona", tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    seen = {call.id for call in w.reply("wetter?", tool_call_policy=registry).finish().tool_calls}
+    w.reply("hallo").finish()
+    assert not _calls_in(w.conversation()["messages"])     # the tool turn was evicted
+    w.begin(**w.conversation())
+    fake.call_script = ["fn:weather{city:'Rom'}"]
+    made, = w.reply("und Rom?", tool_call_policy=registry).finish().tool_calls
+    assert made.id not in seen
+    seen.add(made.id)
+    w.begin("persona", [("user", "a"), ToolTurn((ToolCall("weather", {"city": "Ulm"}),
+                                                 ToolResult("weather", "kalt"), "Kalt."))],
+            tools=registry.specs())
+    given, = _calls_in(w.conversation()["messages"])
+    assert given.id not in seen
