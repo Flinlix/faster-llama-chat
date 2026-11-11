@@ -2034,3 +2034,14 @@ after each finished change, as `conversation()` and `pending_calls` do, so
 the copy carries the token count. A count read while a reply streams is the
 one from before that reply, until the reply is recorded. The library's own
 readers under the lock still read the live state.
+
+**270.1: a cut to a reply the template does not write is refused.** Three
+of the test templates (mistral-3, devstral-2, mistral-large-4) refuse an
+assistant message with empty text. `truncate_last_reply("")` on them recorded
+the empty reply, found that no render of the conversation could be made, and
+left the cache holding the old text; every later question was then refused
+until a new `begin`. The shortened conversation is now checked before
+anything is decoded: where the template writes it neither as it is nor with a
+question after it, the cut is refused with a `ValueError` that asks to keep
+more of the text, and the conversation and the cache stay as they were. The
+same check, `_writes`, serves 270.3.

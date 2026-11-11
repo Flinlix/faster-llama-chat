@@ -316,6 +316,12 @@ class RenderedCache:
             roles[i:i + 2] for i in range(len(roles) - 1)]
             else "this model's template refuses to write this conversation")
 
+    def _writes(self, messages: list[dict]) -> bool:
+        """Whether the template writes ``messages``, as they are or with a question after them."""
+        return (self._rendering.render(messages, False) is not None
+                or self._rendering.render(messages + [{"role": "user", "content": STAND_IN}],
+                                          True) is not None)
+
     def _ends_on_result(self) -> bool:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
@@ -616,8 +622,9 @@ class RenderedCache:
         Raises:
             ValueError: If no conversation was begun, a reply is open, the
                 newest message is not a reply or holds a tool call, one that
-                could not be read included, or ``keep_text`` is not a prefix
-                of its text.
+                could not be read included, ``keep_text`` is not a prefix of
+                its text, or the template does not write the reply shortened
+                to it.
         """
         with self._action():
             _ensure_ready(self, "truncate a reply", "truncate in")
@@ -633,6 +640,9 @@ class RenderedCache:
             if keep_text == newest["content"]:
                 return
             self._state.messages[-1] = {**newest, "content": keep_text}
+            if not self._writes(self._state.messages):
+                raise ValueError(f"this model's template does not write the newest reply "
+                                 f"shortened to {keep_text!r}; keep more of its text")
             self._render_ahead()
             self._memory.rest()
 

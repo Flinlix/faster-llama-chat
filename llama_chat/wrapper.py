@@ -353,8 +353,10 @@ class ChatWrapper:
         Raises:
             ValueError: If no conversation has been begun, if a reply is open,
                 if the newest message is not the assistant's or holds a tool
-                call, one that could not be read included, or if
-                ``keep_text`` is not a prefix of its text.
+                call, one that could not be read included, if ``keep_text``
+                is not a prefix of its text, or if the template does not write
+                the reply shortened to it, as one that writes no empty reply
+                does not write it shortened to ``""``.
         """
         with self._lock:
             self._ensure_open()

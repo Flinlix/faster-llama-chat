@@ -102,6 +102,29 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     assert "Zwei" not in held_text(fake)
 
 
+@pytest.mark.parametrize("stem", ["mistral-3", "devstral-2", "mistral-large-4"])
+def test_a_cut_to_a_reply_the_template_does_not_write_is_refused(stem):
+    """These templates write no empty reply, so a reply cut to nothing could be neither held nor followed."""
+    fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
+    w.begin("")
+    w.reply("Hallo").finish()
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ValueError, match="keep more"):
+        w.truncate_last_reply("")
+    assert w.conversation() == before and fake.cache == held
+    w.truncate_last_reply("Ant")
+    assert w.reply("Weiter").finish().text == "Antwort"
+
+
+def test_a_cut_to_nothing_stands_where_the_template_writes_an_empty_reply():
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
+    w.reply("hi").finish()
+    w.truncate_last_reply("")
+    assert rows(w)[-1] == {"role": "assistant", "text": ""}
+    w.reply("weiter").finish()
+
+
 def test_a_reply_that_called_a_tool_cannot_be_cut():
     w, fake = begun_wrapper(TOOLS)
     fake.call_script.append("fn:uhr{}")
