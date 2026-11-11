@@ -1509,7 +1509,7 @@ user's decision.
 
 **261.5: Whether reasoning can be turned off.** Reasoning off is the
 template's own off, and some templates have none: of the 37 test templates
-that mark a thought, 13 write the prompt the same with reasoning on and off,
+that mark a thought, 12 write the prompt the same with reasoning on and off,
 among them those of DeepSeek R1, gpt-oss, Muse Glimmer and Ministral 3
 Reasoning. `begin(reasoning=False)` was accepted on them without a word,
 though the model may reason in every reply. `can_turn_off_reasoning` now says
