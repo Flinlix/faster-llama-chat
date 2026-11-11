@@ -344,7 +344,9 @@ class RenderedCache:
             alone = self._rendering.length(self._system_part() + [question], generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
-                    f"request needs {alone} tokens but only {room} fit beside room for the reply")
+                    f"request needs {alone} tokens but only {room} fit beside room for the reply; "
+                    "shorten the request or the system prompt, or raise context_size or lower "
+                    "min_reply_tokens")
             self._ensure_writes("user", text, generation_prompt=True)
             before = list(self._memory.tokens)
             n_before = len(as_history(self._state.messages))
@@ -402,7 +404,8 @@ class RenderedCache:
             if alone > limit:
                 raise ContextOverflowError(
                     f"injected message needs {alone} tokens but only {limit} fit beside the "
-                    "system prompt")
+                    "system prompt; shorten the message or the system prompt, or raise "
+                    "context_size/evict_above_fraction")
             self._ensure_writes(role, text, generation_prompt=False)
             n_before = len(as_history(self._state.messages))
             room = self._max_prompt_tokens
@@ -445,7 +448,8 @@ class RenderedCache:
         if len(target.tokens) > room:
             raise ContextOverflowError(
                 f"the conversation needs {len(target.tokens)} tokens but only {room} leave "
-                "room for the reply")
+                "room for the reply; lower evict_above_fraction or min_reply_tokens, so that "
+                "an eviction leaves that room, or raise context_size")
         return target
 
     # ----- generating -------------------------------------------------------------------

@@ -2093,3 +2093,14 @@ dropped what it can and where `inject` has dropped for a message it does not
 splice; a question `inject` splices is a user message, which opens an
 exchange of its own. The threshold is the bound, as for a message checked
 alone, so that a reply has room under the context size.
+
+**270.17: every refusal for want of room says what to change.** Three of the
+`ContextOverflowError` messages gave the cause, how many tokens were needed
+and how many fit, but not what to do, while the others name a remedy. A
+question too long beside room for its reply now asks to shorten it or the
+system prompt, or to raise `context_size` or lower `min_reply_tokens`; an
+injected message too long beside the system prompt asks to shorten it or the
+system prompt, or to raise `context_size` or `evict_above_fraction`; and a
+conversation that an eviction leaves without room for the reply, which a
+threshold close to the context size allows, asks to lower
+`evict_above_fraction` or `min_reply_tokens`, or to raise `context_size`.

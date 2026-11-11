@@ -596,6 +596,21 @@ def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
     assert rows(w) == before
 
 
+def test_every_refusal_for_want_of_room_says_what_to_change():
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=32),
+                    context=fake)
+    w.begin("s")
+    with pytest.raises(ContextOverflowError, match="shorten the request.*min_reply_tokens"):
+        w.reply("x" * 600).finish()
+    with pytest.raises(ContextOverflowError, match="shorten the message.*evict_above_fraction"):
+        w.inject("x" * 600)
+    w.inject("x" * 470)                         # under the threshold, not under room for a reply
+    with pytest.raises(ContextOverflowError,
+                       match="lower evict_above_fraction or min_reply_tokens"):
+        w.reply().finish()
+
+
 def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
     """Nothing in it can be evicted, since an eviction drops up to the next user message."""
     fake = FakeContext(PLAIN)
