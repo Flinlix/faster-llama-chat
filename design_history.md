@@ -1468,3 +1468,14 @@ and its error messages and the README's table name it so. At the user's next
 answer it became `tool_call_policy`, so that it no longer shares its name with
 `Reply.tool_calls`, the calls a reply made, and `CALL_POLICIES` became
 `TOOL_CALL_POLICIES` with it.
+
+## 2026-11-11: Settings, add-on files and logging
+
+The user's decisions on the settings, the add-on files and the engine's log
+output, each under the ID it was decided by.
+
+**270.25: the message for a missing engine package.** It named neither the
+oldest release supported nor how to build one, and its commands installed the
+prebuilt wheel, which install.sh avoids. It now names 0.3.23, the floor
+pyproject.toml and install.sh require, and the repository's `./install.sh`
+with the build by hand beside it.

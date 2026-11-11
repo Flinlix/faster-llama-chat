@@ -9,6 +9,7 @@ design_history.md, "How a call's format is recovered".
 """
 
 import inspect
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -170,6 +171,20 @@ def test_only_this_layer_names_llama_cpp():
                       if f.name != "_backend.py" and "llama_cpp" in f.read_text())
     assert reaching == [], (
         f"{reaching} name llama_cpp directly; the handle belongs in _backend.py")
+
+
+def test_a_missing_engine_package_names_its_minimum_version_and_the_build_command(monkeypatch):
+    import importlib
+    import sys
+
+    floor = re.search(r'"llama-cpp-python>=([0-9.]+)"',
+                      (Path(llama_chat.__file__).parent.parent / "pyproject.toml").read_text())[1]
+    monkeypatch.setitem(sys.modules, "llama_cpp", None)
+    monkeypatch.delitem(sys.modules, "llama_chat._backend")
+    with pytest.raises(ImportError) as missing:
+        importlib.import_module("llama_chat._backend")
+    assert f"llama-cpp-python {floor} or later" in str(missing.value)
+    assert "./install.sh" in str(missing.value)
 
 
 def test_every_cache_quantization_config_offers_resolves_to_a_type_id():
