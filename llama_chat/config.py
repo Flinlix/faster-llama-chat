@@ -61,9 +61,12 @@ class Config:
         evict_above_fraction: Fraction of ``context_size`` above which the
             oldest messages are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
-        max_history_messages: The most non-system messages to keep, a second
-            eviction trigger OR'd with ``evict_above_fraction``. ``None``
-            leaves the token threshold as the only trigger.
+        max_history_exchanges: The most exchanges to keep, a second eviction
+            trigger OR'd with ``evict_above_fraction``. An exchange is one
+            user message and everything after it up to the next, the unit an
+            eviction drops; what a history holds before its first user message
+            is one more. ``None`` leaves the token threshold as the only
+            trigger; otherwise at least ``1``.
         max_reply_tokens: Cap on tokens per generation, a thought included.
             ``None`` sets none, so a reply may run until the context is full;
             generation never crosses ``context_size`` either way.
@@ -107,7 +110,7 @@ class Config:
 
     context_size: int = 4096
     evict_above_fraction: float = 0.75
-    max_history_messages: int | None = None
+    max_history_exchanges: int | None = None
     max_reply_tokens: int | None = None
     min_reply_tokens: int = 32
 
@@ -148,10 +151,10 @@ class Config:
                 f"min_reply_tokens ({self.min_reply_tokens}) must be below "
                 f"context_size ({self.context_size}); no request could leave "
                 "that many tokens free, so every one of them would be refused")
-        if self.max_history_messages is not None and self.max_history_messages < 1:
+        if self.max_history_exchanges is not None and self.max_history_exchanges < 1:
             raise InvalidSettingError(
-                "max_history_messages",
-                "max_history_messages must be None or >= 1 (use None for no message limit)")
+                "max_history_exchanges",
+                "max_history_exchanges must be None or >= 1 (use None for no exchange limit)")
         if self.repetition_penalty is not None and self.repetition_penalty <= 0:
             raise InvalidSettingError("repetition_penalty",
                                       "repetition_penalty must be > 0 (1.0 disables)")

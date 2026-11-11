@@ -1,6 +1,8 @@
 """A history as begin takes it, and as the messages a template is given."""
 
-from llama_chat.messages import as_history, as_messages, exchange_starts
+import itertools
+
+from llama_chat.messages import as_history, as_messages, exchange_count, exchange_starts
 from llama_chat.tools import ToolCall, ToolResult, ToolTurn
 
 
@@ -8,6 +10,20 @@ def test_kept_history_opens_on_each_user_turn():
     messages = [{"role": r, "content": ""} for r in
                 ("system", "user", "assistant", "user", "assistant")]
     assert exchange_starts(messages) == [1, 3]
+
+
+def test_an_exchange_is_what_an_eviction_drops_at_once():
+    """Counted as the oldest exchange is dropped: up to the next user message, until none is left."""
+    for system, roles in itertools.product((True, False), itertools.product(
+            ("user", "assistant", "tool"), repeat=4)):
+        messages = [{"role": "system", "content": ""}] * system + [
+            {"role": r, "content": ""} for r in roles]
+        drops, rest = 0, list(messages[system:])
+        while rest:
+            following = next((i for i, m in enumerate(rest) if m["role"] == "user" and i > 0),
+                             len(rest))
+            rest, drops = rest[following:], drops + 1
+        assert exchange_count(messages) == drops, roles
 
 
 def test_every_history_comes_back_as_it_went_in():

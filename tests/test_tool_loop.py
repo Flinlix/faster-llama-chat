@@ -211,25 +211,25 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
 
 
-def test_an_open_turn_outgrows_the_message_limit_and_is_trimmed_on_close():
+def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
     """The two rules meet here: nothing is evicted while a turn is open.
 
-    A turn holding a call would be cut into by an eviction, so the message limit
-    is allowed to be exceeded until the turn closes, and enforced again the
-    moment it does.
+    A turn holding a call would be cut into by an eviction, so the exchange
+    limit is allowed to be exceeded until the turn closes, and enforced again
+    the moment it does.
     """
     fake = FakeContext(TOOLS)
-    wrapper = ChatWrapper(Config(context_size=4000, max_history_messages=2),
+    wrapper = ChatWrapper(Config(context_size=4000, max_history_exchanges=1),
                           context=fake)
     wrapper.begin("persona", [("user", "alt"), ("assistant", "älter")])
     fake.call_script = ["fn:first{}"]
     assert list(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
-    assert len(rows(wrapper)) - 1 > 2      # over the limit, turn still open
+    assert len(rows(wrapper)) - 1 == 4     # two exchanges, over the limit, turn still open
 
     wrapper.inject_tool_result(ToolCall("first", {}), "ok")
     fake.call_script = []
     list(wrapper.reply(tool_call_policy="yield"))
-    assert len(rows(wrapper)) - 1 == 2     # back inside it once closed
+    assert len(rows(wrapper)) - 1 == 2     # the newest exchange alone once closed
     assert rows(wrapper)[0]["role"] == "system"
 
 

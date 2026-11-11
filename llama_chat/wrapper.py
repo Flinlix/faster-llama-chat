@@ -103,7 +103,7 @@ class ChatWrapper:
                 :meth:`reply` to go on with. Only the most recent are kept,
                 from a user turn on: those that fit with the system prompt in
                 half the context, at least the newest exchange, and no more
-                than ``max_history_messages``. Older ones are dropped
+                than ``max_history_exchanges``. Older ones are dropped
                 unrendered.
             tools: Tools to declare, written where this model's template
                 declares them; nothing else of them is kept. Refused up front
@@ -153,7 +153,7 @@ class ChatWrapper:
         Evicts the oldest exchanges until the new message fits inside both
         eviction limits, then prefills it. A question goes where the next one
         was prepared for, as :meth:`reply` puts one, and is evicted for after
-        its reply, unless ``max_history_messages`` is reached first.
+        its reply, unless ``max_history_exchanges`` is reached first.
 
         Returns:
             The number of messages evicted to make room.

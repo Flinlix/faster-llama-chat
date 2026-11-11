@@ -53,7 +53,7 @@ Both use the same cache operations; the policy differs.
 |------|------|------|
 | what is removed | a fixed token count from `n_keep`, which can cut inside a message or a tag | whole exchanges, from a user turn to the next one, so the cache always holds turns the template writes |
 | the system prompt | `--keep N`, a hand-counted offset | pinned, never evicted |
-| when | when the context is full | above a threshold (`evict_above_fraction`), or above a message count (`max_history_messages`); a request that would not fit evicts first |
+| when | when the context is full | above a threshold (`evict_above_fraction`), or above a count of exchanges (`max_history_exchanges`); a request that would not fit evicts first |
 | caches that cannot shift | context shift off or unreliable | detected at load; such a cache is cut, restored to a saved state or decoded again instead, and an eviction there drops well below the threshold, so that this happens only every few turns |
 | bookkeeping | none at message level | the conversation as the messages its template is given; the cache compared with the template's render of them |
 
@@ -118,8 +118,8 @@ model and makes later actions raise.
 
 | doing what | call |
 |------|------|
-| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_messages`, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
-| adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. A message of another role, or a user message once `max_history_messages` is reached, evicts first |
+| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
+| adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. A message of another role, or a user message once `max_history_exchanges` is reached, evicts first |
 | asking | `reply(text=None, *, tool_call_policy="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so is a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
 | answering a call yourself | `inject_tool_result(call, result)` for each of `owed_calls`, oldest first, then `reply(tool_call_policy="yield")` |
 | telling the model about more tools | `declare_tools(tools)` |
@@ -320,7 +320,7 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 |------|------|------|
 | `context_size` | `4096` | the hard limit in tokens |
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
-| `max_history_messages` | `None` | a second eviction trigger: the most non-system messages kept; whole exchanges go, so fewer may stay |
+| `max_history_exchanges` | `None` | a second eviction trigger: the most exchanges kept, at least `1`. An exchange is one user message and everything after it up to the next, the unit an eviction drops; what a history holds before its first user message counts as one more |
 | `max_reply_tokens` | `None` | cap on tokens per generation, a thought included; `None` sets none, so a reply may run until the context is full |
 | `min_reply_tokens` | `32` | refuse a request with `ContextOverflowError` when fewer would be left for the reply; `0` disables |
 

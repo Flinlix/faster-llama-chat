@@ -1519,3 +1519,22 @@ with `field == "model_path"`. A `max_reply_tokens` of 0 or less passed to
 `reply` was taken as a cap of nothing and produced an empty reply; it is now
 refused when `reply` is called, by the same check `Config` runs
 (`ensure_reply_cap`), so both say the same.
+
+**270.21: the second trigger counts exchanges.** At the user's decision,
+`max_history_messages` became `max_history_exchanges`. An eviction drops
+whole exchanges, so a limit counted in messages could never be met exactly: a
+limit of 3 kept 2, and a limit of 1 kept nothing between turns, since the
+newest reply left with its question. An exchange is now the unit the limit
+counts: one user message and everything after it up to the next, as
+`exchange_starts` and `_drop_oldest_exchange` already took it, with what a
+history holds before its first user message counted as one more, since an
+eviction drops that whole too (`messages.exchange_count`). A limit of 1 keeps
+the newest exchange; below 1 is refused, and `None` is still no limit. `begin`
+honours it as every other action does, keeping the newest exchanges of a
+history and at least the newest; tests pin that for histories that open on a
+user message, on another role, and that end on a question. The rest of the
+rule is as before: at rest after each action the limit holds, `inject` evicts
+before a user message that would open one exchange too many, and while a reply
+runs its question may open one more until the reply settles; a turn that
+called tools outgrows it until the turn closes. `n_evicted_messages` and the
+counts `inject` and `declare_tools` return still count history items.

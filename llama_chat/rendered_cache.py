@@ -23,8 +23,8 @@ from dataclasses import dataclass, field, fields
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
-from .messages import (as_history, as_messages, calling_message, exchange_starts, result_message,
-                       system_part)
+from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
+                       result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
@@ -361,7 +361,7 @@ class RenderedCache:
         A question is put in the stand-in's place as :meth:`ask` puts one, the
         generation prompt after it: within the room left for a reply, the
         conversation over ``evict_above_tokens`` until its reply settles, unless
-        ``max_history_messages`` is reached first.
+        ``max_history_exchanges`` is reached first.
 
         Raises:
             ValueError: If no conversation was begun, a reply is open, or the
@@ -381,8 +381,8 @@ class RenderedCache:
             self._ensure_writes(role, text, generation_prompt=False)
             n_before = len(as_history(self._state.messages))
             room = self._max_prompt_tokens
-            fits = (self._config.max_history_messages is None
-                    or n_before < self._config.max_history_messages)
+            fits = (self._config.max_history_exchanges is None
+                    or exchange_count(self._state.messages) < self._config.max_history_exchanges)
             if role != "user" or not fits or not self._splice(message, room):
                 self._state.messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
@@ -910,7 +910,7 @@ class RenderedCache:
         few turns.
 
         Args:
-            tokens_only: Leave ``max_history_messages`` out, which may keep
+            tokens_only: Leave ``max_history_exchanges`` out, which may keep
                 nothing on purpose.
         """
         def over(bound):
@@ -937,9 +937,9 @@ class RenderedCache:
         return system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
 
     def _too_many(self) -> bool:
-        """Whether the history holds more items than ``max_history_messages``."""
-        limit = self._config.max_history_messages
-        return limit is not None and len(as_history(self._state.messages)) > limit
+        """Whether the history holds more exchanges than ``max_history_exchanges``."""
+        limit = self._config.max_history_exchanges
+        return limit is not None and exchange_count(self._state.messages) > limit
 
     def _drop_oldest_exchange(self, newest_too: bool = False) -> bool:
         """Drop the oldest question and everything up to the next; ``False`` where none can go.

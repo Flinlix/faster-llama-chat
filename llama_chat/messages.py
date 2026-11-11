@@ -92,6 +92,12 @@ def exchange_starts(messages: list[dict]) -> list[int]:
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 
 
+def exchange_count(messages: list[dict]) -> int:
+    """How many exchanges ``messages`` hold: one per user message, and one more for what comes before the first after the system message."""
+    history = messages[len(system_part(messages)):]
+    return len(exchange_starts(history)) + (1 if history and history[0]["role"] != "user" else 0)
+
+
 def system_part(messages: list[dict]) -> list[dict]:
     """The system message ``messages`` open with, alone in a list, or an empty list where they open otherwise."""
     return [m for m in messages[:1] if m["role"] == "system"]
