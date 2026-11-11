@@ -333,8 +333,8 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 | `decode_threads` | `None` | CPU threads for decode; `None` lets llama.cpp decide |
 | `prefill_threads` | `None` | CPU threads for prefill; `None` means as many as `decode_threads` |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
-| `flash_attention` | `True` | required by a quantized KV cache |
-| `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires `flash_attention` |
+| `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
+| `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
 | `log_level` | `"error"` | llama.cpp's own verbosity: `"debug"`, `"info"`, `"warn"`, `"error"` or `"none"`, applied process-wide before the model loads |
 
 `ChatWrapper` also takes, outside `Config` because neither is a value to

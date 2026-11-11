@@ -1550,3 +1550,12 @@ all of it into host RAM, to free VRAM. That placement is llama.cpp's
 (`llama_kv_cache` takes each layer's buffer type from the layer's device when
 offloading is on); it was not measured here, since the GPU was in use by
 another process.
+
+**266.6: flash attention is the engine's choice by default.** It was forced on,
+although llama.cpp has an automatic mode (`LLAMA_FLASH_ATTN_TYPE_AUTO`) that
+turns it on where the device and the model support it and off where they do
+not, which a fixed `True` cannot do. `flash_attention` now defaults to `None`,
+that automatic mode, except under a quantized `kv_cache_type`: a quantized V
+cache works only with flash attention, so the automatic mode turning it off
+would fail the load, and it is forced on there. `True` and `False` still
+force it; `False` with a quantized cache is refused as before.

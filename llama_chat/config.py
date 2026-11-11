@@ -85,11 +85,13 @@ class Config:
             ``decode_threads``.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
-        flash_attention: Enable flash attention. Required by a quantized
-            ``kv_cache_type``.
+        flash_attention: ``True`` or ``False`` forces flash attention on or
+            off. ``None`` leaves it to the engine, except under a quantized
+            ``kv_cache_type``, which requires it and turns it on.
         kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``.
             Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
-            requires ``flash_attention=True``.
+            requires flash attention, so is refused with
+            ``flash_attention=False``.
         log_level: llama.cpp's own verbosity, one of ``LOG_LEVELS``. Applied
             process-wide before the model loads.
     """
@@ -122,7 +124,7 @@ class Config:
     decode_threads: int | None = None
     prefill_threads: int | None = None
     max_batch_tokens: int = 2048
-    flash_attention: bool = True
+    flash_attention: bool | None = None
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
 
     # Logging
@@ -173,11 +175,12 @@ class Config:
         if self.kv_cache_type not in KV_CACHE_TYPES:
             raise InvalidSettingError(
                 "kv_cache_type", f"kv_cache_type must be one of {sorted(KV_CACHE_TYPES)}")
-        if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE and not self.flash_attention:
+        if self.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE and self.flash_attention is False:
             raise InvalidSettingError(
                 "kv_cache_type",
-                f"kv_cache_type={self.kv_cache_type!r} is quantized and requires "
-                f"flash_attention=True (only {UNQUANTIZED_KV_CACHE_TYPE!r} works without it)")
+                f"kv_cache_type={self.kv_cache_type!r} is quantized and requires flash "
+                f"attention, which flash_attention=False turns off (only "
+                f"{UNQUANTIZED_KV_CACHE_TYPE!r} works without it)")
 
     @property
     def evict_above_tokens(self) -> int:

@@ -464,6 +464,18 @@ def test_the_kv_cache_stays_with_its_layers_unless_forced_into_host_ram(
                              kv_cache_on_gpu=False)["kv_cache_on_gpu"] is False
 
 
+@pytest.mark.parametrize("settings, asked", [
+    ({}, None),
+    ({"flash_attention": True}, True),
+    ({"flash_attention": False}, False),
+    ({"kv_cache_type": "q8_0"}, True),
+    ({"kv_cache_type": "q8_0", "flash_attention": True}, True),
+])
+def test_flash_attention_is_the_engines_choice_unless_set_or_a_quantized_cache_needs_it(
+        tmp_path, monkeypatch, settings, asked):
+    assert _context_settings(tmp_path, monkeypatch, **settings)["flash_attn"] is asked
+
+
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
     assert tokenize_pieces(_merging_context(), [], add_special=True) == ["BOS"]
 
@@ -516,13 +528,13 @@ def _stub_context(chains):
 
 
 # ----- flash attention and offload on each build ---------------------------
-@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0)])
-def test_flash_attention_is_set_on_or_off(enable, expected):
+@pytest.mark.parametrize("enable,expected", [(True, 1), (False, 0), (None, -1)])
+def test_flash_attention_is_set_on_off_or_left_to_the_engine(enable, expected):
     from types import SimpleNamespace
 
     cparams = SimpleNamespace(flash_attn_type=None)
     llama_cpp = SimpleNamespace(LLAMA_FLASH_ATTN_TYPE_ENABLED=1,
-                         LLAMA_FLASH_ATTN_TYPE_DISABLED=0)
+                         LLAMA_FLASH_ATTN_TYPE_DISABLED=0, LLAMA_FLASH_ATTN_TYPE_AUTO=-1)
     _set_flash_attn(cparams, enable, llama_cpp=llama_cpp)
     assert cparams.flash_attn_type == expected
 

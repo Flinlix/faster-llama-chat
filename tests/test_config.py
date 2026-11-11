@@ -16,6 +16,11 @@ def test_the_unquantized_kv_cache_type_needs_no_flash_attention():
     assert config.kv_cache_type == UNQUANTIZED_KV_CACHE_TYPE
 
 
+def test_flash_attention_is_left_to_the_engine_by_default():
+    assert Config().flash_attention is None
+    assert Config(kv_cache_type="q8_0").kv_cache_type == "q8_0"     # the engine is told to use it
+
+
 def test_the_kv_cache_type_defaults_to_the_unquantized_one():
     assert Config(flash_attention=False).kv_cache_type == UNQUANTIZED_KV_CACHE_TYPE
 

@@ -11,7 +11,8 @@ import os
 from collections.abc import Callable, Mapping
 
 from ._backend import Backend, set_log_level
-from .config import Config, InvalidSettingError, Sampling, with_request_sampling
+from .config import (UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling,
+                     with_request_sampling)
 from .addon_files import addon_file, with_model_sampling
 from .model_template import ModelTemplate
 
@@ -57,7 +58,7 @@ class KVContext:
             kv_type = self._backend.kv_cache_type_id(config.kv_cache_type)
             self._engine_context = self._backend.new_context(
                 self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
-                flash_attn=config.flash_attention, type_k=kv_type, type_v=kv_type,
+                flash_attn=_flash_attention(config), type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
                 n_threads_batch=config.prefill_threads)
             self._vocab = self._backend.vocab(self._model)
@@ -279,3 +280,9 @@ class KVContext:
             backend.free_sampler(chain)
             raise
 
+
+def _flash_attention(config: Config) -> bool | None:
+    """Flash attention as ``config`` asks for it, on for a quantized cache; ``None`` leaves it to the engine."""
+    if config.flash_attention is None and config.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE:
+        return True
+    return config.flash_attention

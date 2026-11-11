@@ -152,7 +152,7 @@ class Backend:
         return model
 
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
-                    flash_attn: bool = False, type_k: int | None = None,
+                    flash_attn: bool | None = None, type_k: int | None = None,
                     type_v: int | None = None, kv_cache_on_gpu: bool = True,
                     n_threads_batch: int | None = None):
         cparams = self._llama_cpp.llama_context_default_params()
@@ -182,9 +182,10 @@ class Backend:
         """Keep each layer's KV cache where the layer runs (``True``), or all of it in host RAM (``False``)."""
         cparams.offload_kqv = enable
 
-    def _set_flash_attn(self, cparams, enable: bool) -> None:
-        """Set flash attention explicitly on or off."""
-        cparams.flash_attn_type = (self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED if enable
+    def _set_flash_attn(self, cparams, enable: bool | None) -> None:
+        """Set flash attention on or off, or leave it to the engine (``None``)."""
+        cparams.flash_attn_type = (self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_AUTO if enable is None
+                                   else self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED if enable
                                    else self._llama_cpp.LLAMA_FLASH_ATTN_TYPE_DISABLED)
 
     def vocab(self, model):
