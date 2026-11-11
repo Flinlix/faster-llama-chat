@@ -105,7 +105,8 @@ class ConversationRendering:
             upto: Where in the render to stop.
 
         Raises:
-            ValueError: If the template refuses to write them.
+            ValueError: If the template refuses to write them, or writes a kept
+                turn among them where it cannot be placed.
         """
         if not messages:
             return Target(self.tokenize([], add_special=True), {})     # the opener alone
@@ -114,9 +115,18 @@ class ConversationRendering:
             raise ValueError("the template refuses to write this conversation")
         end = len(split.text) if upto is None else upto
         turns = self._inputs().kept
-        placed = sorted(found for kept in turns
-                        if (found := self.place(kept, messages, split)) is not None
-                        and found[1] <= end)
+        placed = []
+        for kept in turns:
+            if not all(any(m is end for m in messages) for end in (kept.first, kept.last)):
+                continue            # a turn these messages do not hold
+            found = self.place(kept, messages, split)
+            if found is None:
+                raise ValueError("this model's template writes a turn that called tools where "
+                                 "it cannot be told apart, so the turn could not keep the tokens "
+                                 "it was generated as")
+            if found[1] <= end:
+                placed.append(found)
+        placed.sort()
         tokens, at, kept_at = [], 0, {}
         for start, stop, n in placed:
             assert start >= at, "two kept turns overlap"

@@ -1587,3 +1587,20 @@ which is no `ValueError` and named no refusal. The renderer's construction now
 turns that error into a `ValueError` that says the template is not valid
 template code and names the line and the cause, at load, as every other
 template that cannot be used is refused.
+
+**270.18: A kept turn that cannot be placed refuses the action.** A turn that
+called tools is held as the tokens it was generated as, in place of the
+template's version of it. Where a render held such a turn but could not place
+it, the turn was left out of the placement and the template's own version of
+it stood in the cache without notice, which breaks invariant 1. The target of
+a render now raises a `ValueError` for a kept turn among its messages that it
+cannot place, so the action that rendered it fails and leaves the
+conversation as it was. A kept turn whose messages the render does not hold,
+such as one outside a window, is no such case. Only a change to how the
+template writes the conversation can make a placed turn unplaceable, such as a
+declaration, so that is the action that is refused. The test stands the
+unplaceable render in by replacing the placement, since none of the 52 test
+templates writes a kept turn where it cannot be placed. Seen while testing:
+answering a call that could not be read catches every `ValueError` as "no
+room, or no result block" and then records the reply without its call; a
+placement refusal there would take that path too.

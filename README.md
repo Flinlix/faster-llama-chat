@@ -199,7 +199,10 @@ rest = chat.reply(tool_call_policy="yield").finish()        # the turn stays ope
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
-since the model reads its own call back. Every call is reported on
+since the model reads its own call back. The turn keeps the tokens it was
+generated as, so an action after which the template's render no longer shows
+where that turn stands is refused with a `ValueError`, the conversation left
+as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran

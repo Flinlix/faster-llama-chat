@@ -329,6 +329,25 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
     assert "fn:clock{}" in held_text(fake)
 
 
+def test_an_action_whose_render_cannot_place_a_kept_turn_is_refused_and_changes_nothing(
+        monkeypatch):
+    w, fake = tool_wrapper()
+    w.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    w.inject_tool_result(call, "12:00")
+    w.reply().finish()
+    before, held = w.conversation(), list(fake.cache)
+    with monkeypatch.context() as patched:
+        # A template that writes the turn where it cannot be told apart, as none of the test
+        # templates does.
+        patched.setattr(ConversationRendering, "place", lambda *_args: None)
+        with pytest.raises(ValueError, match="turn that called tools"):
+            w.declare_tools([ToolSpec("uhr", "Die Uhrzeit.", {})])
+    assert w.conversation() == before and fake.cache == held
+    w.declare_tools([ToolSpec("uhr", "Die Uhrzeit.", {})])
+
+
 # ----- questions --------------------------------------------------------------------
 def test_a_question_without_room_for_its_reply_is_not_recorded():
     fake = FakeContext(PLAIN, gen_tokens=2)
