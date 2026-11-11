@@ -22,3 +22,18 @@ QUESTIONS = ["How are you?", "Name a colour.", "And a number?", "Why that one?",
 ANSWERS = [f"Answer number {i}, kept short." for i in range(len(QUESTIONS) + 2)]
 WEATHER = ToolSpec(name="get_weather", description="Weather for a city",
                    parameters={"type": "object", "properties": {"city": {"type": "string"}}})
+
+
+def in_each_thought_form(messages: list[dict]) -> list[list[dict]]:
+    """``messages``, each reply's thought held under ``reasoning_content``, and the same with every thought in each other form chat templates read one in: a ``thinking`` field, or a content block ahead of the text."""
+    def moved(message, form):
+        thought = message.get("reasoning_content")
+        if not thought:
+            return message
+        rest = {key: value for key, value in message.items() if key != "reasoning_content"}
+        if form == "field":
+            return {**rest, "thinking": thought}
+        return {**rest, "content": [{"type": "thinking", "thinking": thought},
+                                    {"type": "text", "text": message["content"]}]}
+    return [list(messages)] + [[moved(message, form) for message in messages]
+                               for form in ("field", "block")]

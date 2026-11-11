@@ -5,6 +5,7 @@ from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
 from tests import internals
+from tests.chat_templates import in_each_thought_form
 from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN, REASONING, TOOLS
 
@@ -36,21 +37,24 @@ def held_renders(context, messages, tools=None, reasoning=False) -> list[str]:
     """What a cache holding ``messages`` may read as: their render with the generation prompt or without, or decoded ahead of the next question up to where it goes.
 
     Rendered as the context states its template renders, with nothing the
-    library read off the template.
+    library read off the template, each reply's thought in each form a
+    template may read it in.
     """
     from llama_chat.render_checks import STAND_IN as _STAND_IN
     render = lambda m, prompt: context.stated_render(       # noqa: E731
         m, tools, generation_prompt=prompt, reasoning=reasoning)
-    found = [render(messages, False), render(messages, True)]
-    ahead = render(messages + [{"role": "user", "content": _STAND_IN}], True)
-    if ahead is not None and _STAND_IN in ahead:
-        before = ahead[:ahead.index(_STAND_IN)]
-        cut = len(before)
-        for piece, is_tag in reversed(split_at_tags(context, before) or []):
-            if is_tag:
-                break
-            cut -= len(piece)
-        found.append(before[:cut])
+    found = []
+    for written in in_each_thought_form(messages):
+        found += [render(written, False), render(written, True)]
+        ahead = render(written + [{"role": "user", "content": _STAND_IN}], True)
+        if ahead is not None and _STAND_IN in ahead:
+            before = ahead[:ahead.index(_STAND_IN)]
+            cut = len(before)
+            for piece, is_tag in reversed(split_at_tags(context, before) or []):
+                if is_tag:
+                    break
+                cut -= len(piece)
+            found.append(before[:cut])
     return [text for text in found if text is not None]
 
 

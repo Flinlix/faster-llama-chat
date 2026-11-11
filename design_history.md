@@ -1534,3 +1534,23 @@ answer's opening, which the model writes and the answer leaves out. The
 condition asks for the closing in the prompt, so an opened thought, as the
 prompt with reasoning on writes it, is no such case. Of the 52 test
 templates, only cohere-2's opening without reasoning changed.
+
+**264.1: A past thought in the form the template reads.** This broke
+invariant 1, measured on Ministral 3 Reasoning: a past reply's thought was
+handed to every template as `reasoning_content`, while the load check found
+the thought through any of three forms, that field, a `thinking` field or a
+content block of its own. That template reads a thought only from a content
+block, so the check said it keeps a past thought, the reply was recorded with
+its thought, and the render left the thought out: it was lost from the cache
+after the next question. The load check now records the form a past reply
+keeps its thought in, trying the form the thought's tags were read from
+first, and the template's render is the one place that hands a recorded
+thought over in that form. The conversation itself keeps the thought under
+`reasoning_content`, so its content stays one text everywhere else. A
+template that prints a content block as text rather than reading it is not
+taken to keep the thought: the check now looks for each block printed, not
+only the whole list, which kept hunyuan-4, lfm-2.5 and lfm-3 from being read
+as keeping thoughts in blocks they only print. Of the 52 test templates, only
+mistral-3-reasoning's form changed. The tests' own check of the cache renders
+each reply's thought in each of the three forms, written out in the tests,
+and accepts the cache where it matches one of them.

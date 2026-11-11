@@ -265,8 +265,9 @@ and the model may reason in every reply all the same. Every
 stream yields the answer alone, with or without reasoning, and a header a
 template writes for another reader is kept out of it too. Stop strings are
 matched against the answer only. A finished reply is kept as the template
-writes a past reply, without its thought where the template leaves one out.
-Where that differs from what was generated, the cache is brought to that form
+writes a past reply, without its thought where the template leaves one out,
+and with it, handed over in the form the template reads one in, where the
+template keeps it. Where that differs from what was generated, the cache is brought to that form
 right after the reply, while it is read. A turn that called tools keeps the
 tokens it was generated as.
 

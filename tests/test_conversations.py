@@ -23,7 +23,7 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
 from . import internals
-from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture
+from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture, in_each_thought_form
 from .fake_context import FakeContext, ScriptedCall, call_marks
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
@@ -95,6 +95,10 @@ class _Run:
             system + messages, [spec.as_declaration() for spec in tools] if tools else None,
             generation_prompt=True, reasoning=self.reasoning)
 
+    def renders_in_each_thought_form(self, messages, tools=None):
+        """The render of ``messages``, each reply's thought in each form a template may read it in."""
+        return [self.render(written, tools) for written in in_each_thought_form(messages)]
+
 
 def _as_generated(template, answers, reasoning):
     """Each answer as the model generates it: after a thought it closes, where the generation prompt opens one."""
@@ -134,7 +138,8 @@ def _assert_each_reply_followed_what_was_sent(run, questions, forms=(None,), fir
         for first in range(oldest, k + 1):
             for thought in forms:
                 sent = sum(_exchanges(questions[first:k], run.answers[first:k], thought), [])
-                if cached == run.render(sent + [{"role": "user", "content": questions[k]}]):
+                asked = sent + [{"role": "user", "content": questions[k]}]
+                if cached in run.renders_in_each_thought_form(asked):
                     found = first
             if found is not None:
                 break
@@ -660,6 +665,16 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, forms=(_THOUGHT,) if keeps else (None,))
 
 
+@pytest.mark.parametrize("stem", _thinking("all"))
+def test_a_past_replys_thought_stays_in_the_cache_wherever_the_template_keeps_it(stem):
+    run = _Run(stem, reasoning=True)
+    run.begin()
+    for question in QUESTIONS[:3]:
+        run.chat.reply(question).finish()
+    kept = [cached.count(_THOUGHT) for cached in run.seen]
+    assert kept == ([0, 1, 2] if run.template.reasoning.past_keeps_thought else [0, 0, 0])
+
+
 def test_the_answers_opening_a_model_writes_after_an_empty_thought_stays_out_of_answer_and_history():
     """North Mini Code's prompt without reasoning ends in an empty thought; the model opens its answer itself."""
     opening = "<|START_TEXT|>"
@@ -724,8 +739,8 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
         run.chat.reply(QUESTIONS[1]).finish()
         kept = _THOUGHT if reasoning and run.template.reasoning.past_keeps_thought else None
         sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
-        assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}],
-                                          [WEATHER, clock]), result
+        assert run.seen[-1] in run.renders_in_each_thought_form(
+            sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER, clock]), result
         assert isinstance(run.chat.conversation()[1][1], ToolTurn)
 
 

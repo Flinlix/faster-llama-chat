@@ -14,7 +14,7 @@ from .cache_context import MODEL_READER, RENDERER_VARIABLES, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
                           extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
-from .messages import call_id, calling_message, result_message
+from .messages import call_id, calling_message, result_message, with_thought_as
 from .model_template import names_read
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
                        ToolCallFragments, common_prefix_length, shared_tags_length)
@@ -84,7 +84,14 @@ class ResolvedTemplate:
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
-        """``messages`` as the model's template writes them, ``None`` where it refuses that shape."""
+        """``messages`` as the model's template writes them, ``None`` where it refuses that shape.
+
+        A reply's thought, held under ``reasoning_content``, is handed to the
+        template in the form it reads a past reply's thought in.
+        """
+        if self._reasoning is not None and self._reasoning.past_keeps_thought:
+            messages = [with_thought_as(message, self._reasoning.past_thought_form)
+                        for message in messages]
         return self._context.render_with_model_template(
             messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
             variables=self._variables)
