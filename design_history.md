@@ -2064,3 +2064,15 @@ there being no question to stop at. Where the template does write an empty
 reply, nothing changes: such a reply is kept, or, on a template that writes
 two questions in a row, taken out alone so that its question waits for the
 next. Both removals are now one method, `_remove_from`.
+
+**270.2: a question not prepared ahead passes its dropped stretch on.** A
+question the stand-in cannot stand for, such as one ending in a space, is
+added to the conversation and rendered whole. Once `max_history_exchanges`
+was reached, adding it dropped the oldest exchange, but the cache was then
+brought to the new render without being told that a stretch had gone, so it
+was cut where the dropped exchange began and everything after decoded again
+(87 of 124 tokens instead of 34, as measured for the decision). Every other
+drop already passed this on, so that the stretch is found and removed and the
+rest shifted; this one now does too. On the plain invented template the test
+asks the fourth question of a limit of two: the cache is shifted once, cut
+never, and 22 tokens are decoded where 44 were.

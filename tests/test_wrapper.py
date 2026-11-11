@@ -19,7 +19,7 @@ from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
-from tests.wrappers import (assert_consistent, begun_wrapper, held_renders,
+from tests.wrappers import (assert_consistent, begun_wrapper, held_renders, held_text,
                             tool_wrapper, rows)
 def _n_kept(wrapper):
     """Messages kept: everything but the system prompt."""
@@ -457,6 +457,21 @@ def test_a_generation_evicts_down_to_the_exchange_limit():
         assert rows(w)[0]["role"] == "system"       # system still survives
         assert rows(w)[-1]["role"] == "assistant"   # newest turn kept
         assert_consistent(w, fake)
+
+
+def test_a_question_not_prepared_ahead_shifts_the_exchange_the_limit_drops():
+    """A question ending in a space cannot take the stand-in's place, and its eviction still shifts the cache."""
+    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0, max_history_exchanges=2),
+                    context=fake)
+    w.begin("s")
+    for question in ("Eins?", "Zwei?", "Drei?"):
+        w.reply(question).finish()
+    fake.edits.clear()
+    reply = w.reply("Vier? ").finish()
+    assert [edit[0] for edit in fake.edits] == ["shift"]
+    newest = held_text(fake)[held_text(fake).rfind("<[turn>user"):]
+    assert reply.n_prefilled_tokens <= len(fake.tokenize(newest))
 
 
 def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
