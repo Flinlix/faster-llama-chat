@@ -321,7 +321,7 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 | `context_size` | `4096` | the hard limit in tokens |
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
 | `max_history_messages` | `None` | a second eviction trigger: the most non-system messages kept; whole exchanges go, so fewer may stay |
-| `max_reply_tokens` | `1024` | cap per generation |
+| `max_reply_tokens` | `None` | cap on tokens per generation, a thought included; `None` sets none, so a reply may run until the context is full |
 | `min_reply_tokens` | `32` | refuse a request with `ContextOverflowError` when fewer would be left for the reply; `0` disables |
 
 **Backend and hardware**

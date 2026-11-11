@@ -216,7 +216,8 @@ class ChatWrapper:
             max_calls: Where a registry is given, how many calls one turn may
                 use. ``None`` sets no ceiling; a call past one is answered with
                 an error result rather than run. Only with a registry.
-            max_reply_tokens: Override for the per-generation cap.
+            max_reply_tokens: This request's cap on tokens per generation, in
+                place of the config's.
             stop: Texts that end the answer, matched against the answer
                 only. Read when this is called, so a later change to the list
                 changes nothing.
@@ -608,7 +609,8 @@ class ChatWrapper:
             n_evicted_messages = conversation.ask(text)
         elif not conversation.reply_open:
             conversation.prompt()
-        cap = max_reply_tokens if max_reply_tokens is not None else self._config.max_reply_tokens
+        cap = next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
+                   self._config.context_size)       # no generation outgrows the context
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()

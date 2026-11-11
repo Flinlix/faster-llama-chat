@@ -1503,3 +1503,10 @@ now `EVICT_TO_FRACTION_WITHOUT_SHIFT` in `rendered_cache.py`, at the 0.5 that
 measurement kept. A higher value keeps more history and decodes the cache
 again more often; that decode falls after a reply, never before the first
 word. The constraint it must meet stays beside it in the code: in (0, 1].
+
+**265.5: no reply cap by default.** `max_reply_tokens` defaulted to 1,024, and
+the cap counts a thought's tokens too, so a reasoning model that thought
+longer than that ended with an empty answer and `"token_limit"`. The default
+is now `None`, no cap: a reply runs until the model ends it or the context is
+full, and the context bound is the one no generation can cross anyway. A
+caller who wants a bound sets one, in the configuration or per request.

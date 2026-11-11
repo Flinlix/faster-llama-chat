@@ -390,6 +390,16 @@ def test_generation_is_capped_to_the_context_size():
     assert reply.n_generated_tokens < 100
 
 
+def test_a_reply_runs_until_the_context_is_full_unless_a_cap_is_set():
+    """A long thought counts against the cap too, so a default cap could leave no answer."""
+    fake = FakeContext(PLAIN, gen_tokens=3000, gen_text="x" * 3000)
+    w = ChatWrapper(Config(context_size=4096), context=fake)
+    w.begin("s")
+    reply = w.reply("hello").finish()
+    assert reply.n_generated_tokens == 3000 and reply.stop_reason == "end_of_turn"
+    assert w.reply("again", max_reply_tokens=10).finish().n_generated_tokens == 10
+
+
 def test_the_cache_rests_under_the_threshold_after_a_generation():
     # The reply is appended first, then older turns are trimmed, so the cache
     # rests at or below threshold once the generation returns.

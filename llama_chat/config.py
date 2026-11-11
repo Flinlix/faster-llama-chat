@@ -64,8 +64,9 @@ class Config:
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.
-        max_reply_tokens: Cap on tokens per generation, capped again so the
-            total stays inside ``context_size``.
+        max_reply_tokens: Cap on tokens per generation, a thought included.
+            ``None`` sets none, so a reply may run until the context is full;
+            generation never crosses ``context_size`` either way.
         min_reply_tokens: Refuse a request with
             :class:`~llama_chat.reply.ContextOverflowError` when fewer than
             this many tokens would be left for the reply. ``0`` disables it,
@@ -107,7 +108,7 @@ class Config:
     context_size: int = 4096
     evict_above_fraction: float = 0.75
     max_history_messages: int | None = None
-    max_reply_tokens: int = 1024
+    max_reply_tokens: int | None = None
     min_reply_tokens: int = 32
 
     # Backend / hardware
@@ -138,8 +139,10 @@ class Config:
                 "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
             raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
-        if self.max_reply_tokens <= 0:
-            raise InvalidSettingError("max_reply_tokens", "max_reply_tokens must be positive")
+        if self.max_reply_tokens is not None and self.max_reply_tokens <= 0:
+            raise InvalidSettingError(
+                "max_reply_tokens",
+                "max_reply_tokens must be None or positive (use None for no cap)")
         if self.min_reply_tokens < 0:
             raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")
         if self.min_reply_tokens >= self.context_size:
