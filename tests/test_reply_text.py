@@ -36,13 +36,13 @@ def test_the_thought_count_never_exceeds_the_pieces_fed():
 
 # ----- a channel's header --------------------------------------------------
 def test_a_channel_header_cut_short_is_not_answer():
-    reply = ReplyText(None, "<|channel|>final<|message|>", "", [])
-    assert reply.feed("<|channel|>final") == "" and reply.finish("token_limit") == ""
+    reply = ReplyText(None, "<|route|>final<|body|>", "", [])
+    assert reply.feed("<|route|>final") == "" and reply.finish("token_limit") == ""
 
 
 def test_whitespace_after_a_channel_header_is_not_answer():
-    reply = ReplyText(None, "</mm:think>", "", [])
-    assert reply.feed("</mm:think>") + reply.feed("\n\n") + reply.feed("Antwort.") \
+    reply = ReplyText(None, "</reason>", "", [])
+    assert reply.feed("</reason>") + reply.feed("\n\n") + reply.feed("Antwort.") \
         == "Antwort."
 
 
