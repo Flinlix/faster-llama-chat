@@ -102,10 +102,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     visible = _TextBuffer()
     call_open, call_close = boundary.tool_tokens or (None, None)
     call = None            # pieces of the call being generated, once one is
-    open_text, close_text = boundary.call_texts or (None, None)
+    # A call's texts are matched without the whitespace around them, as a thought's tags are.
+    open_text, close_text = ((text.strip() for text in boundary.call_texts)
+                             if boundary.call_texts else (None, None))
     call_opens_as_text = boundary.opens_as_text and open_text is not None
     marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
-    held_chars = max([0] + [len(mark) for mark in marks])
+    held_chars = max([0] + [len(mark) for mark in (*(boundary.call_texts or ()),
+                                                   boundary.turn_end_text) if mark])
     starts = []            # where each token's text begins in ``visible``
     ended_at_text = False
     marks_from = 0         # where the next search for a mark begins
@@ -124,12 +127,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             + context.token_bytes(tok).decode("utf-8", errors="replace")))
         if ends and not closes_call and call is not None and close_text is not None:
             # Ended inside a call: the call ends here, closed as the template closes one.
-            closing = context.tokenize(close_text, add_special=False, parse_special=True)
+            closing = context.tokenize(boundary.call_texts[1], add_special=False,
+                                       parse_special=True)
             context.decode_generated(closing, pos)
             pos += len(closing)
             generated.token_ids.extend(closing)
             generated.stop_reason = "tool_call"
-            generated.tool_call = "".join(call)
+            generated.tool_call = "".join(call).strip()
             break
         if ends and not closes_call:
             generated.stop_reason = "end_of_turn"
@@ -149,7 +153,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             call.append(piece)
             if close_text is not None and close_text in "".join(call):
                 generated.stop_reason = "tool_call"
-                generated.tool_call = "".join(call).split(close_text, 1)[0]
+                generated.tool_call = "".join(call).split(close_text, 1)[0].strip()
                 break
             continue
         if tok == call_open:
@@ -174,6 +178,8 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                 upto = mark_at
                 if open_text is not None and visible.text.startswith(open_text, mark_at):
                     call = [visible.text[mark_at + len(open_text):]]
+                    if boundary.call_texts[0][:1].isspace():
+                        upto = len(visible.text[:mark_at].rstrip())     # the opening's own
                     if held_tag is not None:
                         upto = held_tag[0]          # the tag the call follows is the call's
                 else:

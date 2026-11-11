@@ -17,7 +17,8 @@ class CallBoundary:
     Attributes:
         tool_tokens: The ``(open, close)`` tokens bracketing a call, where a
             call has tags of its own.
-        call_texts: The ``(open, close)`` texts around a call, where it has none.
+        call_texts: The ``(open, close)`` texts around a call, where it has
+            none, matched in a generation without the whitespace around them.
         opens_as_text: Whether the opening of ``call_texts`` is plain text,
             which opens a call only at the reply's start or right after a tag.
         turn_end_text: Text that ends a reply where generated, removed from the

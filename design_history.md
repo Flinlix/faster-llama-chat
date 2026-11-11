@@ -1630,3 +1630,16 @@ through the same restore a conversation uses, then clears the cache; a build
 that cannot is refused there with a `RuntimeError`, as one missing the shift
 is. Measured on Qwen 3.5 9B on the CPU, whose cache cannot be cut: the probe
 passes at load and the model answers as before.
+
+**270.23: A call's texts take the tolerance a thought's tags take.** A
+thought's tags are matched without the whitespace around them, which a model
+does not always reproduce; the texts a call opens and closes with, where the
+call has no tag of its own, had to match exactly as the template writes them,
+so a model that left out a line break before its closing ran the call to the
+end of the reply. Both texts are now matched without their surrounding
+whitespace. The call's text is read without whitespace at its ends, and the
+reading puts back the opening's own text after its last tag as before, so a
+call written exactly as the template writes it reads as it did. Whitespace
+right before an opening that begins with whitespace stays the call's, as it
+was while the whole opening had to match. The closing a call is given where
+the reply ends inside it is still the template's whole closing.

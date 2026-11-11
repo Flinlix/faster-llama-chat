@@ -317,6 +317,24 @@ def test_a_call_without_a_tag_of_its_own_is_read_by_its_texts():
     assert decoded == out.token_ids and decoded[-1] == "<sep>"
 
 
+@pytest.mark.parametrize("sampled", [
+    # Written as the template writes it, whitespace around the texts included.
+    ["Gleich.", "\n", "<open>", "call:", "\n", "clock{}", "\n", "<close>", "x"],
+    # Without that whitespace, as a model may write it.
+    ["Gleich.", "<open>", "call:", "clock{}", "<close>", "x"],
+    # With more of it.
+    ["Gleich.", " \n\n", "<open>", "call:", "  ", "clock{}", " \n", "<close>", "x"],
+], ids=["as-written", "without-whitespace", "more-whitespace"])
+def test_a_calls_texts_are_matched_without_the_whitespace_around_them_as_a_thoughts_tags_are(
+        sampled):
+    context, decoded, _ = _sampling_context(sampled)
+    out = GenerationAccumulator()
+    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+        call_texts=("\n<open>call:\n", "\n<close>"))))
+    assert shown == out.text == "Gleich."
+    assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
+
+
 def test_a_reply_ends_where_its_closing_parts_from_a_call():
     context, decoded, removed = _sampling_context(
         ["Pa", "ris", "<close>", "resp", "<sep>", "<close>", "msg", "<end>"])
