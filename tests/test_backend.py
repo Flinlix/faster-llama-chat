@@ -469,6 +469,29 @@ def test_loading_ends_by_decoding_a_full_batch_and_a_single_token_and_leaves_the
     assert performed[-4:] == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
 
 
+def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, monkeypatch):
+    stored = {"tokenizer.chat_template": "default:{{ messages[0].content }}",
+              "tokenizer.chat_template.tool_use": "tools:{{ messages[0].content }}"}
+    backend = SimpleNamespace(
+        load_model=lambda path, layers, progress: "model",
+        metadata_value=lambda model, key: stored.get(key),
+        kv_cache_type_id=lambda name: 0, new_context=lambda *args, **kwargs: "ctx",
+        vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
+        can_shift=lambda ctx: True, kv_seq_rm=lambda ctx, seq, p0, p1: True,
+        kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
+        decode=lambda *args: None, kv_clear=lambda ctx: None)
+    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    model = tmp_path / "model.gguf"
+    model.touch()
+    context = KVContext(Config(model_path=str(model), context_size=32, max_batch_tokens=8,
+                               min_reply_tokens=0))
+    question = [{"role": "user", "content": "hi"}]
+    assert context.render_with_model_template(question) == "default:hi"
+    assert context.render_with_model_template(question, template_name="tool_use") == "tools:hi"
+    assert context.chat_template_text("tool_use") == stored["tokenizer.chat_template.tool_use"]
+    assert context.chat_template_text("rag") is None
+
+
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
     assert tokenize_pieces(_merging_context(), [], add_special=True) == ["BOS"]
 

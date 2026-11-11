@@ -9,8 +9,9 @@ conversation.
 from __future__ import annotations
 
 import dataclasses
+import functools
 
-from .cache_context import MODEL_READER, RENDERER_VARIABLES, ensure_answers
+from .cache_context import MODEL_READER, RENDERER_VARIABLES, TOOL_USE_TEMPLATE, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
                           extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
@@ -46,6 +47,8 @@ class ResolvedTemplate:
 
     Args:
         context: The cache context to read the model through.
+        template_name: Which of the model's templates: ``None`` for its
+            default one, else the name of a further one it ships.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
@@ -53,10 +56,13 @@ class ResolvedTemplate:
             validation against the model.
     """
 
-    def __init__(self, context) -> None:
+    def __init__(self, context, template_name: str | None = None) -> None:
         ensure_answers(context, MODEL_READER)
         self._context = context
-        self._probe_render = refusing(context.render_with_model_template)
+        self._template_name = template_name
+        self._model_render = functools.partial(context.render_with_model_template,
+                                               template_name=template_name)
+        self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
         self._tag_texts = tag_texts(context)
         self._fragments = self._resolve_fragments()
@@ -92,9 +98,8 @@ class ResolvedTemplate:
         if self._reasoning is not None and self._reasoning.past_keeps_thought:
             messages = [with_thought_as(message, self._reasoning.past_thought_form)
                         for message in messages]
-        return self._context.render_with_model_template(
-            messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
-            variables=self._variables)
+        return self._model_render(messages, tools, generation_prompt=generation_prompt,
+                                  reasoning=reasoning, variables=self._variables)
 
     def _render(self, messages, tools=None, *, variables=None, **options):
         """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
@@ -276,14 +281,13 @@ class ResolvedTemplate:
 
     def _resolve_fragments(self) -> TemplateFragments:
         """Recover the template fragments from the model's own chat template."""
-        fragments = extract_fragments(self._context.render_with_model_template)
+        fragments = extract_fragments(self._model_render)
         if fragments is None:
             raise ValueError(
                 "the model ships no chat template, which this library writes every "
                 "conversation with"
             )
-        rewrites = extract_content_rewrites(self._context.render_with_model_template,
-                                            (*self._tag_texts, *ESCAPABLE))
+        rewrites = extract_content_rewrites(self._model_render, (*self._tag_texts, *ESCAPABLE))
         return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
 
     def _validate_template(self) -> None:
@@ -530,12 +534,12 @@ class ResolvedTemplate:
         conversation without tools; empty where the system turn declares them
         already, or no variable makes it.
         """
-        if not self._calls_marked or self._context.chat_template_text() is None \
-                or self._declares_in_system_turn():
+        text = self._context.chat_template_text(self._template_name)
+        if not self._calls_marked or text is None or self._declares_in_system_turn():
             return {}
         conversation = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
         plain = self._render(conversation)
-        names = names_read(self._context.chat_template_text() or "")
+        names = names_read(text)
         for name in sorted(names - RENDERER_VARIABLES):
             for value in (False, True):
                 self._variables = {}
@@ -609,3 +613,26 @@ class ResolvedTemplate:
         plain = self._system_turn(None)
         return (rendered is not None and plain is not None and _PROMPT in rendered
                 and _PROMPT in plain and rendered != plain)
+
+
+class ResolvedTemplates:
+    """This model's default chat template and, where it ships one, its template for a conversation that declares tools, each recovered and proven usable.
+
+    Args:
+        context: The cache context to read the model through.
+
+    Raises:
+        TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
+        ValueError: If either template cannot be recovered, or fails validation
+            against the model.
+    """
+
+    def __init__(self, context) -> None:
+        self._default = ResolvedTemplate(context)
+        self._for_tools = (ResolvedTemplate(context, TOOL_USE_TEMPLATE)
+                           if context.chat_template_text(TOOL_USE_TEMPLATE) is not None
+                           else self._default)
+
+    def for_conversation(self, declares_tools: bool) -> ResolvedTemplate:
+        """The template a conversation is written with: the one for tools where it declares tools."""
+        return self._for_tools if declares_tools else self._default

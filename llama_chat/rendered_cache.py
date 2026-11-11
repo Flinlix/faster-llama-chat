@@ -29,7 +29,7 @@ from .render_checks import (STAND_IN, ensure_history_stays_written, question_spl
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
-from .resolved_template import ResolvedTemplate
+from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
 from .tokenizing import split_at_tags
@@ -117,13 +117,14 @@ class RenderedCache:
     raises, the conversation and the cache as they were before it.
     """
 
-    def __init__(self, context, template: ResolvedTemplate, config: Config) -> None:
+    def __init__(self, context, templates: ResolvedTemplates, config: Config) -> None:
         self._context = context
-        self._template = template
+        self._templates = templates
         self._config = config
         self._memory = CacheSync(context)
         self._state = _ConversationState()
-        self._rendering = ConversationRendering(context, template, lambda: self._state)
+        self._rendering = ConversationRendering(context, lambda: self.template,
+                                                lambda: self._state)
         # Left as they are by a failed action. The newest generation: where it began,
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
@@ -153,6 +154,11 @@ class RenderedCache:
                 ``asks_question``, as :meth:`ask` does where a reply is open.
         """
         _ensure_can_reply(self._published, asks_question)
+
+    @property
+    def template(self) -> ResolvedTemplate:
+        """The template the conversation is written with: the model's template for tools once it declares any."""
+        return self._templates.for_conversation(bool(self._state.tools))
 
     @property
     def tools(self) -> list[ToolSpec]:
@@ -432,7 +438,7 @@ class RenderedCache:
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.reply_open, before_question)
         room = (self._config.context_size - len(self._memory.tokens)
-                - self._template.n_closing_tokens)
+                - self.template.n_closing_tokens)
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
@@ -881,7 +887,7 @@ class RenderedCache:
 
     def _moves_declarations(self) -> bool:
         """Whether the declarations move with the newest question, leaving a stretch behind."""
-        return bool(self._state.tools) and self._template.declares_before_newest_turn
+        return bool(self._state.tools) and self.template.declares_before_newest_turn
 
     def _prompted(self) -> Target:
         """The conversation with the generation prompt after it, noting the template text a reply follows."""

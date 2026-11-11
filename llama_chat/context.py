@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from ._backend import Backend, set_log_level
 from .config import Config, Sampling, with_request_sampling
 from .addon_files import addon_file, with_model_sampling
+from .cache_context import TOOL_USE_TEMPLATE
 from .model_template import ModelTemplate
 
 SEQ = 0  # single active conversation -> single sequence id
@@ -66,8 +67,11 @@ class KVContext:
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
             self._warm_up()
-            self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
-                                    if template else None)
+            # The default template under None, and each further one the GGUF ships by its name.
+            texts = {None: template, TOOL_USE_TEMPLATE: self._backend.metadata_value(
+                self._model, f"tokenizer.chat_template.{TOOL_USE_TEMPLATE}")}
+            self._model_templates = {name: ModelTemplate(text, self._backend.eos_text(self._vocab))
+                                     for name, text in texts.items() if text}
             self._special_tokens = None
         except BaseException:
             # Free whatever was created before the failure.
@@ -125,25 +129,28 @@ class KVContext:
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   variables: Mapping[str, object] | None = None) -> str | None:
-        """Render ``messages`` with the model's own chat template; see :meth:`ModelTemplate.render`.
+                                   variables: Mapping[str, object] | None = None,
+                                   template_name: str | None = None) -> str | None:
+        """Render ``messages`` with the model's own chat template of that name; see :meth:`ModelTemplate.render`.
 
-        ``None`` where the model ships no template or the template rejects
-        this message shape. BOS is left out: the sequence opener is the
-        tokenizer's to add.
+        ``None`` where the model ships no template of that name or the
+        template rejects this message shape. BOS is left out: the sequence
+        opener is the tokenizer's to add.
         """
-        if self._model_template is None:
+        model_template = self._model_templates.get(template_name)
+        if model_template is None:
             return None
-        return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
-                                           reasoning=reasoning, variables=variables)
+        return model_template.render(messages, tools, generation_prompt=generation_prompt,
+                                     reasoning=reasoning, variables=variables)
 
     def addon_call(self) -> dict:
         """How the model's add-on file says a generated call is written, if it says."""
         return dict(self._addon_call)
 
-    def chat_template_text(self) -> str | None:
-        """The source of the model's own chat template, or ``None`` where it ships none."""
-        return None if self._model_template is None else self._model_template.text
+    def chat_template_text(self, template_name: str | None = None) -> str | None:
+        """The source of the model's own chat template of that name, or ``None`` where it ships none."""
+        model_template = self._model_templates.get(template_name)
+        return None if model_template is None else model_template.text
 
     def reset(self) -> None:
         self._backend.kv_clear(self._engine_context)

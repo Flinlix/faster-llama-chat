@@ -14,8 +14,9 @@ import re
 import sys
 
 from llama_chat.addon_files import addon_file
+from llama_chat.cache_context import TOOL_USE_TEMPLATE
 from llama_chat.model_template import ModelTemplate
-from llama_chat.resolved_template import ResolvedTemplate
+from llama_chat.resolved_template import ResolvedTemplates
 
 
 class _Renders:
@@ -128,13 +129,18 @@ class FakeContext:
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
                  tokens_spell_text: bool = True) -> None:
         self._fixture = fixture
-        self._model = _compiled(fixture["chat_template"], fixture["eos_token"])
         self._template = fixture["chat_template"]
+        # The default template under None, and the one for tools under its name, where given.
+        self._texts = {None: self._template, TOOL_USE_TEMPLATE: fixture.get("tool_use_template")}
+        self._texts = {name: text for name, text in self._texts.items() if text}
+        self._models = {name: _compiled(text, fixture["eos_token"])
+                        for name, text in self._texts.items()}
+        self._model = self._models[None]
         self._stated = fixture["render_variables"]
         self._adds_bos = fixture.get("adds_bos", False)
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: dict[int, str] = {}
-        found = set(TAG.findall(self._template)) | self._rendered_tags()
+        found = set(TAG.findall("".join(self._texts.values()))) | self._rendered_tags()
         self._listed = tuple(self._tag_token(tag) for tag in sorted(
             found | {tag.replace("/", "", 1) for tag in found if "/" in tag}))
         self._call_mark_tokens = None
@@ -193,13 +199,14 @@ class FakeContext:
         tools = [{"type": "function", "function": {"name": "fn", "description": "d",
                                                    "parameters": {"type": "object"}}}]
         found = set()
-        for mode in self._stated:
-            for messages in (conversation, conversation[:3]):
-                for generation_prompt in (False, True):
-                    rendered = self._model.render(messages, tools,
-                                                  generation_prompt=generation_prompt,
-                                                  variables=self._stated[mode])
-                    found |= set(TAG.findall(rendered or ""))
+        for model in self._models.values():
+            for mode in self._stated:
+                for messages in (conversation, conversation[:3]):
+                    for generation_prompt in (False, True):
+                        rendered = model.render(messages, tools,
+                                                generation_prompt=generation_prompt,
+                                                variables=self._stated[mode])
+                        found |= set(TAG.findall(rendered or ""))
         return found
 
     def _tag_token(self, tag: str) -> int:
@@ -233,18 +240,26 @@ class FakeContext:
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   variables: dict | None = None) -> str | None:
+                                   variables: dict | None = None,
+                                   template_name: str | None = None) -> str | None:
         self.rendered.append(len(messages))
-        return self._model.render(messages, tools, generation_prompt=generation_prompt,
-                                  reasoning=reasoning, variables=variables)
+        model = self._models.get(template_name)
+        return None if model is None else model.render(
+            messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
+            variables=variables)
 
     def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
-        """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded."""
-        return self._model.render(messages, tools, generation_prompt=generation_prompt,
-                                  reasoning=None, variables=self._stated["on" if reasoning else "off"])
+        """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded.
 
-    def chat_template_text(self) -> str | None:
-        return self._template
+        A conversation that declares tools is written with the fixture's
+        template for tools, where it gives one.
+        """
+        model = self._models.get(TOOL_USE_TEMPLATE if tools else None, self._model)
+        return model.render(messages, tools, generation_prompt=generation_prompt,
+                            reasoning=None, variables=self._stated["on" if reasoning else "off"])
+
+    def chat_template_text(self, template_name: str | None = None) -> str | None:
+        return self._texts.get(template_name)
 
     def addon_call(self) -> dict:
         # The shipped add-on file that names this template, as a model's load finds it.
@@ -324,7 +339,7 @@ class FakeContext:
         """The template's own call tags as tokens, else its call texts as characters."""
         if self._call_mark_tokens is None:
             reader = FakeContext(self._fixture)
-            template = ResolvedTemplate(reader)
+            template = ResolvedTemplates(reader).for_conversation(True)
             marks = call_marks(template, reader)
             by_tags = template.call_boundary().tool_tokens is not None
             self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)

@@ -1643,3 +1643,36 @@ call written exactly as the template writes it reads as it did. Whitespace
 right before an opening that begins with whitespace stays the call's, as it
 was while the whole opening had to match. The closing a call is given where
 the reply ends inside it is still the template's whole closing.
+
+**264.4: A template of its own for tools.** At the user's choice (B). A GGUF
+can hold further named chat templates beside `tokenizer.chat_template`, among
+them `tokenizer.chat_template.tool_use` for a conversation that declares
+tools; only the default one was read. The engine context now reads that one
+too, and the two members of a cache context that hand out the template, its
+render and its text, take a `template_name`, `None` for the default one, so
+that a context of one's own can offer the same. Where the model ships a
+template for tools, it is recovered and checked at load exactly as the
+default one is, and a model whose template for tools fails that check is
+refused. A conversation is written with that template from the moment it
+declares tools, and with the default one while it declares none; the choice
+is made in one place, from the conversation's declarations, and everything
+that renders or generates reads the template from there. `can_call_tools`
+answers for the template a conversation with tools is written with. A
+`declare_tools` that switches templates is the render changing, as any
+declaration in the system turn changes it: the cache is compared with the new
+render and decoded again from the first token that differs, which for two
+templates of different formats is the whole conversation, once. A turn kept as
+generated under the default template that the template for tools cannot place
+refuses the declaration, as 270.18 refuses any such action. None of the
+models in the local cache ships a template for tools, so the tests run an
+invented pair: a default template that knows no tools, and the invented tool
+template in another format.
+
+Open, for the user: whether a `declare_tools` that switches templates should
+decode the conversation again once in the new form, as built, or be refused
+in favour of a `begin` with the tools; which template `can_reason`,
+`can_turn_off_reasoning` and `can_take_system_prompt` answer for, now the
+current conversation's (before any `begin`, the default one), while `begin`
+checks the template its own `tools` select; and which template a history
+holding tool turns but declaring no tools is written with, now the default
+one, which refuses it where only the template for tools can call tools.

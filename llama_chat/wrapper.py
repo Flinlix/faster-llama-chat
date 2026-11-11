@@ -19,7 +19,7 @@ from .context import KVContext
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
-from .resolved_template import ResolvedTemplate
+from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 
 
@@ -69,12 +69,12 @@ class ChatWrapper:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
-            self._template = ResolvedTemplate(self._context)
+            self._templates = ResolvedTemplates(self._context)
         except BaseException:
             if owns_context:
                 self._context.close()
             raise
-        self._conversation = RenderedCache(self._context, self._template, config)
+        self._conversation = RenderedCache(self._context, self._templates, config)
         self._closed = False
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
@@ -134,11 +134,12 @@ class ChatWrapper:
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
             specs = list(tools or [])
+            template = self._templates.for_conversation(bool(specs))
             if specs or any(isinstance(item, ToolTurn) for item in messages):
-                self._template.ensure_tools_usable()
+                template.ensure_tools_usable()
             if reasoning:
-                self._template.ensure_can_reason()
-            if system_prompt and not self._template.has_system_turn:
+                template.ensure_can_reason()
+            if system_prompt and not template.has_system_turn:
                 raise ValueError(
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
@@ -324,6 +325,8 @@ class ChatWrapper:
 
         Written where the template declares tools, never as a message of its
         own; the cache is decoded again from where the declarations change it.
+        The first declaration of a model that ships a template for tools
+        writes the conversation with that template from then on.
 
         Args:
             tools: What to declare. Nothing to declare does nothing, and
@@ -347,7 +350,8 @@ class ChatWrapper:
             specs = [spec for spec in tools if spec.name not in known]
             if not specs:
                 return 0
-            return self._conversation.declare(specs, accept=self._template.ensure_tools_usable)
+            return self._conversation.declare(
+                specs, accept=self._templates.for_conversation(True).ensure_tools_usable)
 
     # ----- introspection -------------------------------------------------------
     @property
@@ -405,15 +409,16 @@ class ChatWrapper:
     def can_call_tools(self) -> bool:
         """Whether tools can be used with this model, every step of the way.
 
-        Four things have to hold, and all are settled at construction: the
-        template describes a call, it renders the declarations that tell the
+        Four things have to hold of the template a conversation that declares
+        tools is written with, its template for tools where the model ships
+        one, and all are settled at construction: the template describes a call, it renders the declarations that tell the
         model a tool exists, the argument spelling was recovered, and it renders
         a block to answer a call in. True here is exactly what :meth:`begin`
         accepts ``tools`` for. Where only the spelling is missing a call is
         still detected, so :attr:`Reply.stop_reason` can still be
         ``"unreadable_tool_call"``, but nothing runnable comes out of it.
         """
-        return self._template.can_call_tools
+        return self._templates.for_conversation(True).can_call_tools
 
     @property
     def can_reason(self) -> bool:
@@ -693,6 +698,11 @@ class ChatWrapper:
             return self._template.read_calls(generated.tool_call)
         except (ValueError, RecursionError):
             return []
+
+    @property
+    def _template(self) -> ResolvedTemplate:
+        """The template the conversation is written with now."""
+        return self._conversation.template
 
     def _ensure_open(self) -> None:
         if self._closed:
