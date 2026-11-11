@@ -273,9 +273,12 @@ objects, is unreadable, and its tool does not run.
 
 **Nothing is evicted while a turn is open**, since that would cut into the turn
 being written, so a turn of many calls grows towards `context_size`. A result
-too large for what is left is clipped to leave `min_reply_tokens`; one whose
-wrapping alone leaves no room for the reply raises `ContextOverflowError`, the
-call stays owed and nothing is written, and the conversation must begin again.
+too large for what is left is clipped to leave `min_reply_tokens`. Where the
+result's wrapping alone leaves no room for the reply, `inject_tool_result`
+raises `ContextOverflowError`, the call stays owed and nothing is written, and
+the conversation must begin again; a reply that answers its calls itself,
+under `"refuse"` or a registry, closes the turn instead on what the model
+wrote, as the reply cap closes one, and ends with `"token_limit"`.
 
 **A history with tool turns** goes into `begin` as `ToolTurn`s, each holding the
 turn's steps in order: the model's text as `str`, each `ToolCall` and each

@@ -338,6 +338,35 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
     pytest.fail("no context size left the call room but its result wrapping none")
 
 
+@pytest.mark.parametrize("policy", ["refuse", "registry"])
+def test_a_running_reply_with_no_room_to_answer_its_call_closes_the_turn_as_the_cap_does(policy):
+    """The turn closes on what the model wrote, as a reply the cap cut does, and the conversation goes on."""
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    for size in range(40, 400):
+        wrapper, fake = tool_wrapper(context_size=size)
+        try:
+            wrapper.begin("persona")
+        except ContextOverflowError:
+            continue
+        fake.call_script = ["fn:clock{}"]
+        try:
+            reply = wrapper.reply("wie spät?", tool_call_policy=(
+                registry if policy == "registry" else policy)).finish()
+        except ContextOverflowError as refused:
+            if "only" in str(refused):
+                continue                # too small for the question itself
+            raise
+        if reply.stop_reason != "token_limit" or "<result>" in held_text(fake):
+            continue                    # room for the result, or none for the call
+        assert not wrapper.turn_open and wrapper.pending_calls == []
+        assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+        fake.call_script = []
+        assert wrapper.reply("wie spät?").finish().stop_reason == "end_of_turn"
+        return
+    pytest.fail("no context size left the call room but its result none")
+
+
 def test_a_result_with_no_call_waiting_is_refused():
     wrapper, _ = tool_wrapper()
     wrapper.begin("persona")

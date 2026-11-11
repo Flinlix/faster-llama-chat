@@ -547,6 +547,17 @@ class RenderedCache:
         self._state.kept_at = {}
         self._publish()
 
+    def close_unanswered(self) -> int:
+        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history items were dropped.
+
+        The newest reply is kept without those calls, its tokens as generated,
+        and the results already written for them are taken out again.
+        """
+        calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
+        del self._state.messages[calling + 1:]
+        self._forget_calls()
+        return self._settle()
+
     def add_result(self, call: ToolCall, result) -> None:
         """Record what the oldest owed call returned, clipped where it cannot fit; after the last one, decode the prompt for the reply.
 

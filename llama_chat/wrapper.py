@@ -19,7 +19,7 @@ from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
-from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, ToolCallPolicy
+from .reply import TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique
@@ -266,9 +266,10 @@ class ChatWrapper:
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed; at the first
                 iteration, if this thread is still reading another reply.
-            ContextOverflowError: If too little room remains for the reply, or
-                a result or the error answering a call no longer fits. The
-                turn is then open and cannot be continued.
+            ContextOverflowError: If too little room remains for the reply. A
+                result or the error answering a call that no longer fits
+                raises nothing: the turn closes on what the model wrote, and
+                the reply ends with ``"token_limit"``.
         """
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
@@ -596,8 +597,18 @@ class ChatWrapper:
                     settled, calls_left = self._settle_calls(
                         generation.tool_calls, registry, calls_left, max_calls)
                     may_call_again = registry is not None and calls_left > 0
-                    for call, result in settled:
-                        self._conversation.add_result(call, _explain_failure(result, may_call_again))
+                    try:
+                        for call, result in settled:
+                            self._conversation.add_result(
+                                call, _explain_failure(result, may_call_again))
+                    except ContextOverflowError:
+                        # No room is left to answer: the turn closes on what the model
+                        # wrote, as one the reply cap cuts does.
+                        dropped = self._conversation.close_unanswered()
+                        generations[-1] = replace(
+                            generations[-1], stop_reason="token_limit",
+                            n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                        return _sum_generations(generations, calls_left == 0)
                     deltas = self._generate(None, recognizes_calls=may_call_again, **kwargs)
             finally:
                 deltas.close()

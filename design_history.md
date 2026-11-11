@@ -2042,3 +2042,16 @@ history leaves open was started by no reply, so going on with it takes
 `"refuse"` unless a policy is given. The wrapper holds that policy, a
 registry included, until the next turn starts or the conversation begins
 again.
+
+**270.8: no room left to answer a call inside a running reply.** Where a
+reply answers its calls itself, under `"refuse"` or a registry, and the
+context had no room left for a result's wrapping, the reply raised
+`ContextOverflowError` and left the turn open, a call owed and no reply able
+to answer it, so only a new `begin` recovered. The turn now closes as the reply
+cap closes one: the reply is kept as the model wrote it, without the calls
+that could not be answered, results already written for them are taken out
+again, the cache is brought to the template's render, and the reply ends with
+`"token_limit"`, the context having run out. This is the path a call that
+could not be read already took where its error had no room.
+`inject_tool_result` still raises, since the caller holds the call there and
+decides what follows.
