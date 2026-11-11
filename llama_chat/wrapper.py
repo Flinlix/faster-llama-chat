@@ -8,6 +8,7 @@ design_history.md, "The render is the conversation's encoding".
 
 from __future__ import annotations
 
+import contextlib
 import math
 import threading
 from collections.abc import Callable, Generator, Iterable
@@ -87,6 +88,7 @@ class ChatWrapper:
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
+        self._holder: int | None = None         # the thread that holds it, while one does
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
@@ -140,7 +142,7 @@ class ChatWrapper:
                 left intact either way.
         """
         messages = messages or []
-        with self._lock:
+        with self._held():
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
@@ -178,7 +180,7 @@ class ChatWrapper:
                 evicting every non-system message. Raised before anything is
                 evicted.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             return self._conversation.add(role, text)
 
@@ -253,7 +255,8 @@ class ChatWrapper:
                 iteration, if a registry holding tools is given to a model
                 that could never call one.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
-            RuntimeError: At once, if the wrapper is closed.
+            RuntimeError: At once, if the wrapper is closed; at the first
+                iteration, if this thread is still reading another reply.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
@@ -283,7 +286,7 @@ class ChatWrapper:
     def _until_call(self, text: str | None,
                     **options) -> Generator[str | ToolCall, None, Reply]:
         """One generation, from ``text`` or on from the open turn, then the calls it stopped at."""
-        with self._lock:
+        with self._held():
             generation = yield from self._generate(text, **options)
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from generation.tool_calls
@@ -311,7 +314,7 @@ class ChatWrapper:
             ContextOverflowError: If not even an empty result leaves room for
                 the reply in what is left of the context.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             self._conversation.add_result(call, result)
 
@@ -333,7 +336,7 @@ class ChatWrapper:
                 call, one that could not be read included, or if
                 ``keep_text`` is not a prefix of its text.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
@@ -363,7 +366,7 @@ class ChatWrapper:
                 would leave no room under ``evict_above_tokens`` for a short
                 question.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             tools = list(tools)
             ensure_names_unique(tools)
@@ -407,7 +410,12 @@ class ChatWrapper:
 
         Returns:
             ``True`` if the wrapper went idle, ``False`` on timeout.
+
+        Raises:
+            RuntimeError: If this thread is reading a reply, which would never
+                end while it waits.
         """
+        self._ensure_not_holding()
         if not self._lock.acquire(timeout=-1 if timeout_s is None else timeout_s):
             return False
         self._lock.release()
@@ -490,7 +498,7 @@ class ChatWrapper:
         Waits for any in-flight generation. Closes a context passed to the
         constructor as well. Every action after close raises ``RuntimeError``.
         """
-        with self._lock:
+        with self._held():
             if self._closed:
                 return
             self._closed = True
@@ -518,8 +526,8 @@ class ChatWrapper:
             text, **kwargs: As :meth:`reply`.
 
         The lock is held for the whole exchange, tools running included, so
-        no other action comes between its rounds; a tool must not call back
-        into the wrapper.
+        no other action comes between its rounds; a tool that calls back into
+        the wrapper is refused.
 
         Raises:
             ValueError: If ``registry`` holds tools this model could never
@@ -527,7 +535,7 @@ class ChatWrapper:
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
-        with self._lock:
+        with self._held():
             # A registry is the same promise a declaration is, so it is checked the
             # same way: an exchange that cannot run a tool is refused before it
             # starts, not after the model has asked for one.
@@ -729,6 +737,29 @@ class ChatWrapper:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("ChatWrapper is closed")
+
+    @contextlib.contextmanager
+    def _held(self):
+        """Hold the wrapper for one action, refusing one the thread that already holds it asks for."""
+        self._ensure_not_holding()
+        with self._lock:
+            self._holder = threading.get_ident()
+            try:
+                yield
+            finally:
+                self._holder = None
+
+    def _ensure_not_holding(self) -> None:
+        """Refuse an action on the thread whose reply still holds the wrapper, which would wait for itself.
+
+        Raises:
+            RuntimeError: Naming the reply this thread is reading.
+        """
+        if self._holder == threading.get_ident():
+            raise RuntimeError(
+                "the reply this thread is reading still holds this conversation, and an "
+                "action now would wait for that reply for ever; read the reply to its end "
+                "or close it first, and call nothing on the wrapper from a tool it runs")
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:

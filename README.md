@@ -112,7 +112,10 @@ it in a `with`. To stop a generation from another thread, pass
 
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
-model and makes later actions raise.
+model and makes later actions raise. A reply holds the lock while it is read,
+so an action on the thread that reads it, a tool the reply runs included,
+would wait for itself; it is refused instead with a `RuntimeError` that names
+the reply.
 
 ## What to call, by task
 

@@ -799,6 +799,69 @@ def test_the_streamed_deltas_join_into_the_exchange_text():
     assert "".join(deltas) == reply.text
 
 
+# ----- an action on the thread whose reply is still being read ------------
+def _within_seconds(action, seconds=10):
+    """Run ``action`` on a thread of its own; what it returned or raised, or a failure where it hangs."""
+    outcome = {}
+
+    def run():
+        try:
+            outcome["returned"] = action()
+        except BaseException as e:      # noqa: BLE001  handed back to the test
+            outcome["raised"] = e
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        pytest.fail("the action hangs")
+    if "raised" in outcome:
+        raise outcome["raised"]
+    return outcome["returned"]
+
+
+def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging():
+    wrapper, fake = tool_wrapper()
+    registry = ToolRegistry()
+
+    @registry.tool("Notiert etwas.")
+    def note() -> str:
+        wrapper.inject("Notiz")
+        return "ok"
+
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:note{}"]
+    reply = _within_seconds(lambda: wrapper.reply("los", tool_call_policy=registry).finish())
+    told = _result_of(fake)
+    assert "tool_raised" in told and "the reply this thread is reading" in told
+    assert reply.text == "reply" and not wrapper.turn_open
+
+
+@pytest.mark.parametrize("action", [
+    lambda w: w.inject("Notiz"),
+    lambda w: w.reply("noch was").finish(),
+    lambda w: w.begin("neu"),
+    lambda w: w.declare_tools([ToolSpec("clock", "…", {})]),
+    lambda w: w.truncate_last_reply(""),
+    lambda w: w.wait_idle(),
+    lambda w: w.close(),
+], ids=["inject", "reply", "begin", "declare_tools", "truncate_last_reply", "wait_idle", "close"])
+def test_an_action_on_the_thread_reading_a_reply_is_refused_and_names_the_reply(action):
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+
+    def read_and_act():
+        stream = wrapper.reply("hallo")
+        next(stream)
+        try:
+            action(wrapper)
+        finally:
+            stream.close()
+
+    with pytest.raises(RuntimeError, match="the reply this thread is reading"):
+        _within_seconds(read_and_act)
+    assert wrapper.reply("weiter").finish().text == "reply"
+
+
 # ----- a model that writes a batch -----------------------------------------
 def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     wrapper, fake = tool_wrapper()

@@ -2009,3 +2009,15 @@ after such a tag released it into the answer. It is now dropped there, with
 whatever followed it, as the thought filter drops the start of a thought's
 tag on a cut reply. A reply that ends of its own accord after the tag keeps
 it, as before.
+
+**270.13: an action on the thread whose reply is being read.** A reply holds
+the wrapper's lock while it is read, so an action on the same thread, such as
+a tool that the reply runs calling back into the wrapper, or an `inject` made
+between two deltas of the stream, waited for the lock it already held and
+hung for ever. The wrapper now records which thread holds the lock, and every
+action, `wait_idle` and `close` included, refuses on that thread with a
+`RuntimeError` naming the open reply. A tool that does so is answered as a
+tool that raised, so the model is told, and the reply ends. Another thread
+still waits for the reply, as before. A stream resumed on another thread than
+the one that began it is outside this check, as the stream is to be driven
+from one thread at a time.
