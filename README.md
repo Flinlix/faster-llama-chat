@@ -335,12 +335,27 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
-| `log_level` | `"error"` | llama.cpp's own verbosity: `"debug"`, `"info"`, `"warn"`, `"error"` or `"none"`, applied process-wide before the model loads |
 
 `ChatWrapper` also takes, outside `Config` because neither is a value to
 tune: `context=` (a [cache context of your own](#your-own-cache-context)) and
 `on_load_progress=`, called with a fraction while the weights load, which must
 not raise.
+
+**Logging.** Everything llama.cpp writes, and what the library itself has to
+say, goes to Python's `logging`, under the logger `llama_chat` and llama.cpp's
+lines under its child `llama_chat.engine`, one record per line: llama.cpp's
+errors as `ERROR`, its warnings as `WARNING`, its load-time listings as `INFO`
+and `DEBUG`. With no logging configured, Python shows warnings and errors on
+stderr. To show only errors, or everything:
+
+```python
+import logging
+logging.getLogger("llama_chat").setLevel(logging.ERROR)
+logging.getLogger("llama_chat.engine").setLevel(logging.DEBUG)   # every line llama.cpp writes
+```
+
+llama.cpp has one log output per process, so importing `llama_chat` routes it
+for the whole process, a model loaded by other code included.
 
 ## Add-on files
 

@@ -12,8 +12,6 @@ KV_CACHE_TYPES = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
 # flash attention. It is kv_cache_type's default.
 UNQUANTIZED_KV_CACHE_TYPE = "f16"
 
-LOG_LEVELS = ("debug", "info", "warn", "error", "none")
-
 
 class InvalidSettingError(ValueError):
     """A setting the configuration refuses.
@@ -92,8 +90,6 @@ class Config:
             Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
             requires flash attention, so is refused with
             ``flash_attention=False``.
-        log_level: llama.cpp's own verbosity, one of ``LOG_LEVELS``. Applied
-            process-wide before the model loads.
     """
 
     # Model
@@ -126,10 +122,6 @@ class Config:
     max_batch_tokens: int = 2048
     flash_attention: bool | None = None
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
-
-    # Logging
-
-    log_level: str = "error"
 
     def __post_init__(self) -> None:
         if not 0.0 < self.evict_above_fraction <= 1.0:
@@ -169,9 +161,6 @@ class Config:
             raise InvalidSettingError(
                 "seed",
                 "seed must be None or an int in [0, 2**32 - 2] (use None for a random seed)")
-        if self.log_level not in LOG_LEVELS:
-            raise InvalidSettingError("log_level",
-                                      f"log_level must be one of {list(LOG_LEVELS)}")
         if self.kv_cache_type not in KV_CACHE_TYPES:
             raise InvalidSettingError(
                 "kv_cache_type", f"kv_cache_type must be one of {sorted(KV_CACHE_TYPES)}")

@@ -1559,3 +1559,36 @@ that automatic mode, except under a quantized `kv_cache_type`: a quantized V
 cache works only with flash attention, so the automatic mode turning it off
 would fail the load, and it is forced on there. `True` and `False` still
 force it; `False` with a quantized cache is refused as before.
+
+**266.7: the engine's log output through Python's `logging`.** At the user's
+choice (B), `log_level` and `LOG_LEVELS` are removed. `log_level` set the
+level of llama-cpp-python's own logger, whose callback prints straight to
+stderr past every Python handler, and no level of it showed real errors while
+hiding the load-time listings. Measured on this machine's build (0.3.36),
+recording the engine's raw log calls while gemma-3-1b loaded on the CPU and a
+corrupt file failed to load: the engine numbers its levels as ggml.h now does,
+1 debug, 2 info, 3 warn, 4 error and 5 a continuation of the line before, and
+nothing came at 0. The binding maps them by an older numbering, 1 to `INFO`, 2
+to `WARNING`, 3 to `ERROR` and 4 to `DEBUG`, so the engine's errors ("error
+loading model", "invalid magic characters") were filed as `DEBUG`, its
+warnings (the full-size sliding-window cache, a control-looking token) as
+`ERROR`, and its 194 lines of metadata listing as `WARNING`. That is why
+"error" showed what looked like banners and "none" was the only way to hide
+them; the inference server's note "llama.cpp's banners can only be silenced
+entirely" read the same effect as the banners being filed at level 0.
+
+`_backend.py` now installs its own callback through `llama_log_set` when it is
+imported, held at module level since the engine keeps only a raw pointer, and
+turns each line into a record of the logger `llama_chat.engine`: debug to
+`DEBUG`, info and a line without a level to `INFO`, warn to `WARNING`, error to
+`ERROR`. A continuation goes on with the open line at its level, a call of
+several lines becomes a record per line, and a line left open ends at the next
+call with a level of its own; blank lines are dropped. Measured on the same
+load: 1,922 `DEBUG` records, 195 `INFO`, 2 `WARNING` and 1 `ERROR` (the CUDA
+initialization, which fails with no device visible); unconfigured, Python
+shows only the last three, and with the logger at `ERROR` only the one error.
+It is process-wide by nature: the engine has one log sink, so importing the
+package routes the engine's output for the whole process, a model loaded by
+other code included. Rejected: keeping a level setting beside it, which would
+be a second way to do what `logging` does, and patching the binding's map,
+which would still print past Python's handlers.

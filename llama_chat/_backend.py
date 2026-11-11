@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import inspect
 import logging
+import threading
 import warnings
 from typing import Callable
 
@@ -28,23 +29,53 @@ except ImportError as exc:  # pragma: no cover
         '"llama-cpp-python>=0.3.23"'
     ) from exc
 
-# "none" sits above CRITICAL to drop llama.cpp's unconditional banners too.
-_LOG_LEVELS = {
-    "debug": logging.DEBUG,
-    "info": logging.INFO,
-    "warn": logging.WARNING,
-    "error": logging.ERROR,
-    "none": logging.CRITICAL + 1,
-}
-
-
 # The C API's floor on how many candidates a truncating stage may leave.
 _MIN_CANDIDATES = 1
 
+# ggml's log levels, numbered as ggml.h numbers them, each as the Python level
+# its lines are logged at. A line without a level is information.
+_ENGINE_LOG_LEVELS = {0: logging.INFO, 1: logging.DEBUG, 2: logging.INFO,
+                      3: logging.WARNING, 4: logging.ERROR}
+_ENGINE_LOG_CONTINUATION = 5
 
-def set_log_level(level: str) -> None:
-    """Filter llama.cpp log output to ``level`` and above, process-wide."""
-    logging.getLogger("llama-cpp-python").setLevel(_LOG_LEVELS[level])
+
+class _EngineLog:
+    """The engine's log calls as records of ``logger``, one per line, each at its line's level."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+        self._level = logging.INFO
+        self._open_line = ""
+        # The engine may log from threads of its own.
+        self._lock = threading.Lock()
+
+    def write(self, engine_level: int, text: str) -> None:
+        """Take one call: a continuation goes on with the open line, any other level ends it first."""
+        with self._lock:
+            if engine_level != _ENGINE_LOG_CONTINUATION:
+                self._emit(self._open_line)
+                self._open_line = ""
+                self._level = _ENGINE_LOG_LEVELS.get(engine_level, logging.INFO)
+            *lines, self._open_line = (self._open_line + text).split("\n")
+            for line in lines:
+                self._emit(line)
+
+    def _emit(self, line: str) -> None:
+        if line.strip():
+            self._logger.log(self._level, line)
+
+
+_engine_log = _EngineLog(logging.getLogger("llama_chat.engine"))
+
+
+@llama_cpp.llama_log_callback
+def _forward_engine_log(level: int, text: bytes, _user_data) -> None:
+    _engine_log.write(level, text.decode("utf-8", errors="replace"))
+
+
+# Process-wide: the engine has one log sink. Held at module level, since the
+# engine keeps only a raw pointer to it.
+llama_cpp.llama_log_set(_forward_engine_log, ctypes.c_void_p(0))
 
 
 def template_renderer(template: str, eos_token: str, generation_prompt: bool = False):

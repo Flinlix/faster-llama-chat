@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 
-from ._backend import Backend, set_log_level
+from ._backend import Backend
 from .config import (UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling,
                      with_request_sampling)
 from .addon_files import addon_file, with_model_sampling
@@ -44,7 +44,6 @@ class KVContext:
         if not os.path.isfile(config.model_path):
             raise InvalidSettingError("model_path", f"no model file at {config.model_path!r}")
         self._config = config
-        set_log_level(config.log_level)  # filter llama.cpp's load-time logs too
         self._backend = Backend()
         self._model = self._backend.load_model(
             config.model_path, config.gpu_layers, progress=on_load_progress)

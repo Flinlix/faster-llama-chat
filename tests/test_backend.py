@@ -8,8 +8,11 @@ everywhere else, which answers that question itself and so cannot test it. See
 design_history.md, "How a call's format is recovered".
 """
 
+import ctypes
 import inspect
+import logging
 import re
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -602,3 +605,65 @@ def test_the_withheld_stage_biases_each_token_to_never():
     backend._chain_add = lambda chain, stage: added.append(stage)
     backend.add_withheld("chain", "vocab", (7, 9))
     assert added == [(100, [(7, float("-inf")), (9, float("-inf"))])]
+
+
+# ----- the engine's log output -----------------------------------------------
+# ggml's levels, as ggml.h numbers them.
+_DEBUG, _INFO, _WARN, _ERROR, _CONTINUATION = 1, 2, 3, 4, 5
+
+
+def _engine_records(caplog, *calls):
+    """The records the engine's log calls become, as (level, text), each call made as the engine makes it."""
+    from llama_chat import _backend
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="llama_chat"):
+        for level, text in calls:
+            _backend._forward_engine_log(level, text.encode("utf-8"), None)
+        _backend._forward_engine_log(_INFO, b"", None)      # ends a line left open
+    assert {r.name for r in caplog.records} <= {"llama_chat.engine"}
+    return [(r.levelno, r.getMessage()) for r in caplog.records]
+
+
+def test_each_engine_line_becomes_a_record_at_the_python_level_its_own_level_names(caplog):
+    assert _engine_records(
+        caplog, (_DEBUG, "load: control token: 105 '<start_of_turn>' is not marked as EOG\n"),
+        (_INFO, "llama_model_loader: loaded meta data\n"),
+        (_WARN, "llama_kv_cache_iswa: using full-size SWA cache\n"),
+        (_ERROR, "llama_model_load: error loading model\n"),
+        (0, "a line with no level\n")) == [
+        (logging.DEBUG, "load: control token: 105 '<start_of_turn>' is not marked as EOG"),
+        (logging.INFO, "llama_model_loader: loaded meta data"),
+        (logging.WARNING, "llama_kv_cache_iswa: using full-size SWA cache"),
+        (logging.ERROR, "llama_model_load: error loading model"),
+        (logging.INFO, "a line with no level")]
+
+
+def test_a_continuation_keeps_the_level_of_the_line_it_continues(caplog):
+    assert _engine_records(
+        caplog, (_ERROR, "llama_model_load: error: "), (_CONTINUATION, "no such file\n"),
+        (_INFO, "load_tensors: done\n"), (_CONTINUATION, "."), (_CONTINUATION, "."),
+        (_CONTINUATION, "\n")) == [
+        (logging.ERROR, "llama_model_load: error: no such file"),
+        (logging.INFO, "load_tensors: done"), (logging.INFO, "..")]
+
+
+def test_a_call_of_several_lines_is_a_record_per_line_and_an_open_line_ends_at_the_next_call(
+        caplog):
+    assert _engine_records(
+        caplog, (_WARN, "first\nsecond\nthird, still open"), (_DEBUG, "next\n")) == [
+        (logging.WARNING, "first"), (logging.WARNING, "second"),
+        (logging.WARNING, "third, still open"), (logging.DEBUG, "next")]
+
+
+def test_the_engine_logs_through_this_package_once_it_is_imported():
+    from llama_chat import _backend
+    installed = llama_cpp.llama_log_callback()
+    llama_cpp.llama_log_get(ctypes.byref(installed), ctypes.byref(ctypes.c_void_p()))
+    assert (ctypes.cast(installed, ctypes.c_void_p).value
+            == ctypes.cast(_backend._forward_engine_log, ctypes.c_void_p).value)
+
+
+def test_the_engines_output_is_controlled_with_logging_and_no_setting():
+    from llama_chat import config
+    assert "log_level" not in {f.name for f in fields(Config)}
+    assert not hasattr(config, "LOG_LEVELS")
