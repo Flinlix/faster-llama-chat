@@ -94,3 +94,10 @@ def test_every_shipped_file_names_a_template_the_tests_run():
     fixtures = {template_fingerprint(fixture(stem)["chat_template"]) for stem in STEMS}
     for path in SHIPPED_ADDONS.glob("*.json"):
         assert set(json.loads(path.read_text())["templates"]) & fixtures, path.name
+
+
+def test_the_ministral_3_file_holds_the_temperature_its_card_recommends_for_production():
+    path = SHIPPED_ADDONS / "ministral-3.json"
+    assert read_addon_file(path)["sampling"] == {"temperature": 0.05}
+    assert ("Use a temperature below 0.1 for daily-driver and production environments"
+            in json.loads(path.read_text())["source"])

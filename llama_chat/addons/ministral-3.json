@@ -2,8 +2,8 @@
  "templates": [
   "2ef2939ee9623cd56449b410d89405e43094f2fee620dc6395e67409124c51f3"
  ],
- "source": "mistralai/Ministral-3-8B-Instruct-2512, model card, the temperature its examples use",
+ "source": "mistralai/Ministral-3-8B-Instruct-2512, model card, Recommended Settings: \"Use a temperature below 0.1 for daily-driver and production environments; higher temperatures may be explored for creative use cases.\"",
  "sampling": {
-  "temperature": 0.15
+  "temperature": 0.05
  }
 }

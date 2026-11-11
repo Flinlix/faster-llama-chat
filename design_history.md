@@ -1479,3 +1479,11 @@ oldest release supported nor how to build one, and its commands installed the
 prebuilt wheel, which install.sh avoids. It now names 0.3.23, the floor
 pyproject.toml and install.sh require, and the repository's `./install.sh`
 with the build by hand beside it.
+
+**261.4: Ministral 3 at 0.05.** Its model card says: "Use a temperature below
+0.1 for daily-driver and production environments; higher temperatures may be
+explored for creative use cases." The 0.15 the add-on file held is what the
+card's code examples set, which contradicts that sentence. The file now holds
+0.05, below the bound with room on both sides, and quotes the sentence as its
+source. Verified on the CPU with Ministral-3-8B-Instruct-2512 Q4_K_M: the
+wrapper ran at temperature 0.05 and answered "Paris".
