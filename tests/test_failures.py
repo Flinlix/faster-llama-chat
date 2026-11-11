@@ -9,6 +9,7 @@ import pytest
 from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError, rendered_cache
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
+from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests.internals import kept_turns
 from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
@@ -237,19 +238,15 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
 
 
-def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(monkeypatch):
-    import llama_cpp.llama_chat_format as chat_format
-
-    from tests.chat_templates import fixture
-    today = [real_datetime.datetime(2026, 11, 7, 23, 59)]
-    monkeypatch.setattr(chat_format, "datetime", type("_Clock", (), {"now": staticmethod(lambda: today[0])}))
-    context = FakeContext(fixture("llama-3.2"), ["Eins.", "Zwei."])
-    w = ChatWrapper(Config(context_size=400, min_reply_tokens=8), context=context)
-    w.begin("Be brief.")
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "date_format")])
+def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(stem, clock):
+    context = FakeContext(fixture(stem), ["Eins.", "Zwei."])
+    w = ChatWrapper(Config(context_size=8192, min_reply_tokens=8), context=context)
+    w.begin("")
     w.reply("One?").finish()
-    today[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
+    clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):
-        w.begin("x" * 400)
+        w.begin("x" * 9000)
     assert w.conversation()["messages"] == [("user", "One?"), ("assistant", "Eins.")]
     assert w.reply("Two?").finish().text == "Zwei."
 
