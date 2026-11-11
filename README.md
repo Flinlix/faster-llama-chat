@@ -203,7 +203,10 @@ rest = chat.reply(tool_call_policy="yield").finish()        # the turn stays ope
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
-since the model reads its own call back. The turn keeps the tokens it was
+since the model reads its own call back. Where the text after a call would
+join the text before it without whitespace, a blank line parts them, whether
+the call ran or was handed to you: the reply that goes on after a result then
+starts with it. The turn keeps the tokens it was
 generated as, so an action after which the template's render no longer shows
 where that turn stands is refused with a `ValueError`, the conversation left
 as it was. Every call is reported on

@@ -382,8 +382,10 @@ def test_a_running_reply_runs_the_tool_and_yields_only_prose():
     ("Ich sehe nach.", " Es ist neun.", "Ich sehe nach. Es ist neun."),
     ("", "Es ist neun.", "Es ist neun."),
 ])
+@pytest.mark.parametrize("handed_over", [False, True], ids=["run", "yield"])
 def test_the_texts_around_a_call_are_parted_by_a_blank_line_where_they_would_join(
-        before_call, after_call, joined):
+        before_call, after_call, joined, handed_over):
+    """Whether the library runs the call or hands it over, the same rule parts the texts."""
     fake = FakeContext(TOOLS, gen_text=after_call, gen_tokens=len(after_call))
     wrapper = ChatWrapper(Config(context_size=512, evict_above_fraction=0.9), context=fake)
     wrapper.begin("persona")
@@ -391,10 +393,17 @@ def test_the_texts_around_a_call_are_parted_by_a_blank_line_where_they_would_joi
     registry.tool(lambda: {"time": "09:00"}, description="Sagt die Zeit.", name="clock")
     fake.replies = [ScriptedCall("fn:clock{}", before=before_call)]
 
-    stream = wrapper.reply("wie spät?", tool_call_policy=registry)
-    shown = "".join(stream)
-
-    assert shown == stream.reply.text == joined
+    if not handed_over:
+        stream = wrapper.reply("wie spät?", tool_call_policy=registry)
+        shown = "".join(event for event in stream if isinstance(event, str))
+        assert shown == stream.reply.text == joined
+        return
+    first = wrapper.reply("wie spät?", tool_call_policy="yield")
+    shown = [event for event in first if isinstance(event, str)]
+    wrapper.inject_tool_result(wrapper.pending_calls[0], {"time": "09:00"})
+    rest = wrapper.reply(tool_call_policy="yield")
+    shown += list(rest)
+    assert "".join(shown) == first.reply.text + rest.reply.text == joined
 
 
 def test_a_running_reply_stops_calling_at_the_ceiling_and_closes_the_turn():

@@ -223,7 +223,9 @@ class ChatWrapper:
                 * ``"yield"``: each call is handed over as a
                   :class:`~llama_chat.tools.ToolCall` after the text, and the
                   turn stays open. Answer each with :meth:`inject_tool_result`,
-                  in order, then call this again without ``text``.
+                  in order, then call this again without ``text``; that reply
+                  is parted from the text before the call as under
+                  ``"refuse"``.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. In the last permitted round a call the
@@ -285,9 +287,14 @@ class ChatWrapper:
 
     def _until_call(self, text: str | None,
                     **options) -> Generator[str | ToolCall, None, Reply]:
-        """One generation, from ``text`` or on from the open turn, then the calls it stopped at."""
+        """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
+
+        Going on with an open turn, it is parted from the turn's text so far as
+        a reply that runs its calls parts its generations.
+        """
         with self._held():
-            generation = yield from self._generate(text, **options)
+            generation = yield from self._read_generation(self._generate(text, **options),
+                                                          after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from generation.tool_calls
         return generation
@@ -599,6 +606,18 @@ class ChatWrapper:
                 separator = "" if delta[0].isspace() else "\n\n"
                 delta = separator + delta
             yield delta
+
+    def _open_turn_text(self) -> str:
+        """What the model has written so far in the turn a call left open; empty where none is open."""
+        if not self._conversation.turn_open:
+            return ""
+        written = []
+        for message in reversed(self._conversation.messages):
+            if message["role"] not in ("assistant", "tool"):
+                break
+            if message["role"] == "assistant":
+                written.append(message["content"])
+        return "".join(reversed(written))
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):

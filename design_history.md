@@ -2021,3 +2021,12 @@ tool that raised, so the model is told, and the reply ends. Another thread
 still waits for the reply, as before. A stream resumed on another thread than
 the one that began it is outside this check, as the stream is to be driven
 from one thread at a time.
+
+**270.10: one separator around a call.** A reply that runs its calls parts
+the text before a call from the text after it with a blank line where the two
+would join without whitespace. Under `"yield"` the text after the call comes
+from the next `reply`, which knew nothing of the text before, so the two
+joined ("Ich sehe nach.Es ist neun."). A reply that goes on with an open turn
+now reads what the model wrote in that turn so far and applies the same rule,
+so the stream and `Reply.text` start with the blank line where it is needed.
+The history keeps each text as the model wrote it, as before.
