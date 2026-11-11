@@ -18,7 +18,7 @@ from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers
                             ensure_can_go_back)
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
-from .messages import ensure_role
+from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
@@ -136,7 +136,8 @@ class ChatWrapper:
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, cannot fit beside them.
-            TypeError: If a history item is of another form.
+            TypeError: If the system prompt or a history message's text is
+                not a ``str``, or a history item is of another form.
             ValueError: If a history message has another role, or a
                 dictionary other keys; if ``tools`` names anything or the
                 history holds a tool turn and this model cannot call tools; if
@@ -145,6 +146,7 @@ class ChatWrapper:
                 the template refuses to write the conversation. The previous
                 conversation is left intact either way.
         """
+        ensure_text(system_prompt, "the system prompt")
         messages = messages or []
         with self._lock:
             self._ensure_open()
@@ -181,6 +183,7 @@ class ChatWrapper:
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
 
         Raises:
+            TypeError: If ``text`` is not a ``str``.
             ValueError: If ``role`` is another one, if no conversation has
                 been begun, if a tool call has left a reply open, or if the
                 template does not write such a message here.
@@ -189,6 +192,7 @@ class ChatWrapper:
                 evicted.
         """
         ensure_role(role)
+        ensure_text(text, "an injected message's text")
         with self._lock:
             self._ensure_open()
             return self._conversation.add(role, text)
@@ -260,15 +264,19 @@ class ChatWrapper:
             ValueError: At once, if no conversation has been begun; if a tool
                 call has left a reply open and ``text`` is given, or a result
                 is still owed; if ``text`` is ``None`` with nothing to answer;
-                or if ``max_calls`` is given without a registry. At the first
+                or if ``max_calls`` is given without a registry or is not a
+                whole number of at least 0. At the first
                 iteration, if a registry holding tools is given to a model
                 that could never call one.
+            TypeError: At once, if ``text`` is neither ``None`` nor a ``str``.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
         """
+        if text is not None:
+            ensure_text(text, "the request's text")
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
@@ -280,6 +288,10 @@ class ChatWrapper:
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and "
                              f"tool_call_policy={tool_call_policy!r} runs none")
+        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)
+                                      or max_calls < 0):
+            raise ValueError(f"max_calls must be None or a whole number of at least 0, "
+                             f"not {max_calls!r}")
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)

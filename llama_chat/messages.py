@@ -19,7 +19,8 @@ def as_messages(history) -> list[dict]:
 
     Raises:
         TypeError: If an item is neither a ``(role, text)`` pair, a message
-            dictionary nor a :class:`~llama_chat.tools.ToolTurn`.
+            dictionary nor a :class:`~llama_chat.tools.ToolTurn`, or a text
+            is not a ``str``.
         ValueError: If a dictionary holds other keys than ``role`` and
             ``content``, or a role is not one of :data:`MESSAGE_ROLES`.
     """
@@ -64,7 +65,18 @@ def _role_and_text(item) -> tuple[str, str]:
         raise TypeError(f"a history message is a (role, text) pair, a dict with 'role' and "
                         f"'content', or a ToolTurn, not the {type(item).__name__} {item!r}")
     ensure_role(role)
+    ensure_text(text, "a history message's text")
     return role, text
+
+
+def ensure_text(text, what: str) -> None:
+    """Refuse a message's text that is not a ``str``, naming the message as ``what``.
+
+    Raises:
+        TypeError: If ``text`` is not a ``str``.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"{what} must be a str, not {type(text).__name__}")
 
 
 def ensure_role(role) -> None:

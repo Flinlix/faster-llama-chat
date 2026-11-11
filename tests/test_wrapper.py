@@ -760,7 +760,48 @@ def test_every_generation_is_handed_every_sampling_value():
                for f in dataclasses.fields(Sampling) if f.name != "seed")
 
 
-# ----- a message of another role -------------------------------------------
+# ----- what an action is given, refused where it enters ---------------------
+def test_a_message_that_is_not_text_is_refused_where_it_enters_naming_it():
+    w, fake = begun_wrapper()
+    w.reply("hi").finish()
+    before, held = w.conversation(), list(fake.cache)
+    for action, what in ((lambda: w.inject(42), "injected message"),
+                         (lambda: w.reply(42), "request"),
+                         (lambda: w.begin(None), "system prompt"),
+                         (lambda: w.begin("s", [("user", 42)]), "history message"),
+                         (lambda: w.begin("s", [{"role": "user", "content": None}]),
+                          "history message")):
+        with pytest.raises(TypeError, match=f"{what}.*str, not"):
+            action()
+    assert w.conversation() == before and fake.cache == held
+
+
+@pytest.mark.parametrize("max_calls", [-1, 1.5, True])
+def test_a_ceiling_on_calls_that_is_no_count_is_refused(max_calls):
+    w, _ = tool_wrapper()
+    w.begin("s")
+    with pytest.raises(ValueError, match="max_calls"):
+        w.reply("x", tool_call_policy=ToolRegistry(), max_calls=max_calls)
+
+
+def test_a_context_of_your_own_whose_methods_take_other_arguments_is_refused_at_the_start():
+    class _OtherArguments(FakeContext):
+        def prefill(self, tokens, start, want_logits):
+            super().prefill(tokens, start, want_logits)
+
+        def sampled_tokens(self, sampling):
+            return super().sampled_tokens(sampling, ())
+
+    with pytest.raises(TypeError, match=r"prefill.*sampled_tokens"):
+        ChatWrapper(Config(context_size=500), context=_OtherArguments(PLAIN))
+
+    class _Generous(FakeContext):
+        def prefill(self, *args, **kwargs):
+            super().prefill(*args, **kwargs)
+
+    ChatWrapper(Config(context_size=500), context=_Generous(PLAIN)).begin("s")
+
+
 @pytest.mark.parametrize("role, cause", [("system", "begin"), ("tool", "inject_tool_result"),
                                          ("human", "'human'")])
 def test_inject_refuses_a_message_of_another_role_naming_where_it_goes(role, cause):

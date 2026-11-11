@@ -1974,3 +1974,20 @@ the role with the same `ensure_role` as a history, so a tool message points
 to `inject_tool_result` (one part of 270.15, which failed with a `KeyError`
 before) and an unknown role is named. The template's refusal text for a later
 system message, which no action can reach now, is removed.
+
+**270.15, the remaining parts: refused where it enters, naming its cause.**
+Three inputs failed far from where they entered, with an error that named
+something else. A message that is not text, given to `begin` as the system
+prompt or in the history, to `inject` or to `reply`, reached the template and
+came back as "the template refuses to write this conversation"; it is now a
+`TypeError` naming the message, raised before anything changes, by
+`ensure_text` in `messages.py`. A context of one's own whose methods take
+other arguments than the protocol gives them passed the check at adoption,
+which looked at names only, and failed at the first call; adoption now binds
+each method to the arguments of its protocol method, once positionally with
+the keyword-only ones by name and once all by name, and a method that takes
+neither is a `TypeError` naming it with the arguments it is given. A method
+whose arguments cannot be read, such as one written in C, is taken as it is.
+A negative `max_calls` was taken as a ceiling already spent; `reply` now
+refuses with a `ValueError` a `max_calls` that is not a whole number of at
+least 0, `True` included. `inject(role="tool")` is refused with 268.6.
