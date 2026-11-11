@@ -2379,3 +2379,14 @@ starts, under the lock, and only where that reply opens the turn. A reply
 given no policy still reads the kept one when it is called; that read, like
 every check before the stream, is advisory, and the reply is checked again
 under the lock.
+
+**R8: a turn going on keeps what is left of its `max_calls`.** A stream closed
+at a call a registry handed over leaves that call owed (268.9), and the reply
+that goes on after its result keeps the registry. It did not keep the turn's
+`max_calls`: it went on with no ceiling, and the count began again. The turn
+now keeps its ceiling and what is left of it beside its policy, so a reply
+going on without a `max_calls` of its own goes on with both, and the error
+for a spent ceiling names the limit the turn was given. A call counts against
+the ceiling once it is handed over, before it runs, since a stream closed
+there leaves it to the caller, who answers it. A turn going on counts as one
+that has called, so `tool_limit_reached` is reported when its ceiling is spent.

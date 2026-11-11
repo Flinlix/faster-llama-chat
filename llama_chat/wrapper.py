@@ -12,7 +12,7 @@ import contextlib
 import math
 import threading
 from collections.abc import Callable, Generator, Iterable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers,
@@ -94,8 +94,10 @@ class ChatWrapper:
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
         self._holder: int | None = None         # the thread that holds it, while one does
-        # The policy the newest turn was started with, which a reply going on with it keeps.
+        # The policy the newest turn was started with, and the calls it may still run,
+        # which a reply going on with it keeps.
         self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
+        self._turn_budget = _CallBudget(None)
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
@@ -173,7 +175,8 @@ class ChatWrapper:
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
             kept = self._conversation.start(system_prompt, messages, specs, reasoning)
-            self._turn_policy = None        # a turn the history leaves open was started by no reply
+            # A turn the history leaves open was started by no reply.
+            self._turn_policy, self._turn_budget = None, _CallBudget(None)
             return kept
 
     # ----- adding context ------------------------------------------------------
@@ -237,7 +240,8 @@ class ChatWrapper:
                 goes on with a turn a call left open once every result is in.
             tool_call_policy: What becomes of a tool call the model makes.
                 ``None``, the default, keeps the policy of the turn this goes
-                on with, where the reply that started it was given one, and is
+                on with, where the reply that started it was given one, a
+                registry with what is left of its ``max_calls``, and is
                 ``"refuse"`` otherwise.
 
                 * ``"withhold"``: the model cannot write a call at all; the
@@ -262,8 +266,10 @@ class ChatWrapper:
                   call the model writes is not recognized and stays text, so
                   the turn always closes.
             max_calls: Where a registry is given, how many calls one turn may
-                use. ``None`` sets no ceiling; a call past one is answered with
-                an error result rather than run. Only with a registry.
+                use, each call handed over counted. ``None`` sets no ceiling, or,
+                going on with a turn, keeps what is left of the turn's; a call
+                past one is answered with an error result rather than run. Only
+                with a registry.
             max_reply_tokens: This request's cap on tokens per generation, in
                 place of the config's.
             stop: Texts that end the answer, matched against the answer
@@ -339,7 +345,7 @@ class ChatWrapper:
         a reply that runs its calls parts its generations.
         """
         with self._held():
-            self._keep_turn_policy(policy)
+            self._turn_budget_for(policy, None)
             generation = yield from self._read_generation(self._generate(text, **options),
                                                           after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
@@ -584,7 +590,8 @@ class ChatWrapper:
             policy: The registry to run calls against, or ``"refuse"``, which
                 answers every call with an error result.
             max_calls: How many tools one turn may use, ``None`` for no
-                ceiling. Nothing is run under ``"refuse"``, so it does not bind
+                ceiling, or, going on with a turn, for what is left of the
+                turn's. Nothing is run under ``"refuse"``, so it does not bind
                 there.
             text, **kwargs: As :meth:`reply`.
 
@@ -605,12 +612,9 @@ class ChatWrapper:
             registry = policy if isinstance(policy, ToolRegistry) else None
             if registry is not None and len(registry) > 0:
                 self._template.ensure_tools_usable()
-            self._keep_turn_policy(policy)
+            any_call_asked = self._conversation.turn_open      # a turn going on has called
+            budget = self._turn_budget_for(policy, max_calls)
             deltas = self._generate(text, recognizes_calls=True, **kwargs)
-            # An absent ceiling counts down without ever reaching zero, so the
-            # three places that read it need no case of their own.
-            calls_left = math.inf if max_calls is None else max_calls
-            any_call_asked = False
             generations: list[Reply] = []
             try:
                 while True:
@@ -626,20 +630,21 @@ class ChatWrapper:
                             # call, so a model that cannot write a readable one
                             # retries at most `max_calls` times.
                             any_call_asked = True
-                            if registry is not None and calls_left > 0:
-                                calls_left -= 1
+                            if registry is not None and budget.calls_left > 0:
+                                budget.calls_left -= 1
                             deltas = self._generate(
-                                None, recognizes_calls=registry is not None and calls_left > 0,
+                                None,
+                                recognizes_calls=registry is not None and budget.calls_left > 0,
                                 **kwargs)
                             continue
                         # The ceiling binds only once a call has been asked for:
                         # without one the last generation kept its call tokens.
                         return _sum_generations(generations,
-                                                any_call_asked and calls_left == 0)
+                                                any_call_asked and budget.calls_left == 0)
                     any_call_asked = True
-                    settled, calls_left = yield from self._settle_calls(
-                        _answerable(generation.tool_calls), registry, calls_left, max_calls)
-                    may_call_again = registry is not None and calls_left > 0
+                    settled = yield from self._settle_calls(
+                        _answerable(generation.tool_calls), registry, budget)
+                    may_call_again = registry is not None and budget.calls_left > 0
                     try:
                         for call, result in settled:
                             self._conversation.add_result(
@@ -651,7 +656,7 @@ class ChatWrapper:
                         generations[-1] = replace(
                             generations[-1], stop_reason="token_limit",
                             n_evicted_messages=generations[-1].n_evicted_messages + dropped)
-                        return _sum_generations(generations, calls_left == 0)
+                        return _sum_generations(generations, budget.calls_left == 0)
                     deltas = self._generate(None, recognizes_calls=may_call_again, **kwargs)
             finally:
                 deltas.close()
@@ -687,21 +692,30 @@ class ChatWrapper:
                 written.append(message["content"])
         return "".join(reversed(written))
 
-    def _keep_turn_policy(self, policy: ToolCallPolicy | ToolRegistry) -> None:
-        """Note ``policy`` as the one a reply going on with the turn keeps, where this reply opens the turn; the lock must be held."""
+    def _turn_budget_for(self, policy: ToolCallPolicy | ToolRegistry,
+                         max_calls: int | None) -> _CallBudget:
+        """The calls a reply may still run: a reply that opens a turn starts it with ``policy`` and ``max_calls``; the lock must be held.
+
+        A reply going on with a turn keeps the turn's policy, and what is left
+        of its calls unless it gives ``max_calls`` of its own.
+        """
         if not self._conversation.turn_open:
-            self._turn_policy = policy
+            self._turn_policy, self._turn_budget = policy, _CallBudget(max_calls)
+        elif max_calls is not None:
+            self._turn_budget = _CallBudget(max_calls)
+        return self._turn_budget
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
-                      calls_left, max_calls: int | None):
+                      budget: _CallBudget):
         """Decide what every call of one round gets back, running what may run, and hand over each call that runs before it runs.
 
         Settled before any of it is written, because what a failure tells the
         model to do next depends on the budget the last call leaves. In the
-        order asked, which the template renders in.
+        order asked, which the template renders in. A call handed over counts
+        against ``budget`` from then on.
 
         Returns:
-            The ``(call, result)`` pairs, and what is left of the budget.
+            The ``(call, result)`` pairs.
         """
         settled = []
         for call in asked:
@@ -710,16 +724,16 @@ class ChatWrapper:
                 # would leave the turn open with no way to end it.
                 result = {"error": "tools_not_run",
                           "message": "no tool can be run for this request"}
-            elif calls_left > 0:
+            elif budget.calls_left > 0:
+                budget.calls_left -= 1
                 yield call
                 result = registry.call(call)
-                calls_left -= 1
             else:
                 result = {"error": "tool_limit_reached",
                           "message": "no tool calls left in this turn; "
-                                     f"the limit is {max_calls}"}
+                                     f"the limit is {budget.max_calls}"}
             settled.append((call, result))
-        return settled, calls_left
+        return settled
 
     def _generate(self, text: str | None, *, recognizes_calls: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
@@ -854,6 +868,19 @@ class ChatWrapper:
                 "the reply this thread is reading still holds this conversation, and an "
                 "action now would wait for that reply for ever; read the reply to its end "
                 "or close it first, and call nothing on the wrapper from a tool it runs")
+
+
+@dataclass
+class _CallBudget:
+    """How many calls a turn run against a registry may still use, and the ceiling it was given, ``None`` for none."""
+
+    max_calls: int | None
+    # An absent ceiling counts down without ever reaching zero, so what reads it
+    # needs no case of its own.
+    calls_left: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.calls_left = math.inf if self.max_calls is None else self.max_calls
 
 
 def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:

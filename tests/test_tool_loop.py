@@ -1734,3 +1734,16 @@ def test_the_policy_a_turn_keeps_is_the_one_of_the_reply_that_started_it():
     fake.call_script = ["fn:clock{}"]
     handed = [event for event in wrapper.reply() if isinstance(event, ToolCall)]
     assert ran == [] and handed and wrapper.pending_calls == handed     # yielded again, not run
+
+
+def test_a_turn_going_on_with_its_registry_keeps_what_is_left_of_its_max_calls():
+    registry, ran = _counting_clock()
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}", "fn:clock{}", "fn:clock{}"]
+    with wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1) as stream:
+        call = next(event for event in stream if isinstance(event, ToolCall))
+    wrapper.inject_tool_result(call, "12:00")   # the one call the turn may use
+    reply = wrapper.reply().finish()
+    assert ran == [] and reply.tool_limit_reached and not wrapper.turn_open
+    assert "the limit is 1" in held_text(fake)
