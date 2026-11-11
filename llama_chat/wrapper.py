@@ -89,6 +89,8 @@ class ChatWrapper:
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
         self._holder: int | None = None         # the thread that holds it, while one does
+        # The policy the newest turn was started with, which a reply going on with it keeps.
+        self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
@@ -158,7 +160,9 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
-            return self._conversation.start(system_prompt, messages, specs, reasoning)
+            kept = self._conversation.start(system_prompt, messages, specs, reasoning)
+            self._turn_policy = None        # a turn the history leaves open was started by no reply
+            return kept
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
@@ -186,7 +190,7 @@ class ChatWrapper:
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
-              tool_call_policy: ToolCallPolicy | ToolRegistry = "refuse",
+              tool_call_policy: ToolCallPolicy | ToolRegistry | None = None,
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
               stop: list[str] | None = None,
@@ -210,6 +214,9 @@ class ChatWrapper:
                 answers the newest message, a user message already written, or
                 goes on with a turn a call left open once every result is in.
             tool_call_policy: What becomes of a tool call the model makes.
+                ``None``, the default, keeps the policy of the turn this goes
+                on with, where the reply that started it was given one, and is
+                ``"refuse"`` otherwise.
 
                 * ``"withhold"``: the model cannot write a call at all; the
                   token that opens one is never drawn, so the reply is text. A
@@ -266,6 +273,11 @@ class ChatWrapper:
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
+        goes_on = text is None and self._conversation.turn_open
+        if tool_call_policy is None:
+            # Compared with None: an empty registry is false.
+            kept = self._turn_policy if goes_on else None
+            tool_call_policy = "refuse" if kept is None else kept
         runs = isinstance(tool_call_policy, ToolRegistry)
         if not runs and tool_call_policy not in TOOL_CALL_POLICIES:
             raise ValueError(f"tool_call_policy must be "
@@ -277,6 +289,8 @@ class ChatWrapper:
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
+        if not goes_on:
+            self._turn_policy = tool_call_policy
         if tool_call_policy == "yield":
             return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
         if tool_call_policy == "withhold":

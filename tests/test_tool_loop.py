@@ -210,6 +210,36 @@ def test_a_result_resumes_the_same_turn():
     assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
 
 
+def test_a_reply_going_on_after_results_keeps_the_policy_its_turn_was_started_with():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}", "fn:other{}"]
+    first, = list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    wrapper.inject_tool_result(first, "09:00")
+
+    second, = [e for e in wrapper.reply() if isinstance(e, ToolCall)]
+
+    assert second.name == "other" and wrapper.pending_calls == [second]
+    wrapper.inject_tool_result(second, "Bonn")
+    # Another policy, given, holds for that reply.
+    fake.call_script = ["fn:third{}"]
+    reply = wrapper.reply(tool_call_policy="refuse").finish()
+    assert reply.text == "reply" and not wrapper.turn_open
+    # A new turn starts with the default again.
+    fake.call_script = ["fn:clock{}"]
+    assert wrapper.reply("und jetzt?").finish().text == "reply" and not wrapper.turn_open
+
+
+def test_a_turn_a_history_left_open_goes_on_under_the_default_policy():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", [("user", "los"), ToolTurn((ToolCall("clock", {}),
+                                                         ToolResult("clock", "09:00")))])
+    fake.call_script = ["fn:other{}"]
+    reply = wrapper.reply().finish()
+    assert reply.text == "reply" and not wrapper.turn_open
+    assert "tools_not_run" in newest_turn(fake)
+
+
 def test_two_calls_in_a_row_stay_inside_one_turn():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")

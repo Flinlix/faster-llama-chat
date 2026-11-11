@@ -2030,3 +2030,15 @@ joined ("Ich sehe nach.Es ist neun."). A reply that goes on with an open turn
 now reads what the model wrote in that turn so far and applies the same rule,
 so the stream and `Reply.text` start with the blank line where it is needed.
 The history keeps each text as the model wrote it, as before.
+
+**268.2: a reply that goes on keeps its turn's policy.** `reply` took
+`"refuse"` whenever no policy was given, so a caller answering calls under
+`"yield"` who went on with `reply()` had the model's next call refused, and
+had to repeat the policy at every step. The policy now defaults to `None`: a
+reply that goes on with an open turn keeps the policy the reply that started
+the turn was given, and any other reply takes `"refuse"`, as before. A policy
+given to a reply that goes on holds for that reply alone. A turn that a
+history leaves open was started by no reply, so going on with it takes
+`"refuse"` unless a policy is given. The wrapper holds that policy, a
+registry included, until the next turn starts or the conversation begins
+again.

@@ -715,7 +715,7 @@ def test_a_restart_says_how_much_history_it_kept():
 def test_the_tool_call_policies_are_read_from_the_type_reply_takes():
     assert typing.get_args(ToolCallPolicy) == TOOL_CALL_POLICIES
     taken = typing.get_type_hints(ChatWrapper.reply)["tool_call_policy"]
-    assert set(typing.get_args(taken)) == {ToolCallPolicy, ToolRegistry}
+    assert set(typing.get_args(taken)) == {ToolCallPolicy, ToolRegistry, type(None)}
 
 
 # ----- sampling per request ------------------------------------------------

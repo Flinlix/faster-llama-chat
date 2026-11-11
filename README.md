@@ -123,8 +123,8 @@ the reply.
 |------|------|
 | starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns how many history items it kept. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question or the newest exchange cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
 | adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. A message of another role, or a user message once `max_history_exchanges` is reached, evicts first |
-| asking | `reply(text=None, *, tool_call_policy="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so is a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
-| answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply(tool_call_policy="yield")` |
+| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so is a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
+| answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
 | telling the model about more tools | `declare_tools(tools)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads both as the newest finished change left them |
@@ -183,13 +183,16 @@ print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).fi
 
 `tool_call_policy` says what becomes of a call the model makes, whether or not
 tools were declared, since a model may write a call tag unasked. It is one of
-`TOOL_CALL_POLICIES` (the type `ToolCallPolicy`) or a `ToolRegistry`:
+`TOOL_CALL_POLICIES` (the type `ToolCallPolicy`) or a `ToolRegistry`. Left
+out, it is the policy the open turn was started with, where the reply goes on
+with one, and `"refuse"` otherwise; a reply that goes on after results thus
+keeps its turn's policy unless it is given another:
 
 | `tool_call_policy=` | what happens | what the stream yields |
 |------|------|------|
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool | text |
-| `"refuse"` (the default) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
-| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply(tool_call_policy="yield")` again | text, then each `ToolCall` |
+| `"refuse"` (the default for a new turn) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
+| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again | text, then each `ToolCall` |
 | a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=` | text |
 
 ```python
@@ -199,7 +202,7 @@ with chat.reply("What is the weather in Munich?", tool_call_policy="yield") as s
             chat.inject_tool_result(event, registry.call(event))
         else:
             print(event, end="", flush=True)
-rest = chat.reply(tool_call_policy="yield").finish()        # the turn stays open until this
+rest = chat.reply().finish()        # the turn stays open until this, and keeps "yield"
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
