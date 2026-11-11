@@ -646,9 +646,7 @@ class ChatWrapper:
                         _answerable(generation.tool_calls), registry, budget)
                     may_call_again = registry is not None and budget.calls_left > 0
                     try:
-                        for call, result in settled:
-                            self._conversation.add_result(
-                                call, _explain_failure(result, may_call_again))
+                        self._write_results(settled, may_call_again)
                     except ContextOverflowError:
                         # No room is left to answer: the turn closes on what the model
                         # wrote, as one the reply cap cuts does.
@@ -712,7 +710,9 @@ class ChatWrapper:
         Settled before any of it is written, because what a failure tells the
         model to do next depends on the budget the last call leaves. In the
         order asked, which the template renders in. A call handed over counts
-        against ``budget`` from then on.
+        against ``budget`` from then on. Where the stream is closed at a call
+        handed over, the results of the calls that ran before it are written,
+        and it and the rest of the round stay owed.
 
         Returns:
             The ``(call, result)`` pairs.
@@ -726,7 +726,14 @@ class ChatWrapper:
                           "message": "no tool can be run for this request"}
             elif budget.calls_left > 0:
                 budget.calls_left -= 1
-                yield call
+                try:
+                    yield call
+                except GeneratorExit:
+                    # Where no room is left, the calls stay owed, as the caller's own
+                    # result would find no room either.
+                    with contextlib.suppress(ContextOverflowError):
+                        self._write_results(settled, budget.calls_left > 0)
+                    raise
                 result = registry.call(call)
             else:
                 result = {"error": "tool_limit_reached",
@@ -734,6 +741,11 @@ class ChatWrapper:
                                      f"the limit is {budget.max_calls}"}
             settled.append((call, result))
         return settled
+
+    def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> None:
+        """Write the result of each settled call, in order, a failure saying whether another call is worth making."""
+        for call, result in settled:
+            self._conversation.add_result(call, _explain_failure(result, may_call_again))
 
     def _generate(self, text: str | None, *, recognizes_calls: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],

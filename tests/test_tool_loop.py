@@ -1747,3 +1747,23 @@ def test_a_turn_going_on_with_its_registry_keeps_what_is_left_of_its_max_calls()
     reply = wrapper.reply().finish()
     assert ran == [] and reply.tool_limit_reached and not wrapper.turn_open
     assert "the limit is 1" in held_text(fake)
+
+
+def test_a_stream_closed_at_a_later_call_of_a_round_writes_the_results_of_those_that_ran():
+    registry, ran = _counting_clock()
+    wrapper, fake = tool_wrapper(context_size=1024)
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    with wrapper.reply("wie spät?", tool_call_policy=registry) as stream:
+        handed = []
+        for event in stream:
+            if isinstance(event, ToolCall):
+                handed.append(event)
+                if len(handed) == 2:
+                    break                       # closed before the second call runs
+    assert ran == [1]
+    _, second = handed
+    assert wrapper.pending_calls == [second]    # the first ran, and its result is written
+    wrapper.inject_tool_result(second, "12:01")
+    assert wrapper.reply().finish().text == "reply" and ran == [1]
+    assert_consistent(wrapper, fake)

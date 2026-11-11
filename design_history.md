@@ -2390,3 +2390,18 @@ for a spent ceiling names the limit the turn was given. A call counts against
 the ceiling once it is handed over, before it runs, since a stream closed
 there leaves it to the caller, who answers it. A turn going on counts as one
 that has called, so `tool_limit_reached` is reported when its ceiling is spent.
+
+**R9: a stream closed inside a round writes what already ran.** A registry
+settles every call of a round before it writes any result, because what a
+failure tells the model depends on the budget the last call leaves. A stream
+closed at the second call of a round therefore dropped the first call's
+result, though the tool had run: both calls stayed owed, and a caller that
+answered them by running the tools ran the first one twice. Closing the
+stream at a call now writes the results of the calls of the round that ran
+before it, each failure worded for the budget left at that point, and leaves
+that call and the rest of the round owed, as 268.9 leaves a single call.
+Writing them is the same `add_result` a caller's `inject_tool_result` makes,
+so the cache stays the template's render. Where no room is left for a result,
+it is not written and the call stays owed, since the caller's own result
+would find no room either; that is the one case where a call that ran is
+still owed.
