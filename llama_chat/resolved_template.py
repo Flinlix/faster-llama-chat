@@ -53,21 +53,27 @@ class ResolvedTemplate:
             where it says nothing.
         template_name: Which of the model's templates: ``None`` for its
             default one, else the name of a further one it ships.
+        reasoning_on: The template variables the model's add-on file says
+            turn reasoning on, each over the switch the template shows; empty
+            or ``None`` where it says nothing.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
-        ValueError: If the template cannot be recovered, or if it fails
-            validation against the model.
+        ValueError: If the template cannot be recovered, if it fails
+            validation against the model, or if ``reasoning_on`` writes the
+            prompt as reasoning off does.
     """
 
     def __init__(self, context, addon_call: Mapping[str, str] | None = None, *,
-                 template_name: str | None = None) -> None:
+                 template_name: str | None = None,
+                 reasoning_on: Mapping[str, object] | None = None) -> None:
         ensure_answers(context, MODEL_READER)
         self._context = context
         self._addon_call = dict(addon_call or {})
         self._template_name = template_name
-        self._model_render = functools.partial(context.render_with_model_template,
-                                               template_name=template_name)
+        self._model_render = with_reasoning_on(
+            functools.partial(context.render_with_model_template, template_name=template_name),
+            dict(reasoning_on or {}))
         self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
         self._tag_texts = tag_texts(context)
@@ -90,6 +96,8 @@ class ResolvedTemplate:
             tags = (self._reasoning.thought_open.strip(), self._reasoning.thought_close.strip())
             self._boundary = dataclasses.replace(self._boundary,
                                                  thought_tags=tuple(t for t in tags if t))
+        if reasoning_on:
+            self._ensure_reasoning_on_changes_the_prompt()
         self._check_what_generation_reads()
         self._n_closing_tokens = len(context.tokenize(self._fragments.assistant_suffix,
                                                       add_special=False))
@@ -111,6 +119,20 @@ class ResolvedTemplate:
         """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
         return self._probe_render(messages, tools, **options,
                                   variables={**self._variables, **(variables or {})})
+
+    def _ensure_reasoning_on_changes_the_prompt(self) -> None:
+        """Refuse an add-on file's reasoning on that writes the prompt as reasoning off does.
+
+        Raises:
+            ValueError: If it does.
+        """
+        question = [{"role": "user", "content": _PROMPT}]
+        on, off = (self._render(question, generation_prompt=True, reasoning=reasoning)
+                   for reasoning in (True, False))
+        if on is None or on == off:
+            raise ValueError("the add-on file's reasoning_on writes the prompt as reasoning "
+                             "off does; name the template variables that turn this "
+                             "model's reasoning on")
 
     # ----- what the wrapper reads ----------------------------------------------
     @property
@@ -621,6 +643,18 @@ class ResolvedTemplate:
                 and _PROMPT in plain and rendered != plain)
 
 
+def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
+    """``render``, with ``reasoning_on``'s variables over the template's switch wherever it renders with reasoning on."""
+    if not reasoning_on:
+        return render
+
+    def rendered(messages, tools=None, *, reasoning=None, variables=None, **options):
+        if reasoning:
+            variables = {**reasoning_on, **(variables or {})}
+        return render(messages, tools, reasoning=reasoning, variables=variables, **options)
+    return rendered
+
+
 class ResolvedTemplates:
     """This model's default chat template and, where it ships one, its template for a conversation that declares tools, each recovered and proven usable.
 
@@ -628,6 +662,8 @@ class ResolvedTemplates:
         context: The cache context to read the model through.
         addon_call: How the model's add-on file says a call is written, for
             both templates; see :class:`ResolvedTemplate`.
+        reasoning_on: What the add-on file says turns reasoning on, for both
+            templates; see :class:`ResolvedTemplate`.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
@@ -635,9 +671,11 @@ class ResolvedTemplates:
             against the model.
     """
 
-    def __init__(self, context, addon_call: Mapping[str, str] | None = None) -> None:
-        self._default = ResolvedTemplate(context, addon_call)
-        self._for_tools = (ResolvedTemplate(context, addon_call, template_name=TOOL_USE_TEMPLATE)
+    def __init__(self, context, addon_call: Mapping[str, str] | None = None,
+                 reasoning_on: Mapping[str, object] | None = None) -> None:
+        self._default = ResolvedTemplate(context, addon_call, reasoning_on=reasoning_on)
+        self._for_tools = (ResolvedTemplate(context, addon_call, template_name=TOOL_USE_TEMPLATE,
+                                            reasoning_on=reasoning_on)
                            if context.chat_template_text(TOOL_USE_TEMPLATE) is not None
                            else self._default)
 

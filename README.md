@@ -274,7 +274,10 @@ it in the system turn. `can_reason` says whether `begin` accepts
 off is the template's own off: `can_turn_off_reasoning` says whether the
 template has one. Where it has none, as on a template that always reasons, a
 conversation begun without reasoning is written as the template writes it,
-and the model may reason in every reply all the same. Every
+and the model may reason in every reply all the same. Where a template's
+switch cannot be read from the template alone, the model's
+[add-on file](#add-on-files) names the template variables that turn it on.
+Every
 stream yields the answer alone, with or without reasoning, and a header a
 template writes for another reader is kept out of it too. Stop strings are
 matched against the answer only. A finished reply is kept as the template
@@ -398,7 +401,8 @@ with an error naming the file.
 {"templates": ["<sha256 of the chat template>"],
  "source": "where the values come from",
  "sampling": {"temperature": 0.6, "top_k": 20, "top_p": 0.95},
- "call": {"opening": "...", "name_close": "...", "closing": "..."}}
+ "call": {"opening": "...", "name_close": "...", "closing": "..."},
+ "reasoning_on": {"reasoning_effort": "high"}}
 ```
 
 `sampling` sets any of the seven model sampling fields, `presence_penalty` and
@@ -410,6 +414,12 @@ GGUF, or values set in `Config`, take precedence for such a model. `call` says
 how the model writes a call where its template shows none it can be read from:
 the text a call opens with, the text after the function's name, and the text
 that closes it; it is refused where the template never writes that closing.
+`reasoning_on` names the template variables, with their values, that turn the
+model's reasoning on, in place of what the library reads off the template; it
+is for a template whose default does not reason although it writes something
+of its own for the effort `"none"`, which the template alone reads as a default
+that reasons. It is refused at load where it writes the prompt as reasoning off
+does.
 
 ## A model without a usable template
 

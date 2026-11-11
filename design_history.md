@@ -1919,3 +1919,25 @@ At the user's decision, `owed_calls` (the calls still waiting for a result) is
 renamed `pending_calls`, and `reply_open` (a tool call left the newest turn
 open) is renamed `turn_open`. Both needed a definition before a line using them
 could be read. The entries above keep the old names, as they were written.
+
+## 2026-11-11: An add-on file may name what turns reasoning on
+
+The reasoning switch is read off the template's text: where the effort
+`"none"` changes what follows the user turn, `"none"` is off and the template's
+default is on (the user's 248.4A). A template whose default does not reason,
+yet writes something of its own for `"none"`, is then read with a default that
+reasons, and `reasoning=True` gives an answer without a thought, with no error.
+The text cannot tell this case apart; only a run of the model can. None of the
+test templates has this shape.
+
+At the user's decision (289.5B), an add-on file may hold `reasoning_on`: the
+template variables, with their values, that turn reasoning on. They are laid
+over the switch the template shows wherever a render asks for reasoning on, the
+load check's probes included, so the thought tags are read from the prompt the
+model will really get. A `reasoning_on` that writes the prompt as reasoning off
+does is refused at load, naming the add-on file's key. It applies to both of a
+model's templates, as `call` does. Rejected: waiting until a model shows the
+case (289.5A), and a short real reply at every load to see whether the default
+thinks (289.5C), which costs every load a few seconds. The test for it uses an
+invented template, since no local model needs it; no shipped add-on file sets
+it.

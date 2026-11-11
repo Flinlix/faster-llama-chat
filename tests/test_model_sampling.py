@@ -31,7 +31,7 @@ def test_what_the_caller_sets_wins_over_everything_the_model_recommends(tmp_path
 
 
 def _addon(sampling: dict) -> dict:
-    return {"templates": [], "sampling": sampling, "call": {}}
+    return {"templates": [], "sampling": sampling, "call": {}, "reasoning_on": {}}
 
 
 def test_each_value_comes_from_the_add_on_file_else_the_gguf_else_is_switched_off():
@@ -201,3 +201,18 @@ def test_no_two_shipped_files_name_one_template():
              for t in json.loads(path.read_text())["templates"]]
     assert len(named) == len(set(named))
 
+
+
+def test_an_add_on_file_may_name_the_template_variables_that_turn_reasoning_on(tmp_path):
+    model = _own_file(tmp_path, {"templates": [template_fingerprint(_TEMPLATE)],
+                                 "reasoning_on": {"reasoning_effort": "high"}})
+    assert addon_file(model, _TEMPLATE)["reasoning_on"] == {"reasoning_effort": "high"}
+    assert addon_file(None, _TEMPLATE)["reasoning_on"] == {}
+
+
+@pytest.mark.parametrize("reasoning_on", [{}, ["reasoning_effort"], "high"])
+def test_a_reasoning_on_that_names_no_variable_is_refused_naming_the_file(tmp_path, reasoning_on):
+    model = _own_file(tmp_path, {"templates": [template_fingerprint(_TEMPLATE)],
+                                 "reasoning_on": reasoning_on})
+    with pytest.raises(ValueError, match=r"m\.json: reasoning_on"):
+        addon_file(model, _TEMPLATE)

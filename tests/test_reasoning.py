@@ -1,10 +1,12 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
+import json
 import re
 import sys
 
 import pytest
 
+from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.template import Reasoning
@@ -242,3 +244,50 @@ def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_sha
     assert reply_header("<|a|>user<|a|>", tags("<|a|>")) is None
     assert reply_header("<|a|>", tags("<|a|>self<|a|>")) is None
     assert reply_header("<|a|>user<|b|>", tags("<|a|>self<|b|>")) == ("<|a|>", "<|b|>")
+
+
+# ----- reasoning turned on as the add-on file says -------------------------
+# A template whose default does not reason, yet writes an empty thought for the
+# effort "none", so that the template alone reads the default as on.
+_DEFAULT_WITHOUT_THOUGHT = {
+    "chat_template": _TURNS.replace("◁/think▷", "</think>")
+                     + "{%- if add_generation_prompt -%}<|assistant|>"
+                     "{%- if reasoning_effort == 'none' -%}<think></think>"
+                     "{%- elif reasoning_effort == 'high' -%}<think>{%- endif -%}{%- endif -%}",
+    "eos_token": "<|end|>",
+    "render_variables": {"off": {"reasoning_effort": "none"}, "on": {"reasoning_effort": "high"}}}
+_QUESTION = [{"role": "user", "content": "hi"}]
+
+
+def test_without_an_add_on_file_such_a_template_reasons_as_its_default_writes():
+    template = ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT))
+    assert template.render(_QUESTION, generation_prompt=True,
+                           reasoning=True).endswith("<|assistant|>")
+
+
+def test_the_add_on_files_reasoning_on_is_what_reasoning_on_renders():
+    template = ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT),
+                                reasoning_on={"reasoning_effort": "high"})
+    assert template.render(_QUESTION, generation_prompt=True,
+                           reasoning=True).endswith("<|assistant|><think>")
+    assert template.render(_QUESTION, generation_prompt=True,
+                           reasoning=False).endswith("<|assistant|><think></think>")
+    assert template.can_reason
+
+
+def test_a_reasoning_on_that_writes_the_prompt_as_off_does_is_refused_at_load():
+    with pytest.raises(ValueError, match="reasoning_on"):
+        ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT),
+                         reasoning_on={"reasoning_effort": "none"})
+
+
+def test_a_wrapper_takes_reasoning_on_from_the_add_on_file_next_to_the_model(tmp_path):
+    (tmp_path / "m.json").write_text(json.dumps(
+        {"templates": [template_fingerprint(_DEFAULT_WITHOUT_THOUGHT["chat_template"])],
+         "reasoning_on": {"reasoning_effort": "high"}}))
+    (tmp_path / "m.gguf").touch()
+    fake = FakeContext(_DEFAULT_WITHOUT_THOUGHT)
+    w = ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
+                           evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "hi")], reasoning=True)
+    assert held_text(fake).endswith("<|assistant|><think>")

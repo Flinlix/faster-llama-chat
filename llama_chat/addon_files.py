@@ -22,7 +22,7 @@ SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty",
                    "presence_penalty", "frequency_penalty")
 CALL_FIELDS = ("opening", "name_close", "closing")
-_FILE_KEYS = {"templates", "source", "sampling", "call"}
+_FILE_KEYS = {"templates", "source", "sampling", "call", "reasoning_on"}
 # llama.cpp's own defaults, for a model that recommends nothing.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0}
@@ -37,7 +37,7 @@ def template_fingerprint(template: str) -> str:
 
 
 def addon_file(model_path: str | None, template: str | None) -> dict:
-    """A model's add-on file, with ``sampling`` and ``call`` always present, possibly empty.
+    """A model's add-on file, with ``sampling``, ``call`` and ``reasoning_on`` always present, possibly empty.
 
     The file next to the model with its name and ``.json`` comes first, where
     it names the model's template; one that does not is not used, and a
@@ -89,10 +89,11 @@ def read_addon_file(path: Path | None) -> dict:
         ValueError: Naming the file, if it is not JSON, holds a key no add-on
             file has, templates that are not a list of fingerprints, a source
             that is not text, a sampling value :class:`Config` refuses, its
-            type included, or a call field that is not text.
+            type included, a call field that is not text, or a reasoning_on
+            that is no object of template variables.
     """
     if path is None:
-        return {"templates": [], "sampling": {}, "call": {}}
+        return {"templates": [], "sampling": {}, "call": {}, "reasoning_on": {}}
     try:
         found = json.loads(path.read_text())
     except ValueError as error:
@@ -116,7 +117,12 @@ def read_addon_file(path: Path | None) -> dict:
     if call and (not isinstance(call, dict) or set(call) != set(CALL_FIELDS)
                  or not all(isinstance(value, str) and value for value in call.values())):
         raise ValueError(f"{path}: call must give {list(CALL_FIELDS)}, each as text")
-    return {"templates": templates, "sampling": sampling, "call": call}
+    reasoning_on = found.get("reasoning_on", {})
+    if not isinstance(reasoning_on, dict) or "reasoning_on" in found and not reasoning_on:
+        raise ValueError(f"{path}: reasoning_on must be an object naming the template "
+                         "variables that turn reasoning on, with their values")
+    return {"templates": templates, "sampling": sampling, "call": call,
+            "reasoning_on": reasoning_on}
 
 
 def with_model_sampling(config: Config, recommended: Mapping[str, float],

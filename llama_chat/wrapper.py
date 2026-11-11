@@ -77,7 +77,7 @@ class ChatWrapper:
             addon = addon_file(config.model_path, self._context.chat_template_text())
             self._config = with_model_sampling(
                 config, self._context.recommended_sampling(), addon)
-            self._templates = ResolvedTemplates(self._context, addon["call"])
+            self._templates = ResolvedTemplates(self._context, addon["call"], addon["reasoning_on"])
             self._conversation = RenderedCache(self._context, self._templates, self._config)
         except BaseException:
             if owns_context:
