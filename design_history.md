@@ -2358,3 +2358,12 @@ skip the question decoded ahead on every turn and put the eviction, and on a
 cache that cannot shift the decode after it, before each reply. `inject`
 still evicts first, since no reply follows it to restore the limit, as the
 README states.
+
+**R12: the logging example shows what it says.** The README's example set
+`llama_chat.engine` to `DEBUG` to show every line llama.cpp writes, but with no
+handler configured Python falls back to a handler that shows only warnings and
+errors, so no `INFO` or `DEBUG` line appeared. The example now adds
+`logging.basicConfig()`. It leaves the root logger at `WARNING`, so other
+libraries' debug output stays hidden, while the records `llama_chat.engine`
+passes at its own level reach the handler. A test runs the example in a fresh
+interpreter and reads a debug line back from stderr.

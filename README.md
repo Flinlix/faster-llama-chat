@@ -439,10 +439,13 @@ say, goes to Python's `logging`, under the logger `llama_chat` and llama.cpp's
 lines under its child `llama_chat.engine`, one record per line: llama.cpp's
 errors as `ERROR`, its warnings as `WARNING`, its load-time listings as `INFO`
 and `DEBUG`. With no logging configured, Python shows warnings and errors on
-stderr. To show only errors, or everything:
+stderr, and nothing below them whatever level a logger is set to; showing
+`INFO` and `DEBUG` lines takes a handler, such as the one `logging.basicConfig()`
+puts on stderr. To show only errors, or everything:
 
 ```python
 import logging
+logging.basicConfig()               # a handler on stderr that shows every level it is given
 logging.getLogger("llama_chat").setLevel(logging.ERROR)
 logging.getLogger("llama_chat.engine").setLevel(logging.DEBUG)   # every line llama.cpp writes
 ```

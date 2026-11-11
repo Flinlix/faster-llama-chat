@@ -786,3 +786,15 @@ def test_the_engines_output_is_controlled_with_logging_and_no_setting():
     from llama_chat import config
     assert "log_level" not in {f.name for f in fields(Config)}
     assert not hasattr(config, "LOG_LEVELS")
+
+
+def test_the_readmes_logging_example_shows_every_line_the_engine_writes(tmp_path):
+    import subprocess
+    import sys
+    readme = (Path(llama_chat.__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    example = re.search(r"\*\*Logging\.\*\*.*?```python\n(.*?)```", readme, re.S).group(1)
+    script = example + ("from llama_chat import _backend\n"
+                        f"_backend._forward_engine_log({_DEBUG}, b'a debug line\\n', None)\n")
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         cwd=tmp_path, check=True)
+    assert "a debug line" in ran.stderr
