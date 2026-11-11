@@ -1919,3 +1919,15 @@ At the user's decision, `owed_calls` (the calls still waiting for a result) is
 renamed `pending_calls`, and `reply_open` (a tool call left the newest turn
 open) is renamed `turn_open`. Both needed a definition before a line using them
 could be read. The entries above keep the old names, as they were written.
+
+## 2026-11-11: The conversation and its surface
+
+The user's decisions on the conversation, its history, its cache and the
+public interface, each under the ID it was decided by.
+
+**268.12: `ModelReader` is no longer exported.** It is the part of
+`CacheContext` that reading a template needs, and the wrapper never takes a
+context that answers it alone, so exporting it suggested a second way to
+build a context of one's own. It stays in `cache_context.py`, where the
+template's readers name it as the type they take, and the README names
+`CacheContext` as the one protocol.

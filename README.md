@@ -433,10 +433,10 @@ past midnight is decoded again once, from the date on.
 
 ## Your own cache context
 
-`ChatWrapper(context=...)` takes any object that answers the two protocols
-`ModelReader` (its tokenizer, tags, chat template and the sampling the model
-recommends) and `CacheContext` (that, and the cache a conversation is decoded
-into), with the type one of its members takes: `Sampling`, from `llama_chat`.
+`ChatWrapper(context=...)` takes any object that answers the protocol
+`CacheContext`: the model's tokenizer, its tags, its chat template and the
+sampling it recommends, and the cache a conversation is decoded into, with the
+type one of its members takes: `Sampling`, from `llama_chat`.
 Nothing to subclass or register; the members are checked where the context is
 adopted, so a missing one is a `TypeError` from the constructor. The wrapper
 reads the [add-on file](#add-on-files) itself, by `model_path` where one is set

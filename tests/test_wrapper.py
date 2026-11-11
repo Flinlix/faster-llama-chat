@@ -589,6 +589,13 @@ def test_the_config_cannot_be_changed_once_a_wrapper_runs_with_it():
         w.config.context_size = 99
 
 
+def test_the_package_exports_the_one_protocol_a_wrapper_takes():
+    """The model reader is a part of the cache context, which no wrapper takes alone."""
+    import llama_chat
+    assert "CacheContext" in llama_chat.__all__
+    assert "ModelReader" not in llama_chat.__all__ and not hasattr(llama_chat, "ModelReader")
+
+
 def test_begin_rejects_system_prompt_over_threshold():
     fake = FakeContext(PLAIN)
     # threshold = 100 tokens; a 100-char system prompt with its tags can never fit.

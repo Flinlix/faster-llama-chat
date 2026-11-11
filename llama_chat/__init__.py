@@ -18,7 +18,7 @@ template describes tool calls can use them, the tags and the argument spelling
 being recovered from that template.
 """
 
-from .cache_context import CacheContext, ModelReader
+from .cache_context import CacheContext
 from .config import Config, InvalidSettingError, Sampling
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
@@ -43,5 +43,4 @@ __all__ = [
     "ToolRegistry",
     # For a cache context of one's own, ``ChatWrapper(context=...)``.
     "CacheContext",
-    "ModelReader",
 ]
