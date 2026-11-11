@@ -125,7 +125,7 @@ model and makes later actions raise.
 | telling the model about more tools | `declare_tools(tools)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (tool turns and the thoughts the template keeps included), `tools` (those `declare_tools` added included) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)` |
+| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):

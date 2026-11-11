@@ -389,6 +389,31 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     assert set(seen) <= {2, 4}
 
 
+def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finished_changes(
+        monkeypatch):
+    """Read in the middle of a begin that fails, they are what the conversation it leaves standing holds."""
+    w, fake = tool_wrapper()
+    w.begin("persona", [("user", "a"), ("assistant", "b")])
+    before, seen = (w.total_tokens, w.turn_open), []
+    split = ConversationRendering.split
+
+    def reading(self, messages, generation_prompt):
+        seen.append((w.total_tokens, w.turn_open))            # as another thread reads them
+        return split(self, messages, generation_prompt)
+
+    def failing(token_ids, start_pos, want_logits):
+        raise RuntimeError("decode failed")
+
+    monkeypatch.setattr(ConversationRendering, "split", reading)
+    fake.prefill = failing
+    with pytest.raises(RuntimeError):
+        w.begin("persona", [("user", "x"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),))],
+                tools=weather_registry().specs())
+    del fake.prefill
+    assert seen and set(seen) == {before}
+    assert (w.total_tokens, w.turn_open) == before
+
+
 # ----- what a request asks for ------------------------------------------------------
 def test_a_call_ceiling_where_no_call_is_run_is_refused():
     w, fake = tool_wrapper()

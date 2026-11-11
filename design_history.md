@@ -2024,3 +2024,13 @@ The template still decides what is written: the invented template that keeps
 thoughts leaves out the thought of a reply that closes a tool turn, which the
 live turn held as generated, so a conversation begun again holds that turn as
 the template writes it, as any past tool turn.
+
+**270.14: the token count and the open turn are read from the finished copy.**
+`total_tokens` and `turn_open` read the live state, which an action in
+progress may still put back: a `begin` that failed after emptying the cache
+showed 0 tokens and an open turn to another thread for a moment, although the
+conversation it left standing held neither. Both now read the copy published
+after each finished change, as `conversation()` and `pending_calls` do, so
+the copy carries the token count. A count read while a reply streams is the
+one from before that reply, until the reply is recorded. The library's own
+readers under the lock still read the live state.

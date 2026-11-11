@@ -396,8 +396,8 @@ class ChatWrapper:
     # ----- introspection -------------------------------------------------------
     @property
     def total_tokens(self) -> int:
-        """How many tokens the cache currently holds."""
-        return self._conversation.total_tokens
+        """How many tokens the cache holds, as the newest finished change left it; safe from any thread."""
+        return self._conversation.published_total_tokens()
 
     @property
     def config(self) -> Config:
@@ -491,9 +491,10 @@ class ChatWrapper:
 
         True from a call until :meth:`reply` closes the turn, the results in
         between included. While it is, :meth:`reply` with a request,
-        :meth:`inject` and :meth:`declare_tools` refuse.
+        :meth:`inject` and :meth:`declare_tools` refuse. Safe from any thread,
+        as :meth:`conversation` is: as the newest finished change left it.
         """
-        return self._conversation.turn_open
+        return self._conversation.published_turn_open()
 
     @property
     def pending_calls(self) -> list[ToolCall]:

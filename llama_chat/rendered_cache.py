@@ -112,13 +112,15 @@ class _Published:
     begun: bool = False
     turn_open: bool = False
     newest_role: str | None = None
+    total_tokens: int = 0
 
 
 class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation`, :meth:`published_pending_calls` and
+    :meth:`conversation`, :meth:`published_pending_calls`,
+    :meth:`published_total_tokens`, :meth:`published_turn_open` and
     :meth:`ensure_can_reply`, which read a copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
@@ -155,6 +157,14 @@ class RenderedCache:
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
         return copy.deepcopy(list(self._published.pending_calls))
+
+    def published_total_tokens(self) -> int:
+        """How many tokens the cache holds, from the newest publication; safe to read unlocked."""
+        return self._published.total_tokens
+
+    def published_turn_open(self) -> bool:
+        """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
+        return self._published.turn_open
 
     def ensure_can_reply(self, asks_question: bool) -> None:
         """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.
@@ -1038,7 +1048,8 @@ class RenderedCache:
             system_prompt=system[0]["content"] if system else "",
             history=tuple(as_history(self._state.messages)), tools=tuple(self._state.tools),
             reasoning=self._state.reasoning, pending_calls=tuple(self.pending_calls),
-            begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role)
+            begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role,
+            total_tokens=len(self._memory.tokens))
 
 
 # ----- what an action may start from -------------------------------------------------
