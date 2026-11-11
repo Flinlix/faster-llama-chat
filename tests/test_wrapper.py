@@ -760,15 +760,17 @@ def test_every_generation_is_handed_every_sampling_value():
                for f in dataclasses.fields(Sampling) if f.name != "seed")
 
 
-# ----- a system turn where the template has one or none --------------------
-def test_a_system_message_later_on_has_the_tags_of_a_later_system_turn():
-    fake = FakeContext(PLAIN)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s")
-    w.inject("hi", "user")
-    w.inject("Notiz", "system")
-    assert fake.text_of(fake.cache).endswith(
-        "<[turn>system\nNotiz<turn]>\n")
+# ----- a message of another role -------------------------------------------
+@pytest.mark.parametrize("role, cause", [("system", "begin"), ("tool", "inject_tool_result"),
+                                         ("human", "'human'")])
+def test_inject_refuses_a_message_of_another_role_naming_where_it_goes(role, cause):
+    """The system prompt belongs to begin, a result to inject_tool_result, and no other role is written."""
+    w, fake = begun_wrapper()
+    w.reply("hi").finish()
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ValueError, match=cause):
+        w.inject("Notiz", role)
+    assert w.conversation() == before and fake.cache == held
 
 
 # ----- two user turns in a row ---------------------------------------------

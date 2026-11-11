@@ -18,6 +18,7 @@ from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers
                             ensure_can_go_back)
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
+from .messages import ensure_role
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
@@ -174,14 +175,20 @@ class ChatWrapper:
         Returns:
             The number of messages evicted to make room.
 
+        Args:
+            text: The message's text.
+            role: ``"user"`` or ``"assistant"``. The system prompt is
+                :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
+
         Raises:
-            ValueError: If no conversation has been begun, if a tool call
-                has left a reply open, or if the template does not write such a
-                message here.
+            ValueError: If ``role`` is another one, if no conversation has
+                been begun, if a tool call has left a reply open, or if the
+                template does not write such a message here.
             ContextOverflowError: If the message cannot fit even after
                 evicting every non-system message. Raised before anything is
                 evicted.
         """
+        ensure_role(role)
         with self._lock:
             self._ensure_open()
             return self._conversation.add(role, text)

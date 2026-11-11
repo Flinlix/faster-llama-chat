@@ -685,8 +685,6 @@ class RenderedCache:
         if role == "user" and newest == "user":
             return ("this model's template does not write two user turns in a row; write a "
                     "reply between them")
-        if role == "system":
-            return "this model's template writes no system message after the conversation has begun"
         return f"this model's template does not write a {role} message here"
 
     def _ensure_room_for_a_question(self, remedy: str) -> None:

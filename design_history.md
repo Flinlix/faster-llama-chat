@@ -1963,3 +1963,14 @@ holding `role` and `content` and nothing else, each with the role `"user"` or
 `ValueError` naming it; a system message points to `begin`'s first argument,
 and a tool message to `ToolTurn`. `ensure_role` in `messages.py` is the one
 check of a role, so that `inject` can share it.
+
+**268.6: no system message is injected.** `inject(text, role="system")` wrote
+the message into the cache, but `conversation()` reads the system prompt from
+the first message only and left the later one out, and the count of evicted
+messages counted the message itself as one dropped. A system prompt kept for
+the whole conversation is `begin`'s first argument, so `inject` now refuses
+the role with a `ValueError` that says so, before anything changes. It checks
+the role with the same `ensure_role` as a history, so a tool message points
+to `inject_tool_result` (one part of 270.15, which failed with a `KeyError`
+before) and an unknown role is named. The template's refusal text for a later
+system message, which no action can reach now, is removed.
