@@ -530,12 +530,21 @@ class RenderedCache:
                      and k in self._state.kept_at), None)
 
     def _write_unreadable(self) -> bool:
-        """Answer a call that could not be read, where the context has room; whether it was."""
-        try:
-            self.add_result(self.pending_calls[0], _UNREADABLE_RESULT)
-            return True
-        except ValueError:          # no room for it, or the template writes no result
+        """Answer a call that could not be read, where the template writes a result and the context has room; whether it was."""
+        call = self.pending_calls[0]
+        if not self._renders_result(result_message(call.name, call.id,
+                                                   result_text(_UNREADABLE_RESULT))):
             return False
+        try:
+            self.add_result(call, _UNREADABLE_RESULT)
+            return True
+        except ContextOverflowError:
+            return False
+
+    def _renders_result(self, message: dict) -> bool:
+        """Whether the template writes ``message``, a result, after the conversation."""
+        return self._rendering.render(self._state.messages + [message], False) not in (
+            None, self._rendering.render(self._state.messages, False))
 
     def _forget_calls(self) -> None:
         """Record the newest reply without the call it made, which could be told nothing; its tokens stay as generated."""
@@ -581,8 +590,7 @@ class RenderedCache:
                     "are owed in the order the model asked for them")
             text = result_text(result)
             message = result_message(owed.name, owed_id, text)
-            if self._rendering.render(self._state.messages + [message], False) in (
-                    None, self._rendering.render(self._state.messages, False)):
+            if not self._renders_result(message):
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             room = self._max_prompt_tokens

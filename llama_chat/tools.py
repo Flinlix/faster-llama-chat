@@ -16,9 +16,13 @@ import types
 import typing
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
-__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn"]
+__all__ = ["ToolCall", "ToolCallStatus", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn"]
+
+# Whether a call the model wrote was read: whole, not readable, or cut short by the
+# reply cap or a cancel.
+ToolCallStatus = Literal["complete", "unreadable", "unfinished"]
 
 
 @dataclass(frozen=True)
@@ -54,11 +58,17 @@ class ToolCall:
             the conversation's history holds it; empty for a call not written
             into one yet, such as one built for a history, which ``begin``
             gives an id.
+        status: ``"complete"`` for a call that was read. ``"unreadable"``
+            for one that was written but could not be read, and
+            ``"unfinished"`` for one the reply cap or a cancel cut short:
+            such a call is only reported, with no name, arguments or id, and
+            nothing answers it.
     """
 
     name: str
     arguments: dict
     id: str = ""
+    status: ToolCallStatus = "complete"
 
 
 def ensure_names_unique(specs: list[ToolSpec]) -> None:

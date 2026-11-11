@@ -311,7 +311,7 @@ class ChatWrapper:
             generation = yield from self._read_generation(self._generate(text, **options),
                                                           after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
-        yield from generation.tool_calls
+        yield from _answerable(generation.tool_calls)
         return generation
 
     def inject_tool_result(self, call: ToolCall, result) -> None:
@@ -574,7 +574,7 @@ class ChatWrapper:
                     generation = yield from self._read_generation(
                         deltas, after="".join(g.text for g in generations))
                     generations.append(generation)
-                    if not generation.tool_calls:
+                    if not _answerable(generation.tool_calls):
                         if self._conversation.turn_open:
                             # An unreadable call: its result is already written, and
                             # the turn wants the reply that follows it. Nothing is
@@ -595,7 +595,7 @@ class ChatWrapper:
                                                 any_call_asked and calls_left == 0)
                     any_call_asked = True
                     settled, calls_left = self._settle_calls(
-                        generation.tool_calls, registry, calls_left, max_calls)
+                        _answerable(generation.tool_calls), registry, calls_left, max_calls)
                     may_call_again = registry is not None and calls_left > 0
                     try:
                         for call, result in settled:
@@ -734,7 +734,7 @@ class ChatWrapper:
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
-            tool_calls=conversation.pending_calls,
+            tool_calls=_reported_calls(generated, conversation.pending_calls),
             n_reasoning_tokens=reply_text.thought_pieces,
         )
 
@@ -804,6 +804,20 @@ class ChatWrapper:
                 "the reply this thread is reading still holds this conversation, and an "
                 "action now would wait for that reply for ever; read the reply to its end "
                 "or close it first, and call nothing on the wrapper from a tool it runs")
+
+
+def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
+    """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
+    if generated.stop_reason == "unreadable_tool_call":
+        return [ToolCall("", {}, status="unreadable")]
+    if generated.cut_inside_call:
+        return [ToolCall("", {}, status="unfinished")]
+    return pending
+
+
+def _answerable(calls: list[ToolCall]) -> list[ToolCall]:
+    """Of the calls a generation reports, those that were read, which a result answers."""
+    return [call for call in calls if call.status == "complete"]
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:

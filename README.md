@@ -213,7 +213,10 @@ starts with it. The turn keeps the tokens it was
 generated as, so an action after which the template's render no longer shows
 where that turn stands is refused with a `ValueError`, the conversation left
 as it was. Every call is reported on
-`Reply.tool_calls`, whatever became of it. Where calls run, the `Reply` sums
+`Reply.tool_calls`, whatever became of it: one that was read with its
+`ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
+and one the reply cap or a cancel cut short as `"unfinished"`, the last two
+without a name, arguments or id, and never handed over in the stream. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
 out.

@@ -20,7 +20,7 @@ being recovered from that template.
 
 from .cache_context import CacheContext, ModelReader
 from .config import Config, InvalidSettingError, Sampling
-from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from .tools import ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
                     StopReason, ToolCallPolicy)
 from .wrapper import ChatWrapper
@@ -38,6 +38,7 @@ __all__ = [
     "ToolCallPolicy",
     "TOOL_CALL_POLICIES",
     "ToolCall",
+    "ToolCallStatus",
     "ToolResult",
     "ToolTurn",
     "ToolSpec",

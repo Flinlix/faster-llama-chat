@@ -8,6 +8,7 @@ import pytest
 
 from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
+from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from llama_chat import ChatWrapper, ContextOverflowError
@@ -594,7 +595,64 @@ def test_an_unreadable_call_says_why():
             break
 
     assert reply.stop_reason == "unreadable_tool_call"
-    assert reply.tool_calls == []
+    # Reported, though nothing of it is handed over to be answered.
+    assert reply.tool_calls == [ToolCall("", {}, status="unreadable")]
+
+
+def test_a_refusal_while_an_unreadable_call_is_answered_is_raised_not_taken_for_no_room(
+        monkeypatch):
+    """Only no room, or no result block, records the reply without its call; any other refusal is raised."""
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"]
+
+    fitting_prompt = RenderedCache._fitting_prompt
+
+    def refused(self):
+        if "nonsense" in held_text(fake):       # only where the call is answered
+            raise ValueError("a kept turn cannot be placed")
+        return fitting_prompt(self)
+
+    monkeypatch.setattr(RenderedCache, "_fitting_prompt", refused)
+    with pytest.raises(ValueError, match="cannot be placed"):
+        wrapper.reply("los").finish()
+    monkeypatch.undo()
+    assert wrapper.reply("noch einmal?").finish().text == "reply"
+
+
+@pytest.mark.parametrize("policy", ["refuse", "registry"])
+def test_an_unreadable_call_is_reported_where_the_reply_answers_it_itself(policy):
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"]
+    reply = wrapper.reply("los", tool_call_policy=(
+        weather_registry() if policy == "registry" else policy)).finish()
+    assert reply.tool_calls == [ToolCall("", {}, status="unreadable")]
+    assert reply.text == "reply"
+
+
+@pytest.mark.parametrize("policy", ["refuse", "yield", "registry"])
+@pytest.mark.parametrize("cut_by", ["token_limit", "interrupted"])
+def test_a_call_cut_by_the_cap_or_a_cancel_is_reported_unfinished(policy, cut_by):
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    cancel = threading.Event()
+    decode = fake.decode_generated
+
+    def decode_and_cancel(tokens, start):
+        decode(tokens, start)
+        if "<call>fn" in held_text(fake):
+            cancel.set()
+    fake.decode_generated = decode_and_cancel
+    options = ({"max_reply_tokens": 4} if cut_by == "token_limit" else {"cancel": cancel})
+
+    reply = wrapper.reply("wie spät?", tool_call_policy=(
+        weather_registry() if policy == "registry" else policy), **options).finish()
+
+    assert reply.stop_reason == cut_by
+    assert reply.tool_calls == [ToolCall("", {}, status="unfinished")]
+    assert not wrapper.turn_open and reply.text == ""
 
 
 def test_a_reset_ends_the_turn_a_call_was_holding_open():
@@ -718,7 +776,8 @@ def test_an_unreadable_call_may_be_written_again():
     reply = wrapper.reply("wie spät?", tool_call_policy=registry).finish()
 
     assert ran == [1]                                # the second one ran
-    assert [c.name for c in reply.tool_calls] == ["clock"]
+    assert [(c.name, c.status) for c in reply.tool_calls] == [
+        ("", "unreadable"), ("clock", "complete")]
     assert not wrapper.turn_open
 
 

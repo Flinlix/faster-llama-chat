@@ -2055,3 +2055,17 @@ again, the cache is brought to the template's render, and the reply ends with
 could not be read already took where its error had no room.
 `inject_tool_result` still raises, since the caller holds the call there and
 decides what follows.
+
+**270.7: every call reported.** The README promised that every call is
+reported on `Reply.tool_calls`, but a call that could not be read, and one the
+reply cap or a cancel cut short, were missing from it. `ToolCall` now carries
+a `status`, the type `ToolCallStatus`: `"complete"` for a call that was read,
+`"unreadable"` and `"unfinished"` for the other two, which are reported with
+no name, arguments or id, since none could be read, and are never handed over
+in the stream, since nothing answers them. The history keeps an unreadable
+call as before, under the name a result is written with where none was read.
+The related find is fixed with it: answering an unreadable call took every
+`ValueError` for "no room, or no result block" and recorded the reply without
+its call, so a refusal to place a kept turn took that quiet path too. The
+template's result block is now checked before the answer is written, and only
+`ContextOverflowError` counts as no room; any other refusal is raised.

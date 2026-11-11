@@ -217,6 +217,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             break
     else:
         generated.stop_reason = "token_limit"
+    generated.cut_inside_call = call is not None and generated.stop_reason != "tool_call"
 
     # Flush the held-back tail unless the reply ended in a call or at its text.
     in_text_call = call is not None and close_text is not None
