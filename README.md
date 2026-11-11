@@ -286,9 +286,10 @@ holds that question.
 ## Configuration
 
 `Config` holds every setting except what an add-on file gives and what one
-request passes. It checks every value on construction, its type (a whole
-number where a fraction is asked for, never `True` for a number, never one
-that is not finite) and its range, and cannot be changed afterwards.
+request passes. It checks every value on construction, its type and its
+range, and cannot be changed afterwards: a whole number is taken where a
+fraction is asked for, but `True` is never taken for a number, nor a number
+that is not finite.
 `ChatWrapper.config` is the one the wrapper runs with: a sampling setting left
 unset holds the value the model supplies, whether the wrapper loaded the model
 or was given a cache context of your own.
@@ -312,10 +313,13 @@ The seven marked "the model's" take, unless set, the model's own
 recommendation, value by value: its [add-on file](#add-on-files)'s first,
 then what its GGUF states for a value the file leaves out, then switched off
 (`temperature` 1, `top_k` 0, `top_p` 1, `min_p` 0, `repetition_penalty` 1,
-`presence_penalty` and `frequency_penalty` 0).
-A model for which neither states any value runs at llama.cpp's defaults. `Sampling(...)` passed to one `reply`
-overrides any field of this table but `model_path` for that request.
-`Sampling` refuses, where it is built, any value `Config` refuses.
+`presence_penalty` and `frequency_penalty` 0). A model for which neither
+states any value runs at llama.cpp's defaults. A value the GGUF states that
+`Config` would refuse stops the load with a `ValueError` naming the GGUF as
+its source, unless `Config` or the add-on file replaces it.
+`Sampling(...)` passed to one `reply` overrides any field of this table but
+`model_path` for that request. `Sampling` refuses, where it is built, any
+value `Config` refuses.
 
 **Context management**
 
@@ -367,10 +371,10 @@ never from code: the one next to the GGUF with its name and `.json`, else one
 shipped in `llama_chat/addons/`, each used only where it names the model's
 template by its SHA-256. A file next to the GGUF that names no template, or
 another one, or is no JSON object, is not used, and a warning on the logger
-`llama_chat` says why.
-It fills in only what the template cannot tell; what the template states, the
-template decides. It is checked when the model loads, and anything else in it
-is refused.
+`llama_chat` says why. It fills in only what the template cannot tell; what
+the template states, the template decides. The file used is checked when the
+model loads, each value's type included, and anything else in it is refused
+with an error naming the file.
 
 ```json
 {"templates": ["<sha256 of the chat template>"],
@@ -380,15 +384,14 @@ is refused.
 ```
 
 `sampling` sets any of the seven model sampling fields, `presence_penalty` and
-`frequency_penalty` among them, and its values win over
-the GGUF's (see [Configuration](#configuration)). Since a shipped file is
-matched by the template, it also applies to a fine-tuned model that keeps the
-same template, and its values win over those that fine-tune's GGUF states; a
-file next to the GGUF, or values set in `Config`, take precedence for such a
-model. `call` says how the
-model writes a call where its template shows none it can be read from: the
-text a call opens with, the text after the function's name, and the text that
-closes it; it is refused where the template never writes that closing.
+`frequency_penalty` among them, and its values win over the GGUF's (see
+[Configuration](#configuration)). Since a shipped file is matched by the
+template, it also applies to a fine-tuned model that keeps the same template,
+and its values win over those that fine-tune's GGUF states; a file next to the
+GGUF, or values set in `Config`, take precedence for such a model. `call` says
+how the model writes a call where its template shows none it can be read from:
+the text a call opens with, the text after the function's name, and the text
+that closes it; it is refused where the template never writes that closing.
 
 ## A model without a usable template
 

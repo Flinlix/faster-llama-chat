@@ -2,9 +2,8 @@
 
 Two protocols: the model as it is read (its tokenizer, tags, chat template and
 the sampling it recommends), and that plus the cache a conversation is decoded
-into. Each is
-checked once, where a context is adopted, rather than at the first call that
-finds a member missing.
+into. Each is checked once, where a context is adopted, rather than at the
+first call that finds a member missing.
 """
 
 from __future__ import annotations
@@ -77,7 +76,12 @@ class ModelReader(Protocol):
     def chat_template_text(self) -> str | None: ...
 
     def recommended_sampling(self) -> Mapping[str, float]:
-        """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none."""
+        """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none.
+
+        Only the fields an add-on file may set too are taken
+        (:data:`~llama_chat.addon_files.SAMPLING_FIELDS`); another name is
+        refused where the wrapper is built.
+        """
 
 
 class CacheContext(ModelReader, Protocol):

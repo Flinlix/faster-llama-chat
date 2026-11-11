@@ -9,11 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from .config import Config
+from .config import Config, InvalidSettingError
 
 _log = logging.getLogger(__name__)
 
@@ -85,9 +86,10 @@ def read_addon_file(path: Path | None) -> dict:
     """An add-on file's contents, checked; an empty one for ``None``.
 
     Raises:
-        ValueError: If it is not JSON, holds a key no add-on file has, a
-            sampling value :class:`Config` refuses, or a call field that is not
-            text.
+        ValueError: Naming the file, if it is not JSON, holds a key no add-on
+            file has, templates that are not a list of fingerprints, a source
+            that is not text, a sampling value :class:`Config` refuses, its
+            type included, or a call field that is not text.
     """
     if path is None:
         return {"templates": [], "sampling": {}, "call": {}}
@@ -97,6 +99,13 @@ def read_addon_file(path: Path | None) -> dict:
         raise ValueError(f"{path} is not valid JSON: {error}") from None
     if not isinstance(found, dict) or not set(found) <= _FILE_KEYS:
         raise ValueError(f"{path} may hold only {sorted(_FILE_KEYS)}")
+    templates = found.get("templates", [])
+    if not isinstance(templates, list) or not all(
+            isinstance(t, str) and re.fullmatch("[0-9a-f]{64}", t) for t in templates):
+        raise ValueError(f"{path}: templates must be a list of SHA-256 fingerprints, "
+                         "each as 64 lowercase hex digits")
+    if not isinstance(found.get("source", ""), str):
+        raise ValueError(f"{path}: source must be text")
     sampling, call = found.get("sampling", {}), found.get("call", {})
     if not isinstance(sampling, dict) or not set(sampling) <= set(SAMPLING_FIELDS):
         raise ValueError(f"{path}: sampling may set only {list(SAMPLING_FIELDS)}")
@@ -107,7 +116,7 @@ def read_addon_file(path: Path | None) -> dict:
     if call and (not isinstance(call, dict) or set(call) != set(CALL_FIELDS)
                  or not all(isinstance(value, str) and value for value in call.values())):
         raise ValueError(f"{path}: call must give {list(CALL_FIELDS)}, each as text")
-    return {"templates": list(found.get("templates", [])), "sampling": sampling, "call": call}
+    return {"templates": templates, "sampling": sampling, "call": call}
 
 
 def with_model_sampling(config: Config, recommended: Mapping[str, float],
@@ -123,10 +132,37 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
         recommended: The sampling the model states for itself, as
             :meth:`~llama_chat.cache_context.ModelReader.recommended_sampling` gives it.
         addon: The model's add-on file, as :func:`addon_file` reads it.
+
+    Raises:
+        ValueError: If a value the model recommends, which neither ``config``
+            nor the add-on file replaces, is one the settings refuse, or names
+            no model sampling field. Not an
+            :class:`~llama_chat.config.InvalidSettingError`, since no setting
+            of the caller's is at fault.
     """
+    unknown = sorted(set(recommended) - set(SAMPLING_FIELDS))
+    if unknown:
+        raise ValueError(f"the model's own recommendation (its GGUF) names {unknown}, which "
+                         f"are no model sampling fields {list(SAMPLING_FIELDS)}")
     unset = [name for name in SAMPLING_FIELDS if getattr(config, name) is None]
-    if not unset:
-        return config
+    for name in unset:
+        if name in recommended and name not in addon["sampling"]:
+            _ensure_recommendation_taken(name, recommended[name])
     stated = {**recommended, **addon["sampling"]}
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
+
+
+def _ensure_recommendation_taken(name: str, value) -> None:
+    """Refuse a value the model recommends for ``name`` that the settings refuse, naming where it comes from.
+
+    Raises:
+        ValueError: If :class:`Config` refuses it.
+    """
+    try:
+        Config(**{name: value})
+    except InvalidSettingError as refused:
+        raise ValueError(
+            f"the model's own recommendation (its GGUF) gives {name} = {value!r}, which is "
+            f"refused: {refused}. Set {name} in Config, or in the model's add-on file, "
+            "to run it with another value") from None

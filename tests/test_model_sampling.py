@@ -9,7 +9,7 @@ from llama_chat import addon_files
 from llama_chat.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
-from llama_chat.config import Config
+from llama_chat.config import Config, InvalidSettingError
 from tests.chat_templates import STEMS, fixture
 
 _TEMPLATE = "{{ messages }}"
@@ -161,4 +161,43 @@ def test_the_qwen_3_5_file_holds_the_presence_penalty_its_card_recommends():
     path = SHIPPED_ADDONS / "qwen3.5.json"
     assert read_addon_file(path)["sampling"]["presence_penalty"] == 1.5
     assert "presence_penalty=1.5" in json.loads(path.read_text())["source"]
+
+
+@pytest.mark.parametrize("contents, named", [
+    ({"sampling": {"temperature": "hot"}}, "temperature"),
+    ({"sampling": {"top_k": 2.5}}, "top_k"),
+    ({"sampling": {"min_p": True}}, "min_p"),
+    ({"templates": "7f0e5290"}, "templates"),
+    ({"templates": ["not a fingerprint"]}, "templates"),
+    ({"source": ["a", "list"]}, "source"),
+])
+def test_an_add_on_file_value_of_the_wrong_type_is_refused_naming_the_file(
+        tmp_path, contents, named):
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(contents))
+    with pytest.raises(ValueError) as refused:
+        read_addon_file(path)
+    assert str(path) in str(refused.value) and named in str(refused.value)
+
+
+@pytest.mark.parametrize("stated, named", [({"top_p": 2.0}, "top_p"), ({"top_k": 20.5}, "top_k"),
+                                           ({"temperature": "warm"}, "temperature"),
+                                           ({"seed": 3}, "seed")])
+def test_a_value_the_model_recommends_that_the_settings_refuse_stops_the_load_naming_its_source(
+        stated, named):
+    with pytest.raises(ValueError) as refused:
+        with_model_sampling(Config(), stated, _addon({}))
+    assert not isinstance(refused.value, InvalidSettingError)     # no setting of the caller's
+    assert "the model's own" in str(refused.value) and named in str(refused.value)
+
+
+def test_a_refused_value_the_model_recommends_is_no_matter_where_another_source_wins():
+    assert with_model_sampling(Config(top_p=0.9), {"top_p": 2.0}, _addon({})).top_p == 0.9
+    assert with_model_sampling(Config(), {"top_p": 2.0}, _addon({"top_p": 0.8})).top_p == 0.8
+
+
+def test_no_two_shipped_files_name_one_template():
+    named = [t for path in SHIPPED_ADDONS.glob("*.json")
+             for t in json.loads(path.read_text())["templates"]]
+    assert len(named) == len(set(named))
 

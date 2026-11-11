@@ -1687,3 +1687,20 @@ without any logging configured. A file that does name the template is checked
 whole, and refused where malformed, as before. Run on the CPU with gemma-3-1b and a
 file of another program's settings beside it: the warning named the file and
 the reason, and the model loaded with its shipped file's values and answered.
+
+**265.7: every value checked at load, naming its source.** An add-on file's
+values were checked only for range, so `"temperature": "hot"` loaded and
+failed at the first reply, and `"templates": "7f0e..."` as text was read
+letter by letter, matching any template whose fingerprint held those letters.
+A value the GGUF recommended that the settings refuse stopped the load with an
+`InvalidSettingError` naming a setting the caller never set. Now an add-on
+file's sampling values are checked for type by the same code as `Config`'s
+(266.8), its `templates` must be a list of 64-digit lowercase hex
+fingerprints and its `source` text, each refusal naming the file. A value
+the model recommends itself is checked where it would be taken, that is
+where neither the caller nor the add-on file replaces it, and refused with a
+`ValueError` that names the model's own recommendation as its source and says
+how to override it; a value another source replaces cannot stop the load. A
+name it recommends that is no model sampling field is refused too, for a
+cache context of your own. A test now pins that no two shipped files name one
+template, since the first in file order would win and the other be dead.
