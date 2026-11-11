@@ -1964,3 +1964,15 @@ changing the caller's dict later changed the declaration; it is copied now,
 and `specs()` hands out copies. A tool with no description, neither a
 docstring nor `description=`, is refused, since the model would read nothing
 about it.
+
+**270.9: arguments that are no object, and arguments nested too deeply.** A
+call whose arguments were a JSON list or `null` was read as a call with no
+arguments, and its tool ran with none of what the model gave. Such a call is
+now unreadable, and the model is told so. Very deep nesting was read on one
+path and not on another: the JSON reader followed thousands of levels, while
+copying the arguments into the conversation and rendering them did not, so a
+call 600 levels deep raised `RecursionError` out of the reply, measured with
+the test stand-in. The reading now refuses arguments that nest deeper than
+`MAX_ARGUMENT_DEPTH`, 100 levels, on every path, and a reader that runs out
+of recursion refuses the call as unreadable too, so the wrapper treats only a
+`ValueError` as an unreadable call.

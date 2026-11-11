@@ -14,6 +14,11 @@ from typing import Any
 from .template import CallBody
 from .tools import ToolCall
 
+# How many levels of lists and objects a call's arguments may nest, the arguments'
+# own object counted. Well inside the interpreter's recursion limit, so that every
+# later step that walks the arguments, copying and rendering them, completes.
+MAX_ARGUMENT_DEPTH = 100
+
 
 def parse_calls(body: str, call_body: CallBody | None,
                 lead_in: str = "") -> list[ToolCall]:
@@ -33,8 +38,22 @@ def parse_calls(body: str, call_body: CallBody | None,
         Usually one; a JSON array holds a whole batch.
 
     Raises:
-        ValueError: If ``body`` is not a call this can read.
+        ValueError: If ``body`` is not a call this can read, among them a call
+            whose arguments are no object or nest deeper than
+            :data:`MAX_ARGUMENT_DEPTH`.
     """
+    try:
+        calls = _read_calls(body, call_body, lead_in)
+    except RecursionError as e:
+        raise ValueError("the call's arguments nest deeper than can be read") from e
+    for call in calls:
+        if _nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
+            raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
+    return calls
+
+
+def _read_calls(body: str, call_body: CallBody | None, lead_in: str) -> list[ToolCall]:
+    """:func:`parse_calls` before the depth of the arguments is checked."""
     # Unstripped: the recovered delimiters carry their own whitespace.
     text = body
     if lead_in and text.startswith(lead_in):
@@ -53,6 +72,18 @@ def parse_calls(body: str, call_body: CallBody | None,
     return [_as_delimited_call(text, call_body)]
 
 
+def _nesting_depth(value) -> int:
+    """How many levels of lists and objects ``value`` nests, counted without recursion; past :data:`MAX_ARGUMENT_DEPTH` it stops counting."""
+    deepest, pending = 0, [(value, 0)]
+    while pending and deepest <= MAX_ARGUMENT_DEPTH:
+        item, depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            deepest = max(deepest, depth + 1)
+            pending += [(child, depth + 1) for child in
+                        (item.values() if isinstance(item, dict) else item)]
+    return deepest
+
+
 def _as_json_calls(text: str) -> list[ToolCall]:
     """Read the calls that name themselves, or nothing if these are not calls."""
     try:
@@ -66,7 +97,11 @@ def _as_json_calls(text: str) -> list[ToolCall]:
 
 
 def _one_json_call(decoded) -> ToolCall | None:
-    """Read one entry of a batch, or ``None`` if it is not a call."""
+    """Read one entry of a batch, or ``None`` if it is not a call.
+
+    Raises:
+        ValueError: If it names a function but its arguments are no object.
+    """
     if not isinstance(decoded, dict):
         return None
     name = decoded.get("name", decoded.get("tool_name"))      # both are in the wild
@@ -78,8 +113,9 @@ def _one_json_call(decoded) -> ToolCall | None:
             arguments = json.loads(arguments)
         except ValueError:
             return None
-    return ToolCall(name=name,
-                    arguments=arguments if isinstance(arguments, dict) else {})
+    if not isinstance(arguments, dict):
+        raise ValueError(f"the arguments of the call to {name!r} are no object: {arguments!r}")
+    return ToolCall(name=name, arguments=arguments)
 
 
 def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:

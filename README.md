@@ -258,7 +258,9 @@ arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
 that the call failed, why, and `try again` or `do not call again`. A result
 that is a dict carrying `error` counts as a failure too, and so does a tool
 that returns what JSON cannot write. Handed to `inject_tool_result`, such a
-result is refused, and the call stays owed.
+result is refused, and the call stays owed. A call whose arguments are no
+object, such as a list or `null`, or nest deeper than 100 levels of lists and
+objects, is unreadable, and its tool does not run.
 
 **Nothing is evicted while a turn is open**, since that would cut into the turn
 being written, so a turn of many calls grows towards `context_size`. A result

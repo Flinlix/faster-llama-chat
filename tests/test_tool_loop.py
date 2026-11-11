@@ -583,6 +583,27 @@ def test_an_unreadable_call_is_told_so_and_the_reply_goes_on():
     assert "unreadable_call" in turn
 
 
+@pytest.mark.parametrize("body", [
+    '{"name": "clock", "arguments": null}',
+    '{"name": "clock", "arguments": ["Bonn"]}',
+    "fn:clock{a:%s}" % ("[" * 600 + "]" * 600),
+], ids=["null", "a-list", "nested-too-deeply"])
+def test_a_call_whose_arguments_cannot_be_read_does_not_run_and_is_told_so(body):
+    ran = []
+    registry = ToolRegistry()
+    registry.tool(lambda **given: ran.append(given) or "12:00", description="Die Zeit.",
+                  name="clock", parameters={"type": "object", "properties": {}})
+    wrapper, fake = tool_wrapper(context_size=8192)
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = [body]
+
+    reply = wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1).finish()
+
+    assert ran == []
+    assert "unreadable_call" in newest_turn(fake)
+    assert reply.text == "reply" and not wrapper.turn_open
+
+
 def test_a_failed_call_is_named_as_one_and_told_to_try_again():
     """The reason alone reads as data; the model has to know the call failed."""
     registry = ToolRegistry()

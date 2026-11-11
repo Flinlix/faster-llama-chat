@@ -451,7 +451,6 @@ class ResolvedTemplate:
 
         Raises:
             ValueError: If the text is not a call this model's format reads.
-            RecursionError: If its values nest deeper than the parser can follow.
         """
         text = generated_call_text
         if self._boundary.call_texts is not None:

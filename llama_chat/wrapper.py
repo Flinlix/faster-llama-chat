@@ -716,7 +716,7 @@ class ChatWrapper:
             return []
         try:
             return self._template.read_calls(generated.tool_call)
-        except (ValueError, RecursionError):
+        except ValueError:
             return []
 
     @property

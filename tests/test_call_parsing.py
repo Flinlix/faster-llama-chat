@@ -59,6 +59,31 @@ def test_the_shapes_the_json_family_comes_in(raw):
     assert parse_calls(raw, None)[0].arguments == {"a": 1}
 
 
+@pytest.mark.parametrize("raw", [
+    '{"name": "x", "arguments": [1, 2]}',
+    '{"name": "x", "arguments": null}',
+    '{"name": "x", "parameters": null}',
+    '{"name": "x", "arguments": "[1, 2]"}',
+    '{"name": "x", "arguments": "null"}',
+])
+def test_arguments_that_are_no_object_make_the_call_unreadable(raw):
+    """Read as no arguments, the tool would run with none of what the model gave."""
+    with pytest.raises(ValueError):
+        parse_calls(raw, None)
+
+
+_NESTED_TOO_DEEPLY = "[" * 150 + "]" * 150
+_NESTED_PAST_THE_RECURSION_LIMIT = "[" * 3000 + "]" * 3000
+
+
+@pytest.mark.parametrize("deep", [_NESTED_TOO_DEEPLY, _NESTED_PAST_THE_RECURSION_LIMIT])
+@pytest.mark.parametrize("written", ['{"name": "f", "arguments": {"a": %s}}',
+                                     "fn:f{a:%s}"], ids=["json", "the-model-s-own"])
+def test_arguments_nested_too_deeply_make_the_call_unreadable_on_every_path(written, deep):
+    with pytest.raises(ValueError, match="nest"):
+        parse_calls(written % deep, CALL_BODY, "fn:")
+
+
 def test_without_a_grammar_anything_but_json_is_refused():
     with pytest.raises(ValueError, match="no call_body"):
         parse_calls("fn:clock{}", None, "fn:")
