@@ -308,10 +308,11 @@ or was given a cache context of your own.
 | `penalty_window_tokens` | `64` | how far back the penalties look, within one generation; at least `0` |
 | `seed` | `None` | in `[0, 2**32 - 2]`, which every generation starts from; `None` draws a fresh one |
 
-The five marked "the model's" take, unless set, the model's own recommendation
-from one source, taken whole: what the GGUF states, else its
-[add-on file](#add-on-files), a field it leaves out switched off; with
-neither, llama.cpp's defaults. `Sampling(...)` passed to one `reply`
+The five marked "the model's" take, unless set, the model's own
+recommendation, value by value: its [add-on file](#add-on-files)'s first,
+then what its GGUF states for a value the file leaves out, then switched off
+(`temperature` 1, `top_k` 0, `top_p` 1, `min_p` 0, `repetition_penalty` 1).
+A model for which neither states any value runs at llama.cpp's defaults. `Sampling(...)` passed to one `reply`
 overrides any field of this table but `model_path` for that request.
 `Sampling` refuses, where it is built, any value `Config` refuses.
 
@@ -374,7 +375,12 @@ is refused.
  "call": {"opening": "...", "name_close": "...", "closing": "..."}}
 ```
 
-`sampling` sets any of the five model sampling fields. `call` says how the
+`sampling` sets any of the five model sampling fields, and its values win over
+the GGUF's (see [Configuration](#configuration)). Since a shipped file is
+matched by the template, it also applies to a fine-tuned model that keeps the
+same template, and its values win over those that fine-tune's GGUF states; a
+file next to the GGUF, or values set in `Config`, take precedence for such a
+model. `call` says how the
 model writes a call where its template shows none it can be read from: the
 text a call opens with, the text after the function's name, and the text that
 closes it; it is refused where the template never writes that closing.

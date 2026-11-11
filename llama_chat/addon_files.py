@@ -21,7 +21,7 @@ _FILE_KEYS = {"templates", "source", "sampling", "call"}
 # llama.cpp's own defaults, for a model that recommends nothing.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
                     "repetition_penalty": 1.0}
-# What a field a recommendation leaves out stands at: switched off.
+# What a field no source states stands at, where another field is stated: switched off.
 UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
                      "repetition_penalty": 1.0}
 
@@ -86,8 +86,8 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
                         addon: dict) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
-    One source is taken whole: what the model recommends itself, else the
-    add-on file's, a field it leaves out switched off; with neither,
+    Value by value: the add-on file's, else what the model recommends itself,
+    else switched off. A model for which neither states any value runs at
     llama.cpp's defaults.
 
     Args:
@@ -99,6 +99,6 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
     unset = [name for name in SAMPLING_FIELDS if getattr(config, name) is None]
     if not unset:
         return config
-    stated = dict(recommended) or addon["sampling"]
+    stated = {**recommended, **addon["sampling"]}
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})

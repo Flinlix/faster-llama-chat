@@ -32,9 +32,10 @@ class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`, every value checked where it is made.
 
     The five model sampling fields, ``temperature`` to
-    ``repetition_penalty``, left ``None`` take the model's own when it loads:
-    what its GGUF states, else its add-on file's, else llama.cpp's default. See
-    the README, "Configuration".
+    ``repetition_penalty``, left ``None`` take the model's own when it loads,
+    value by value: its add-on file's, else what its GGUF states, else
+    switched off; where neither states any, llama.cpp's defaults. See the
+    README, "Configuration".
 
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.

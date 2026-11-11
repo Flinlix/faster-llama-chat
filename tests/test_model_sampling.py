@@ -24,21 +24,29 @@ def test_what_the_caller_sets_wins_over_everything_the_model_recommends(tmp_path
     assert config.temperature == 0.9
 
 
-def test_the_gguf_comes_before_the_add_on_file_and_the_file_before_the_default(tmp_path):
-    model = tmp_path / "m.gguf"
-    (tmp_path / "m.json").write_text(json.dumps({"sampling": {"temperature": 0.3, "top_k": 7}}))
-    config = with_model_sampling(
-        Config(model_path=str(model)),
-        {"temperature": 0.6, "top_k": -1}, addon_file(model, None))
-    assert (config.temperature, config.top_k) == (0.6, -1)
-    config = with_model_sampling(
-        Config(model_path=str(model)),
-        {}, addon_file(model, None))
-    assert (config.temperature, config.top_k) == (0.3, 7)
-    config = with_model_sampling(
-        Config(model_path=str(tmp_path / "other.gguf")),
-        {}, addon_file(tmp_path / "other.gguf", None))
-    assert config.min_p == DEFAULT_SAMPLING["min_p"]
+def _addon(sampling: dict) -> dict:
+    return {"templates": [], "sampling": sampling, "call": {}}
+
+
+def test_each_value_comes_from_the_add_on_file_else_the_gguf_else_is_switched_off():
+    config = with_model_sampling(Config(), {"temperature": 0.6, "top_p": 0.9, "min_p": 0.02},
+                                 _addon({"temperature": 0.3, "top_k": 7}))
+    assert (config.temperature, config.top_k, config.top_p, config.min_p,
+            config.repetition_penalty) == (0.3, 7, 0.9, 0.02, UNSTATED_SAMPLING["repetition_penalty"])
+
+
+def test_the_gguf_alone_or_the_add_on_file_alone_is_taken_as_it_states():
+    stated = {"temperature": 0.6, "top_k": -1}
+    from_gguf = with_model_sampling(Config(), stated, _addon({}))
+    from_file = with_model_sampling(Config(), {}, _addon(stated))
+    assert from_gguf == from_file
+    assert (from_file.temperature, from_file.top_k, from_file.top_p) == (
+        0.6, -1, UNSTATED_SAMPLING["top_p"])
+
+
+def test_a_model_that_recommends_nothing_runs_at_the_engines_defaults():
+    config = with_model_sampling(Config(), {}, _addon({}))
+    assert {name: getattr(config, name) for name in DEFAULT_SAMPLING} == DEFAULT_SAMPLING
 
 
 def test_what_a_recommendation_leaves_out_stays_switched_off(tmp_path):

@@ -1642,3 +1642,20 @@ the template the file's call format (`ResolvedTemplate(context, addon_call)`).
 never needs a configuration of its own for sampling and `KVContext.config` is
 gone. Rejected: keeping the add-on file in the context and copying it into a
 context of your own, which would make every implementation repeat the lookup.
+
+**265.3: the model's sampling, merged value by value.** Where the GGUF stated
+any sampling value, its add-on file was ignored whole, and every value the
+GGUF left out was switched off, so a GGUF stating only a temperature lost the
+file's top-k and top-p. The user decided the new rule: value by value, the
+add-on file first, its values winning, then the GGUF's for a value the file
+leaves out, then off. The file wins because it is the one source a person
+checked against the makers' published recommendation and cites, while a
+GGUF's values are whatever its converter copied, often a generation config
+written for another runtime. A model for which neither states any value still
+runs at llama.cpp's defaults, as before; whether such a model should run with
+every value off instead was not part of the decision and is left open. (277.2)
+The README says that a shipped file, matched by its template, also wins over
+the values a fine-tune that keeps the template states in its own GGUF; a file
+next to that GGUF, or the caller's own values, are how to override it. Of the
+GGUFs on the machine this was built on, none both states sampling values and
+matches a shipped file, so the change alters no model's sampling there.
