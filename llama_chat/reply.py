@@ -52,6 +52,10 @@ class Reply:
             where no call was asked for.
         n_reasoning_tokens: Of the tokens sampled, about how many were thought:
             the streamed pieces that held any.
+        thought: What the model thought before its answer, its tags and the
+            whitespace around it left out; empty where it thought nothing.
+            Where the request took several generations, each one's thought in
+            order, a blank line between two.
     """
 
     text: str
@@ -63,6 +67,7 @@ class Reply:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_limit_reached: bool = False
     n_reasoning_tokens: int = 0
+    thought: str = ""
 
 
 _Delta = TypeVar("_Delta")

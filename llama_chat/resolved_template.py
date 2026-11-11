@@ -308,8 +308,9 @@ class ResolvedTemplate:
                 "be made but never answered")
 
     def _resolve_fragments(self) -> TemplateFragments:
-        """Recover the template fragments from the model's own chat template."""
-        fragments = extract_fragments(self._model_render)
+        """Recover the template fragments from the model's own chat template, which a context that reports no template text ships none of."""
+        has_text = self._context.chat_template_text(self._template_name) is not None
+        fragments = extract_fragments(self._model_render) if has_text else None
         if fragments is None:
             raise ValueError(
                 "the model ships no chat template, which this library writes every "

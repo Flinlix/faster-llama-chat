@@ -162,8 +162,8 @@ def _steps(history):
 
 def _assert_kept_only_what_it_produced(before, after, shown, calls):
     """A failed reply loses nothing, and adds nothing, or what it produced: the text it showed, then a call or a result."""
-    held, kept = _steps(before[0][1]), _steps(after[0][1])
-    assert after[0][0] == before[0][0] and kept[:len(held)] == held
+    held, kept = _steps(before[0]["messages"]), _steps(after[0]["messages"])
+    assert after[0]["system_prompt"] == before[0]["system_prompt"] and kept[:len(held)] == held
     added = kept[len(held):]
     texts = [step[1] for step in added if isinstance(step, tuple) and step[0] == "assistant"]
     assert "".join(texts) == "".join(shown)
@@ -181,7 +181,7 @@ def _go_on(w, fake):
         w.inject_tool_result(call, "sonnig")
     if w.turn_open:
         w.reply(tool_call_policy="yield").finish()
-    history = w.conversation()[1]
+    history = w.conversation()["messages"]
     waiting = bool(history) and isinstance(history[-1], tuple) and history[-1][0] == "user"
     w.reply(None if waiting else "weiter").finish()
 
@@ -228,10 +228,10 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
     w, fake = _flaky(gen_tokens=2)
     w.begin("s")
     w.reply("eins").finish()
-    before = w.conversation()[1]
+    before = w.conversation()["messages"]
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 600)
-    assert w.conversation() == ("s", before)
+    assert w.conversation()["system_prompt"] == "s" and w.conversation()["messages"] == before
     w.reply("zwei").finish()
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
 
@@ -249,7 +249,7 @@ def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversa
     today[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 400)
-    assert w.conversation()[1] == [("user", "One?"), ("assistant", "Eins.")]
+    assert w.conversation()["messages"] == [("user", "One?"), ("assistant", "Eins.")]
     assert w.reply("Two?").finish().text == "Zwei."
 
 
@@ -356,7 +356,7 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
     w.begin("s")
     with pytest.raises(ContextOverflowError):
         w.reply("hello").finish()
-    assert w.conversation()[1] == []
+    assert w.conversation()["messages"] == []
 
 
 # ----- a cache that cannot shift ----------------------------------------------------
@@ -381,12 +381,37 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     split = ConversationRendering.split
 
     def reading(self, messages, generation_prompt):
-        seen.append(len(w.conversation()[1]))           # as another thread reads it, mid-action
+        seen.append(len(w.conversation()["messages"]))           # as another thread reads it, mid-action
         return split(self, messages, generation_prompt)
 
     monkeypatch.setattr(ConversationRendering, "split", reading)
     w.reply("c").finish()
     assert set(seen) <= {2, 4}
+
+
+def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finished_changes(
+        monkeypatch):
+    """Read in the middle of a begin that fails, they are what the conversation it leaves standing holds."""
+    w, fake = tool_wrapper()
+    w.begin("persona", [("user", "a"), ("assistant", "b")])
+    before, seen = (w.total_tokens, w.turn_open), []
+    split = ConversationRendering.split
+
+    def reading(self, messages, generation_prompt):
+        seen.append((w.total_tokens, w.turn_open))            # as another thread reads them
+        return split(self, messages, generation_prompt)
+
+    def failing(token_ids, start_pos, want_logits):
+        raise RuntimeError("decode failed")
+
+    monkeypatch.setattr(ConversationRendering, "split", reading)
+    fake.prefill = failing
+    with pytest.raises(RuntimeError):
+        w.begin("persona", [("user", "x"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),))],
+                tools=weather_registry().specs())
+    del fake.prefill
+    assert seen and set(seen) == {before}
+    assert (w.total_tokens, w.turn_open) == before
 
 
 # ----- what a request asks for ------------------------------------------------------
@@ -396,7 +421,7 @@ def test_a_call_ceiling_where_no_call_is_run_is_refused():
     for tool_call_policy in TOOL_CALL_POLICIES:
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", tool_call_policy=tool_call_policy, max_calls=2)
-    assert w.conversation()[1] == []
+    assert w.conversation()["messages"] == []
 
 
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
@@ -417,7 +442,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
         w.reply("Wetter?", tool_call_policy="yield").finish()
     fake.sampled_tokens = sampled
     assert not w.turn_open and w.pending_calls == []
-    assert w.conversation()[1][-2:] == [("user", "Wetter?"), ("assistant", "")]
+    assert w.conversation()["messages"][-2:] == [("user", "Wetter?"), ("assistant", "")]
     w.reply("weiter").finish()
 
 

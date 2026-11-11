@@ -106,17 +106,21 @@ class _Published:
 
     system_prompt: str = ""
     history: tuple = ()
+    tools: tuple = ()
+    reasoning: bool = False
     pending_calls: tuple = ()
     begun: bool = False
     turn_open: bool = False
     newest_role: str | None = None
+    total_tokens: int = 0
 
 
 class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation`, :meth:`published_pending_calls` and
+    :meth:`conversation`, :meth:`published_pending_calls`,
+    :meth:`published_total_tokens`, :meth:`published_turn_open` and
     :meth:`ensure_can_reply`, which read a copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
@@ -143,14 +147,24 @@ class RenderedCache:
         """The conversation as the template is given it; not to be changed by the caller."""
         return self._state.messages
 
-    def conversation(self) -> tuple[str, list]:
-        """The system prompt and the history as ``begin`` takes them, from one publication, the caller's to change; safe to read unlocked."""
+    def conversation(self) -> dict:
+        """Everything ``begin`` takes to begin the conversation again, by its parameter names, from one publication, the caller's to change; safe to read unlocked."""
         published = self._published
-        return published.system_prompt, copy.deepcopy(list(published.history))
+        return {"system_prompt": published.system_prompt,
+                "messages": copy.deepcopy(list(published.history)),
+                "tools": copy.deepcopy(list(published.tools)), "reasoning": published.reasoning}
 
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
         return copy.deepcopy(list(self._published.pending_calls))
+
+    def published_total_tokens(self) -> int:
+        """How many tokens the cache holds, from the newest publication; safe to read unlocked."""
+        return self._published.total_tokens
+
+    def published_turn_open(self) -> bool:
+        """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
+        return self._published.turn_open
 
     def ensure_can_reply(self, asks_question: bool) -> None:
         """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.
@@ -244,6 +258,7 @@ class RenderedCache:
                     "fit beside the system prompt; shorten it or raise "
                     "context_size/evict_above_fraction")
             self._drop_while_over(limit, generation_prompt=False)
+            self._ensure_within(limit, "shorten the history")
             self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
             self._state.begun = False
             self._memory.reset()
@@ -302,6 +317,12 @@ class RenderedCache:
             roles[i:i + 2] for i in range(len(roles) - 1)]
             else "this model's template refuses to write this conversation")
 
+    def _writes(self, messages: list[dict]) -> bool:
+        """Whether the template writes ``messages``, as they are or with a question after them."""
+        return (self._rendering.render(messages, False) is not None
+                or self._rendering.render(messages + [{"role": "user", "content": STAND_IN}],
+                                          True) is not None)
+
     def _ends_on_result(self) -> bool:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
@@ -323,14 +344,16 @@ class RenderedCache:
             alone = self._rendering.length(self._system_part() + [question], generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
-                    f"request needs {alone} tokens but only {room} fit beside room for the reply")
+                    f"request needs {alone} tokens but only {room} fit beside room for the reply; "
+                    "shorten the request or the system prompt, or raise context_size or lower "
+                    "min_reply_tokens")
             self._ensure_writes("user", text, generation_prompt=True)
             before = list(self._memory.tokens)
             n_before = len(as_history(self._state.messages))
             if not self._splice(question, room):
                 self._state.messages.append(question)
-                self._drop_while_over(room, generation_prompt=True)
-                self._sync(self._fitting_prompt())
+                dropped = self._drop_while_over(room, generation_prompt=True)
+                self._sync(self._fitting_prompt(), dropped=dropped)
             free = self._config.context_size - len(self._memory.tokens)
             if free < self._config.min_reply_tokens:
                 raise ContextOverflowError(
@@ -381,7 +404,8 @@ class RenderedCache:
             if alone > limit:
                 raise ContextOverflowError(
                     f"injected message needs {alone} tokens but only {limit} fit beside the "
-                    "system prompt")
+                    "system prompt; shorten the message or the system prompt, or raise "
+                    "context_size/evict_above_fraction")
             self._ensure_writes(role, text, generation_prompt=False)
             n_before = len(as_history(self._state.messages))
             room = self._max_prompt_tokens
@@ -390,6 +414,7 @@ class RenderedCache:
             if role != "user" or not fits or not self._splice(message, room):
                 self._state.messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
+                self._ensure_within(limit, "shorten the message or inject a user message first")
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
@@ -423,7 +448,8 @@ class RenderedCache:
         if len(target.tokens) > room:
             raise ContextOverflowError(
                 f"the conversation needs {len(target.tokens)} tokens but only {room} leave "
-                "room for the reply")
+                "room for the reply; lower evict_above_fraction or min_reply_tokens, so that "
+                "an eviction leaves that room, or raise context_size")
         return target
 
     # ----- generating -------------------------------------------------------------------
@@ -455,10 +481,11 @@ class RenderedCache:
         open while a call is owed a result. A call that could not be read is
         answered with an error result, so the turn goes on to say so, or, where
         that result has no room, the turn closes as a reply. Any other reply
-        closes the turn: one with no answer, after a question, is taken out
-        again where the template writes two questions in a row, and the cache
-        is then brought to the template's render and decoded ahead for the next
-        question.
+        closes the turn: one that produced nothing the template writes is taken
+        back with its request, the newest question and everything after it;
+        one with no answer, after a question, is taken out again where the
+        template writes two questions in a row; and the cache is then brought
+        to the template's render and decoded ahead for the next question.
 
         Where the generation failed, what it said is recorded, or, where it
         said nothing, the question its request asked is taken out again; the
@@ -514,11 +541,14 @@ class RenderedCache:
                 self._forget_calls()
         if self.turn_open:
             return 0
+        if not answer and not called and not self._writes(self._state.messages):
+            starts = exchange_starts(self._state.messages)
+            return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
                 and writes_two_user_turns(self._rendering.render):
             # A reply all thought or cut before its answer leaves the question
             # unanswered, as the next question then follows it.
-            return self._remove_newest()
+            return self._remove_from(len(self._state.messages) - 1)
         return self._settle()
 
     def _open_kept(self) -> KeptTurn | None:
@@ -602,8 +632,9 @@ class RenderedCache:
         Raises:
             ValueError: If no conversation was begun, a reply is open, the
                 newest message is not a reply or holds a tool call, one that
-                could not be read included, or ``keep_text`` is not a prefix
-                of its text.
+                could not be read included, ``keep_text`` is not a prefix of
+                its text, or the template does not write the reply shortened
+                to it.
         """
         with self._action():
             _ensure_ready(self, "truncate a reply", "truncate in")
@@ -619,6 +650,9 @@ class RenderedCache:
             if keep_text == newest["content"]:
                 return
             self._state.messages[-1] = {**newest, "content": keep_text}
+            if not self._writes(self._state.messages):
+                raise ValueError(f"this model's template does not write the newest reply "
+                                 f"shortened to {keep_text!r}; keep more of its text")
             self._render_ahead()
             self._memory.rest()
 
@@ -685,8 +719,6 @@ class RenderedCache:
         if role == "user" and newest == "user":
             return ("this model's template does not write two user turns in a row; write a "
                     "reply between them")
-        if role == "system":
-            return "this model's template writes no system message after the conversation has begun"
         return f"this model's template does not write a {role} message here"
 
     def _ensure_room_for_a_question(self, remedy: str) -> None:
@@ -702,15 +734,34 @@ class RenderedCache:
                 f"question but the eviction threshold is {limit}; {remedy}, or raise "
                 "context_size/evict_above_fraction")
 
+    def _ensure_within(self, limit: int, remedy: str) -> None:
+        """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped.
+
+        What is left over then has no user message after it, and an eviction
+        drops only up to the next one.
+
+        Raises:
+            ContextOverflowError: With ``remedy`` as what to do instead.
+        """
+        needed = self._rendering.length(self._state.messages, generation_prompt=False)
+        if needed > limit:
+            raise ContextOverflowError(
+                f"the conversation needs {needed} tokens but the eviction threshold is "
+                f"{limit}, and the messages no user message follows cannot be evicted; "
+                f"{remedy}, or raise context_size/evict_above_fraction")
+
     def _with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
         return self._rendering.length(self._system_part() + [{"role": "user", "content": "?"}],
                                       generation_prompt=True)
 
-    def _remove_newest(self) -> int:
-        """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
+    def _remove_from(self, first: int) -> int:
+        """Take the messages from ``first`` on out again, then drop what is over the limits; how many history items were dropped."""
         with self._action():
-            self._state.messages.pop()
+            gone = self._state.messages[first:]
+            del self._state.messages[first:]
+            self._state.kept = [k for k in self._state.kept
+                                if not any(k.first is m or k.last is m for m in gone)]
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
@@ -1034,8 +1085,10 @@ class RenderedCache:
         system = self._system_part()
         self._published = _Published(
             system_prompt=system[0]["content"] if system else "",
-            history=tuple(as_history(self._state.messages)), pending_calls=tuple(self.pending_calls),
-            begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role)
+            history=tuple(as_history(self._state.messages)), tools=tuple(self._state.tools),
+            reasoning=self._state.reasoning, pending_calls=tuple(self.pending_calls),
+            begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role,
+            total_tokens=len(self._memory.tokens))
 
 
 # ----- what an action may start from -------------------------------------------------

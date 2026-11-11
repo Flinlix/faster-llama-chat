@@ -86,6 +86,29 @@ def test_the_thought_is_kept_out_of_the_stream_and_out_of_the_conversation():
     w.reply("weiter").finish()
 
 
+def test_the_reply_hands_back_the_thought_it_kept_out_of_the_answer():
+    w, _fake = reasoning_wrapper()
+    reply = w.reply("hi").finish()
+    assert (reply.text, reply.thought) == ("Antwort.", "Denken")
+    plain, _ = reasoning_wrapper(False, template=PLAIN, gen_text="Antwort.")
+    assert plain.reply("hi").finish().thought == ""
+
+
+def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
+    from llama_chat.tools import ToolRegistry
+    from tests.fake_context import ScriptedCall
+    registry = ToolRegistry()
+    registry.register(lambda: "12:00", "Uhrzeit.", name="uhr", parameters={"type": "object"})
+    fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=[
+        ScriptedCall("fn:uhr{}", before="<thought>Erst fragen</thought>"),
+        "<thought>Jetzt antworten</thought>Zwölf."])
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=1.0), context=fake)
+    w.begin("s", tools=registry.specs(), reasoning=True)
+    reply = w.reply("wie spät?", tool_call_policy=registry).finish()
+    assert reply.text == "Zwölf."
+    assert reply.thought == "Erst fragen\n\nJetzt antworten"
+
+
 def test_a_thought_the_model_has_without_being_asked_is_kept_out_too():
     w, _fake = reasoning_wrapper(False)
     assert w.reply("hi").finish().text == "Antwort."

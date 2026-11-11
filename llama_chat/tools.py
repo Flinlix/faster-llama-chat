@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-__all__ = ["ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn"]
+__all__ = ["Thought", "ToolCall", "ToolRegistry", "ToolResult", "ToolSpec", "ToolTurn"]
 
 # Anything not here has to be spelled out by passing `parameters` explicitly.
 _JSON_TYPES = {str: "string", int: "integer", float: "number",
@@ -70,6 +70,17 @@ def result_text(result) -> str:
 
 
 @dataclass(frozen=True)
+class Thought:
+    """What the model thought in a tool turn before the text and the calls after it, as the template keeps a past reply's thought.
+
+    Attributes:
+        text: The thought, without its tags.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
 class ToolResult:
     """What one call returned, as the conversation already holds it.
 
@@ -88,8 +99,9 @@ class ToolTurn:
 
     Attributes:
         steps: The turn in the order it was written: the model's text as a
-            ``str``, each call as a :class:`ToolCall`, and each result as a
-            :class:`ToolResult`, each result after the call it answers.
+            ``str``, its thought as a :class:`Thought`, each call as a
+            :class:`ToolCall`, and each result as a :class:`ToolResult`, each
+            result after the call it answers.
 
     Raises:
         ValueError: If a result answers no call made before it in the turn.

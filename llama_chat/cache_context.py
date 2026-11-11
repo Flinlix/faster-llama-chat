@@ -3,11 +3,12 @@
 Two protocols: the model as it is read (its tokenizer, tags, chat template and
 the sampling it recommends), and that plus the cache a conversation is decoded
 into. Each is checked once, where a context is adopted, rather than at the
-first call that finds a member missing.
+first call that finds a member missing or taking other arguments.
 """
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from collections.abc import Generator, Mapping
 from typing import Protocol
@@ -149,12 +150,66 @@ CACHE_CONTEXT = MODEL_READER + _members(CacheContext)
 
 
 def ensure_answers(context, members: tuple[str, ...]) -> None:
-    """Refuse a context missing any of ``members``.
+    """Refuse a context missing any of ``members``, or whose methods among them take other arguments than the protocol gives.
 
     Raises:
-        TypeError: Naming every member that is missing.
+        TypeError: Naming every member that is missing, else every method
+            that takes other arguments, with the arguments it is given.
     """
     missing = [name for name in members if not hasattr(context, name)]
     if missing:
         raise TypeError(f"{type(context).__name__} does not answer {missing}, "
                         "which this library calls on a cache context")
+    other = [name for name in members if not _takes_arguments_of(getattr(CacheContext, name),
+                                                                  getattr(context, name))]
+    if other:
+        given = "; ".join(f"{name}{_arguments(getattr(CacheContext, name))}" for name in other)
+        raise TypeError(f"{type(context).__name__} takes other arguments than this library "
+                        f"gives a cache context: {given}")
+
+
+def _takes_arguments_of(expected, member) -> bool:
+    """Whether ``member`` takes every argument the protocol method ``expected`` is given, positionally and by name."""
+    if isinstance(expected, property):
+        return True
+    if not callable(member):
+        return False
+    try:
+        signature = inspect.signature(member)
+    except (TypeError, ValueError):
+        return True                     # one whose arguments cannot be read
+    parameters = list(inspect.signature(expected).parameters.values())[1:]
+    positional = [None for p in parameters if p.kind is p.POSITIONAL_OR_KEYWORD]
+    keywords = {p.name: None for p in parameters if p.kind is p.KEYWORD_ONLY}
+    try:
+        signature.bind(*positional, **keywords)
+        signature.bind(**{p.name: None for p in parameters})
+    except TypeError:
+        return False
+    return True
+
+
+def _arguments(expected) -> str:
+    """The arguments the protocol method ``expected`` is given, as its signature spells them."""
+    parameters = list(inspect.signature(expected).parameters.values())[1:]
+    return str(inspect.Signature([p.replace(annotation=p.empty) for p in parameters]))
+
+
+def ensure_can_go_back(context) -> None:
+    """Refuse a context whose cache can neither shift, cut its end nor save a state.
+
+    Raises:
+        ValueError: If ``save_state`` gives ``None`` or raises where the cache
+            can neither shift nor cut.
+    """
+    if context.can_shift or context.can_cut_tail:
+        return
+    try:
+        state = context.save_state()
+    except RuntimeError:
+        state = None
+    if state is None:
+        raise ValueError(
+            f"{type(context).__name__} can neither shift its cache, cut its end nor save a "
+            "state, so it could go back to an earlier point only by decoding the whole "
+            "conversation again; let it do one of the three")

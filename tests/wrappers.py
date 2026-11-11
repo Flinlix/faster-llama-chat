@@ -195,9 +195,15 @@ def rendered_close(fake, reasoning=False) -> str:
 def rows(wrapper) -> list[dict]:
     """The conversation as ``{"role", "text"}`` rows, the system prompt first, read from what the wrapper publishes."""
     from llama_chat.tools import ToolTurn
-    system, history = wrapper.conversation()
+    saved = wrapper.conversation()
+    system = saved["system_prompt"]
     found = [{"role": "system", "text": system}] if system else []
-    for item in history:
-        role, text = ("assistant", item.text) if isinstance(item, ToolTurn) else item
+    for item in saved["messages"]:
+        if isinstance(item, ToolTurn):
+            role, text = "assistant", item.text
+        elif isinstance(item, dict):
+            role, text = item["role"], item["content"]
+        else:
+            role, text = item
         found.append({"role": role, "text": text})
     return found

@@ -49,6 +49,16 @@ def test_a_model_that_ships_no_chat_template_is_refused_at_load():
         ChatWrapper(Config(context_size=500), context=_NoTemplate(PLAIN))
 
 
+def test_a_context_of_your_own_that_reports_no_template_text_is_refused_at_load():
+    """Its renders alone would pass every check, but no add-on file could name its template."""
+    class _NoTemplateText(FakeContext):
+        def chat_template_text(self, template_name=None):
+            return None
+
+    with pytest.raises(ValueError, match="no chat template"):
+        ChatWrapper(Config(context_size=500), context=_NoTemplateText(PLAIN))
+
+
 def test_the_tokens_that_stay_are_not_decoded_again():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply("hi").finish()
@@ -90,6 +100,29 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     w.truncate_last_reply("Eins.")
     assert held_text(fake).endswith(rendered_reply(fake, "Eins.").rstrip("\n") + "\n<[turn>")
     assert "Zwei" not in held_text(fake)
+
+
+@pytest.mark.parametrize("stem", ["mistral-3", "devstral-2", "mistral-large-4"])
+def test_a_cut_to_a_reply_the_template_does_not_write_is_refused(stem):
+    """These templates write no empty reply, so a reply cut to nothing could be neither held nor followed."""
+    fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
+    w.begin("")
+    w.reply("Hallo").finish()
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ValueError, match="keep more"):
+        w.truncate_last_reply("")
+    assert w.conversation() == before and fake.cache == held
+    w.truncate_last_reply("Ant")
+    assert w.reply("Weiter").finish().text == "Antwort"
+
+
+def test_a_cut_to_nothing_stands_where_the_template_writes_an_empty_reply():
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
+    w.reply("hi").finish()
+    w.truncate_last_reply("")
+    assert rows(w)[-1] == {"role": "assistant", "text": ""}
+    w.reply("weiter").finish()
 
 
 def test_a_reply_that_called_a_tool_cannot_be_cut():
@@ -176,6 +209,22 @@ def test_what_a_reply_decodes_again_is_counted(can_shift):
     before = fake.total_prefilled()
     reply = w.reply("hi").finish()
     assert reply.n_prefilled_tokens == fake.total_prefilled() - before
+
+
+@pytest.mark.parametrize("refusal", ["none", "raises"])
+def test_a_context_of_your_own_that_can_neither_shift_cut_nor_save_is_refused(refusal):
+    """It could go back to an earlier point only by decoding the whole conversation again."""
+    class _NoWayBack(FakeContext):
+        def save_state(self):
+            if refusal == "raises":
+                raise RuntimeError("no state to save")
+
+    with pytest.raises(ValueError, match="neither shift"):
+        ChatWrapper(Config(context_size=500),
+                    context=_NoWayBack(PLAIN, can_shift=False, can_cut_tail=False))
+    for can_shift, can_cut_tail in ((True, False), (False, True)):
+        ChatWrapper(Config(context_size=500), context=_NoWayBack(
+            PLAIN, can_shift=can_shift, can_cut_tail=can_cut_tail)).begin("s")
 
 
 def test_a_context_that_saves_states_must_restore_them():

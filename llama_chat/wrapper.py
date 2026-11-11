@@ -14,9 +14,11 @@ from collections.abc import Callable, Generator
 from dataclasses import replace
 
 from .addon_files import addon_file, with_model_sampling
-from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
+from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers,
+                            ensure_can_go_back)
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
+from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
 from .reply_text import ReplyText
@@ -56,8 +58,9 @@ class ChatWrapper:
             InvalidSettingError: If ``model_path`` names no file, where the
                 wrapper loads the model itself.
             ValueError: If the model ships no chat template, if its template
-                fails validation against the model, or if ``config`` asks for
-                a larger context than ``context`` holds.
+                fails validation against the model, if ``config`` asks for
+                a larger context than ``context`` holds, or if ``context`` can
+                neither shift its cache, cut its end nor save a state.
         """
         if config is None:
             config = Config()
@@ -74,6 +77,8 @@ class ChatWrapper:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
+            if not owns_context:
+                ensure_can_go_back(self._context)    # a loaded one is tried at load
             addon = addon_file(config.model_path, self._context.chat_template_text())
             self._config = with_model_sampling(
                 config, self._context.recommended_sampling(), addon)
@@ -89,7 +94,7 @@ class ChatWrapper:
         self._lock = threading.Lock()
 
     def begin(self, system_prompt: str,
-              messages: list[tuple[str, str] | ToolTurn] | None = None,
+              messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
               tools: list[ToolSpec] | None = None, *,
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
@@ -101,9 +106,12 @@ class ChatWrapper:
             system_prompt: Always kept, never evicted. Empty, it is no system
                 message at all, and the conversation opens as the template
                 opens one without.
-            messages: Optional history, oldest first: ``(role, text)`` pairs,
-                and a :class:`~llama_chat.tools.ToolTurn` for an assistant turn
-                that called tools, written as this model's template writes one.
+            messages: Optional history, oldest first: ``(role, text)`` pairs
+                or ``{"role": role, "content": text}`` dictionaries, the role
+                ``"user"`` or ``"assistant"``, a reply's dictionary with its
+                thought under ``"reasoning_content"`` where it has one, and a
+                :class:`~llama_chat.tools.ToolTurn` for an assistant turn that
+                called tools, written as this model's template writes one.
                 A history that ends on a tool turn's result leaves that turn
                 open, as a result written into a live turn does, for
                 :meth:`reply` to go on with. Only the most recent are kept,
@@ -128,14 +136,19 @@ class ChatWrapper:
             ContextOverflowError: If the system prompt and its declarations
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
-                on, cannot fit beside them.
-            ValueError: If ``tools`` names anything or the history holds a
-                tool turn and this model cannot call tools; if ``reasoning`` is
-                asked of a model that cannot reason; if the template has no
-                system turn and a system prompt is given; or if the template
-                refuses to write the conversation. The previous conversation is
-                left intact either way.
+                on, cannot fit beside them, or ``messages`` hold no user
+                message and cannot fit beside them either.
+            TypeError: If the system prompt or a history message's text is
+                not a ``str``, or a history item is of another form.
+            ValueError: If a history message has another role, or a
+                dictionary other keys; if ``tools`` names anything or the
+                history holds a tool turn and this model cannot call tools; if
+                ``reasoning`` is asked of a model that cannot reason; if the
+                template has no system turn and a system prompt is given; or if
+                the template refuses to write the conversation. The previous
+                conversation is left intact either way.
         """
+        ensure_text(system_prompt, "the system prompt")
         messages = messages or []
         with self._lock:
             self._ensure_open()
@@ -166,14 +179,24 @@ class ChatWrapper:
         Returns:
             The number of messages evicted to make room.
 
+        Args:
+            text: The message's text.
+            role: ``"user"`` or ``"assistant"``. The system prompt is
+                :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
+
         Raises:
-            ValueError: If no conversation has been begun, if a tool call
-                has left a reply open, or if the template does not write such a
-                message here.
+            TypeError: If ``text`` is not a ``str``.
+            ValueError: If ``role`` is another one, if no conversation has
+                been begun, if a tool call has left a reply open, or if the
+                template does not write such a message here.
             ContextOverflowError: If the message cannot fit even after
-                evicting every non-system message. Raised before anything is
-                evicted.
+                evicting every non-system message, raised before anything is
+                evicted; or if the conversation with it cannot fit once every
+                exchange that can go is evicted, since no user message follows
+                the rest.
         """
+        ensure_role(role)
+        ensure_text(text, "an injected message's text")
         with self._lock:
             self._ensure_open()
             return self._conversation.add(role, text)
@@ -245,15 +268,19 @@ class ChatWrapper:
             ValueError: At once, if no conversation has been begun; if a tool
                 call has left a reply open and ``text`` is given, or a result
                 is still owed; if ``text`` is ``None`` with nothing to answer;
-                or if ``max_calls`` is given without a registry. At the first
+                or if ``max_calls`` is given without a registry or is not a
+                whole number of at least 0. At the first
                 iteration, if a registry holding tools is given to a model
                 that could never call one.
+            TypeError: At once, if ``text`` is neither ``None`` nor a ``str``.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
         """
+        if text is not None:
+            ensure_text(text, "the request's text")
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
@@ -265,6 +292,10 @@ class ChatWrapper:
         if max_calls is not None and not runs:
             raise ValueError(f"max_calls limits calls that are run, and "
                              f"tool_call_policy={tool_call_policy!r} runs none")
+        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)
+                                      or max_calls < 0):
+            raise ValueError(f"max_calls must be None or a whole number of at least 0, "
+                             f"not {max_calls!r}")
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
@@ -325,8 +356,10 @@ class ChatWrapper:
         Raises:
             ValueError: If no conversation has been begun, if a reply is open,
                 if the newest message is not the assistant's or holds a tool
-                call, one that could not be read included, or if
-                ``keep_text`` is not a prefix of its text.
+                call, one that could not be read included, if ``keep_text``
+                is not a prefix of its text, or if the template does not write
+                the reply shortened to it, as one that writes no empty reply
+                does not write it shortened to ``""``.
         """
         with self._lock:
             self._ensure_open()
@@ -368,8 +401,8 @@ class ChatWrapper:
     # ----- introspection -------------------------------------------------------
     @property
     def total_tokens(self) -> int:
-        """How many tokens the cache currently holds."""
-        return self._conversation.total_tokens
+        """How many tokens the cache holds, as the newest finished change left it; safe from any thread."""
+        return self._conversation.published_total_tokens()
 
     @property
     def config(self) -> Config:
@@ -404,16 +437,20 @@ class ChatWrapper:
         self._lock.release()
         return True
 
-    def conversation(self) -> tuple[str, list[tuple[str, str] | ToolTurn]]:
-        """The system prompt and the history the cache holds, as :meth:`begin` takes them.
+    def conversation(self) -> dict:
+        """Everything :meth:`begin` takes to begin the conversation the cache holds again, by its parameter names.
 
-        The history is every message after the system prompt, oldest first:
-        ``(role, text)`` pairs, and a :class:`~llama_chat.tools.ToolTurn` for
-        an assistant turn that called tools, with its calls and results.
-        ``begin(*chat.conversation())``, with the same tools, begins again as
-        the template writes it, a call still owed a result owed again. Safe
-        from any thread, including while another is mid-generation: both are
-        read as the newest finished change left them.
+        ``system_prompt``, ``messages``, ``tools`` and ``reasoning``, so that
+        ``begin(**chat.conversation())`` begins again as it was, a call still
+        owed a result owed again. ``messages`` is every message after the
+        system prompt, oldest first: a ``(role, text)`` pair, a reply whose
+        thought the template keeps as ``{"role", "content",
+        "reasoning_content"}``, and a :class:`~llama_chat.tools.ToolTurn` for
+        an assistant turn that called tools, with its thoughts, calls and
+        results. ``tools`` is every declaration, those of
+        :meth:`declare_tools` included. Safe from any thread, including while
+        another is mid-generation: all of it is read as the newest finished
+        change left it.
         """
         return self._conversation.conversation()
 
@@ -459,9 +496,10 @@ class ChatWrapper:
 
         True from a call until :meth:`reply` closes the turn, the results in
         between included. While it is, :meth:`reply` with a request,
-        :meth:`inject` and :meth:`declare_tools` refuse.
+        :meth:`inject` and :meth:`declare_tools` refuse. Safe from any thread,
+        as :meth:`conversation` is: as the newest finished change left it.
         """
-        return self._conversation.turn_open
+        return self._conversation.published_turn_open()
 
     @property
     def pending_calls(self) -> list[ToolCall]:
@@ -675,6 +713,7 @@ class ChatWrapper:
             stop_reason=generated.stop_reason,
             tool_calls=conversation.pending_calls,
             n_reasoning_tokens=reply_text.thought_pieces,
+            thought=reply_text.thought,
         )
 
     def _turn_end_test(self, reply_text: ReplyText) -> Callable[[int], bool] | None:
@@ -734,6 +773,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
+        thought="\n\n".join(t.thought for t in generations if t.thought),
     )
 
 

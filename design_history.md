@@ -123,7 +123,10 @@ past reply may close with a tag that only a following turn shows, and the next
 user turn's tag then starts where the role tags' shared opening last occurs, or
 is the longest end of what follows the reply that a first user turn's opening
 also ends with; what a template writes once after the last message, such as an
-end-of-text token, belongs to no turn; every probe renders with reasoning off;
+end-of-text token, belongs to no turn; every probe renders with reasoning off
+(2026-11-11: true of the probes for the turn tags only; the probes for a
+thought, and the load check of the generation prompt and of the closing after
+a reply, render in each reasoning mode);
 an empty system prompt is no system message, and the conversation opens as the
 template opens one without, tools declared where it declares them then.
 Replaced since: a system
@@ -679,7 +682,9 @@ leaves `conversation()` as the one read and adds `owed_calls`.
 ### Faults the old code had
 
 - Llama 3.2 writes `<|python_tag|>` before a call its template opens with plain
-  text; such a tag is held back while a call may follow, and is never shown.
+  text; such a tag is held back while a call may follow, and is never shown
+  (2026-11-11: no longer true: where the text after it cannot begin a call,
+  it is shown as the reply's text).
 - A tool result JSON cannot write is an error result, and refused by
   `inject_tool_result`.
 - The README promised `"interrupted"` for a stream closed early, which has no
@@ -1058,7 +1063,9 @@ one from a history given to begin already was. The records made ahead (the
 render for the next question, the splice note and the question an ask added)
 each carry the conversation and the cache version they were made for, and are
 used only while both are unchanged, or, for the window, while the
-conversation continues from theirs; no action clears them. The cache length
+conversation continues from theirs; no action clears them (2026-11-11: no
+longer true: `begin` clears all three, and a generation clears the record of
+the question its request asked). The cache length
 alone was rejected, because two different targets of one conversation can
 have the same length; `CacheSync.version` changes with every change to the
 token list, checked by a random test of 3000 operations with injected
@@ -1941,3 +1948,205 @@ case (289.5A), and a short real reply at every load to see whether the default
 thinks (289.5C), which costs every load a few seconds. The test for it uses an
 invented template, since no local model needs it; no shipped add-on file sets
 it.
+
+## 2026-11-11: The conversation and its surface
+
+The user's decisions on the conversation, its history, its cache and the
+public interface, each under the ID it was decided by.
+
+**268.12: `ModelReader` is no longer exported.** It is the part of
+`CacheContext` that reading a template needs, and the wrapper never takes a
+context that answers it alone, so exporting it suggested a second way to
+build a context of one's own. It stays in `cache_context.py`, where the
+template's readers name it as the type they take, and the README names
+`CacheContext` as the one protocol.
+
+**262.2: a context of one's own must report its template text.** The template
+was read from a context's renders alone, so a context whose
+`chat_template_text()` answered `None` was accepted as long as it rendered.
+The text is what an add-on file names a template by, and what the
+declaration variables are read from, so such a context ran without either.
+Reading the template now refuses it first, with the same `ValueError` as a
+model that ships no chat template.
+
+**270.5: a context of one's own must be able to go back.** A cache is brought
+back to an earlier point by a shift, a cut at its end, or a saved state; one
+that can do none of the three decodes the whole conversation again after
+every reply that changes what it holds, which invariant 2 refuses. The engine's
+own context already tries saving and restoring a state at load where its
+cache cannot be cut (270.22 under "Templates, reasoning and the load check").
+A context of one's own is now checked where the wrapper adopts it: where it
+can neither shift nor cut, `save_state` is called once on it, and a `None`
+or a `RuntimeError` refuses it with a `ValueError`. The engine's own context
+is left to its load check, so the save is not tried twice. A context that
+stops saving later is still decoded again whole, as before.
+
+**268.1: the forms and roles of a history message.** A history item that was
+not a tool turn was unpacked as `role, text = item`, so the usual dictionary
+`{"role": "user", "content": "Hello"}` unpacked into its two keys and was
+stored as the message `("role", "content")` without an error, and a role the
+template happened to accept, such as `"human"`, went into the cache. `begin`
+now takes a `(role, text)` pair, as a tuple or a list, or a dictionary
+holding `role` and `content` and nothing else, each with the role `"user"` or
+`"assistant"`. Any other form is a `TypeError`, and another key or role a
+`ValueError` naming it; a system message points to `begin`'s first argument,
+and a tool message to `ToolTurn`. `ensure_role` in `messages.py` is the one
+check of a role, so that `inject` can share it.
+
+**268.6: no system message is injected.** `inject(text, role="system")` wrote
+the message into the cache, but `conversation()` reads the system prompt from
+the first message only and left the later one out, and the count of evicted
+messages counted the message itself as one dropped. A system prompt kept for
+the whole conversation is `begin`'s first argument, so `inject` now refuses
+the role with a `ValueError` that says so, before anything changes. It checks
+the role with the same `ensure_role` as a history, so a tool message points
+to `inject_tool_result` (one part of 270.15, which failed with a `KeyError`
+before) and an unknown role is named. The template's refusal text for a later
+system message, which no action can reach now, is removed.
+
+**270.15, the remaining parts: refused where it enters, naming its cause.**
+Three inputs failed far from where they entered, with an error that named
+something else. A message that is not text, given to `begin` as the system
+prompt or in the history, to `inject` or to `reply`, reached the template and
+came back as "the template refuses to write this conversation"; it is now a
+`TypeError` naming the message, raised before anything changes, by
+`ensure_text` in `messages.py`. A context of one's own whose methods take
+other arguments than the protocol gives them passed the check at adoption,
+which looked at names only, and failed at the first call; adoption now binds
+each method to the arguments of its protocol method, once positionally with
+the keyword-only ones by name and once all by name, and a method that takes
+neither is a `TypeError` naming it with the arguments it is given. A method
+whose arguments cannot be read, such as one written in C, is taken as it is.
+A negative `max_calls` was taken as a ceiling already spent; `reply` now
+refuses with a `ValueError` a `max_calls` that is not a whole number of at
+least 0, `True` included. `inject(role="tool")` is refused with 268.6.
+
+**268.4: the reply hands back its thought.** A reasoning model's thought was
+kept out of the stream and out of `Reply.text`, and only its approximate
+length came back, as `n_reasoning_tokens`. `Reply.thought` now holds its
+text, as the stream's filter collected it: without its tags and the
+whitespace around them, whether or not the template keeps a past reply's
+thought. A request that took several generations, around tool calls, joins
+each generation's thought in order, with a blank line between two.
+The stream still yields the answer alone, so a caller who shows only the
+answer changes nothing.
+
+**268.11: `conversation()` holds everything `begin` takes.** It returned the
+system prompt and the history, so a caller beginning again passed the tools
+and the reasoning switch by hand, and every thought the template keeps was
+lost: a past reply's thought was held in the conversation's messages but left
+out of the history. `conversation()` now returns a dictionary keyed by
+`begin`'s parameter names, `system_prompt`, `messages`, `tools` and
+`reasoning`, so `begin(**chat.conversation())` begins again in one step;
+`tools` holds every declaration, those `declare_tools` added later included,
+which `begin` then writes from the start, where the template writes
+declarations anyway. A dictionary was chosen over a record type of its own
+because it unpacks into `begin` as it is and adds no name to the interface. A
+thought the template keeps comes back in the form that the field already
+uses: a reply as `{"role": "assistant", "content": ..., "reasoning_content":
+...}`, which `begin` now takes too (a question with that key is refused), and
+a tool turn's thought as a `Thought` step, a new public type in `tools.py`,
+before the text and the calls of the message it belongs to. A reply without a
+thought stays a `(role, text)` pair. Sixteen of the test templates write a
+past tool turn's thought, so a tool turn needs it as much as a plain reply.
+The template still decides what is written: the invented template that keeps
+thoughts leaves out the thought of a reply that closes a tool turn, which the
+live turn held as generated, so a conversation begun again holds that turn as
+the template writes it, as any past tool turn.
+
+**270.14: the token count and the open turn are read from the finished copy.**
+`total_tokens` and `turn_open` read the live state, which an action in
+progress may still put back: a `begin` that failed after emptying the cache
+showed 0 tokens and an open turn to another thread for a moment, although the
+conversation it left standing held neither. Both now read the copy published
+after each finished change, as `conversation()` and `pending_calls` do, so
+the copy carries the token count. A count read while a reply streams is the
+one from before that reply, until the reply is recorded. The library's own
+readers under the lock still read the live state.
+
+**270.1: a cut to a reply the template does not write is refused.** Three
+of the test templates (mistral-3, devstral-2, mistral-large-4) refuse an
+assistant message with empty text. `truncate_last_reply("")` on them recorded
+the empty reply, found that no render of the conversation could be made, and
+left the cache holding the old text; every later question was then refused
+until a new `begin`. The shortened conversation is now checked before
+anything is decoded: where the template writes it neither as it is nor with a
+question after it, the cut is refused with a `ValueError` that asks to keep
+more of the text, and the conversation and the cache stay as they were. The
+same check, `_writes`, serves 270.3.
+
+**270.3: a reply that produced nothing the template cannot write takes its
+question back.** On the same three templates, a reply that produced nothing
+(cancelled before its first word, ended by the model at once, or cancelled
+while a tool ran) was recorded as an empty assistant message, which no render
+of the conversation could hold, so the reply raised and every later question
+was refused until `begin`. A request whose generation fails before it says
+anything was already taken back whole; such a reply now is too: where the
+template writes the conversation with the empty reply neither as it is nor
+with a question after it, the newest question and everything after it are
+taken out again, a tool turn's calls and results and the turn kept as
+generated included, and the cache is brought to the render of what is left.
+A tool that ran has run all the same; its result leaves the conversation with
+the question. Where no user message precedes the reply, as after a history
+that opens on a tool turn, everything after the system prompt is taken back,
+there being no question to stop at. Where the template does write an empty
+reply, nothing changes: such a reply is kept, or, on a template that writes
+two questions in a row, taken out alone so that its question waits for the
+next. Both removals are now one method, `_remove_from`.
+
+**270.2: a question not prepared ahead passes its dropped stretch on.** A
+question the stand-in cannot stand for, such as one ending in a space, is
+added to the conversation and rendered whole. Once `max_history_exchanges`
+was reached, adding it dropped the oldest exchange, but the cache was then
+brought to the new render without being told that a stretch had gone, so it
+was cut where the dropped exchange began and everything after decoded again
+(87 of 124 tokens instead of 34, as measured for the decision). Every other
+drop already passed this on, so that the stretch is found and removed and the
+rest shifted; this one now does too. On the plain invented template the test
+asks the fourth question of a limit of two: the cache is shifted once, cut
+never, and 22 tokens are decoded where 44 were.
+
+**270.4: what no question follows is refused once it no longer fits.** An
+eviction drops the oldest exchange up to the next user message, so the
+messages after the newest user message, or every message of a history that
+holds none, can never be dropped while no question follows them. A `begin`
+with a history of replies alone, or replies injected one after another,
+therefore grew the cache past the context size (630 tokens in 500, and 1,320
+in 500, as measured for the decision). As settled with the user, replies
+before a later question are still evicted first; only where the conversation
+still renders longer than the eviction threshold after every exchange that
+can go was dropped is the action refused, with a `ContextOverflowError` that
+says no user message follows what is left, and the conversation and the
+cache stay as they were. The check, `_ensure_within`, runs where `begin` has
+dropped what it can and where `inject` has dropped for a message it does not
+splice; a question `inject` splices is a user message, which opens an
+exchange of its own. The threshold is the bound, as for a message checked
+alone, so that a reply has room under the context size.
+
+**270.17: every refusal for want of room says what to change.** Three of the
+`ContextOverflowError` messages gave the cause, how many tokens were needed
+and how many fit, but not what to do, while the others name a remedy. A
+question too long beside room for its reply now asks to shorten it or the
+system prompt, or to raise `context_size` or lower `min_reply_tokens`; an
+injected message too long beside the system prompt asks to shorten it or the
+system prompt, or to raise `context_size` or `evict_above_fraction`; and a
+conversation that an eviction leaves without room for the reply, which a
+threshold close to the context size allows, asks to lower
+`evict_above_fraction` or `min_reply_tokens`, or to raise `context_size`.
+
+**270.24: texts that no longer held.** Three sentences of this history
+described the code as it no longer is, and each now carries a dated note
+where it stands: not every probe renders with reasoning off, only those for
+the turn tags; `begin` and a generation clear the records made ahead, which
+"no action clears them" denied; and a tag held back while a call may follow
+is shown as reply text where none follows. The README left four things out,
+each now stated and pinned by a test. `"withhold"` keeps a call's opening tag
+from being drawn, so a call that opens with plain text, as one model's
+template writes it, cannot be withheld and stays in the reply's text. The
+answer to an unreadable call says that it failed and could not be read, and
+gives no instruction to try again or not. A result handed to
+`inject_tool_result` is written as given, a dict carrying `error` included,
+without the sentence a registry's failure gets. And a context of one's own
+must keep its token ids from -65,536 to 1,048,575: the search for a dropped
+stretch spells each id as one character, offset by 65,536, and Python's
+characters end at 1,114,111.
