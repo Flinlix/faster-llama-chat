@@ -168,14 +168,18 @@ def with_thought_as(message: dict, form: str) -> dict:
 
 
 def as_history(messages: list[dict]) -> list:
-    """The messages back as ``begin`` takes them: a reply that holds a thought as a dictionary, a tool turn's thoughts as its steps."""
+    """The messages back as ``begin`` takes them: a reply that holds a thought as a dictionary, a tool turn's thoughts as its steps.
+
+    A tool turn that was closed ends on the text of the reply that closed it,
+    empty where that reply wrote none; one still open ends on a call or a result.
+    """
     history, steps = [], []
     for message in messages:
         role = message["role"]
         if role == "system":
             continue
-        said = ([Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []) \
-            + ([message["content"]] if message["content"] else [])
+        thought = [Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []
+        said = thought + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
             steps += said + [ToolCall(c["function"]["name"],
                                       copy.deepcopy(c["function"]["arguments"]), c["id"])
@@ -183,7 +187,7 @@ def as_history(messages: list[dict]) -> list:
         elif role == "tool":
             steps.append(ToolResult(message["name"], message["content"]))
         elif role == "assistant" and steps:
-            history.append(ToolTurn(tuple(steps + said)))
+            history.append(ToolTurn(tuple(steps + thought + [message["content"]])))
             steps = []
         elif message.get(THOUGHT_KEY):
             history.append({"role": role, "content": message["content"],

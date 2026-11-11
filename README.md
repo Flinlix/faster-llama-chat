@@ -294,7 +294,9 @@ turn's steps in order: the model's text as `str`, its thought as
 `Thought(text)`, each `ToolCall` and each `ToolResult(name, result)`. It is
 written as the template writes a past turn.
 A history ending on a result leaves that turn open, and `reply(tool_call_policy="yield")`
-goes on with it.
+goes on with it. A turn that closed ends on the text of the reply that closed
+it, in `conversation()` too, an empty `str` where the model wrote nothing after
+its results, so that `begin(**chat.conversation())` begins it closed.
 
 **Every call has an id**, `ToolCall.id`, that no other call of the
 conversation has. A call handed over in the stream, in `Reply.tool_calls`, in

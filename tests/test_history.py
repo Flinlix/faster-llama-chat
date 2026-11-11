@@ -276,3 +276,17 @@ def test_a_history_message_of_another_form_or_role_is_refused_naming_it(item, er
     with pytest.raises(error, match=cause):
         w.begin("s", [("user", "a"), item])
     assert w.conversation() == before and fake.cache == held      # left as it was
+
+
+def test_a_tool_turn_closed_by_an_empty_answer_begins_again_closed():
+    registry = weather_registry()
+    live, _ = tool_wrapper(context_size=2048, replies=[ScriptedCall("fn:weather{city:'Bonn'}"), ""])
+    live.begin("persona", tools=registry.specs())
+    live.reply("wetter?", tool_call_policy=registry).finish()
+    assert not live.turn_open
+    saved = live.conversation()
+    again, _ = tool_wrapper(context_size=2048)
+    again.begin(**saved)
+    assert not again.turn_open
+    assert again.conversation() == saved
+    again.reply("danke").finish()           # a question follows the closed turn

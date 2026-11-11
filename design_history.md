@@ -2314,3 +2314,14 @@ keeps the registry (268.2). Verified on the CPU with MiniCPM5-2B Q4_K_M and a
 tool registered by the bare decorator: the call was handed over before the
 tool ran, and the stream, `Reply.tool_calls` and `conversation()` carried the
 same id; the exchange took 1.9 s.
+
+## 2026-11-11: Review fixes
+
+**R2: a tool turn closed by an empty reply begins again closed.** Where the
+model ended at once after a result, or the reply was kept without the calls it
+could not have answered, the turn closed on a reply with no text.
+`conversation()` left that empty text out, so the turn it handed back ended on
+its result, and `begin(**chat.conversation())` began it open: the round trip
+compared equal while `turn_open` differed. The reply that closes a tool turn is
+now always the turn's last step, an empty `str` where it wrote nothing, and
+`begin` already read a trailing text as the closing reply.
