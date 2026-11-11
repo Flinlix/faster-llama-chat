@@ -43,6 +43,12 @@ _UNREADABLE_RESULT = {"error": "unreadable_call",
                       "message": "the tool call failed: the call could not be read"}
 # Returned where a window cannot stand for the whole render.
 _WHOLE = object()
+# Where the cache cannot shift, the fraction of the room under the eviction
+# threshold, after a short question, that an eviction brings the conversation
+# down to. In (0, 1]: low enough that a cache decoded again after an eviction
+# takes several turns to fill again, high enough to keep history. See
+# design_history.md, "Settings, add-on files and logging", 266.3.
+EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 
 
 @dataclass(frozen=True, eq=False)
@@ -928,7 +934,7 @@ class RenderedCache:
         if self._context.can_shift:
             return limit
         system = min(self._with_a_short_question(), limit)
-        return system + int((limit - system) * self._config.evict_to_fraction_without_shift)
+        return system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
 
     def _too_many(self) -> bool:
         """Whether the history holds more items than ``max_history_messages``."""

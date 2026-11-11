@@ -61,11 +61,6 @@ class Config:
         evict_above_fraction: Fraction of ``context_size`` above which the
             oldest messages are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
-        evict_to_fraction_without_shift: Where the cache cannot shift, the
-            fraction of the room under ``evict_above_tokens`` after the
-            system turn that an eviction brings the history down to, so that
-            the cache is decoded again only every few turns rather than every
-            turn. Must be in ``(0, 1]``.
         max_history_messages: The most non-system messages to keep, a second
             eviction trigger OR'd with ``evict_above_fraction``. ``None``
             leaves the token threshold as the only trigger.
@@ -111,7 +106,6 @@ class Config:
 
     context_size: int = 4096
     evict_above_fraction: float = 0.75
-    evict_to_fraction_without_shift: float = 0.5
     max_history_messages: int | None = None
     max_reply_tokens: int = 1024
     min_reply_tokens: int = 32
@@ -134,9 +128,6 @@ class Config:
         if not 0.0 < self.evict_above_fraction <= 1.0:
             raise InvalidSettingError("evict_above_fraction",
                                       "evict_above_fraction must be in (0, 1]")
-        if not 0.0 < self.evict_to_fraction_without_shift <= 1.0:
-            raise InvalidSettingError("evict_to_fraction_without_shift",
-                                      "evict_to_fraction_without_shift must be in (0, 1]")
         if self.context_size <= 0:
             raise InvalidSettingError("context_size", "context_size must be positive")
         if self.evict_above_tokens < 1:

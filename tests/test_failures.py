@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError
+from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError, rendered_cache
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
 from tests.fake_context import FakeContext
@@ -341,10 +341,11 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
 
 
 # ----- a cache that cannot shift ----------------------------------------------------
-def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_once():
+def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_once(
+        monkeypatch):
+    monkeypatch.setattr(rendered_cache, "EVICT_TO_FRACTION_WITHOUT_SHIFT", 0.2)
     fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5,
-                           evict_to_fraction_without_shift=0.2), context=fake)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
     w.begin("s")
     for i in range(8):
         before = fake.resets + fake.edit_count("restore")

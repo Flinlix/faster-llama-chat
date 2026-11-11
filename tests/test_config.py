@@ -1,5 +1,7 @@
 """Settings refused where they are built."""
 
+from dataclasses import fields
+
 import pytest
 
 from llama_chat.config import (KV_CACHE_TYPES, UNQUANTIZED_KV_CACHE_TYPE, Config,
@@ -75,6 +77,12 @@ def test_an_eviction_threshold_that_rounds_to_nothing_is_refused():
         Config(context_size=8, evict_above_fraction=0.1)
 
 
+def test_how_far_an_eviction_drops_without_a_shift_is_fixed_and_no_setting():
+    from llama_chat.rendered_cache import EVICT_TO_FRACTION_WITHOUT_SHIFT
+    assert "evict_to_fraction_without_shift" not in {f.name for f in fields(Config)}
+    assert 0.0 < EVICT_TO_FRACTION_WITHOUT_SHIFT <= 1.0
+
+
 # ----- a sampling built for one request ------------------------------------
 def test_an_empty_sampling_overrides_nothing():
     config = Config(temperature=0.7)
@@ -101,7 +109,7 @@ def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
 
 @pytest.mark.parametrize("settings, field", [
     (dict(top_p=2.0), "top_p"), (dict(seed=-1), "seed"),
-    (dict(evict_to_fraction_without_shift=0.0), "evict_to_fraction_without_shift"),
+    (dict(evict_above_fraction=0.0), "evict_above_fraction"),
     (dict(min_reply_tokens=5000), "min_reply_tokens")])
 def test_a_refused_setting_names_its_field_as_data(settings, field):
     from llama_chat import InvalidSettingError

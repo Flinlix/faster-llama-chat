@@ -1494,3 +1494,12 @@ thing; it was also a list inside a frozen configuration, which a caller could
 change while the wrapper ran. It is removed. `reply` copies the `stop` it is
 given when it is called, so the texts a reply stops at are those it was asked
 with, even though the generation starts at the first read.
+
+**266.3: how far an eviction drops without a shift is fixed.**
+`evict_to_fraction_without_shift` could be chosen well only by measuring the
+decode it trades against the history it keeps, as "Measured on a cache that
+cannot shift" did, so no caller could set it better than its default. It is
+now `EVICT_TO_FRACTION_WITHOUT_SHIFT` in `rendered_cache.py`, at the 0.5 that
+measurement kept. A higher value keeps more history and decodes the cache
+again more often; that decode falls after a reply, never before the first
+word. The constraint it must meet stays beside it in the code: in (0, 1].
