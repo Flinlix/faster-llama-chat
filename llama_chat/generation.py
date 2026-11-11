@@ -222,7 +222,10 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     in_text_call = call is not None and close_text is not None
     if generated.stop_reason != "tool_call" and not ended_at_text and not in_text_call:
         visible.append(decoder.decode(b"", final=True))
-        delta = visible.emit(len(visible))
+        # A reply cut before a call could follow its tag ends before the tag, as a cut
+        # thought's tag is dropped.
+        cut = generated.stop_reason in ("token_limit", "interrupted") and held_tag is not None
+        delta = visible.emit(held_tag[0] if cut else len(visible))
         if delta:
             generated.text += delta
             yield delta

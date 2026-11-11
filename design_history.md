@@ -2001,3 +2001,11 @@ own, the same turn ended as `"end_of_turn"`, and the call was dropped without
 a word, its tokens left in the cache. The closing tag is now decoded after the
 call's last token, and the call is read and answered as any other, so both
 kinds of closing end the same.
+
+**270.12: a held tag on a reply that was cut.** Where a call opens with
+plain text, a tag of the model's own is held back while a call may follow it,
+since the tag is then the call's. A reply that the cap or a cancel cut right
+after such a tag released it into the answer. It is now dropped there, with
+whatever followed it, as the thought filter drops the start of a thought's
+tag on a cut reply. A reply that ends of its own accord after the tag keeps
+it, as before.
