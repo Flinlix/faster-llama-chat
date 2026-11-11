@@ -53,6 +53,18 @@ def template_renderer(template: str, eos_token: str, generation_prompt: bool = F
                                add_generation_prompt=generation_prompt)
 
 
+def template_names_read(renderer) -> frozenset[str]:
+    """Every name the template of ``renderer``, one :func:`template_renderer` built, reads.
+
+    Parsed by the renderer's own environment, so a tag only that environment
+    knows parses as it renders.
+    """
+    import jinja2
+    parsed = renderer._environment.environment.parse(renderer.template)
+    return frozenset(node.name for node in parsed.find_all(jinja2.nodes.Name)
+                     if node.ctx == "load")
+
+
 def _parameter_count(fn) -> int:
     """How many arguments a binding takes, from its ctypes types or its signature."""
     argtypes = getattr(fn, "argtypes", None)

@@ -14,6 +14,7 @@ import pytest
 
 import llama_chat
 from llama_chat.call_format import extract_call_body, extract_tool_fragments
+from llama_chat.model_template import names_read
 from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_fragments, reasoning_switch
 
@@ -430,6 +431,13 @@ def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, swi
     assert switch(True) == switch_on
     assert switch(False) == switch_off
     assert switch(None) == {}
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_the_names_a_template_reads_are_read_as_the_renderer_parses_it(stem):
+    """A tag only the renderer knows, such as a loop's ``break``, leaves the names readable."""
+    names = names_read(fixture(stem)["chat_template"])
+    assert "messages" in names
 
 
 def test_a_variable_named_as_a_render_argument_reaches_the_template():

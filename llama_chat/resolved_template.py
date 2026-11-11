@@ -15,10 +15,11 @@ from .call_format import (extract_call_body, extract_call_close_text, extract_ca
                           extract_named_twice_opening, extract_tool_fragments)
 from .call_parsing import parse_calls
 from .messages import call_id, calling_message, result_message
+from .model_template import names_read
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
                        ToolCallFragments, common_prefix_length, shared_tags_length)
 from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_fragments,
-                               extract_reasoning, extract_removed_thought, names_read, refusing)
+                               extract_reasoning, extract_removed_thought, refusing)
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
 

@@ -1468,3 +1468,16 @@ and its error messages and the README's table name it so. At the user's next
 answer it became `tool_call_policy`, so that it no longer shares its name with
 `Reply.tool_calls`, the calls a reply made, and `CALL_POLICIES` became
 `TOOL_CALL_POLICIES` with it.
+
+## 2026-11-11: Templates, reasoning and the load check
+
+The user decided these items; each is a commit of its own.
+
+**264.2: The names a template reads, parsed as it renders.** The search for
+the variable that moves declarations into the system turn read the names a
+template reads with a plain `jinja2.Environment`. The renderer's environment
+knows tags and extensions a plain one does not, such as `break`, `continue`
+and `{% generation %}`, so the plain parse failed on 7 of the 52 test
+templates and returned no names at all. The names are now parsed by the
+renderer's own environment, so every template the renderer can render has its
+names read. No test template's declaration variable changed.

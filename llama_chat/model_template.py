@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ._backend import template_renderer
+from ._backend import template_names_read, template_renderer
 from .template_extract import reasoning_switch
+
+
+def names_read(text: str) -> frozenset[str]:
+    """Every name the template ``text`` reads, a variable it gives a default when undefined included, as its renderer parses it."""
+    return template_names_read(template_renderer(text, ""))
 
 
 class ModelTemplate:
