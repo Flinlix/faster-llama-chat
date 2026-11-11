@@ -1919,3 +1919,14 @@ At the user's decision, `owed_calls` (the calls still waiting for a result) is
 renamed `pending_calls`, and `reply_open` (a tool call left the newest turn
 open) is renamed `turn_open`. Both needed a definition before a line using them
 could be read. The entries above keep the old names, as they were written.
+
+## 2026-11-11: Tools and tool calls
+
+The user's decisions on declaring tools and on the calls a model makes, each
+under the ID it was decided by.
+
+**268.8: a type for the tool call policies.** The policies a request names
+were a plain tuple of strings, so a type checker could not tell a misspelled
+policy from a real one. They are now the type `ToolCallPolicy`, as the stop
+reasons are `StopReason`, and `TOOL_CALL_POLICIES` is read from that type, so
+the list and the type cannot disagree. `reply` takes the type.

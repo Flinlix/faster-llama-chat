@@ -179,7 +179,7 @@ print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).fi
 
 `tool_call_policy` says what becomes of a call the model makes, whether or not
 tools were declared, since a model may write a call tag unasked. It is one of
-`TOOL_CALL_POLICIES` or a `ToolRegistry`:
+`TOOL_CALL_POLICIES` (the type `ToolCallPolicy`) or a `ToolRegistry`:
 
 | `tool_call_policy=` | what happens | what the stream yields |
 |------|------|------|

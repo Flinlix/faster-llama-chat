@@ -8,12 +8,13 @@ including across evictions.
 
 import dataclasses
 import threading
+import typing
 
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tools import ToolCall, ToolRegistry
-from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError
+from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
@@ -708,6 +709,13 @@ def test_a_restart_says_how_much_history_it_kept():
     w = ChatWrapper(Config(context_size=4000), context=fake)
     assert w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")]) == 3
     assert w.begin("s") == 0
+
+
+# ----- the tool call policies ----------------------------------------------
+def test_the_tool_call_policies_are_read_from_the_type_reply_takes():
+    assert typing.get_args(ToolCallPolicy) == TOOL_CALL_POLICIES
+    taken = typing.get_type_hints(ChatWrapper.reply)["tool_call_policy"]
+    assert set(typing.get_args(taken)) == {ToolCallPolicy, ToolRegistry}
 
 
 # ----- sampling per request ------------------------------------------------

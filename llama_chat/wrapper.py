@@ -18,7 +18,7 @@ from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
-from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
+from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
@@ -180,7 +180,7 @@ class ChatWrapper:
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
-              tool_call_policy: str | ToolRegistry = "refuse",
+              tool_call_policy: ToolCallPolicy | ToolRegistry = "refuse",
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
               stop: list[str] | None = None,

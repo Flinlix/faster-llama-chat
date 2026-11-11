@@ -22,7 +22,7 @@ from .cache_context import CacheContext, ModelReader
 from .config import Config, InvalidSettingError, Sampling
 from .tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
-                    StopReason)
+                    StopReason, ToolCallPolicy)
 from .wrapper import ChatWrapper
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "ReplyStream",
     "StopReason",
     "STOP_REASONS",
+    "ToolCallPolicy",
     "TOOL_CALL_POLICIES",
     "ToolCall",
     "ToolResult",
