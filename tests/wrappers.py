@@ -131,10 +131,10 @@ def _occurrences(text: str, piece: str, start: int) -> list[int]:
 
 def weather_registry():
     registry = ToolRegistry()
-    registry.register(lambda city: {"city": city, "celsius": 18},
-                      "Wetter.", name="weather",
-                      parameters={"type": "object",
-                                  "properties": {"city": {"type": "string"}}})
+    registry.tool(lambda city: {"city": city, "celsius": 18},
+                  description="Wetter.", name="weather",
+                  parameters={"type": "object",
+                              "properties": {"city": {"type": "string"}}})
     return registry
 
 

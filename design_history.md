@@ -1936,3 +1936,31 @@ declared both, and the model could reach only one of them, without a way to
 tell which. `begin` and `declare_tools` now refuse such a declaration with a
 `ValueError` naming the tool, before anything is written. A tool that the
 conversation already declares is still skipped by `declare_tools`, as before.
+
+**267.3: the tool decorator in full.** `@registry.tool` now works bare, with
+the function's docstring as the description; a string given to it is still
+the description, as `@registry.tool("...")`, and `name=`, `description=` and
+`parameters=` override by keyword. `register` is folded into it:
+`registry.tool(fn, description="...")` registers a function written
+elsewhere, so there is one way to register. The annotations describe lists,
+dicts with text keys, optional values, `Literal` choices, enums, defaults and
+`Annotated` descriptions, and the same reading of each annotation builds both
+the schema and the check of the model's argument, so the two cannot disagree.
+Arguments that do not fit are answered as `wrong_arguments`, naming the
+parameter and what it must be, before the tool runs; the model is told and
+may try again. A number where text is asked is taken as its text, since a
+call format that marks no strings reads `42` as a number, and refusing it
+would tell a model to write what its format cannot. A registry lists its
+tools, so `begin(tools=registry)` declares them. Four defects of the old code
+are fixed: a bare `@registry.tool` registered nothing and replaced the
+function with the inner decorator; a parameter taken only by position was
+declared, but every call passes arguments by name, so the tool could never
+run; an asynchronous function registered, and every call answered the model
+with "unwritable result" while the coroutine never ran; and a parameter that
+cannot be described, on a callable without a `__name__` such as a partial,
+raised `AttributeError` instead of the documented `TypeError`. A fifth was
+found on the way: an explicit `parameters=` schema was kept by reference, so
+changing the caller's dict later changed the declaration; it is copied now,
+and `specs()` hands out copies. A tool with no description, neither a
+docstring nor `description=`, is refused, since the model would read nothing
+about it.

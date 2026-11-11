@@ -168,12 +168,13 @@ from llama_chat import ChatWrapper, Config, ToolCall, ToolRegistry
 
 registry = ToolRegistry()
 
-@registry.tool("Current weather for a city.")
+@registry.tool
 def get_weather(city: str) -> dict:
+    """Current weather for a city."""
     return {"city": city, "celsius": 18}
 
 chat = ChatWrapper(Config(model_path="model.gguf"))
-chat.begin("You are a terse assistant.", tools=registry.specs())
+chat.begin("You are a terse assistant.", tools=registry)
 print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).finish().text)
 ```
 
@@ -215,13 +216,24 @@ readable argument spelling, and a block for the result. `can_call_tools`
 answers the same question up front. A declaration that names one tool twice is
 refused there too, since the model could reach only one of them.
 
-**Registering.** `@registry.tool(description)` makes a function runnable and
-describes it; the parameters come from its annotations, postponed ones
-included, and `parameters=` takes an explicit JSON Schema where they cannot be
-described. `registry.register(fn, description)` is the same for a function
-written elsewhere. `registry.specs()` gives each tool's `ToolSpec`, the
-declaration the model is told; a `ToolSpec` of your own declares a tool that
-this process does not run.
+**Registering.** `@registry.tool` makes a function runnable and describes it:
+its docstring is the description, and its annotations, postponed ones
+included, are the parameters. `@registry.tool("...")` or `description=` gives
+the description instead, `name=` the name the model calls, and `parameters=`
+an explicit JSON Schema where the annotations cannot be described.
+`registry.tool(fn, description="...")` is the same for a function written
+elsewhere. Text, numbers, truth values, lists, dicts with text keys, optional
+values (`str | None`), choices (`Literal["c", "f"]`) and enums are described,
+with each default, and `Annotated[str, "the city"]` describes a parameter in
+words. Before a tool runs, the model's arguments are checked against those
+types, so arguments that do not fit are told to the model, which may try
+again; a number where text is asked is taken as the text it was written as,
+and an enum's value reaches the function as its member. A function that is
+asynchronous, takes a parameter only by position, or has no description is
+refused when it is registered. A registry lists its tools, so
+`begin(tools=registry)` declares them; `registry.specs()` gives each tool's
+`ToolSpec`, the declaration the model is told, and a `ToolSpec` of your own
+declares a tool that this process does not run.
 
 **When the model is told.** `begin(tools=...)` declares the specs it is given
 when it writes the conversation, and `declare_tools` adds more later, skipping
@@ -294,7 +306,7 @@ conversation saved from it and begun again from it reads in as it was:
 ```python
 saved = chat.conversation()
 ...
-chat.begin(*saved, tools=registry.specs())
+chat.begin(*saved, tools=registry)
 ```
 
 To keep everything, older turns included, keep each message as you send it

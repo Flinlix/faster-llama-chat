@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import replace
 
 from .addon_files import addon_file, with_model_sampling
@@ -90,7 +90,7 @@ class ChatWrapper:
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | ToolTurn] | None = None,
-              tools: list[ToolSpec] | None = None, *,
+              tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
@@ -111,8 +111,9 @@ class ChatWrapper:
                 half the context, at least the newest exchange, and no more
                 than ``max_history_exchanges``. Older ones are dropped
                 unrendered.
-            tools: Tools to declare, written where this model's template
-                declares them; nothing else of them is kept. Refused up front
+            tools: Tools to declare, a list of specs or a registry, written
+                where this model's template declares them; nothing else of
+                them is kept. Refused up front
                 where this model could not use them, rather than at the first
                 call.
             reasoning: Whether the model reasons before each answer, as its
@@ -334,7 +335,7 @@ class ChatWrapper:
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
-    def declare_tools(self, tools: list[ToolSpec]) -> int:
+    def declare_tools(self, tools: Iterable[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
         Written where the template declares tools, never as a message of its
@@ -343,7 +344,8 @@ class ChatWrapper:
         writes the conversation with that template from then on.
 
         Args:
-            tools: What to declare. Nothing to declare does nothing, and
+            tools: What to declare, a list of specs or a registry. Nothing to
+                declare does nothing, and
                 neither does a tool the conversation already declares.
 
         Returns:

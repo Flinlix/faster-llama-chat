@@ -89,7 +89,7 @@ _CALENDAR = ToolSpec("kalender", "Die Termine.", {"type": "object", "properties"
 _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
            "neither": dict(can_shift=False, can_cut_tail=False)}
 _CLOCK = ToolRegistry()
-_CLOCK.register(lambda: "12:00", "Die Zeit.", name="uhr")
+_CLOCK.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
 
 
 def _begin(*history):
@@ -304,8 +304,8 @@ def test_a_result_that_cannot_be_written_as_text_is_refused_and_the_call_stays_o
 
 def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
     registry = ToolRegistry()
-    registry.register(lambda: real_datetime.date(2026, 11, 8), "Das Datum.", name="clock",
-                      parameters={"type": "object", "properties": {}})
+    registry.tool(lambda: real_datetime.date(2026, 11, 8), description="Das Datum.", name="clock",
+                  parameters={"type": "object", "properties": {}})
     w, fake = tool_wrapper()
     w.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]

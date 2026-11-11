@@ -264,7 +264,7 @@ def test_a_reply_resumed_after_a_result_reports_the_tokens_the_result_left():
 
 def test_a_request_that_ran_calls_reports_its_last_generations_tokens():
     registry = ToolRegistry()
-    registry.register(lambda: "12:00", "The time.", name="clock")
+    registry.tool(lambda: "12:00", description="The time.", name="clock")
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
