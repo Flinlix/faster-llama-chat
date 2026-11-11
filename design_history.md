@@ -1487,3 +1487,10 @@ card's code examples set, which contradicts that sentence. The file now holds
 0.05, below the bound with room on both sides, and quotes the sentence as its
 source. Verified on the CPU with Ministral-3-8B-Instruct-2512 Q4_K_M: the
 wrapper ran at temperature 0.05 and answered "Paris".
+
+**266.4: no stop texts in the configuration.** `Config.stop_strings` did what
+`reply(stop=...)` does, for every reply, so there were two ways to say one
+thing; it was also a list inside a frozen configuration, which a caller could
+change while the wrapper ran. It is removed. `reply` copies the `stop` it is
+given when it is called, so the texts a reply stops at are those it was asked
+with, even though the generation starts at the first read.

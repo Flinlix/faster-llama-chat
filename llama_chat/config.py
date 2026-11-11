@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, fields, replace
 
 # The quantizations a caller may name. Which type id each one is worth is
 # llama.cpp's own numbering, resolved where llama.cpp is named.
@@ -76,7 +76,6 @@ class Config:
             this many tokens would be left for the reply. ``0`` disables it,
             and it must stay below ``context_size``, which no request can leave
             entirely free.
-        stop_strings: Strings that end generation.
         gpu_layers: Layers to offload to GPU. ``0`` for a CPU-only build,
             ``-1`` for all of them.
         kv_cache_on_gpu: ``True`` places the KV cache in VRAM, ``False`` keeps
@@ -116,10 +115,6 @@ class Config:
     max_history_messages: int | None = None
     max_reply_tokens: int = 1024
     min_reply_tokens: int = 32
-
-    # Generation
-
-    stop_strings: list[str] = field(default_factory=list)
 
     # Backend / hardware
 

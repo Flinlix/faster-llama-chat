@@ -354,6 +354,20 @@ def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
     assert stream.reply.stop_reason == "stop_string"   # not "interrupted"
 
 
+def test_the_stop_texts_are_the_ones_given_when_the_reply_was_asked_for():
+    fake = FakeContext(PLAIN, gen_tokens=10, gen_text="helloSTOPx")
+    w = ChatWrapper(Config(context_size=400), context=fake)
+    w.begin("s")
+    stop = ["STOP"]
+    stream = w.reply("hi", stop=stop)
+    stop.clear()                    # before the first read, which starts the generation
+    assert stream.finish().text == "hello"
+
+
+def test_stop_texts_are_a_request_option_and_no_setting():
+    assert "stop_strings" not in {field.name for field in dataclasses.fields(Config)}
+
+
 def test_generator_close_marks_interrupted():
     # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).

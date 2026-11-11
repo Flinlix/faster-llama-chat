@@ -133,7 +133,7 @@ model and makes later actions raise.
 | | |
 |------|------|
 | `"end_of_turn"` | the model ended its turn |
-| `"stop_string"` | a stop string matched the answer; the reply ends just before it |
+| `"stop_string"` | one of the texts `stop=` gave matched the answer; the reply ends just before it |
 | `"token_limit"` | `max_reply_tokens` ran out, or the context did |
 | `"interrupted"` | `cancel` was set |
 | `"tool_call"` | the reply stopped on a call, and the turn is open for its result |
@@ -324,7 +324,6 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 | `max_history_messages` | `None` | a second eviction trigger: the most non-system messages kept; whole exchanges go, so fewer may stay |
 | `max_reply_tokens` | `1024` | cap per generation |
 | `min_reply_tokens` | `32` | refuse a request with `ContextOverflowError` when fewer would be left for the reply; `0` disables |
-| `stop_strings` | `[]` | strings that end the answer; a request's `stop=` adds to them |
 
 **Backend and hardware**
 

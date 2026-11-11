@@ -217,8 +217,9 @@ class ChatWrapper:
                 use. ``None`` sets no ceiling; a call past one is answered with
                 an error result rather than run. Only with a registry.
             max_reply_tokens: Override for the per-generation cap.
-            stop: Stop strings for this request, added to the config's,
-                matched against the answer only.
+            stop: Texts that end the answer, matched against the answer
+                only. Read when this is called, so a later change to the list
+                changes nothing.
             cancel: Setting it, from any thread, stops generation within one
                 token and ends the turn with ``stop_reason == "interrupted"``.
             sampling: This request's own sampling settings, in place of the
@@ -241,7 +242,7 @@ class ChatWrapper:
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
         """
-        options = dict(max_reply_tokens=max_reply_tokens, stop=stop, cancel=cancel,
+        options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
         runs = isinstance(tool_call_policy, ToolRegistry)
         if not runs and tool_call_policy not in TOOL_CALL_POLICIES:
@@ -582,7 +583,7 @@ class ChatWrapper:
         return settled, calls_left
 
     def _generate(self, text: str | None, *, recognizes_calls: bool,
-                  max_reply_tokens: int | None, stop: list[str] | None,
+                  max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: Sampling | None,
                   withhold: bool = False) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end and record what it left, as a Reply.
@@ -608,13 +609,12 @@ class ChatWrapper:
         elif not conversation.reply_open:
             conversation.prompt()
         cap = max_reply_tokens if max_reply_tokens is not None else self._config.max_reply_tokens
-        stops = list(self._config.stop_strings) + list(stop or [])
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
         reply_text = ReplyText(self._template.reasoning,
                                self._template.answer_opening(conversation.reasoning),
-                               conversation.prompt_text, stops)
+                               conversation.prompt_text, list(stop))
         pieces = conversation.generate(
             cap, generated, cancel=cancel,
             sampling=sampling, ends_turn=self._turn_end_test(reply_text),
