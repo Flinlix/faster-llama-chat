@@ -7,16 +7,26 @@ import copy
 from .tools import ToolCall, ToolResult, ToolTurn, result_text
 
 
+# The roles a message of the caller's takes: a question and a reply.
+MESSAGE_ROLES = ("user", "assistant")
+
+
 def as_messages(history) -> list[dict]:
     """``begin``'s history as the messages a template is given.
 
     A tool turn becomes its assistant messages, each holding the calls made
     before a result, and the results after them, each answering its own call.
+
+    Raises:
+        TypeError: If an item is neither a ``(role, text)`` pair, a message
+            dictionary nor a :class:`~llama_chat.tools.ToolTurn`.
+        ValueError: If a dictionary holds other keys than ``role`` and
+            ``content``, or a role is not one of :data:`MESSAGE_ROLES`.
     """
     messages, n = [], 0
     for item in history:
         if not isinstance(item, ToolTurn):
-            role, text = item
+            role, text = _role_and_text(item)
             messages.append({"role": role, "content": text})
             continue
         text, calls, owed = "", [], []          # owed: the ids of the calls still to be answered
@@ -38,6 +48,39 @@ def as_messages(history) -> list[dict]:
         elif text or not (item.steps and isinstance(item.steps[-1], ToolResult)):
             messages.append({"role": "assistant", "content": text})     # a result ends it open
     return messages
+
+
+def _role_and_text(item) -> tuple[str, str]:
+    """A history message's role and text, from a ``(role, text)`` pair or a ``{"role", "content"}`` dictionary."""
+    if isinstance(item, dict):
+        other = sorted(set(item) - {"role", "content"})
+        if other or "content" not in item:
+            raise ValueError(f"a history message holds 'role' and 'content' and nothing else, "
+                             f"not {sorted(item)}; a turn that called tools is a ToolTurn")
+        role, text = item.get("role"), item["content"]
+    elif isinstance(item, (tuple, list)) and len(item) == 2:
+        role, text = item
+    else:
+        raise TypeError(f"a history message is a (role, text) pair, a dict with 'role' and "
+                        f"'content', or a ToolTurn, not the {type(item).__name__} {item!r}")
+    ensure_role(role)
+    return role, text
+
+
+def ensure_role(role) -> None:
+    """Refuse a message whose role is not one of :data:`MESSAGE_ROLES`, naming where such a message goes instead.
+
+    Raises:
+        ValueError: For every other role.
+    """
+    if role == "system":
+        raise ValueError("a system message is the system prompt, which begin() takes as its "
+                         "first argument")
+    if role == "tool":
+        raise ValueError("a tool result is written by inject_tool_result(), and given to "
+                         "begin() as a ToolResult inside a ToolTurn")
+    if role not in MESSAGE_ROLES:
+        raise ValueError(f"a message's role is 'user' or 'assistant', not {role!r}")
 
 
 def call_id(n: int) -> str:

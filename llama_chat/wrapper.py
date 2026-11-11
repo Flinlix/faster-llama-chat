@@ -93,7 +93,7 @@ class ChatWrapper:
         self._lock = threading.Lock()
 
     def begin(self, system_prompt: str,
-              messages: list[tuple[str, str] | ToolTurn] | None = None,
+              messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
               tools: list[ToolSpec] | None = None, *,
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
@@ -105,9 +105,11 @@ class ChatWrapper:
             system_prompt: Always kept, never evicted. Empty, it is no system
                 message at all, and the conversation opens as the template
                 opens one without.
-            messages: Optional history, oldest first: ``(role, text)`` pairs,
-                and a :class:`~llama_chat.tools.ToolTurn` for an assistant turn
-                that called tools, written as this model's template writes one.
+            messages: Optional history, oldest first: ``(role, text)`` pairs
+                or ``{"role": role, "content": text}`` dictionaries, the role
+                ``"user"`` or ``"assistant"``, and a
+                :class:`~llama_chat.tools.ToolTurn` for an assistant turn that
+                called tools, written as this model's template writes one.
                 A history that ends on a tool turn's result leaves that turn
                 open, as a result written into a live turn does, for
                 :meth:`reply` to go on with. Only the most recent are kept,
@@ -133,12 +135,14 @@ class ChatWrapper:
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, cannot fit beside them.
-            ValueError: If ``tools`` names anything or the history holds a
-                tool turn and this model cannot call tools; if ``reasoning`` is
-                asked of a model that cannot reason; if the template has no
-                system turn and a system prompt is given; or if the template
-                refuses to write the conversation. The previous conversation is
-                left intact either way.
+            TypeError: If a history item is of another form.
+            ValueError: If a history message has another role, or a
+                dictionary other keys; if ``tools`` names anything or the
+                history holds a tool turn and this model cannot call tools; if
+                ``reasoning`` is asked of a model that cannot reason; if the
+                template has no system turn and a system prompt is given; or if
+                the template refuses to write the conversation. The previous
+                conversation is left intact either way.
         """
         messages = messages or []
         with self._lock:

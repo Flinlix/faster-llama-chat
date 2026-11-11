@@ -143,3 +143,35 @@ def test_a_tool_turn_whose_result_answers_no_call_is_refused():
     with pytest.raises(ValueError):
         ToolTurn((call, ToolResult("clock", "12:00"), ToolResult("clock", "12:01")))
     ToolTurn(("Let me look.", call, ToolResult("clock", "12:00"), "It is noon."))
+
+
+# ----- the forms a history message takes ------------------------------------
+def test_a_history_in_the_usual_dictionaries_reads_in_as_the_same_pairs():
+    pairs, _ = begun_wrapper()
+    pairs.begin("s", [("user", "Hallo"), ("assistant", "Hi."), ["user", "Wie gehts?"]])
+    dicts, _ = begun_wrapper()
+    dicts.begin("s", [{"role": "user", "content": "Hallo"},
+                      {"role": "assistant", "content": "Hi."},
+                      {"role": "user", "content": "Wie gehts?"}])
+    assert rows(dicts) == rows(pairs)
+    assert [row["text"] for row in rows(dicts)] == ["s", "Hallo", "Hi.", "Wie gehts?"]
+
+
+@pytest.mark.parametrize("item, error, cause", [
+    (("human", "Hallo"), ValueError, "'human'"),
+    ({"role": "human", "content": "Hallo"}, ValueError, "'human'"),
+    (("system", "Sei kurz."), ValueError, "begin"),
+    (("tool", "12:00"), ValueError, "ToolTurn"),
+    ({"role": "user"}, ValueError, "content"),
+    ({"role": "user", "content": "Hallo", "name": "Ada"}, ValueError, "'name'"),
+    ("Hallo", TypeError, "str"),
+    (("user", "Hallo", "zu viel"), TypeError, "tuple"),
+], ids=["unknown-role", "unknown-role-dict", "system", "tool", "no-content", "other-key",
+        "bare-text", "three-values"])
+def test_a_history_message_of_another_form_or_role_is_refused_naming_it(item, error, cause):
+    w, fake = begun_wrapper()
+    w.reply("eins").finish()
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(error, match=cause):
+        w.begin("s", [("user", "a"), item])
+    assert w.conversation() == before and fake.cache == held      # left as it was

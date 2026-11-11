@@ -1951,3 +1951,15 @@ can neither shift nor cut, `save_state` is called once on it, and a `None`
 or a `RuntimeError` refuses it with a `ValueError`. The engine's own context
 is left to its load check, so the save is not tried twice. A context that
 stops saving later is still decoded again whole, as before.
+
+**268.1: the forms and roles of a history message.** A history item that was
+not a tool turn was unpacked as `role, text = item`, so the usual dictionary
+`{"role": "user", "content": "Hello"}` unpacked into its two keys and was
+stored as the message `("role", "content")` without an error, and a role the
+template happened to accept, such as `"human"`, went into the cache. `begin`
+now takes a `(role, text)` pair, as a tuple or a list, or a dictionary
+holding `role` and `content` and nothing else, each with the role `"user"` or
+`"assistant"`. Any other form is a `TypeError`, and another key or role a
+`ValueError` naming it; a system message points to `begin`'s first argument,
+and a tool message to `ToolTurn`. `ensure_role` in `messages.py` is the one
+check of a role, so that `inject` can share it.
