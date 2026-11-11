@@ -311,9 +311,9 @@ as passed.
 The five marked "the model's" take, unless set, the model's own recommendation
 from one source, taken whole: what the GGUF states, else its
 [add-on file](#add-on-files), a field it leaves out switched off; with
-neither, llama.cpp's defaults. `Sampling(...)` passed to one `reply` overrides
-`temperature`, `top_p`, `seed`, `presence_penalty` and `frequency_penalty` for
-that request. `Sampling` refuses, where it is built, any value `Config` refuses.
+neither, llama.cpp's defaults. `Sampling(...)` passed to one `reply`
+overrides any field of this table but `model_path` for that request.
+`Sampling` refuses, where it is built, any value `Config` refuses.
 
 **Context management**
 

@@ -248,18 +248,26 @@ class Sampling:
 
     Attributes:
         temperature: As :attr:`Config.temperature`.
+        top_k: As :attr:`Config.top_k`.
         top_p: As :attr:`Config.top_p`.
-        seed: As :attr:`Config.seed`. A request cannot ask for a fresh seed
-            where the config fixes one; leave it ``None`` to keep the config's.
+        min_p: As :attr:`Config.min_p`.
+        repetition_penalty: As :attr:`Config.repetition_penalty`.
         presence_penalty: As :attr:`Config.presence_penalty`.
         frequency_penalty: As :attr:`Config.frequency_penalty`.
+        penalty_window_tokens: As :attr:`Config.penalty_window_tokens`.
+        seed: As :attr:`Config.seed`. A request cannot ask for a fresh seed
+            where the config fixes one; leave it ``None`` to keep the config's.
     """
 
     temperature: float | None = None
+    top_k: int | None = None
     top_p: float | None = None
-    seed: int | None = None
+    min_p: float | None = None
+    repetition_penalty: float | None = None
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
+    penalty_window_tokens: int | None = None
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         with_request_sampling(Config(), self)

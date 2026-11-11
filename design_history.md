@@ -1608,3 +1608,11 @@ code, through the configuration it is applied to, and the cap `reply` takes by
 `ensure_reply_cap`, which checks its type too. The list-valued setting the
 item named, `stop_strings`, went with 266.4, so no setting holds a value that
 can be changed in place.
+
+**268.7: every sampling value per request.** `Sampling` took five values;
+top-k, min-p, the repetition penalty and the penalty window could be set only
+for the whole wrapper, so a caller wanting one request greedy-ish and the next
+creative had to rebuild the wrapper, and with it the cache. It now takes every
+sampling field of `Config`, each `None` to keep the wrapper's, and is checked
+by the same code. No field was left out: each of them shapes only the chain a
+generation draws from, which is built for each generation anyway.

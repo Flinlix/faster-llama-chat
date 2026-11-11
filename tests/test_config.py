@@ -174,6 +174,17 @@ def test_a_sampling_replaces_exactly_the_fields_it_sets():
     assert (applied.temperature, applied.seed, applied.top_p) == (0.2, 7, 0.9)
 
 
+_SAMPLING_SETTINGS = {"temperature": 0.3, "top_k": 7, "top_p": 0.8, "min_p": 0.1,
+                      "repetition_penalty": 1.2, "presence_penalty": 0.5,
+                      "frequency_penalty": 0.4, "penalty_window_tokens": 16, "seed": 9}
+
+
+def test_a_request_may_set_every_sampling_setting():
+    assert {f.name for f in fields(Sampling)} == set(_SAMPLING_SETTINGS)
+    applied = with_request_sampling(Config(), Sampling(**_SAMPLING_SETTINGS))
+    assert {name: getattr(applied, name) for name in _SAMPLING_SETTINGS} == _SAMPLING_SETTINGS
+
+
 @pytest.mark.parametrize("bad", [{"top_p": 0.0}, {"top_p": 1.5}, {"seed": -1},
                                  {"seed": 2**32 - 1}, {"temperature": "hot"}, {"seed": 1.5}])
 def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
