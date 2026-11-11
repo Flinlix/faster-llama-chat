@@ -334,8 +334,9 @@ class ChatWrapper:
 
         Raises:
             ValueError: If no conversation has been begun, if a tool call has
-                left a reply open, or if this model cannot call tools at all
-                (see :meth:`begin`).
+                left a reply open, if this model cannot call tools at all
+                (see :meth:`begin`), or if the template with the declarations
+                writes an older exchange otherwise once another follows.
             ContextOverflowError: If the system turn with the declarations
                 would leave no room under ``evict_above_tokens`` for a short
                 question.

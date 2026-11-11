@@ -650,6 +650,27 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
     assert len([cut for cut in cuts if cut[1] < len(run.seen[0]) // 2]) == 1
 
 
+def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
+        clock, monkeypatch):
+    from llama_chat import rendered_cache
+    checked = []
+    for name in ("ensure_history_stays_written", "windows_are_exact"):
+        check = getattr(rendered_cache, name)
+        monkeypatch.setattr(rendered_cache, name,
+                            lambda *args, check=check, name=name: (checked.append(name),
+                                                                   check(*args))[1])
+    run = _Run("llama-3.2")
+    run.begin()
+    run.chat.reply(QUESTIONS[0]).finish()
+    both = ["ensure_history_stays_written", "windows_are_exact"]
+    assert checked == both
+    run.chat.declare_tools([WEATHER])
+    assert checked == both * 2
+    clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
+    run.chat.reply(QUESTIONS[1]).finish()
+    assert checked == both * 3
+
+
 # ----- reasoning ---------------------------------------------------------------------
 def _thinking(stem):
     return [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["can_reason"]]

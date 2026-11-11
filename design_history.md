@@ -1604,3 +1604,16 @@ templates writes a kept turn where it cannot be placed. Seen while testing:
 answering a call that could not be read catches every `ValueError` as "no
 room, or no result block" and then records the reply without its call; a
 placement refusal there would take that path too.
+
+**270.19: The checks of what renders allow run wherever their inputs change.**
+Two checks read the template's renders with the conversation's system turn,
+declarations and clock: that an older exchange stays written as it was once
+another follows, and whether windows of the conversation stand for its whole
+render. `begin` ran both; `declare_tools` ran only the second, though the
+declarations it adds are among the first's inputs; and an action that found
+the clock moved, so that the template writes another date, only pinned the
+new opening. All three now run both checks through one method, so a
+template that rewrites older exchanges only with tools declared, or only on a
+later date, is refused there rather than kept by a check made for other
+inputs. The test records that both checks run at each of the three, since none
+of the 52 test templates rewrites an older exchange under either change.

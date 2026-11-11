@@ -224,9 +224,7 @@ class RenderedCache:
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
-            ensure_history_stays_written(self._rendering.render, system)
-            self._state.windows = windows_are_exact(self._rendering.render, system,
-                                                    self._rendering.tag_from)
+            self._check_renders()
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
                          or self._rendering.length(self._state.messages, False) > limit):
                 raise ContextOverflowError(
@@ -620,7 +618,9 @@ class RenderedCache:
                 is written; one that raises refuses the declarations.
 
         Raises:
-            ValueError: If no conversation was begun or a reply is open.
+            ValueError: If no conversation was begun or a reply is open, or the
+                template with them writes an older exchange otherwise once
+                another follows.
             ContextOverflowError: If the system prompt with them leaves no room
                 under ``evict_above_tokens`` for a short question.
         """
@@ -632,8 +632,7 @@ class RenderedCache:
             self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
-            self._state.windows = windows_are_exact(self._rendering.render, self._system_part(),
-                                                    self._rendering.tag_from)
+            self._check_renders()
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._memory.pin(self._rendering.opening_length(self._system_part()))
             n_before = len(as_history(self._state.messages))
@@ -641,6 +640,18 @@ class RenderedCache:
             self._render_ahead(dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
+
+    def _check_renders(self) -> None:
+        """Check again what the template's renders allow, as the system turn, the declarations and the clock now leave them.
+
+        Raises:
+            ValueError: If the template writes an older exchange otherwise once
+                another follows.
+        """
+        system = self._system_part()
+        ensure_history_stays_written(self._rendering.render, system)
+        self._state.windows = windows_are_exact(self._rendering.render, system,
+                                                self._rendering.tag_from)
 
     def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.
@@ -992,6 +1003,7 @@ class RenderedCache:
             opening = self._rendering.opening_render(self._system_part())
             if opening != self._state.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
+                self._check_renders()
                 self._state.opening = opening
                 self._memory.pin(self._rendering.opening_length(self._system_part()))
         saved = self._state.copied()
