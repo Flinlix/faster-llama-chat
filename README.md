@@ -310,7 +310,10 @@ are to run is still handed its `ToolRegistry`.
 To keep everything, older turns included, keep each message as you send it
 and each reply as you read it. A request whose generation fails before it says
 anything is taken back, its question with it, so the conversation no longer
-holds that question.
+holds that question. So is a request whose reply produced nothing, where the
+template writes no empty reply: one cancelled before its first word, one the
+model ended at once, or one cancelled while a tool ran, which takes the turn's
+calls and results back with it.
 
 ## Configuration
 

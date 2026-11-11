@@ -475,10 +475,11 @@ class RenderedCache:
         open while a call is owed a result. A call that could not be read is
         answered with an error result, so the turn goes on to say so, or, where
         that result has no room, the turn closes as a reply. Any other reply
-        closes the turn: one with no answer, after a question, is taken out
-        again where the template writes two questions in a row, and the cache
-        is then brought to the template's render and decoded ahead for the next
-        question.
+        closes the turn: one that produced nothing the template writes is taken
+        back with its request, the newest question and everything after it;
+        one with no answer, after a question, is taken out again where the
+        template writes two questions in a row; and the cache is then brought
+        to the template's render and decoded ahead for the next question.
 
         Where the generation failed, what it said is recorded, or, where it
         said nothing, the question its request asked is taken out again; the
@@ -534,11 +535,14 @@ class RenderedCache:
                 self._forget_calls()
         if self.turn_open:
             return 0
+        if not answer and not called and not self._writes(self._state.messages):
+            starts = exchange_starts(self._state.messages)
+            return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
                 and writes_two_user_turns(self._rendering.render):
             # A reply all thought or cut before its answer leaves the question
             # unanswered, as the next question then follows it.
-            return self._remove_newest()
+            return self._remove_from(len(self._state.messages) - 1)
         return self._settle()
 
     def _open_kept(self) -> KeptTurn | None:
@@ -729,10 +733,13 @@ class RenderedCache:
         return self._rendering.length(self._system_part() + [{"role": "user", "content": "?"}],
                                       generation_prompt=True)
 
-    def _remove_newest(self) -> int:
-        """Take the newest message out again, then drop what is over the limits; how many history items were dropped."""
+    def _remove_from(self, first: int) -> int:
+        """Take the messages from ``first`` on out again, then drop what is over the limits; how many history items were dropped."""
         with self._action():
-            self._state.messages.pop()
+            gone = self._state.messages[first:]
+            del self._state.messages[first:]
+            self._state.kept = [k for k in self._state.kept
+                                if not any(k.first is m or k.last is m for m in gone)]
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)

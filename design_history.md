@@ -2045,3 +2045,22 @@ anything is decoded: where the template writes it neither as it is nor with a
 question after it, the cut is refused with a `ValueError` that asks to keep
 more of the text, and the conversation and the cache stay as they were. The
 same check, `_writes`, serves 270.3.
+
+**270.3: a reply that produced nothing the template cannot write takes its
+question back.** On the same three templates, a reply that produced nothing
+(cancelled before its first word, ended by the model at once, or cancelled
+while a tool ran) was recorded as an empty assistant message, which no render
+of the conversation could hold, so the reply raised and every later question
+was refused until `begin`. A request whose generation fails before it says
+anything was already taken back whole; such a reply now is too: where the
+template writes the conversation with the empty reply neither as it is nor
+with a question after it, the newest question and everything after it are
+taken out again, a tool turn's calls and results and the turn kept as
+generated included, and the cache is brought to the render of what is left.
+A tool that ran has run all the same; its result leaves the conversation with
+the question. Where no user message precedes the reply, as after a history
+that opens on a tool turn, everything after the system prompt is taken back,
+there being no question to stop at. Where the template does write an empty
+reply, nothing changes: such a reply is kept, or, on a template that writes
+two questions in a row, taken out alone so that its question waits for the
+next. Both removals are now one method, `_remove_from`.

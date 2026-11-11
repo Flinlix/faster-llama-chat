@@ -834,6 +834,37 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
     _as_rendered(w, fake)
 
 
+@pytest.mark.parametrize("stem", ["mistral-3", "devstral-2", "mistral-large-4"])
+@pytest.mark.parametrize("nothing", ["cancelled-at-once", "ends-at-once", "cancelled-by-a-tool"])
+def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_question_back(
+        stem, nothing):
+    """These templates write no empty reply, so the request is taken back whole and the next question is answered."""
+    from tests.chat_templates import WEATHER, fixture
+    from tests.fake_context import ScriptedCall
+    fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
+    cancel, options = threading.Event(), {}
+    if nothing == "cancelled-by-a-tool":
+        registry = ToolRegistry()
+        registry.register(lambda city: (cancel.set(), "18 Grad")[1], "Wetter.",
+                          name=WEATHER.name, parameters=WEATHER.parameters)
+        w.begin("", tools=registry.specs())
+        fake.replies = [ScriptedCall('{"name": "get_weather", "arguments": {"city": "Bonn"}}')]
+        options = dict(tool_call_policy=registry, cancel=cancel)
+    else:
+        w.begin("")
+        if nothing == "cancelled-at-once":
+            cancel.set()
+            options = dict(cancel=cancel)
+        else:
+            fake.gen_tokens = 0
+    w.reply("Erste Frage", **options).finish()
+    assert w.conversation()["messages"] == [] and not w.turn_open
+    fake.gen_tokens = 7
+    assert w.reply("Zweite Frage").finish().text == "Antwort"
+    assert [m["text"] for m in rows(w)] == ["Zweite Frage", "Antwort"]
+
+
 def test_an_injected_user_turn_after_a_user_turn_is_joined_or_refused():
     w, fake = begun_wrapper(JOINS_USER_TURNS)
     w.inject("eins")
