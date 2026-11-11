@@ -296,7 +296,10 @@ written as the template writes a past turn.
 A history ending on a result leaves that turn open, and `reply(tool_call_policy="yield")`
 goes on with it. A turn that closed ends on the text of the reply that closed
 it, in `conversation()` too, an empty `str` where the model wrote nothing after
-its results, so that `begin(**chat.conversation())` begins it closed.
+its results, so that `begin(**chat.conversation())` begins it closed. A reply
+given as an item of its own after a `ToolTurn` that ends on a result closes
+that turn: `begin` counts it as the item it was given as, and
+`conversation()` hands it back as the turn's last step.
 
 **Every call has an id**, `ToolCall.id`, that no other call of the
 conversation has. A call handed over in the stream, in `Reply.tool_calls`, in

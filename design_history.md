@@ -2333,3 +2333,12 @@ the first id again and a new call took the id of one the caller had already
 seen. The count of ids written now only goes up within one `ChatWrapper`, and
 a call of the history given without an id is numbered from it too. A failed
 `begin` puts the count back with the rest of the conversation.
+
+**R11: `begin` counts the items it kept as they were given.** A reply given as
+an item of its own after a `ToolTurn` that ends on a result is the reply that
+closes that turn, and `conversation()` hands it back inside the turn, the one
+shape a closed tool turn has. `begin` counted what it kept in that regrouped
+shape, so it returned one item fewer than it kept. It now counts the newest
+items of the history as given whose messages were kept. The regrouping stays,
+since one turn read back in two shapes would make the round trip ambiguous; the
+README states it.

@@ -71,6 +71,18 @@ def as_messages(history, min_call_number: int = 0) -> list[dict]:
     return messages
 
 
+def kept_items(history, n_messages: int) -> int:
+    """How many of the newest items of ``history`` its newest ``n_messages`` messages, as :func:`as_messages` writes them, come from."""
+    items = 0
+    for item in reversed(history):
+        if n_messages <= 0:
+            break
+        n_messages -= len(as_messages([item]))
+        items += 1
+    assert n_messages == 0, "the kept messages begin inside an item of the history"
+    return items
+
+
 def _history_message(item) -> dict:
     """A history message from a ``(role, text)`` pair or a ``{"role", "content"}`` dictionary, a reply's thought included."""
     if isinstance(item, dict):

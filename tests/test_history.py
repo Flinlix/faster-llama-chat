@@ -314,3 +314,18 @@ def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
             tools=registry.specs())
     given, = _calls_in(w.conversation()["messages"])
     assert given.id not in seen
+
+
+def test_begin_counts_the_items_kept_as_they_were_given():
+    """A reply given after a tool turn that ends on a result closes that turn, and counts as the item it was."""
+    history = [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"))),
+               ("assistant", "Zwölf.")]
+    w, _ = unbegun_tool_wrapper()
+    assert w.begin("s", history, tools=[ToolSpec("uhr", "", {})]) == len(history)
+    turn = w.conversation()["messages"][-1]
+    assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
+    w, _ = unbegun_tool_wrapper()
+    longer = [item for n in range(6) for item in _past_exchange(n)] + history
+    kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})])
+    assert 3 <= kept < len(longer)
+    assert w.conversation()["messages"][0] == longer[-kept]

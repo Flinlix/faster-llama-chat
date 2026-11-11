@@ -24,7 +24,7 @@ from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
-                       next_call_number, result_message, system_part)
+                       kept_items, next_call_number, result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
@@ -277,7 +277,7 @@ class RenderedCache:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
-            return len(as_history(self._state.messages))
+            return kept_items(history, len(self._state.messages) - len(self._system_part()))
 
     def _keep_newest_history(self, bound: int) -> None:
         """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.
