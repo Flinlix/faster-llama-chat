@@ -1,6 +1,7 @@
 """A history as begin takes it, and as the messages a template is given."""
 
 import itertools
+from dataclasses import replace
 
 from llama_chat.messages import as_history, as_messages, exchange_count, exchange_starts
 from llama_chat.tools import ToolCall, ToolResult, ToolTurn
@@ -36,7 +37,17 @@ def test_every_history_comes_back_as_it_went_in():
         [("user", "q"), ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
     ]
     for history in histories:
-        assert as_history(as_messages(history)) == history
+        back = as_history(as_messages(history))
+        # Each call comes back with the id it was given, and goes in again under it.
+        assert [_without_ids(item) for item in back] == history
+        assert as_history(as_messages(back)) == back
+
+
+def _without_ids(item):
+    if not isinstance(item, ToolTurn):
+        return item
+    return ToolTurn(tuple(replace(step, id="") if isinstance(step, ToolCall) else step
+                          for step in item.steps))
 
 
 def test_each_result_of_a_batch_answers_its_own_call():

@@ -50,10 +50,15 @@ class ToolCall:
     Attributes:
         name: The function named. Nothing here checks that it exists.
         arguments: What it was called with, by keyword.
+        id: What tells it apart from every other call of its conversation, as
+            the conversation's history holds it; empty for a call not written
+            into one yet, such as one built for a history, which ``begin``
+            gives an id.
     """
 
     name: str
     arguments: dict
+    id: str = ""
 
 
 def ensure_names_unique(specs: list[ToolSpec]) -> None:

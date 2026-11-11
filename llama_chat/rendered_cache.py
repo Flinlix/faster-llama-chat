@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
-                       result_message, system_part)
+                       next_call_number, result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
@@ -228,6 +228,9 @@ class RenderedCache:
             self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history)
+            # Counted before the oldest are dropped, so that no later call takes the id of one.
+            self._state.n_calls = next_call_number(
+                c["id"] for m in self._state.messages for c in m.get("tool_calls") or ())
             self._state.kept, self._state.kept_at = [], {}
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
@@ -244,7 +247,6 @@ class RenderedCache:
                     "fit beside the system prompt; shorten it or raise "
                     "context_size/evict_above_fraction")
             self._drop_while_over(limit, generation_prompt=False)
-            self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -530,7 +532,7 @@ class RenderedCache:
     def _write_unreadable(self) -> bool:
         """Answer a call that could not be read, where the context has room; whether it was."""
         try:
-            self.add_result(ToolCall(UNKNOWN_FUNCTION, {}), _UNREADABLE_RESULT)
+            self.add_result(self.pending_calls[0], _UNREADABLE_RESULT)
             return True
         except ValueError:          # no room for it, or the template writes no result
             return False
@@ -562,7 +564,7 @@ class RenderedCache:
             if not waiting:
                 raise ValueError("no tool call is waiting for a result")
             owed, owed_id = waiting[0]
-            if call != owed:
+            if not isinstance(call, ToolCall) or replace(call, id=call.id or owed.id) != owed:
                 raise ValueError(
                     f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
@@ -1084,8 +1086,8 @@ def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     if calling is None or any(m["role"] not in ("tool",) for m in messages[calling + 1:]):
         return []
     answered = len(messages) - calling - 1
-    return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"])), c["id"])
-            for c in messages[calling]["tool_calls"][answered:]]
+    return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
+             c["id"]) for c in messages[calling]["tool_calls"][answered:]]
 
 
 def _is_plain(text: str, reader) -> bool:

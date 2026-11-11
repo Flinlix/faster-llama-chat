@@ -274,6 +274,17 @@ turn's steps in order: the model's text as `str`, each `ToolCall` and each
 A history ending on a result leaves that turn open, and `reply(tool_call_policy="yield")`
 goes on with it.
 
+**Every call has an id**, `ToolCall.id`, that no other call of the
+conversation has. A call handed over in the stream, in `Reply.tool_calls`, in
+`pending_calls` and in `conversation()` carries it, so one call reads the
+same in all of them. A `ToolCall` of a history keeps the id it carries, and
+`begin` gives one to a call that carries none, so `begin(*chat.conversation())`
+keeps every id; a history that gives two calls one id is refused. A call made
+after a `begin` takes an id that none of the history's calls had, those that
+did not fit included. `inject_tool_result` takes the call as it was handed
+over, or one built by hand without an id that names the same function with
+the same arguments.
+
 ## Reasoning
 
 ```python

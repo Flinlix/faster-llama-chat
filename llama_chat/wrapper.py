@@ -134,8 +134,9 @@ class ChatWrapper:
                 anything or the history holds a tool turn and this model cannot
                 call tools; if ``reasoning`` is
                 asked of a model that cannot reason; if the template has no
-                system turn and a system prompt is given; or if the template
-                refuses to write the conversation. The previous conversation is
+                system turn and a system prompt is given; if two calls of the
+                history carry one id; or if the template refuses to write the
+                conversation. The previous conversation is
                 left intact either way.
         """
         messages = messages or []
@@ -298,8 +299,9 @@ class ChatWrapper:
         the README, "Tool calling".
 
         Args:
-            call: The call being answered, as it was handed to you. It must
-                be the oldest unanswered one.
+            call: The call being answered, as it was handed to you, or one
+                built without an id that names the same function with the
+                same arguments. It must be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
 
         Raises:

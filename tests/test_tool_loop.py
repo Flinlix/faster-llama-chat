@@ -17,7 +17,7 @@ from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
 from tests.wrappers import (assert_consistent, held_renders, held_text, newest_turn, system_turn,
-                            tool_wrapper, weather_registry, rows)
+                            tool_wrapper, weather_registry, without_ids, rows)
 
 
 def _result_of(fake):
@@ -81,7 +81,7 @@ def test_a_call_ends_the_stream_and_holds_the_turn_open():
 
     events = list(wrapper.reply("wie spät?", tool_call_policy="yield"))
 
-    assert events == [ToolCall(name="clock", arguments={})]
+    assert without_ids(events) == [ToolCall(name="clock", arguments={})]
     assert bool(wrapper.pending_calls)
     # Nothing of the call reached the reply text.
     assert rows(wrapper)[-1]["text"] == ""
@@ -101,7 +101,7 @@ def test_a_call_refused_without_tools_still_lets_the_reply_go_on():
     reply = wrapper.reply("wie spät?").finish()
 
     assert reply.text == "reply"                 # it answered in words
-    assert reply.tool_calls == [ToolCall(name="clock", arguments={})]
+    assert without_ids(reply.tool_calls) == [ToolCall(name="clock", arguments={})]
     assert not wrapper.turn_open
     # The turn holds the call, an error result for it, and the reply after.
     written = rows(wrapper)[-1]["text"]
@@ -201,11 +201,11 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:first{}"]
-    assert list(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
+    assert without_ids(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
 
     wrapper.inject_tool_result(ToolCall("first", {}), "ok")
     fake.call_script = ["fn:second{}"]
-    assert list(wrapper.reply(tool_call_policy="yield")) == [ToolCall("second", {})]
+    assert without_ids(wrapper.reply(tool_call_policy="yield")) == [ToolCall("second", {})]
 
     wrapper.inject_tool_result(ToolCall("second", {}), "ok")
     fake.call_script = []
@@ -226,7 +226,7 @@ def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
                           context=fake)
     wrapper.begin("persona", [("user", "alt"), ("assistant", "älter")])
     fake.call_script = ["fn:first{}"]
-    assert list(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
+    assert without_ids(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
     assert len(rows(wrapper)) - 1 == 4     # two exchanges, over the limit, turn still open
 
     wrapper.inject_tool_result(ToolCall("first", {}), "ok")
@@ -266,7 +266,7 @@ def test_a_result_answers_the_call_itself_not_its_name(not_the_call):
         wrapper.inject_tool_result(not_the_call, "ok")
 
     assert fake.cache == before
-    assert wrapper.pending_calls == [ToolCall("clock", {})]
+    assert without_ids(wrapper.pending_calls) == [ToolCall("clock", {})]
 
 
 def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
@@ -290,7 +290,7 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
             assert "result wrapping alone" in str(refused)
             # Nothing reached the cache, and the call is still owed.
             assert fake.cache == before
-            assert wrapper.pending_calls == [ToolCall("clock", {})]
+            assert without_ids(wrapper.pending_calls) == [ToolCall("clock", {})]
             return
     pytest.fail("no context size left the call room but its result wrapping none")
 
@@ -794,7 +794,7 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
                         '{"name":"other","arguments":{}}]']
 
     asked = list(wrapper.reply("los", tool_call_policy="yield"))
-    assert asked == [ToolCall("clock", {}), ToolCall("other", {})]
+    assert without_ids(asked) == [ToolCall("clock", {}), ToolCall("other", {})]
     assert bool(wrapper.pending_calls)
 
     wrapper.inject_tool_result(ToolCall("clock", {}), "a")
@@ -818,7 +818,7 @@ def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
 
     wrapper.pending_calls[1].arguments["city"] = "Rom"          # a copy, the caller's to change
     wrapper.inject_tool_result(asked[0], "a")
-    assert wrapper.pending_calls == [ToolCall("other", {"city": "Bonn"})]
+    assert wrapper.pending_calls == [asked[1]] and asked[1].arguments == {"city": "Bonn"}
     wrapper.inject_tool_result(asked[1], "b")
     assert wrapper.pending_calls == [] and wrapper.turn_open
 
@@ -827,9 +827,9 @@ def test_a_history_owes_the_calls_of_its_newest_turn_that_no_result_answers():
     wrapper, _ = tool_wrapper()
     clock, other = ToolCall("clock", {}), ToolCall("other", {})
     wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other))])
-    assert wrapper.pending_calls == [clock, other]
+    assert without_ids(wrapper.pending_calls) == [clock, other]
     wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other, ToolResult("clock", "a")))])
-    assert wrapper.pending_calls == [other]
+    assert without_ids(wrapper.pending_calls) == [other]
 
 
 def test_the_pending_calls_are_read_without_waiting_for_a_running_reply():

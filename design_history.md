@@ -1976,3 +1976,20 @@ the test stand-in. The reading now refuses arguments that nest deeper than
 `MAX_ARGUMENT_DEPTH`, 100 levels, on every path, and a reader that runs out
 of recursion refuses the call as unreadable too, so the wrapper treats only a
 `ValueError` as an unreadable call.
+
+**268.5: an id for every call.** The ids a conversation's calls are written
+with were numbered from the count of calls the conversation held. After a
+`begin` that dropped older exchanges the count was smaller than the highest
+number kept, so the next call took an id that a kept call already had, and a
+template that pairs a result with its call by id paired it with the wrong
+one. `ToolCall` now carries its `id`, and every place a call is handed out
+carries it: the stream, `Reply.tool_calls`, `pending_calls` and
+`conversation()`. A call of a history keeps its id; one without takes a new
+one, and the next call of the conversation is numbered past the highest id
+the history holds, counted before the oldest exchanges are dropped, so no
+call takes the id of one that did not fit. A history that gives one id to two
+calls is refused. The service kept its own list of ids for this
+reason and can read the id from what the library returns instead.
+`inject_tool_result` still takes a call built by hand without an id, matched
+by its name and arguments, as before; a call that carries an id must carry
+the owed call's.

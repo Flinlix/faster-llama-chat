@@ -1,5 +1,6 @@
 """Every action that is refused or fails leaves the conversation and the cache as they were before it, a reply keeping only what it produced, and usable."""
 
+import dataclasses
 import datetime as real_datetime
 import threading
 
@@ -167,7 +168,7 @@ def _assert_kept_only_what_it_produced(before, after, shown, calls):
     added = kept[len(held):]
     texts = [step[1] for step in added if isinstance(step, tuple) and step[0] == "assistant"]
     assert "".join(texts) == "".join(shown)
-    made = [step for step in added if isinstance(step, ToolCall)]
+    made = [dataclasses.replace(step, id="") for step in added if isinstance(step, ToolCall)]
     assert made == calls[:len(made)]
     last = added[-1] if added else None
     assert not isinstance(last, tuple) or (last[0] == "assistant" and last[1]), \

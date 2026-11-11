@@ -112,6 +112,68 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
     assert fake_again.cache == fake.cache
 
 
+# ----- the id of every call --------------------------------------------------
+def _calls_in(history) -> list[ToolCall]:
+    return [step for item in history if isinstance(item, ToolTurn) for step in item.steps
+            if isinstance(step, ToolCall)]
+
+
+def _past_exchange(n: int) -> list:
+    return [("user", f"frage {n}"),
+            ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", f"{n}:00"), f"Es ist {n}."))]
+
+
+def test_every_call_has_an_id_the_history_and_the_reply_agree_on():
+    w, fake = tool_wrapper(context_size=2048)
+    w.begin("persona", tools=weather_registry())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    handed, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert handed.id and w.pending_calls == [handed]
+    w.inject_tool_result(handed, {"celsius": 18})
+    w.reply(tool_call_policy="yield").finish()
+    fake.call_script = ["fn:weather{city:'Rom'}"]
+    reply = w.reply("und in Rom?", tool_call_policy=weather_registry()).finish()
+
+    held = _calls_in(w.conversation()[1])
+    assert held[0] == handed and held[1] == reply.tool_calls[0]
+    assert len({call.id for call in held}) == 2
+
+
+def test_a_call_after_a_begin_that_shortened_the_history_gets_an_id_of_its_own():
+    """The kept calls carry the ids they were written with; a new one must take none of them."""
+    history = [item for n in range(6) for item in _past_exchange(n)]
+    w, fake = unbegun_tool_wrapper()
+    kept = w.begin("s", history, tools=[ToolSpec("uhr", "", {})])
+    assert kept < len(history)
+    ids = {call.id for call in _calls_in(w.conversation()[1])}
+    fake.call_script.append("fn:uhr{}")
+    handed, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert handed.id and handed.id not in ids
+
+
+def test_a_conversation_begun_again_keeps_the_ids_of_its_calls():
+    history = [item for n in range(2) for item in _past_exchange(n)]
+    w, _ = unbegun_tool_wrapper()
+    w.begin("s", history, tools=[ToolSpec("uhr", "", {})])
+    again, fake = unbegun_tool_wrapper()
+    again.begin(*w.conversation(), tools=[ToolSpec("uhr", "", {})])
+    assert again.conversation() == w.conversation()
+    ids = {call.id for call in _calls_in(w.conversation()[1])}
+    fake.call_script.append("fn:uhr{}")
+    handed, = [e for e in again.reply("wie spät?", tool_call_policy="yield")
+               if isinstance(e, ToolCall)]
+    assert handed.id not in ids
+
+
+def test_a_history_that_gives_one_id_to_two_calls_is_refused():
+    w, fake = unbegun_tool_wrapper()
+    twice = [("user", "a"), ToolTurn((ToolCall("uhr", {}, id="eins"), ToolResult("uhr", "1"),
+                                      ToolCall("uhr", {}, id="eins"), ToolResult("uhr", "2"),
+                                      "Fertig."))]
+    with pytest.raises(ValueError, match="'eins'"):
+        w.begin("s", twice, tools=[ToolSpec("uhr", "", {})])
+
+
 # ----- what a caller is handed ---------------------------------------------
 def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     w, fake = tool_wrapper()
