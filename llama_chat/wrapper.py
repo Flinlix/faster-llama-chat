@@ -454,17 +454,17 @@ class ChatWrapper:
         return self._template.has_system_turn
 
     @property
-    def reply_open(self) -> bool:
+    def turn_open(self) -> bool:
         """Whether a reply is unfinished, so no new message may be added.
 
         True from a call until :meth:`reply` closes the turn, the results in
         between included. While it is, :meth:`reply` with a request,
         :meth:`inject` and :meth:`declare_tools` refuse.
         """
-        return self._conversation.reply_open
+        return self._conversation.turn_open
 
     @property
-    def owed_calls(self) -> list[ToolCall]:
+    def pending_calls(self) -> list[ToolCall]:
         """The calls the model made that still wait for a result, oldest first.
 
         Each is answered with :meth:`inject_tool_result`, in this order, and
@@ -472,7 +472,7 @@ class ChatWrapper:
         any thread, as :meth:`conversation` is: the calls as the newest
         finished change left them, each a copy that is the caller's to change.
         """
-        return self._conversation.published_owed_calls()
+        return self._conversation.published_pending_calls()
 
     # ----- lifecycle -----------------------------------------------------------
     def close(self) -> None:
@@ -536,7 +536,7 @@ class ChatWrapper:
                         deltas, after="".join(g.text for g in generations))
                     generations.append(generation)
                     if not generation.tool_calls:
-                        if self._conversation.reply_open:
+                        if self._conversation.turn_open:
                             # An unreadable call: its result is already written, and
                             # the turn wants the reply that follows it. Nothing is
                             # owed, since nothing could be read, so the resume is
@@ -635,7 +635,7 @@ class ChatWrapper:
         n_evicted_messages = 0
         if text is not None:
             n_evicted_messages = conversation.ask(text)
-        elif not conversation.reply_open:
+        elif not conversation.turn_open:
             conversation.prompt()
         cap = next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
                    self._config.context_size)       # no generation outgrows the context
@@ -673,7 +673,7 @@ class ChatWrapper:
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
-            tool_calls=conversation.owed_calls,
+            tool_calls=conversation.pending_calls,
             n_reasoning_tokens=reply_text.thought_pieces,
         )
 

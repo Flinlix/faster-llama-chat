@@ -106,9 +106,9 @@ class _Published:
 
     system_prompt: str = ""
     history: tuple = ()
-    owed_calls: tuple = ()
+    pending_calls: tuple = ()
     begun: bool = False
-    reply_open: bool = False
+    turn_open: bool = False
     newest_role: str | None = None
 
 
@@ -116,7 +116,7 @@ class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation`, :meth:`published_owed_calls` and
+    :meth:`conversation`, :meth:`published_pending_calls` and
     :meth:`ensure_can_reply`, which read a copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
@@ -148,9 +148,9 @@ class RenderedCache:
         published = self._published
         return published.system_prompt, copy.deepcopy(list(published.history))
 
-    def published_owed_calls(self) -> list[ToolCall]:
+    def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
-        return copy.deepcopy(list(self._published.owed_calls))
+        return copy.deepcopy(list(self._published.pending_calls))
 
     def ensure_can_reply(self, asks_question: bool) -> None:
         """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.
@@ -182,12 +182,12 @@ class RenderedCache:
         return self._state.reasoning
 
     @property
-    def reply_open(self) -> bool:
+    def turn_open(self) -> bool:
         """Whether the newest turn called tools and is not closed: a call is owed a result, or a result waits for the reply after it."""
-        return bool(self.owed_calls) or self._ends_on_result()
+        return bool(self.pending_calls) or self._ends_on_result()
 
     @property
-    def owed_calls(self) -> list[ToolCall]:
+    def pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first."""
         return [call for call, _ in _unanswered(self._state.messages)]
 
@@ -253,7 +253,7 @@ class RenderedCache:
             self._memory.pin(self._rendering.opening_length(self._system_part()))
             if self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 self._sync(self._prompted())
-            elif self.owed_calls:
+            elif self.pending_calls:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False))
             else:
                 self._render_ahead()
@@ -442,7 +442,7 @@ class RenderedCache:
         asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
-                            self.reply_open, before_question)
+                            self.turn_open, before_question)
         room = (self._config.context_size - len(self._memory.tokens)
                 - self.template.n_closing_tokens)
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
@@ -512,7 +512,7 @@ class RenderedCache:
                 raise
             if not written:
                 self._forget_calls()
-        if self.reply_open:
+        if self.turn_open:
             return 0
         if not answer and not called and not resumed \
                 and writes_two_user_turns(self._rendering.render):
@@ -580,7 +580,7 @@ class RenderedCache:
                     "of the context; this turn cannot be continued, start a new conversation "
                     "with begin()")
             self._state.messages[-1] = {**message, "content": self._clipped(message, text, room)}
-            if not self.owed_calls:
+            if not self.pending_calls:
                 self._sync(self._fitting_prompt())
 
     def _clipped(self, message: dict, text: str, room: int) -> str:
@@ -1034,8 +1034,8 @@ class RenderedCache:
         system = self._system_part()
         self._published = _Published(
             system_prompt=system[0]["content"] if system else "",
-            history=tuple(as_history(self._state.messages)), owed_calls=tuple(self.owed_calls),
-            begun=self._state.begun, reply_open=self.reply_open, newest_role=self.newest_role)
+            history=tuple(as_history(self._state.messages)), pending_calls=tuple(self.pending_calls),
+            begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role)
 
 
 # ----- what an action may start from -------------------------------------------------
@@ -1049,7 +1049,7 @@ def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
     """
     if not conversation.begun:
         raise ValueError(f"no conversation to {into or action}; call begin() first")
-    if conversation.reply_open:
+    if conversation.turn_open:
         raise ValueError(
             f"cannot {action} while a reply is open: it stopped on a tool "
             "call and its turn is unclosed. Finish it with "
@@ -1058,13 +1058,13 @@ def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
 
 def _ensure_can_reply(conversation, asks_question: bool) -> None:
     """Refuse a reply ``conversation`` cannot take: a question while a reply is open, or, without one, a result still owed or nothing to answer."""
-    if asks_question or not conversation.reply_open:
+    if asks_question or not conversation.turn_open:
         _ensure_ready(conversation, "start a request", "generate into")
         if not asks_question and conversation.newest_role != "user":
             raise ValueError("there is nothing to answer: the newest message "
                              "is not a user message")
-    elif conversation.owed_calls:
-        raise ValueError(f"{len(conversation.owed_calls)} call(s) still owe a result")
+    elif conversation.pending_calls:
+        raise ValueError(f"{len(conversation.pending_calls)} call(s) still owe a result")
 
 
 # ----- helpers ---------------------------------------------------------------------

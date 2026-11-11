@@ -116,7 +116,7 @@ def _owing(w, fake):
 
 def _answered(w, fake):
     _owing(w, fake)
-    w.inject_tool_result(w.owed_calls[0], "sonnig")
+    w.inject_tool_result(w.pending_calls[0], "sonnig")
 
 
 def _replying(text=None, script=None, **options):
@@ -133,7 +133,7 @@ _ACTIONS = {
     "begin": (_exchanged, lambda w, f, s: w.begin("neu", [("user", "a"), ("assistant", "b")]), None),
     "begin while a call is owed": (_owing, lambda w, f, s: w.begin("neu"), None),
     "inject": (_exchanged, lambda w, f, s: w.inject("Notiz dazu."), None),
-    "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.owed_calls[0], "sonnig"),
+    "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.pending_calls[0], "sonnig"),
                            None),
     "truncate_last_reply": (_exchanged, lambda w, f, s: w.truncate_last_reply("Ge"), None),
     "declare_tools": (_exchanged, lambda w, f, s: w.declare_tools([_CALENDAR]), None),
@@ -150,7 +150,7 @@ _ACTIONS = {
 
 
 def _state(w):
-    return w.conversation(), w.owed_calls, w.reply_open, w.total_tokens
+    return w.conversation(), w.pending_calls, w.turn_open, w.total_tokens
 
 
 def _steps(history):
@@ -177,9 +177,9 @@ def _assert_kept_only_what_it_produced(before, after, shown, calls):
 def _go_on(w, fake):
     """Use the conversation as it was left: answer what is owed, close an open turn, then reply."""
     fake.call_script = []
-    for call in w.owed_calls:
+    for call in w.pending_calls:
         w.inject_tool_result(call, "sonnig")
-    if w.reply_open:
+    if w.turn_open:
         w.reply(tool_call_policy="yield").finish()
     history = w.conversation()[1]
     waiting = bool(history) and isinstance(history[-1], tuple) and history[-1][0] == "user"
@@ -260,10 +260,10 @@ def test_a_failed_restart_keeps_the_call_its_conversation_owes_and_nothing_else(
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 600)
-    assert w.reply_open and w.owed_calls == [call]
+    assert w.turn_open and w.pending_calls == [call]
     w.inject_tool_result(call, "12:00")
     w.reply().finish()
-    assert not w.reply_open
+    assert not w.turn_open
 
 
 # ----- results ---------------------------------------------------------------------
@@ -283,7 +283,7 @@ def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stay
         try:
             w.inject_tool_result(calls[0], "12:00")
         except ContextOverflowError:
-            assert fake.cache == held and w.owed_calls == calls
+            assert fake.cache == held and w.pending_calls == calls
             with pytest.raises(ValueError, match="owe a result"):
                 w.reply().finish()           # never resumed without its result
             return
@@ -310,7 +310,7 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
     w.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
     reply = w.reply("welcher Tag?", tool_call_policy=registry).finish()
-    assert reply.stop_reason == "end_of_turn" and not w.reply_open
+    assert reply.stop_reason == "end_of_turn" and not w.turn_open
     assert "unwritable_result" in held_text(fake)
 
 
@@ -323,7 +323,7 @@ def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
     cancel = threading.Event()
     cancel.set()
     assert w.reply(cancel=cancel).finish().text == ""
-    assert not w.reply_open and kept_turns(w)
+    assert not w.turn_open and kept_turns(w)
     assert "fn:clock{}" in held_text(fake)
     w.reply("und jetzt?").finish()
     assert "fn:clock{}" in held_text(fake)
@@ -416,7 +416,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
     with pytest.raises(RuntimeError, match="decode failed"):
         w.reply("Wetter?", tool_call_policy="yield").finish()
     fake.sampled_tokens = sampled
-    assert not w.reply_open and w.owed_calls == []
+    assert not w.turn_open and w.pending_calls == []
     assert w.conversation()[1][-2:] == [("user", "Wetter?"), ("assistant", "")]
     w.reply("weiter").finish()
 
@@ -433,7 +433,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
             reply = w.reply("Wetter?", tool_call_policy="yield").finish()
         except ContextOverflowError:
             continue
-        if reply.stop_reason == "unreadable_tool_call" and not w.reply_open:
+        if reply.stop_reason == "unreadable_tool_call" and not w.turn_open:
             assert newest_turn(fake).count("<[turn>model") == 1
             return
     pytest.fail("no context size left the error result without room")

@@ -96,9 +96,9 @@ def prompt_text(wrapper) -> str:
     return wrapper._conversation.prompt_text
 
 
-def owed_calls_held(wrapper) -> list:
-    """The calls the wrapper itself holds as owed, not the copies ``owed_calls`` hands out."""
-    return wrapper._conversation.owed_calls
+def pending_calls_held(wrapper) -> list:
+    """The calls the wrapper itself holds as owed, not the copies ``pending_calls`` hands out."""
+    return wrapper._conversation.pending_calls
 
 
 # ----- a template read otherwise than it writes ---------------------------------------

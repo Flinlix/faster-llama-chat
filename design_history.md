@@ -1912,3 +1912,10 @@ current conversation's (before any `begin`, the default one), while `begin`
 checks the template its own `tools` select; and which template a history
 holding tool turns but declaring no tools is written with, now the default
 one, which refuses it where only the template for tools can call tools.
+
+## 2026-11-11: Two state names in plain words
+
+At the user's decision, `owed_calls` (the calls still waiting for a result) is
+renamed `pending_calls`, and `reply_open` (a tool call left the newest turn
+open) is renamed `turn_open`. Both needed a definition before a line using them
+could be read. The entries above keep the old names, as they were written.

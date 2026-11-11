@@ -500,7 +500,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
             reply = chat.reply("Weather?", tool_call_policy="yield").finish()
         except ContextOverflowError:
             continue
-        if reply.stop_reason == "unreadable_tool_call" and not chat.reply_open:
+        if reply.stop_reason == "unreadable_tool_call" and not chat.turn_open:
             with pytest.raises(ValueError, match="tool call"):
                 chat.truncate_last_reply("Mo")
             return
