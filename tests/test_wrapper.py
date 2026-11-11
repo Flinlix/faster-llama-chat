@@ -1025,3 +1025,19 @@ def test_config_holds_the_sampling_the_model_supplies_whoever_built_the_context(
     own = ChatWrapper(given, context=_Loaded(given)).config
     assert loaded == own
     assert (own.temperature, own.top_p, own.context_size) == (0.6, 0.9, 512)
+
+
+@pytest.mark.parametrize("question", ["zwei", " zwei "], ids=["prepared-ahead", "not-prepared"])
+def test_a_question_sees_the_same_history_whether_or_not_it_was_prepared_ahead(question):
+    """At the exchange limit a question opens one more exchange while its reply runs, and the limit holds again once it settles."""
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0, max_history_exchanges=1),
+                    context=fake)
+    w.begin("s")
+    w.reply("eins").finish()
+    seen = []
+    fake.before_reply = seen.append
+    w.reply(question).finish()
+    assert "eins" in seen[0]
+    assert _n_exchanges(w) == 1 and rows(w)[1]["text"] == question
+    assert_consistent(w, fake)

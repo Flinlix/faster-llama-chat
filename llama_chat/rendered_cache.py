@@ -355,7 +355,8 @@ class RenderedCache:
             n_before = len(as_history(self._state.messages))
             if not self._splice(question, room):
                 self._state.messages.append(question)
-                dropped = self._drop_while_over(room, generation_prompt=True)
+                # As a spliced one, the question may open one exchange more until its reply settles.
+                dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True)
                 self._sync(self._fitting_prompt(), dropped=dropped)
             free = self._config.context_size - len(self._memory.tokens)
             if free < self._config.min_reply_tokens:

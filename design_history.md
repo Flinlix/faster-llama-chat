@@ -2342,3 +2342,19 @@ shape, so it returned one item fewer than it kept. It now counts the newest
 items of the history as given whose messages were kept. The regrouping stays,
 since one turn read back in two shapes would make the round trip ambiguous; the
 README states it.
+
+**R10: a question sees the same history however it is written.** At
+`max_history_exchanges`, a question the render made ahead stood in for was
+spliced in and answered with one exchange more in view, as 270.21 settled:
+the eviction waits until the reply ends, so that it does not delay the reply.
+A question that could not be spliced, such as one with a leading space, was
+added with the eviction first, so the model saw one exchange fewer depending
+on how the question was spaced. Both paths now follow 270.21: the question is
+added with only the token room enforced, and the limit is restored when the
+reply settles, where the dropped stretch is shifted out as 270.2 requires.
+The review proposed the other direction, evicting before every question at the
+limit. That was not taken: it contradicts 270.21, and at the limit it would
+skip the question decoded ahead on every turn and put the eviction, and on a
+cache that cannot shift the decode after it, before each reply. `inject`
+still evicts first, since no reply follows it to restore the limit, as the
+README states.
