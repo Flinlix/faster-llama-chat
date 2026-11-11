@@ -456,7 +456,9 @@ apart and a reply ends the same on every context.
 `render_with_model_template` and `chat_template_text` take a `template_name`:
 `None` for the default template, else the name of a further one the model
 ships, such as `TOOL_USE_TEMPLATE` from `llama_chat.cache_context`; a name the
-model ships no template of answers `None`.
+model ships no template of answers `None`. A context whose `chat_template_text()`
+answers `None` is refused where it is adopted, as a model that ships no chat
+template is, whatever it renders.
 `tests/fake_context.py` is a worked one over a list of ints.
 
 ## Verify

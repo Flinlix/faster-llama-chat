@@ -1931,3 +1931,11 @@ context that answers it alone, so exporting it suggested a second way to
 build a context of one's own. It stays in `cache_context.py`, where the
 template's readers name it as the type they take, and the README names
 `CacheContext` as the one protocol.
+
+**262.2: a context of one's own must report its template text.** The template
+was read from a context's renders alone, so a context whose
+`chat_template_text()` answered `None` was accepted as long as it rendered.
+The text is what an add-on file names a template by, and what the
+declaration variables are read from, so such a context ran without either.
+Reading the template now refuses it first, with the same `ValueError` as a
+model that ships no chat template.

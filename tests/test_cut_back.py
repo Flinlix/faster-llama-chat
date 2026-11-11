@@ -49,6 +49,16 @@ def test_a_model_that_ships_no_chat_template_is_refused_at_load():
         ChatWrapper(Config(context_size=500), context=_NoTemplate(PLAIN))
 
 
+def test_a_context_of_your_own_that_reports_no_template_text_is_refused_at_load():
+    """Its renders alone would pass every check, but no add-on file could name its template."""
+    class _NoTemplateText(FakeContext):
+        def chat_template_text(self, template_name=None):
+            return None
+
+    with pytest.raises(ValueError, match="no chat template"):
+        ChatWrapper(Config(context_size=500), context=_NoTemplateText(PLAIN))
+
+
 def test_the_tokens_that_stay_are_not_decoded_again():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw")
     w.reply("hi").finish()
