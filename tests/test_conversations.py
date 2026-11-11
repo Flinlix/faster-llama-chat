@@ -660,6 +660,19 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, forms=(_THOUGHT,) if keeps else (None,))
 
 
+def test_the_answers_opening_a_model_writes_after_an_empty_thought_stays_out_of_answer_and_history():
+    """North Mini Code's prompt without reasoning ends in an empty thought; the model opens its answer itself."""
+    opening = "<|START_TEXT|>"
+    run = _Run("cohere-2", replies=[opening + answer for answer in ANSWERS])
+    run.answers = list(ANSWERS)
+    run.begin()
+    answers = [run.chat.reply(question).finish().text for question in QUESTIONS[:3]]
+    assert answers == ANSWERS[:3]
+    assert all(row["content"] == answer for row, answer in zip(
+        [m for m in _sent(run.chat) if m["role"] == "assistant"], ANSWERS))
+    _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
+
+
 # ----- tools ------------------------------------------------------------------------
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_tools_declared_mid_conversation_are_written_where_the_template_writes_them(stem):

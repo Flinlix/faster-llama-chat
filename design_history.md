@@ -1519,3 +1519,18 @@ all, since then nothing is known to turn off. Nothing is refused: such a
 conversation is written as the template writes it, and the thought is kept out
 of the answer as before. Read as: the property is the switch's effect on the
 prompt, the one place the renders show whether an off exists.
+
+**261.3: The answer's opening after an empty thought.** Measured on North
+Mini Code: with reasoning off, every answer began with a stray
+`<|START_TEXT|>`, in 8 of 8 real replies, and the tag was kept with each past
+reply, so the model read it twice from then on. Its generation prompt without
+reasoning ends in an empty thought, `<|START_THINKING|><|END_THINKING|>`,
+where a past reply's tag holds `<|START_TEXT|>` instead; the answer's opening
+was recognised only where the prompt is the start of the tag, as on a
+template that routes replies through channels. Where the prompt, past what it
+shares with the tag, is a thought opened and closed with nothing in it, and
+the tag's rest completes that thought's closing, the tag's rest is now the
+answer's opening, which the model writes and the answer leaves out. The
+condition asks for the closing in the prompt, so an opened thought, as the
+prompt with reasoning on writes it, is no such case. Of the 52 test
+templates, only cohere-2's opening without reasoning changed.

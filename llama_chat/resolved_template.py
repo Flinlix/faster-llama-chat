@@ -169,13 +169,32 @@ class ResolvedTemplate:
 
         A template that routes replies through channels ends its generation
         prompt before the channel's own header, which the model writes and
-        the answer does not include.
+        the answer does not include. One whose prompt ends in an empty thought
+        leaves the tag's own opening of the answer to the model after it,
+        which is then what the tag holds beyond what it shares with the
+        prompt.
 
         Raises:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
         prompt, tag = self.generation_prompt(reasoning), self._fragments.assistant_prefix
-        return tag[len(prompt):] if tag.startswith(prompt) else ""
+        if tag.startswith(prompt):
+            return tag[len(prompt):]
+        shared = shared_tags_length(tag, prompt)
+        return tag[shared:] if self._closes_empty_thought(prompt[shared:], tag[shared:]) else ""
+
+    def _closes_empty_thought(self, written: str, opening: str) -> bool:
+        """Whether ``written`` is a thought with nothing in it, closed, and ``opening`` the rest of its closing, whitespace aside."""
+        if self._reasoning is None:
+            return False
+        def unspaced(text: str) -> str:
+            return "".join(text.split())
+
+        thought_open = unspaced(self._reasoning.thought_open)
+        written = unspaced(written)
+        return (written.startswith(thought_open) and len(written) > len(thought_open)
+                and written + unspaced(opening)
+                == thought_open + unspaced(self._reasoning.thought_close))
 
     @property
     def n_closing_tokens(self) -> int:
