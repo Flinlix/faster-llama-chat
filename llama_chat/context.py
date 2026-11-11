@@ -11,7 +11,7 @@ import os
 from collections.abc import Callable, Mapping
 
 from ._backend import Backend, set_log_level
-from .config import Config, Sampling, with_request_sampling
+from .config import Config, InvalidSettingError, Sampling, with_request_sampling
 from .addon_files import addon_file, with_model_sampling
 from .model_template import ModelTemplate
 
@@ -28,8 +28,7 @@ class KVContext:
             because a raise aborts the load.
 
     Raises:
-        ValueError: If ``config.model_path`` is unset.
-        FileNotFoundError: If it names no file.
+        InvalidSettingError: If ``config.model_path`` is unset or names no file.
         RuntimeError: If the model or the context cannot be created, or this
             build cannot perform one of the cache edits eviction rests on.
     """
@@ -39,10 +38,10 @@ class KVContext:
         on_load_progress: Callable[[float], None] | None = None,
     ) -> None:
         if not config.model_path:
-            raise ValueError("config.model_path is unset; a model cannot be "
-                             "loaded without one")
+            raise InvalidSettingError("model_path", "model_path is unset; a model cannot be "
+                                                    "loaded without one")
         if not os.path.isfile(config.model_path):
-            raise FileNotFoundError(f"no model file at {config.model_path!r}")
+            raise InvalidSettingError("model_path", f"no model file at {config.model_path!r}")
         self._config = config
         set_log_level(config.log_level)  # filter llama.cpp's load-time logs too
         self._backend = Backend()

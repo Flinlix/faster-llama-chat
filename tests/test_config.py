@@ -77,6 +77,29 @@ def test_an_eviction_threshold_that_rounds_to_nothing_is_refused():
         Config(context_size=8, evict_above_fraction=0.1)
 
 
+@pytest.mark.parametrize("model_path", [None, "", "no-such-model.gguf"])
+def test_a_model_path_that_names_no_file_is_a_refused_setting(tmp_path, model_path):
+    from llama_chat import ChatWrapper
+    path = model_path and str(tmp_path / model_path)
+    with pytest.raises(InvalidSettingError) as refused:
+        ChatWrapper(Config(model_path=path))
+    assert refused.value.field == "model_path"
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
+    from llama_chat import ChatWrapper
+    from tests.fake_context import FakeContext
+    from tests.invented_templates import PLAIN
+    wrapper = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN))
+    wrapper.begin("s")
+    with pytest.raises(InvalidSettingError) as refused:
+        wrapper.reply("hi", max_reply_tokens=cap)
+    assert refused.value.field == "max_reply_tokens"
+    assert str(refused.value) == str(pytest.raises(InvalidSettingError, Config,
+                                                   max_reply_tokens=cap).value)
+
+
 def test_how_far_an_eviction_drops_without_a_shift_is_fixed_and_no_setting():
     from llama_chat.rendered_cache import EVICT_TO_FRACTION_WITHOUT_SHIFT
     assert "evict_to_fraction_without_shift" not in {f.name for f in fields(Config)}

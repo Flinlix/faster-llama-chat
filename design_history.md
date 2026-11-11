@@ -1510,3 +1510,12 @@ longer than that ended with an empty answer and `"token_limit"`. The default
 is now `None`, no cap: a reply runs until the model ends it or the context is
 full, and the context bound is the one no generation can cross anyway. A
 caller who wants a bound sets one, in the configuration or per request.
+
+**270.15, the configuration part: a missing model and a cap of nothing.** A
+`model_path` that was unset or named no file raised a bare `ValueError` or
+`FileNotFoundError`, although the README promises an `InvalidSettingError`
+naming the setting for every setting refused at startup; it now raises that,
+with `field == "model_path"`. A `max_reply_tokens` of 0 or less passed to
+`reply` was taken as a cap of nothing and produced an empty reply; it is now
+refused when `reply` is called, by the same check `Config` runs
+(`ensure_reply_cap`), so both say the same.

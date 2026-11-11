@@ -139,10 +139,7 @@ class Config:
                 "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
             raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
-        if self.max_reply_tokens is not None and self.max_reply_tokens <= 0:
-            raise InvalidSettingError(
-                "max_reply_tokens",
-                "max_reply_tokens must be None or positive (use None for no cap)")
+        ensure_reply_cap(self.max_reply_tokens)
         if self.min_reply_tokens < 0:
             raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")
         if self.min_reply_tokens >= self.context_size:
@@ -182,6 +179,17 @@ class Config:
     def evict_above_tokens(self) -> int:
         """``evict_above_fraction`` as an absolute token count."""
         return int(self.evict_above_fraction * self.context_size)
+
+
+def ensure_reply_cap(max_reply_tokens: int | None) -> None:
+    """Refuse a cap on a reply's tokens that allows none.
+
+    Raises:
+        InvalidSettingError: If ``max_reply_tokens`` is not ``None`` or positive.
+    """
+    if max_reply_tokens is not None and max_reply_tokens <= 0:
+        raise InvalidSettingError(
+            "max_reply_tokens", "max_reply_tokens must be None or positive (use None for no cap)")
 
 
 @dataclass(frozen=True)

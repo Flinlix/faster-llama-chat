@@ -14,7 +14,7 @@ from collections.abc import Callable, Generator
 from dataclasses import replace
 
 from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
-from .config import Config, Sampling
+from .config import Config, Sampling, ensure_reply_cap
 from .context import KVContext
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
@@ -49,6 +49,8 @@ class ChatWrapper:
         Raises:
             TypeError: If ``context`` does not answer everything the wrapper
                 calls on it.
+            InvalidSettingError: If ``model_path`` names no file, where the
+                wrapper loads the model itself.
             ValueError: If the model ships no chat template, if its template
                 fails validation against the model, or if ``config`` asks for
                 a larger context than ``context`` holds.
@@ -238,11 +240,13 @@ class ChatWrapper:
                 or if ``max_calls`` is given without a registry. At the first
                 iteration, if a registry holding tools is given to a model
                 that could never call one.
+            InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed.
             ContextOverflowError: If too little room remains for the reply, or
                 a result or the error answering a call no longer fits. The
                 turn is then open and cannot be continued.
         """
+        ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
         runs = isinstance(tool_call_policy, ToolRegistry)
