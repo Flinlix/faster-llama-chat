@@ -63,10 +63,60 @@ def test_the_kv_cache_follows_the_model_by_default():
     ("repetition_penalty", 0.0),
     ("seed", -1),
     ("seed", 0xFFFFFFFF),
+    ("penalty_window_tokens", -1),
+    ("decode_threads", 0),
+    ("decode_threads", -2),
+    ("prefill_threads", 0),
+    ("gpu_layers", -2),
 ])
 def test_config_rejects_invalid_values(field, value):
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(InvalidSettingError, match=field) as refused:
         Config(**{field: value})
+    assert refused.value.field == field
+
+
+# Every setting, with a value of a type it does not take.
+_WRONG_TYPES = {
+    "model_path": 3, "temperature": "hot", "top_k": 2.5, "top_p": "0.9", "min_p": True,
+    "repetition_penalty": [1.1], "presence_penalty": "1.5", "frequency_penalty": None,
+    "penalty_window_tokens": 64.0, "seed": "7", "context_size": "4096",
+    "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64",
+    "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
+    "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
+    "flash_attention": "auto", "kv_cache_type": 8,
+}
+
+
+def test_the_wrong_types_cover_every_setting():
+    assert set(_WRONG_TYPES) == {f.name for f in fields(Config)}
+
+
+@pytest.mark.parametrize("field, value", sorted(_WRONG_TYPES.items()))
+def test_every_setting_refuses_a_value_of_another_type_where_the_configuration_is_made(
+        field, value):
+    with pytest.raises(InvalidSettingError) as refused:
+        Config(**{field: value})
+    assert refused.value.field == field
+
+
+@pytest.mark.parametrize("field", ["temperature", "top_p", "presence_penalty",
+                                   "evict_above_fraction"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_a_number_that_is_not_finite_is_refused(field, value):
+    with pytest.raises(InvalidSettingError) as refused:
+        Config(**{field: value})
+    assert refused.value.field == field
+
+
+def test_a_whole_number_is_taken_where_a_fraction_is():
+    assert Config(temperature=1, top_p=1, evict_above_fraction=1).temperature == 1
+
+
+@pytest.mark.parametrize("cap", ["10", 2.5, True])
+def test_a_request_cap_of_another_type_is_refused(cap):
+    from llama_chat.config import ensure_reply_cap
+    with pytest.raises(InvalidSettingError, match="max_reply_tokens"):
+        ensure_reply_cap(cap)
 
 
 # ----- configurations that could never work --------------------------------
@@ -125,7 +175,7 @@ def test_a_sampling_replaces_exactly_the_fields_it_sets():
 
 
 @pytest.mark.parametrize("bad", [{"top_p": 0.0}, {"top_p": 1.5}, {"seed": -1},
-                                 {"seed": 2**32 - 1}])
+                                 {"seed": 2**32 - 1}, {"temperature": "hot"}, {"seed": 1.5}])
 def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
     with pytest.raises(InvalidSettingError) as by_config:
         Config(**bad)

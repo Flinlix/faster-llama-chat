@@ -286,8 +286,9 @@ holds that question.
 ## Configuration
 
 `Config` holds every setting except what an add-on file gives and what one
-request passes. It validates itself on construction and cannot be changed
-afterwards. `ChatWrapper.config` is the one the wrapper runs with: where the
+request passes. It checks every value on construction, its type (a whole
+number where a fraction is asked for, never `True` for a number, never one
+that is not finite) and its range, and cannot be changed afterwards. `ChatWrapper.config` is the one the wrapper runs with: where the
 wrapper loads the model itself, a sampling setting left unset holds the value
 the model supplies; with a cache context of your own, it is the configuration
 as passed.
@@ -304,7 +305,7 @@ as passed.
 | `repetition_penalty` | the model's | over `penalty_window_tokens`; `1.0` disables |
 | `presence_penalty` | `0.0` | flat penalty on a token already in the window |
 | `frequency_penalty` | `0.0` | penalty scaled by how often a token occurs in the window |
-| `penalty_window_tokens` | `64` | how far back the penalties look, within one generation |
+| `penalty_window_tokens` | `64` | how far back the penalties look, within one generation; at least `0` |
 | `seed` | `None` | in `[0, 2**32 - 2]`, which every generation starts from; `None` draws a fresh one |
 
 The five marked "the model's" take, unless set, the model's own recommendation
@@ -328,10 +329,10 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 
 | field | default | meaning |
 |------|------|------|
-| `gpu_layers` | `0` | layers offloaded to the GPU; `-1` for all |
+| `gpu_layers` | `0` | layers offloaded to the GPU, at least `0`; `-1` for all |
 | `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
-| `decode_threads` | `None` | CPU threads for decode; `None` lets llama.cpp decide |
-| `prefill_threads` | `None` | CPU threads for prefill; `None` means as many as `decode_threads` |
+| `decode_threads` | `None` | CPU threads for decode, at least `1`; `None` lets llama.cpp decide |
+| `prefill_threads` | `None` | CPU threads for prefill, at least `1`; `None` means as many as `decode_threads` |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |

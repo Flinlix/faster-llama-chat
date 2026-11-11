@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields, replace
 
 # The quantizations a caller may name. Which type id each one is worth is
@@ -28,7 +29,7 @@ class InvalidSettingError(ValueError):
 
 @dataclass(frozen=True)
 class Config:
-    """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`.
+    """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`, every value checked where it is made.
 
     The five model sampling fields, ``temperature`` to
     ``repetition_penalty``, left ``None`` take the model's own when it loads:
@@ -52,7 +53,7 @@ class Config:
         penalty_window_tokens: How far back the three penalties look, within
             the tokens of the generation being sampled: each generation starts
             with an empty window, and a turn resumed after a tool result is a
-            generation of its own.
+            generation of its own. At least ``0``.
         seed: Sampling RNG seed in ``[0, 2**32 - 2]``, which every generation
             starts from. ``None`` draws a fresh one per generation.
         context_size: The hard limit in tokens; generation never crosses it.
@@ -73,14 +74,15 @@ class Config:
             this many tokens would be left for the reply. ``0`` disables it,
             and it must stay below ``context_size``, which no request can leave
             entirely free.
-        gpu_layers: Layers to offload to GPU. ``0`` for a CPU-only build,
-            ``-1`` for all of them.
+        gpu_layers: Layers to offload to GPU, at least ``0``. ``0`` for a
+            CPU-only build, ``-1`` for all of them.
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
-        decode_threads: CPU threads for decode. ``None`` lets llama.cpp decide.
-        prefill_threads: CPU threads for prefill. ``None`` means as many as
-            ``decode_threads``.
+        decode_threads: CPU threads for decode, at least ``1``. ``None`` lets
+            llama.cpp decide.
+        prefill_threads: CPU threads for prefill, at least ``1``. ``None``
+            means as many as ``decode_threads``.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
         flash_attention: ``True`` or ``False`` forces flash attention on or
@@ -124,6 +126,7 @@ class Config:
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
 
     def __post_init__(self) -> None:
+        ensure_types(self)
         if not 0.0 < self.evict_above_fraction <= 1.0:
             raise InvalidSettingError("evict_above_fraction",
                                       "evict_above_fraction must be in (0, 1]")
@@ -137,6 +140,16 @@ class Config:
                 "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
             raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
+        if self.penalty_window_tokens < 0:
+            raise InvalidSettingError("penalty_window_tokens",
+                                      "penalty_window_tokens must be >= 0")
+        if self.gpu_layers < -1:
+            raise InvalidSettingError("gpu_layers",
+                                      "gpu_layers must be >= 0, or -1 for all of them")
+        for name in ("decode_threads", "prefill_threads"):
+            if getattr(self, name) is not None and getattr(self, name) < 1:
+                raise InvalidSettingError(
+                    name, f"{name} must be None or >= 1 (use None to let the engine decide)")
         ensure_reply_cap(self.max_reply_tokens)
         if self.min_reply_tokens < 0:
             raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")
@@ -177,13 +190,50 @@ class Config:
         return int(self.evict_above_fraction * self.context_size)
 
 
+def ensure_types(settings) -> None:
+    """Refuse a field of the dataclass ``settings`` whose value is of no type its annotation names.
+
+    A ``float`` field takes an ``int`` too, and only a finite number; no
+    number field takes a ``bool``.
+
+    Raises:
+        InvalidSettingError: Naming the first such field.
+    """
+    for setting in fields(settings):
+        kinds = [kind.strip() for kind in setting.type.split("|")]
+        value = getattr(settings, setting.name)
+        if not any(_is_of_kind(value, kind) for kind in kinds):
+            expected = " or ".join(_KIND_NAMES[kind] for kind in kinds)
+            raise InvalidSettingError(setting.name,
+                                      f"{setting.name} must be {expected}, not {value!r}")
+
+
+_KIND_NAMES = {"None": "None", "bool": "True or False", "int": "an int",
+               "float": "a finite number", "str": "a str"}
+
+
+def _is_of_kind(value, kind: str) -> bool:
+    if kind == "None":
+        return value is None
+    if kind == "bool":
+        return isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if kind == "int":
+        return isinstance(value, int)
+    if kind == "float":
+        return isinstance(value, (int, float)) and math.isfinite(value)
+    return isinstance(value, str)
+
+
 def ensure_reply_cap(max_reply_tokens: int | None) -> None:
     """Refuse a cap on a reply's tokens that allows none.
 
     Raises:
-        InvalidSettingError: If ``max_reply_tokens`` is not ``None`` or positive.
+        InvalidSettingError: If ``max_reply_tokens`` is neither ``None`` nor a positive int.
     """
-    if max_reply_tokens is not None and max_reply_tokens <= 0:
+    if max_reply_tokens is not None and (not _is_of_kind(max_reply_tokens, "int")
+                                         or max_reply_tokens <= 0):
         raise InvalidSettingError(
             "max_reply_tokens", "max_reply_tokens must be None or positive (use None for no cap)")
 

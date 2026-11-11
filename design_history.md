@@ -1592,3 +1592,19 @@ package routes the engine's output for the whole process, a model loaded by
 other code included. Rejected: keeping a level setting beside it, which would
 be a second way to do what `logging` does, and patching the binding's map,
 which would still print past Python's handlers.
+
+**266.8: every setting checked where the configuration is made.** Several
+settings were not checked at all: a negative penalty window or thread count, a
+`gpu_layers` below -1, and the type of any value, so `temperature="hot"` was
+taken and failed at the first reply, and `True` passed for a number.
+`Config.__post_init__` now first checks every field's type against its own
+annotation (`config.ensure_types`), so the annotation is the one statement of
+what a field takes and no list of fields can fall out of step with it: an
+`int` field takes only an `int`, a `float` field an `int` or a finite `float`,
+never a `bool`, and a field that may be `None` says so in its annotation. The
+range checks follow: `penalty_window_tokens` at least 0, `gpu_layers` at least
+-1, each thread count `None` or at least 1. `Sampling` is checked by the same
+code, through the configuration it is applied to, and the cap `reply` takes by
+`ensure_reply_cap`, which checks its type too. The list-valued setting the
+item named, `stop_strings`, went with 266.4, so no setting holds a value that
+can be changed in place.
