@@ -82,6 +82,11 @@ class ScriptedCall:
         self.before = before
 
 
+def shipped_addon_call(template_text: str) -> dict:
+    """How the shipped add-on file that names ``template_text`` says a call is written, as a wrapper finds it."""
+    return addon_file(None, template_text)["call"]
+
+
 def call_marks(template, context) -> tuple[str, str]:
     """The texts a call opens and closes with in a render: its own texts, else its tags' text."""
     boundary = template.call_boundary()
@@ -158,6 +163,7 @@ class FakeContext:
         # ("cut", position), ("shift", start, tokens) and ("restore", position).
         self.edits: list[tuple] = []
         self.samplings = []                      # the sampling each generation was handed
+        self.recommended = {}                    # the sampling the model states for itself
         self.resets = 0
         self.saved_states = 0
 
@@ -223,9 +229,8 @@ class FakeContext:
     def chat_template_text(self) -> str | None:
         return self._template
 
-    def addon_call(self) -> dict:
-        # The shipped add-on file that names this template, as a model's load finds it.
-        return addon_file(None, self._template)["call"]
+    def recommended_sampling(self) -> dict:
+        return dict(self.recommended)
 
     # ----- the cache ---------------------------------------------------------------
     def reset(self) -> None:
@@ -301,7 +306,7 @@ class FakeContext:
         """The template's own call tags as tokens, else its call texts as characters."""
         if self._call_mark_tokens is None:
             reader = FakeContext(self._fixture)
-            template = ResolvedTemplate(reader)
+            template = ResolvedTemplate(reader, shipped_addon_call(self._template))
             marks = call_marks(template, reader)
             by_tags = template.call_boundary().tool_tokens is not None
             self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)

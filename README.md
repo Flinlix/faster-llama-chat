@@ -288,10 +288,10 @@ holds that question.
 `Config` holds every setting except what an add-on file gives and what one
 request passes. It checks every value on construction, its type (a whole
 number where a fraction is asked for, never `True` for a number, never one
-that is not finite) and its range, and cannot be changed afterwards. `ChatWrapper.config` is the one the wrapper runs with: where the
-wrapper loads the model itself, a sampling setting left unset holds the value
-the model supplies; with a cache context of your own, it is the configuration
-as passed.
+that is not finite) and its range, and cannot be changed afterwards.
+`ChatWrapper.config` is the one the wrapper runs with: a sampling setting left
+unset holds the value the model supplies, whether the wrapper loaded the model
+or was given a cache context of your own.
 
 **Model and sampling**
 
@@ -402,12 +402,17 @@ past midnight is decoded again once, from the date on.
 ## Your own cache context
 
 `ChatWrapper(context=...)` takes any object that answers the two protocols
-`ModelReader` (its tokenizer, tags, chat template and add-on file) and
-`CacheContext` (that, and the cache a conversation is decoded into), with the
-type one of its members takes: `Sampling`, from `llama_chat`. Nothing to
-subclass or register; the
-members are checked where the context is adopted, so a missing one is a
-`TypeError` from the constructor. What the template is read for comes from its
+`ModelReader` (its tokenizer, tags, chat template and the sampling the model
+recommends) and `CacheContext` (that, and the cache a conversation is decoded
+into), with the type one of its members takes: `Sampling`, from `llama_chat`.
+Nothing to subclass or register; the members are checked where the context is
+adopted, so a missing one is a `TypeError` from the constructor. The wrapper
+reads the [add-on file](#add-on-files) itself, by `model_path` where one is set
+and by the template `chat_template_text` gives, and merges the sampling, so a
+context of your own gets both as one the wrapper loads does;
+`recommended_sampling` gives what the model states for itself, by `Sampling`'s
+field names, and each `sampled_tokens` call is handed every value it draws
+with. What the template is read for comes from its
 renders alone, and where the model's tags lie in a text from its tokenizer
 alone: `special_tokens` lists the tags, `is_special` tells one among the tokens
 of a text, `tokenize` with special-token parsing on gives each tag in a text as

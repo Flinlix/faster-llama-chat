@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from llama_chat.config import Config, Sampling
+from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tools import ToolCall, ToolRegistry
 from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError
 from llama_chat.generation import generate
@@ -621,7 +621,6 @@ def test_close_is_idempotent_and_blocks_actions():
 def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing):
     closed = []
     loaded = FakeContext(PLAIN)
-    loaded.config = Config(context_size=500)
     loaded.close = lambda: closed.append(True)
     monkeypatch.setattr("llama_chat.wrapper.KVContext", lambda config, on_load_progress: loaded)
 
@@ -718,7 +717,8 @@ def test_every_tool_call_policy_hands_its_sampling_to_the_generation(tool_call_p
     sampling = Sampling(temperature=0.1)
     w.reply("hi", tool_call_policy=ToolRegistry() if tool_call_policy == "registry" else tool_call_policy,
             sampling=sampling).finish()
-    assert fake.samplings == [sampling]
+    assert fake.samplings == [generation_sampling(w.config, sampling)]
+    assert fake.samplings[0].temperature == 0.1
 
 
 def test_a_stream_and_a_resume_hand_it_over_as_well():
@@ -726,7 +726,31 @@ def test_a_stream_and_a_resume_hand_it_over_as_well():
     sampling = Sampling(top_p=0.5)
     list(w.reply("hi", sampling=sampling))
     list(w.reply("again", tool_call_policy="yield", sampling=sampling))
-    assert fake.samplings == [sampling, sampling]
+    assert fake.samplings == [generation_sampling(w.config, sampling)] * 2
+
+
+def test_a_context_of_your_own_gets_the_add_on_file_and_what_the_model_recommends():
+    # The shipped Qwen 3 file names this template; nothing the model states is used beside it.
+    from tests.chat_templates import fixture
+    fake = FakeContext(fixture("qwen-3"), ["Fine."])
+    w = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=fake)
+    assert (w.config.temperature, w.config.top_k, w.config.top_p) == (0.6, 20, 0.95)
+    w.begin("")
+    w.reply("hi").finish()
+    assert (fake.samplings[0].temperature, fake.samplings[0].top_k) == (0.6, 20)
+
+    # A model that states its own and has no add-on file.
+    stating = FakeContext(PLAIN)
+    stating.recommended = {"temperature": 0.4, "min_p": 0.07}
+    w = ChatWrapper(Config(context_size=512), context=stating)
+    assert (w.config.temperature, w.config.min_p) == (0.4, 0.07)
+
+
+def test_every_generation_is_handed_every_sampling_value():
+    w, fake = begun_wrapper()
+    w.reply("hi").finish()
+    assert all(getattr(fake.samplings[0], f.name) is not None
+               for f in dataclasses.fields(Sampling) if f.name != "seed")
 
 
 # ----- a system turn where the template has one or none --------------------
@@ -828,15 +852,16 @@ def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_inc
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
 
 
-def test_config_holds_the_sampling_the_model_supplies_where_the_wrapper_loads_it(monkeypatch):
+def test_config_holds_the_sampling_the_model_supplies_whoever_built_the_context(monkeypatch):
     given = Config(context_size=512)
-    in_use = dataclasses.replace(given, temperature=0.6, top_p=0.9)
 
     class _Loaded(FakeContext):
         def __init__(self, config, on_load_progress=None):
             super().__init__(PLAIN)
-            self.config = in_use
+            self.recommended = {"temperature": 0.6, "top_p": 0.9}
 
     monkeypatch.setattr("llama_chat.wrapper.KVContext", _Loaded)
-    assert ChatWrapper(given).config == in_use
-    assert ChatWrapper(given, context=FakeContext(PLAIN)).config == given
+    loaded = ChatWrapper(given).config
+    own = ChatWrapper(given, context=_Loaded(given)).config
+    assert loaded == own
+    assert (own.temperature, own.top_p, own.context_size) == (0.6, 0.9, 512)

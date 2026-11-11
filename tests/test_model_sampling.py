@@ -15,18 +15,12 @@ from tests.chat_templates import STEMS, fixture
 _TEMPLATE = "{{ messages }}"
 
 
-def _metadata(stated=None, template=_TEMPLATE):
-    values = {"tokenizer.chat_template": template,
-              **{f"general.sampling.{key}": value for key, value in (stated or {}).items()}}
-    return values.get
-
-
 def test_what_the_caller_sets_wins_over_everything_the_model_recommends(tmp_path):
     model = tmp_path / "m.gguf"
     (tmp_path / "m.json").write_text(json.dumps({"sampling": {"temperature": 0.3}}))
     config = with_model_sampling(
         Config(model_path=str(model), temperature=0.9),
-        _metadata({"temp": "0.6"}), addon_file(model, None))
+        {"temperature": 0.6}, addon_file(model, None))
     assert config.temperature == 0.9
 
 
@@ -35,22 +29,22 @@ def test_the_gguf_comes_before_the_add_on_file_and_the_file_before_the_default(t
     (tmp_path / "m.json").write_text(json.dumps({"sampling": {"temperature": 0.3, "top_k": 7}}))
     config = with_model_sampling(
         Config(model_path=str(model)),
-        _metadata({"temp": "0.600000", "top_k": "-1"}), addon_file(model, None))
+        {"temperature": 0.6, "top_k": -1}, addon_file(model, None))
     assert (config.temperature, config.top_k) == (0.6, -1)
     config = with_model_sampling(
         Config(model_path=str(model)),
-        _metadata(), addon_file(model, None))
+        {}, addon_file(model, None))
     assert (config.temperature, config.top_k) == (0.3, 7)
     config = with_model_sampling(
         Config(model_path=str(tmp_path / "other.gguf")),
-        _metadata(), addon_file(tmp_path / "other.gguf", None))
+        {}, addon_file(tmp_path / "other.gguf", None))
     assert config.min_p == DEFAULT_SAMPLING["min_p"]
 
 
 def test_what_a_recommendation_leaves_out_stays_switched_off(tmp_path):
     config = with_model_sampling(
         Config(model_path=str(tmp_path / "m.gguf")),
-        _metadata({"temp": "1.0", "top_k": "64", "top_p": "0.95"}), addon_file(tmp_path / "m.gguf", None))
+        {"temperature": 1.0, "top_k": 64, "top_p": 0.95}, addon_file(tmp_path / "m.gguf", None))
     assert (config.min_p, config.repetition_penalty) == (UNSTATED_SAMPLING["min_p"], 1.0)
 
 
@@ -70,7 +64,7 @@ def test_a_malformed_add_on_file_is_refused_when_the_model_loads(tmp_path, conte
     with pytest.raises(ValueError):
         with_model_sampling(
         Config(model_path=str(tmp_path / "m.gguf")),
-        _metadata(), addon_file(tmp_path / "m.gguf", None))
+        {}, addon_file(tmp_path / "m.gguf", None))
 
 
 @pytest.mark.parametrize("path", sorted(SHIPPED_ADDONS.glob("*.json")), ids=lambda p: p.stem)

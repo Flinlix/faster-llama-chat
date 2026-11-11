@@ -12,6 +12,7 @@ import ctypes
 import inspect
 import logging
 import re
+import dataclasses
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
@@ -479,6 +480,27 @@ def test_flash_attention_is_the_engines_choice_unless_set_or_a_quantized_cache_n
     assert _context_settings(tmp_path, monkeypatch, **settings)["flash_attn"] is asked
 
 
+def _gguf_stating(stated: dict):
+    """A KVContext whose model's GGUF holds ``stated``, by key."""
+    context = object.__new__(KVContext)
+    context._model = "model"
+    context._backend = SimpleNamespace(metadata_value=lambda model, key: stated.get(key))
+    return context
+
+
+def test_the_sampling_a_gguf_states_is_read_by_the_names_a_request_gives_it():
+    context = _gguf_stating({"general.sampling.temp": "0.600000", "general.sampling.top_k": "20",
+                             "general.sampling.penalty_repeat": "1.05"})
+    assert context.recommended_sampling() == {"temperature": 0.6, "top_k": 20,
+                                              "repetition_penalty": 1.05}
+    assert _gguf_stating({}).recommended_sampling() == {}
+
+
+def test_a_gguf_sampling_value_that_is_no_number_is_refused_naming_its_key():
+    with pytest.raises(ValueError, match="general.sampling.top_p"):
+        _gguf_stating({"general.sampling.top_p": "high"}).recommended_sampling()
+
+
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
     assert tokenize_pieces(_merging_context(), [], add_special=True) == ["BOS"]
 
@@ -525,9 +547,13 @@ def _stub_context(chains):
     )
     ctx._vocab, ctx._engine_context = None, None
     ctx._max_batch_tokens = 8
-    ctx._config = Config()
-    ctx._build_sampler = lambda config, withheld=(): ("own", config.temperature) + withheld
+    ctx._build_sampler = lambda sampling, withheld=(): ("own", sampling.temperature) + withheld
     return ctx
+
+
+# Every value a generation draws with, as a wrapper hands them over.
+_DRAWN = Sampling(temperature=0.8, top_k=40, top_p=0.95, min_p=0.05, repetition_penalty=1.0,
+                  presence_penalty=0.0, frequency_penalty=0.0, penalty_window_tokens=64)
 
 
 # ----- flash attention and offload on each build ---------------------------
@@ -556,17 +582,18 @@ def test_every_generation_draws_from_a_chain_of_its_own_freed_when_it_ends():
     """No chain outlives its generation, so penalties and a seed start afresh in each."""
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    own = ("own", Config().temperature)
-    list(generate(ctx, 0, 1, out=GenerationAccumulator()))
+    own = ("own", _DRAWN.temperature)
+    list(generate(ctx, 0, 1, out=GenerationAccumulator(), sampling=_DRAWN))
     assert chains["sampled"] == chains["freed"] == [own]
-    list(generate(ctx, 1, 1, out=GenerationAccumulator(), sampling=Sampling()))
+    list(generate(ctx, 1, 1, out=GenerationAccumulator(), sampling=_DRAWN))
     assert chains["sampled"] == chains["freed"] == [own, own]
 
 
 def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    stream = generate(ctx, 0, 3, out=GenerationAccumulator(), sampling=Sampling(temperature=0.3))
+    stream = generate(ctx, 0, 3, out=GenerationAccumulator(),
+                      sampling=dataclasses.replace(_DRAWN, temperature=0.3))
     next(stream)
     stream.close()
     assert chains["sampled"] == [("own", 0.3)]
@@ -576,9 +603,9 @@ def test_an_override_gets_its_own_chain_and_frees_it_even_when_abandoned():
 def test_a_withheld_token_gets_a_chain_of_its_own_that_never_draws_it():
     chains = {"sampled": [], "freed": []}
     ctx = _stub_context(chains)
-    list(generate(ctx, 0, 3, out=GenerationAccumulator(),
+    list(generate(ctx, 0, 3, out=GenerationAccumulator(), sampling=_DRAWN,
                       boundary=CallBoundary(withheld_tokens=(42,))))
-    assert chains["sampled"][0] == ("own", Config().temperature, 42)
+    assert chains["sampled"][0] == ("own", _DRAWN.temperature, 42)
     assert chains["freed"] == [chains["sampled"][0]]
 
 
@@ -592,7 +619,7 @@ def test_a_chain_a_stage_fails_to_join_is_freed():
     ctx._backend = SimpleNamespace(sampler_chain=lambda: "chain", add_withheld=refuse,
                                    free_sampler=freed.append)
     with pytest.raises(RuntimeError, match="refused"):
-        ctx._build_sampler(Config(), withheld=(42,))
+        ctx._build_sampler(_DRAWN, withheld=(42,))
     assert freed == ["chain"]
 
 

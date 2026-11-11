@@ -9,6 +9,7 @@ conversation.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 
 from .cache_context import MODEL_READER, RENDERER_VARIABLES, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
@@ -45,6 +46,9 @@ class ResolvedTemplate:
 
     Args:
         context: The cache context to read the model through.
+        addon_call: How the model's add-on file says a call is written, its
+            ``opening``, ``name_close`` and ``closing``; empty or ``None``
+            where it says nothing.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
@@ -52,9 +56,10 @@ class ResolvedTemplate:
             validation against the model.
     """
 
-    def __init__(self, context) -> None:
+    def __init__(self, context, addon_call: Mapping[str, str] | None = None) -> None:
         ensure_answers(context, MODEL_READER)
         self._context = context
+        self._addon_call = dict(addon_call or {})
         self._probe_render = refusing(context.render_with_model_template)
         self._variables: dict = {}      # template variables every render passes
         self._tag_texts = tag_texts(context)
@@ -354,7 +359,7 @@ class ResolvedTemplate:
         found = self._template_call_texts()
         if found is not None:
             return found, False
-        call = self._context.addon_call()
+        call = self._addon_call
         if not call or self._tool_calls is None:
             return None, False
         rendered = self._render([{"role": "user", "content": _PROMPT},
@@ -471,7 +476,7 @@ class ResolvedTemplate:
             return None
         if self._call_from_file:
             # The name ends where the file says; the arguments are read as written.
-            return CallBody(name_close=self._context.addon_call()["name_close"], key_open="",
+            return CallBody(name_close=self._addon_call["name_close"], key_open="",
                             key_close="", pair_sep="", body_close="", empty_close="")
         call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
                      else self._tool_calls.call_open)

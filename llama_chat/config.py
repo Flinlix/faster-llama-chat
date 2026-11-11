@@ -283,3 +283,9 @@ def with_request_sampling(config: Config, sampling: Sampling | None) -> Config:
         return config
     return replace(config, **{f.name: getattr(sampling, f.name) for f in fields(sampling)
                               if getattr(sampling, f.name) is not None})
+
+
+def generation_sampling(config: Config, sampling: Sampling | None) -> Sampling:
+    """Every sampling value a generation draws with: ``sampling``'s where it sets one, else ``config``'s."""
+    applied = with_request_sampling(config, sampling)
+    return Sampling(**{f.name: getattr(applied, f.name) for f in fields(Sampling)})

@@ -1,10 +1,12 @@
 """Declaring tools to a conversation, the turn a call holds open, and running the tools."""
 
+import json
 import re
 import threading
 
 import pytest
 
+from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
@@ -903,11 +905,14 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     assert "the limit is 1" in refusals[0]     # and the count reads correctly
 
 
-def test_an_add_on_files_call_format_gives_no_calls_to_a_template_that_writes_none():
+def test_an_add_on_files_call_format_gives_no_calls_to_a_template_that_writes_none(tmp_path):
     """An add-on file says how a call is written only where the template writes one."""
     fake = FakeContext(PLAIN)
-    fake.addon_call = lambda: {"opening": "OPEN:", "name_close": "(", "closing": ":CLOSE"}
-    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    (tmp_path / "model.json").write_text(json.dumps(
+        {"templates": [template_fingerprint(PLAIN["chat_template"])],
+         "call": {"opening": "OPEN:", "name_close": "(", "closing": ":CLOSE"}}))
+    wrapper = ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=512),
+                          context=fake)
     assert not wrapper.can_call_tools
 
 

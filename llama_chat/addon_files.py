@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,10 +18,6 @@ SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty")
 CALL_FIELDS = ("opening", "name_close", "closing")
 _FILE_KEYS = {"templates", "source", "sampling", "call"}
-# The GGUF keys that state the sampling fields a model may recommend.
-_GGUF_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
-              "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
-              "repetition_penalty": "general.sampling.penalty_repeat"}
 # llama.cpp's own defaults, for a model that recommends nothing.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
                     "repetition_penalty": 1.0}
@@ -86,37 +82,23 @@ def read_addon_file(path: Path | None) -> dict:
     return {"templates": list(found.get("templates", [])), "sampling": sampling, "call": call}
 
 
-def with_model_sampling(config: Config, metadata: Callable[[str], str | None],
+def with_model_sampling(config: Config, recommended: Mapping[str, float],
                         addon: dict) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
-    One source is taken whole: the GGUF's recommendation, else the add-on
-    file's, a field it leaves out switched off; with neither, llama.cpp's
-    defaults.
+    One source is taken whole: what the model recommends itself, else the
+    add-on file's, a field it leaves out switched off; with neither,
+    llama.cpp's defaults.
 
     Args:
         config: What the caller set; a field it sets is kept.
-        metadata: Reads one of the model's GGUF metadata values, ``None`` where absent.
+        recommended: The sampling the model states for itself, as
+            :meth:`~llama_chat.cache_context.ModelReader.recommended_sampling` gives it.
         addon: The model's add-on file, as :func:`addon_file` reads it.
     """
     unset = [name for name in SAMPLING_FIELDS if getattr(config, name) is None]
     if not unset:
         return config
-    stated = _stated_in_gguf(metadata) or addon["sampling"]
+    stated = dict(recommended) or addon["sampling"]
     rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
-
-
-def _stated_in_gguf(metadata: Callable[[str], str | None]) -> dict:
-    """The sampling the model's GGUF states, as numbers."""
-    stated = {}
-    for name, key in _GGUF_KEYS.items():
-        value = metadata(key)
-        if value is None:
-            continue
-        try:
-            number = float(value)
-        except ValueError:
-            continue
-        stated[name] = int(number) if name == "top_k" else number
-    return stated

@@ -1624,3 +1624,21 @@ model and its context allocated, in VRAM where it was offloaded, with nothing
 holding them that could free them. Every step after the load is now inside the
 guard. A context of your own is still left open where construction fails, as
 documented, since the caller holds it and may use it again.
+
+**265.6: the add-on file and the model's sampling are the wrapper's.** The
+engine's context read the add-on file and merged the sampling while it
+loaded, and built each generation's sampler from its own configuration, so a
+cache context of your own got neither: no add-on file, so a model whose calls
+only its file describes could not call tools, and no recommended sampling.
+Both now happen in `ChatWrapper.__init__`, for every context. The protocol
+lost `addon_call` and gained `recommended_sampling`, the values the model
+states for itself by `Sampling`'s names; the engine's context reads them from
+the GGUF's `general.sampling.*` keys, which now live in `context.py`, the one
+file that knows a GGUF. The wrapper finds the add-on file from `model_path`
+and the template text, merges the sampling into its configuration, and hands
+the template the file's call format (`ResolvedTemplate(context, addon_call)`).
+`sampled_tokens` is handed every value a generation draws with
+(`config.generation_sampling`), a request's where it sets one, so a context
+never needs a configuration of its own for sampling and `KVContext.config` is
+gone. Rejected: keeping the add-on file in the context and copying it into a
+context of your own, which would make every implementation repeat the lookup.

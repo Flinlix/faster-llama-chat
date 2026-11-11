@@ -69,8 +69,8 @@ def generate(
             after abandoning the stream; a fresh one is used otherwise.
         cancel: Checked once per token. Setting it, from any thread, ends
             the generation with ``stop_reason == "interrupted"``.
-        sampling: This generation's own settings, in place of the
-            configuration's.
+        sampling: Every value this generation draws with, handed to the
+            context.
         ends_turn: Whether a sampled token ends the reply as an
             end-of-generation token does, neither cached nor yielded: the
             first of a closing the model writes in several tags.

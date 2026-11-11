@@ -24,7 +24,7 @@ from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture
-from .fake_context import FakeContext, ScriptedCall, call_marks
+from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -69,7 +69,8 @@ class _Run:
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
-        self.template = ResolvedTemplate(self.reader)
+        self.template = ResolvedTemplate(self.reader,
+                                         shipped_addon_call(self.fixture["chat_template"]))
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                            can_shift=can_shift)
@@ -725,10 +726,10 @@ def _call_body(run, arguments):
              {"id": "call00000", "type": "function",
               "function": {"name": WEATHER.name, "arguments": arguments}}]}])
     opener, closer = call_marks(template, run.reader)
-    if run.context.addon_call():
+    addon_call = shipped_addon_call(run.fixture["chat_template"])
+    if addon_call:
         # The template shows no call it could be read from; the model writes the add-on file's.
-        return opener, WEATHER.name + run.context.addon_call()["name_close"] + json.dumps(
-            arguments), closer
+        return opener, WEATHER.name + addon_call["name_close"] + json.dumps(arguments), closer
     return opener, rendered.rsplit(opener, 1)[1].split(closer, 1)[0], closer
 
 

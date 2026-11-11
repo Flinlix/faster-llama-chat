@@ -7,17 +7,19 @@ tag, so what is compared is the text. Whole conversations on these templates
 are in ``test_conversations.py``.
 """
 
+import json
+
 import pytest
 
 from llama_chat import ChatWrapper, Config
-from llama_chat.addon_files import addon_file
+from llama_chat.addon_files import addon_file, template_fingerprint
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolRegistry
 
 from .chat_templates import STEMS, WEATHER, fixture
-from .fake_context import FakeContext, call_marks
+from .fake_context import FakeContext, call_marks, shipped_addon_call
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
@@ -27,7 +29,7 @@ def _load(stem):
     context = FakeContext(fixture(stem))
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
-    return context, ResolvedTemplate(context)
+    return context, ResolvedTemplate(context, shipped_addon_call(fixture(stem)["chat_template"]))
 
 
 @pytest.mark.parametrize("stem", STEMS)
@@ -93,7 +95,7 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
 def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
     context, template = _load(stem)
     template.ensure_tools_usable()
-    call = context.addon_call()
+    call = shipped_addon_call(fixture(stem)["chat_template"])
     if call:
         # The add-on file says how the model writes a call, where the template
         # writes it in another order; a call in that form reads back.
@@ -155,20 +157,23 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
 def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
     # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
     context = FakeContext(fixture("qwen-3.6"))
-    context.addon_call = lambda: {"opening": "CALL:", "name_close": " ", "closing": "END"}
-    boundary = ResolvedTemplate(context).call_boundary()
+    boundary = ResolvedTemplate(
+        context, {"opening": "CALL:", "name_close": " ", "closing": "END"}).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
 
 
-def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable():
+def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable(tmp_path):
     # gpt-oss writes a call's opening as plain text its replies also hold.
     known = fixture("gpt-oss")
     registry = ToolRegistry()
     registry.register(lambda: "12:00", "The time.", name="clock")
 
+    # An add-on file of its own that names the template and says nothing of a call.
+    (tmp_path / "model.json").write_text(json.dumps(
+        {"templates": [template_fingerprint(known["chat_template"])]}))
     without = FakeContext(known, ["Fine."])
-    without.addon_call = lambda: {}
-    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=without)
+    chat = ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=4096,
+                              min_reply_tokens=8), context=without)
     assert not chat.can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
         chat.begin("", tools=registry.specs())
@@ -178,17 +183,17 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     assert chat.can_call_tools
     chat.begin("", tools=registry.specs())      # the whole chain is checked, and passes
     # Read with the spelling the file gives.
-    written = "clock" + context.addon_call()["name_close"] + "{}"
-    assert ResolvedTemplate(context).read_calls(written) == [ToolCall("clock", {})]
+    call = shipped_addon_call(known["chat_template"])
+    written = "clock" + call["name_close"] + "{}"
+    assert ResolvedTemplate(context, call).read_calls(written) == [ToolCall("clock", {})]
 
 
 def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
     context = FakeContext(fixture("gpt-oss"))
-    context.addon_call = lambda: {"opening": "<|channel|>commentary to=functions.",
-                                  "name_close": " <|constrain|>json<|message|>",
-                                  "closing": "<|never|>"}
     with pytest.raises(ValueError, match="add-on file closes a call"):
-        ResolvedTemplate(context)
+        ResolvedTemplate(context, {"opening": "<|channel|>commentary to=functions.",
+                                   "name_close": " <|constrain|>json<|message|>",
+                                   "closing": "<|never|>"})
 
 
 _ARGUMENTS = [{}, {"title": "Zahnarzt"}, {"title": "Zahnarzt", "minutes": 30},

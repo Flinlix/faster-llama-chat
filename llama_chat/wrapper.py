@@ -13,8 +13,9 @@ import threading
 from collections.abc import Callable, Generator
 from dataclasses import replace
 
+from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
-from .config import Config, Sampling, ensure_reply_cap
+from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
@@ -34,7 +35,10 @@ class ChatWrapper:
         *,
         on_load_progress: Callable[[float], None] | None = None,
     ) -> None:
-        """Load the model, resolve the chat template, and validate it.
+        """Load the model, read its add-on file, resolve the chat template, and validate it.
+
+        The add-on file and the sampling the model recommends are read the
+        same way for a context of your own as for one this loads.
 
         Args:
             config: The configuration; :class:`~llama_chat.config.Config`'s
@@ -65,13 +69,15 @@ class ChatWrapper:
         # Everything that can be settled about this model is settled here, so
         # that what fails, fails while the wrapper is being built.
         try:
-            self._config = self._context.config if owns_context else config
             ensure_answers(self._context, CACHE_CONTEXT)
             if config.context_size > self._context.context_size:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
-            self._template = ResolvedTemplate(self._context)
+            addon = addon_file(config.model_path, self._context.chat_template_text())
+            self._config = with_model_sampling(
+                config, self._context.recommended_sampling(), addon)
+            self._template = ResolvedTemplate(self._context, addon["call"])
             self._conversation = RenderedCache(self._context, self._template, self._config)
         except BaseException:
             if owns_context:
@@ -363,9 +369,9 @@ class ChatWrapper:
     def config(self) -> Config:
         """The configuration this wrapper runs with, its limits included.
 
-        Where the wrapper loaded the model itself, a sampling setting left
-        unset holds the value the model supplies; with a cache context of your
-        own, it is the configuration as given.
+        A sampling setting left unset holds the value the model supplies,
+        through its add-on file or its own recommendation, whether the wrapper
+        loaded the model itself or was given a cache context of your own.
         """
         return self._config
 
@@ -623,7 +629,8 @@ class ChatWrapper:
                                conversation.prompt_text, list(stop))
         pieces = conversation.generate(
             cap, generated, cancel=cancel,
-            sampling=sampling, ends_turn=self._turn_end_test(reply_text),
+            sampling=generation_sampling(self._config, sampling),
+            ends_turn=self._turn_end_test(reply_text),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
         try:
             for piece in pieces:

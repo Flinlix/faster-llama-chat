@@ -1,8 +1,9 @@
 """KV-cache operations: tokenize, prefill, the steps a generation takes, evict and shift.
 
-Owns the model and the context, and builds each generation's sampler. What
-the cache should hold is decided by the caller, and how a generation goes on
-by :mod:`llama_chat.generation`.
+Owns the model and the context, reads the sampling the model's GGUF
+recommends, and builds each generation's sampler. What the cache should hold
+is decided by the caller, and how a generation goes on by
+:mod:`llama_chat.generation`.
 """
 
 from __future__ import annotations
@@ -11,12 +12,14 @@ import os
 from collections.abc import Callable, Mapping
 
 from ._backend import Backend
-from .config import (UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling,
-                     with_request_sampling)
-from .addon_files import addon_file, with_model_sampling
+from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling
 from .model_template import ModelTemplate
 
 SEQ = 0  # single active conversation -> single sequence id
+# The GGUF keys that state the sampling a model recommends, by Sampling's names.
+_GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
+                       "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
+                       "repetition_penalty": "general.sampling.penalty_repeat"}
 
 
 class KVContext:
@@ -50,10 +53,6 @@ class KVContext:
         self._engine_context = None
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
-            addon = addon_file(config.model_path, template)      # read once, for both uses
-            self._config = config = with_model_sampling(
-                config, lambda key: self._backend.metadata_value(self._model, key), addon)
-            self._addon_call = addon["call"]
             kv_type = self._backend.kv_cache_type_id(config.kv_cache_type)
             self._engine_context = self._backend.new_context(
                 self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
@@ -74,11 +73,6 @@ class KVContext:
             self._backend.free_model(self._model)
             raise
         self._closed = False
-
-    @property
-    def config(self) -> Config:
-        """The configuration this context runs with, the sampling the model supplies filled in."""
-        return self._config
 
     @property
     def context_size(self) -> int:
@@ -135,9 +129,24 @@ class KVContext:
         return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
                                            reasoning=reasoning, variables=variables)
 
-    def addon_call(self) -> dict:
-        """How the model's add-on file says a generated call is written, if it says."""
-        return dict(self._addon_call)
+    def recommended_sampling(self) -> dict[str, float]:
+        """The sampling the model's GGUF states, by :class:`Sampling`'s names.
+
+        Raises:
+            ValueError: If the GGUF states one of them as text that is no number.
+        """
+        stated = {}
+        for name, key in _GGUF_SAMPLING_KEYS.items():
+            text = self._backend.metadata_value(self._model, key)
+            if text is None:
+                continue
+            try:
+                number = float(text)
+            except ValueError:
+                raise ValueError(f"the model's GGUF states {key} as {text!r}, which is "
+                                 "no number") from None
+            stated[name] = int(number) if name == "top_k" and number.is_integer() else number
+        return stated
 
     def chat_template_text(self) -> str | None:
         """The source of the model's own chat template, or ``None`` where it ships none."""
@@ -198,11 +207,10 @@ class KVContext:
             raise RuntimeError(f"the cache refused to remove its tokens from {pos} on")
 
     # ----- the steps a generation takes ----------------------------------
-    def sampled_tokens(self, sampling: Sampling | None, withheld_tokens: tuple[int, ...]):
+    def sampled_tokens(self, sampling: Sampling, withheld_tokens: tuple[int, ...]):
         """Tokens drawn one at a time from a sampler chain of their own, freed when this is closed."""
         # A chain of its own: penalties count this generation's tokens only, and a seed starts over.
-        sampler = self._build_sampler(with_request_sampling(self._config, sampling),
-                                      withheld_tokens)
+        sampler = self._build_sampler(sampling, withheld_tokens)
         try:
             while True:
                 yield self._backend.sample(sampler, self._engine_context)
@@ -249,30 +257,30 @@ class KVContext:
         finally:
             self._backend.kv_clear(self._engine_context)
 
-    def _build_sampler(self, config: Config, withheld: tuple[int, ...] = ()):
-        """Assemble the sampler chain ``config`` asks for, in sampling order, ``withheld`` never drawn."""
+    def _build_sampler(self, sampling: Sampling, withheld: tuple[int, ...] = ()):
+        """Assemble the sampler chain ``sampling`` asks for, in sampling order, ``withheld`` never drawn."""
         backend = self._backend
         chain = backend.sampler_chain()
         try:
             if withheld:
                 backend.add_withheld(chain, self._vocab, withheld)
-            if config.repetition_penalty != 1.0 \
-                    or config.presence_penalty or config.frequency_penalty:
-                backend.add_penalties(chain, self._vocab, config.penalty_window_tokens,
-                                      config.repetition_penalty,
-                                      config.frequency_penalty,
-                                      config.presence_penalty)
-            if config.temperature <= 0.0:
+            if sampling.repetition_penalty != 1.0 \
+                    or sampling.presence_penalty or sampling.frequency_penalty:
+                backend.add_penalties(chain, self._vocab, sampling.penalty_window_tokens,
+                                      sampling.repetition_penalty,
+                                      sampling.frequency_penalty,
+                                      sampling.presence_penalty)
+            if sampling.temperature <= 0.0:
                 backend.add_greedy(chain)
                 return chain
-            if config.top_k > 0:
-                backend.add_top_k(chain, config.top_k)
-            backend.add_top_p(chain, config.top_p)
-            if config.min_p > 0.0:
-                backend.add_min_p(chain, config.min_p)
-            backend.add_temperature(chain, config.temperature)
+            if sampling.top_k > 0:
+                backend.add_top_k(chain, sampling.top_k)
+            backend.add_top_p(chain, sampling.top_p)
+            if sampling.min_p > 0.0:
+                backend.add_min_p(chain, sampling.min_p)
+            backend.add_temperature(chain, sampling.temperature)
             # An unset seed asks for a fresh random one on every run.
-            seed = config.seed if config.seed is not None else backend.fresh_seed_per_run
+            seed = sampling.seed if sampling.seed is not None else backend.fresh_seed_per_run
             backend.add_distribution(chain, seed)
             return chain
         except BaseException:

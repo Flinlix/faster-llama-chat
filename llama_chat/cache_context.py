@@ -1,7 +1,8 @@
 """What resolving a template and running a conversation call on a cache context.
 
 Two protocols: the model as it is read (its tokenizer, tags, chat template and
-add-on file), and that plus the cache a conversation is decoded into. Each is
+the sampling it recommends), and that plus the cache a conversation is decoded
+into. Each is
 checked once, where a context is adopted, rather than at the first call that
 finds a member missing.
 """
@@ -48,7 +49,7 @@ class GenerationAccumulator:
 
 
 class ModelReader(Protocol):
-    """The model's tokenizer, its own tags, its chat template and its add-on file."""
+    """The model's tokenizer, its own tags, its chat template and the sampling it recommends."""
 
     def tokenize(self, text: str, add_special: bool = False,
                  parse_special: bool = True) -> list[int]:
@@ -75,7 +76,8 @@ class ModelReader(Protocol):
 
     def chat_template_text(self) -> str | None: ...
 
-    def addon_call(self) -> dict: ...
+    def recommended_sampling(self) -> Mapping[str, float]:
+        """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none."""
 
 
 class CacheContext(ModelReader, Protocol):
@@ -95,13 +97,13 @@ class CacheContext(ModelReader, Protocol):
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
 
-    def sampled_tokens(self, sampling: Sampling | None,
+    def sampled_tokens(self, sampling: Sampling,
                        withheld_tokens: tuple[int, ...]) -> Generator[int, None, None]:
         """Tokens drawn one at a time, each from the logits of the newest decode.
 
-        ``sampling`` stands in for the configuration's settings where given,
-        and no token of ``withheld_tokens`` is drawn. Closing it frees what
-        drawing took.
+        Drawn with every value of ``sampling``, each of them set, but its
+        ``seed``, whose ``None`` draws a fresh one; no token of
+        ``withheld_tokens`` is drawn. Closing it frees what drawing took.
         """
 
     def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
