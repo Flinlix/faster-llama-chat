@@ -22,7 +22,7 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     template = ResolvedTemplate(FakeContext(REASONING))
     assert template.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
-        generation_prompt="<[turn>model\n")
+        generation_prompt="<[turn>model\n", can_turn_off=True)
     assert template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
 
 
@@ -34,6 +34,13 @@ def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation()
     with pytest.raises(ValueError, match="reasoning"):
         w.begin("t", reasoning=True)
     assert [m["text"] for m in rows(w)] == ["s", "hi"]
+
+
+def test_reasoning_can_be_turned_off_with_a_switch_and_where_no_thought_is_marked():
+    for template in (REASONING, PLAIN):
+        w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                        context=FakeContext(template))
+        assert w.can_turn_off_reasoning
 
 
 def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():

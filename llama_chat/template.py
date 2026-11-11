@@ -167,12 +167,15 @@ class Reasoning:
             reasons, the assistant tag included.
         past_keeps_thought: Whether the template writes a past reply's thought
             into the conversation, rather than leaving it out.
+        can_turn_off: Whether the template's switch writes a reply without
+            reasoning otherwise than one with it.
     """
 
     thought_open: str
     thought_close: str
     generation_prompt: str
     past_keeps_thought: bool = False
+    can_turn_off: bool = False
 
 
 def common_prefix_length(one: Sequence, other: Sequence) -> int:

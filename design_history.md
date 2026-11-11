@@ -1506,3 +1506,16 @@ A switch whose values are words of the template's own, such as
 comparisons in the template's source, but nothing in a render tells which of
 them is off where the template's default does not reason; this waits for the
 user's decision.
+
+**261.5: Whether reasoning can be turned off.** Reasoning off is the
+template's own off, and some templates have none: of the 37 test templates
+that mark a thought, 13 write the prompt the same with reasoning on and off,
+among them those of DeepSeek R1, gpt-oss, Muse Glimmer and Ministral 3
+Reasoning. `begin(reasoning=False)` was accepted on them without a word,
+though the model may reason in every reply. `can_turn_off_reasoning` now says
+so: it is true where the switch writes the generation prompt with reasoning
+off otherwise than with it on, and where the template marks no thought at
+all, since then nothing is known to turn off. Nothing is refused: such a
+conversation is written as the template writes it, and the thought is kept out
+of the answer as before. Read as: the property is the switch's effect on the
+prompt, the one place the renders show whether an off exists.

@@ -202,12 +202,14 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
     messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     on = render(messages, generation_prompt=True, reasoning=True)
     off = render(messages, generation_prompt=True, reasoning=False)
-    if on is not None and off is not None and on != off:
+    switches = on is not None and off is not None and on != off
+    if switches:
         prompt = _prompt_added(render, True)
         if prompt is None:
             return None
     return Reasoning(thought_open=tags[0], thought_close=tags[1], generation_prompt=prompt,
-                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought))
+                     past_keeps_thought=_past_keeps_thought(render, reply_with_thought),
+                     can_turn_off=switches)
 
 
 def extract_removed_thought(render: Render, fragments: TemplateFragments,

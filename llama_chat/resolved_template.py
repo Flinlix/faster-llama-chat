@@ -119,6 +119,14 @@ class ResolvedTemplate:
         return self._reasoning is not None
 
     @property
+    def can_turn_off_reasoning(self) -> bool:
+        """Whether a reply asked for without reasoning is generated without it, as the template's own off writes it.
+
+        True where the template marks no thought.
+        """
+        return self._reasoning is None or self._reasoning.can_turn_off
+
+    @property
     def has_system_turn(self) -> bool:
         """Whether a system prompt can be kept: no later question moves where the template writes it."""
         return self._has_system_turn

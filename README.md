@@ -125,7 +125,7 @@ model and makes later actions raise.
 | telling the model about more tools | `declare_tools(tools)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads both as the newest finished change left them |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `owed_calls`, `wait_idle(timeout_s)` |
+| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `reply_open`, `owed_calls`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
@@ -257,7 +257,11 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 
 Reasoning is chosen per conversation, at `begin`, because a template may switch
 it in the system turn. `can_reason` says whether `begin` accepts
-`reasoning=True`, which it does where the template marks a thought. Every
+`reasoning=True`, which it does where the template marks a thought. Reasoning
+off is the template's own off: `can_turn_off_reasoning` says whether the
+template has one. Where it has none, as on a template that always reasons, a
+conversation begun without reasoning is written as the template writes it,
+and the model may reason in every reply all the same. Every
 stream yields the answer alone, with or without reasoning, and a header a
 template writes for another reader is kept out of it too. Stop strings are
 matched against the answer only. A finished reply is kept as the template

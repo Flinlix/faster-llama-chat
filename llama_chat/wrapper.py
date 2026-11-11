@@ -108,7 +108,8 @@ class ChatWrapper:
                 where this model could not use them, rather than at the first
                 call.
             reasoning: Whether the model reasons before each answer, as its
-                template turns that on. It belongs to the conversation, so it
+                template turns that on or off; :attr:`can_turn_off_reasoning`
+                says whether it has an off. It belongs to the conversation, so it
                 changes only here. Every reply's thought is kept out of what
                 it yields, either way.
 
@@ -417,6 +418,17 @@ class ChatWrapper:
     def can_reason(self) -> bool:
         """Whether :meth:`begin` may be asked to have the model reason."""
         return self._template.can_reason
+
+    @property
+    def can_turn_off_reasoning(self) -> bool:
+        """Whether :meth:`begin` without reasoning has the model answer without it.
+
+        Reasoning off is the template's own off. Where the template has none,
+        a model that reasons does so in every reply, ``reasoning`` or not,
+        and its thought is kept out of the answer either way. True where the
+        template marks no thought.
+        """
+        return self._template.can_turn_off_reasoning
 
     @property
     def can_take_system_prompt(self) -> bool:
