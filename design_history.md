@@ -1616,3 +1616,11 @@ creative had to rebuild the wrapper, and with it the cache. It now takes every
 sampling field of `Config`, each `None` to keep the wrapper's, and is checked
 by the same code. No field was left out: each of them shapes only the chain a
 generation draws from, which is built for each generation anyway.
+
+**270.20: a construction that fails frees the model it loaded.** The wrapper
+closed the context it had loaded where checking the template failed, but built
+the conversation's cache state after that guard, so a failure there left the
+model and its context allocated, in VRAM where it was offloaded, with nothing
+holding them that could free them. Every step after the load is now inside the
+guard. A context of your own is still left open where construction fails, as
+documented, since the caller holds it and may use it again.

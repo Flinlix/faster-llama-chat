@@ -62,21 +62,21 @@ class ChatWrapper:
             KVContext(config, on_load_progress=on_load_progress)
             if owns_context else context
         )
-        self._config = self._context.config if owns_context else config
         # Everything that can be settled about this model is settled here, so
         # that what fails, fails while the wrapper is being built.
         try:
+            self._config = self._context.config if owns_context else config
             ensure_answers(self._context, CACHE_CONTEXT)
             if config.context_size > self._context.context_size:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
             self._template = ResolvedTemplate(self._context)
+            self._conversation = RenderedCache(self._context, self._template, self._config)
         except BaseException:
             if owns_context:
                 self._context.close()
             raise
-        self._conversation = RenderedCache(self._context, self._template, config)
         self._closed = False
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.

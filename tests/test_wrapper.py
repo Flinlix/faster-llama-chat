@@ -617,6 +617,33 @@ def test_close_is_idempotent_and_blocks_actions():
         w.declare_tools([])     # even with nothing to declare
 
 
+@pytest.mark.parametrize("failing", ["ResolvedTemplate", "RenderedCache"])
+def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing):
+    closed = []
+    loaded = FakeContext(PLAIN)
+    loaded.config = Config(context_size=500)
+    loaded.close = lambda: closed.append(True)
+    monkeypatch.setattr("llama_chat.wrapper.KVContext", lambda config, on_load_progress: loaded)
+
+    def refuse(*args, **kwargs):
+        raise MemoryError("failed part-way")
+
+    monkeypatch.setattr(f"llama_chat.wrapper.{failing}", refuse)
+    with pytest.raises(MemoryError):
+        ChatWrapper(Config(context_size=500))
+    assert closed == [True]
+
+
+def test_a_construction_that_fails_leaves_a_context_of_your_own_open():
+    closed = []
+    own = FakeContext(PLAIN)
+    own.close = lambda: closed.append(True)
+    with pytest.raises(ValueError, match="holds 256 tokens"):
+        own.context_size = 256
+        ChatWrapper(Config(context_size=512), context=own)
+    assert closed == []
+
+
 def test_context_manager_closes_on_exit():
     fake = FakeContext(PLAIN, gen_tokens=2)
     with ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
