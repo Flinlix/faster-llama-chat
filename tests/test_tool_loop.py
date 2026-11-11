@@ -412,6 +412,23 @@ def test_a_declaration_added_later_reaches_the_model():
     assert "<decl>clock</decl>" in written
 
 
+def test_two_tools_of_one_name_in_one_declaration_are_refused():
+    """The model could call only one of them, and which one runs is the caller's guess."""
+    wrapper, fake = tool_wrapper()
+    first = ToolSpec("clock", "Sagt die Zeit.", {"type": "object", "properties": {}})
+    second = ToolSpec("clock", "Sagt die Zeit in Bonn.", {"type": "object", "properties": {}})
+    with pytest.raises(ValueError, match="'clock' twice"):
+        wrapper.begin("persona", tools=[first, second])
+    assert fake.cache == []
+
+    wrapper.begin("persona")
+    before = list(fake.cache)
+    with pytest.raises(ValueError, match="'clock' twice"):
+        wrapper.declare_tools([first, second])
+    assert fake.cache == before and wrapper.declare_tools([first]) == 0
+    assert held_text(fake).count("<decl>clock</decl>") == 1
+
+
 def test_declaring_nothing_writes_nothing():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")

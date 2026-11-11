@@ -1930,3 +1930,9 @@ were a plain tuple of strings, so a type checker could not tell a misspelled
 policy from a real one. They are now the type `ToolCallPolicy`, as the stop
 reasons are `StopReason`, and `TOOL_CALL_POLICIES` is read from that type, so
 the list and the type cannot disagree. `reply` takes the type.
+
+**270.11: one name, one tool.** A declaration that held two tools of one name
+declared both, and the model could reach only one of them, without a way to
+tell which. `begin` and `declare_tools` now refuse such a declaration with a
+`ValueError` naming the tool, before anything is written. A tool that the
+conversation already declares is still skipped by `declare_tools`, as before.

@@ -55,6 +55,20 @@ class ToolCall:
     arguments: dict
 
 
+def ensure_names_unique(specs: list[ToolSpec]) -> None:
+    """Refuse a declaration that names one tool twice.
+
+    Raises:
+        ValueError: Naming the first name given twice.
+    """
+    seen = set()
+    for spec in specs:
+        if spec.name in seen:
+            raise ValueError(f"the declaration names the tool {spec.name!r} twice; "
+                             "declare each name once")
+        seen.add(spec.name)
+
+
 def result_text(result) -> str:
     """One tool's return value as the text the model is handed.
 

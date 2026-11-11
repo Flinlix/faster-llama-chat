@@ -21,7 +21,7 @@ from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
-from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
+from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique
 
 
 class ChatWrapper:
@@ -129,8 +129,9 @@ class ChatWrapper:
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, cannot fit beside them.
-            ValueError: If ``tools`` names anything or the history holds a
-                tool turn and this model cannot call tools; if ``reasoning`` is
+            ValueError: If ``tools`` names one tool twice; if ``tools`` names
+                anything or the history holds a tool turn and this model cannot
+                call tools; if ``reasoning`` is
                 asked of a model that cannot reason; if the template has no
                 system turn and a system prompt is given; or if the template
                 refuses to write the conversation. The previous conversation is
@@ -142,6 +143,7 @@ class ChatWrapper:
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
             specs = list(tools or [])
+            ensure_names_unique(specs)
             template = self._templates.for_conversation(bool(specs))
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 template.ensure_tools_usable()
@@ -348,8 +350,9 @@ class ChatWrapper:
             How many messages were evicted to make room.
 
         Raises:
-            ValueError: If no conversation has been begun, if a tool call has
-                left a reply open, if this model cannot call tools at all
+            ValueError: If ``tools`` names one tool twice, if no conversation
+                has been begun, if a tool call has left a reply open, if this
+                model cannot call tools at all
                 (see :meth:`begin`), or if the template with the declarations
                 writes an older exchange otherwise once another follows.
             ContextOverflowError: If the system turn with the declarations
@@ -358,6 +361,8 @@ class ChatWrapper:
         """
         with self._lock:
             self._ensure_open()
+            tools = list(tools)
+            ensure_names_unique(tools)
             known = {spec.name for spec in self._conversation.tools}
             specs = [spec for spec in tools if spec.name not in known]
             if not specs:

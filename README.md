@@ -212,7 +212,8 @@ out.
 `begin(tools=...)`, `declare_tools` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
 readable argument spelling, and a block for the result. `can_call_tools`
-answers the same question up front.
+answers the same question up front. A declaration that names one tool twice is
+refused there too, since the model could reach only one of them.
 
 **Registering.** `@registry.tool(description)` makes a function runnable and
 describes it; the parameters come from its annotations, postponed ones
