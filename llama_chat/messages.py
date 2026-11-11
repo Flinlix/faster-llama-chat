@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import collections
 import copy
+import itertools
+import re
+from dataclasses import replace
 
 from .tools import Thought, ToolCall, ToolResult, ToolTurn, result_text
 
@@ -18,17 +22,27 @@ def as_messages(history) -> list[dict]:
 
     A tool turn becomes its assistant messages, each holding the calls made
     before a result and the thought before them, and the results after them,
-    each answering its own call.
+    each answering its own call. A call keeps the id it carries; one without
+    takes the next id this library writes after every id of the history, so
+    no two calls share one.
 
     Raises:
         TypeError: If an item is neither a ``(role, text)`` pair, a message
             dictionary nor a :class:`~llama_chat.tools.ToolTurn`, or a text
             or a thought is not a ``str``.
         ValueError: If a dictionary holds other keys than ``role``,
-            ``content`` and, for a reply, :data:`THOUGHT_KEY`, or a role is
-            not one of :data:`MESSAGE_ROLES`.
+            ``content`` and, for a reply, :data:`THOUGHT_KEY`, if a role is
+            not one of :data:`MESSAGE_ROLES`, or if two calls of the history
+            carry the same id.
     """
-    messages, n = [], 0
+    given = [step.id for item in history if isinstance(item, ToolTurn)
+             for step in item.steps if isinstance(step, ToolCall) and step.id]
+    repeated = next((given_id for given_id, n in collections.Counter(given).items() if n > 1), None)
+    if repeated is not None:
+        raise ValueError(f"two calls of the history carry the id {repeated!r}; "
+                         "give each call an id of its own")
+    numbered = itertools.count(next_call_number(given))
+    messages = []
     for item in history:
         if not isinstance(item, ToolTurn):
             messages.append(_history_message(item))
@@ -41,17 +55,16 @@ def as_messages(history) -> list[dict]:
                 ensure_text(step.text, "a thought")
                 thought += step.text
             elif isinstance(step, ToolCall):
-                calls.append(step)
+                calls.append(step if step.id else replace(step, id=call_id(next(numbered))))
             elif isinstance(step, ToolResult):
                 if calls:
-                    messages.append(_with_thought(calling_message(text, calls, n), thought))
-                    owed += [call_id(n + k) for k in range(len(calls))]
-                    n, text, thought, calls = n + len(calls), "", "", []
-                answered = owed.pop(0) if owed else call_id(n - 1)
-                messages.append(result_message(step.name, answered, result_text(step.result)))
+                    messages.append(_with_thought(calling_message(text, calls), thought))
+                    owed += [call.id for call in calls]
+                    text, thought, calls = "", "", []
+                # A ToolTurn holds no result before the call it answers.
+                messages.append(result_message(step.name, owed.pop(0), result_text(step.result)))
         if calls:                       # called, and not answered yet
-            messages.append(_with_thought(calling_message(text, calls, n), thought))
-            n += len(calls)
+            messages.append(_with_thought(calling_message(text, calls), thought))
         elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
             messages.append(_with_thought({"role": "assistant", "content": text},  # a result ends it open
                                           thought))
@@ -114,12 +127,22 @@ def call_id(n: int) -> str:
     return f"call{n:05d}"
 
 
-def calling_message(text: str, calls: list[ToolCall], first_id: int) -> dict:
-    """An assistant message holding ``text`` and ``calls``, numbered from ``first_id``."""
+def next_call_number(ids) -> int:
+    """One past the highest number among ``ids`` that :func:`call_id` writes, so that every id numbered from it is new."""
+    numbers = [int(found.group(1)) for found in map(_CALL_ID.fullmatch, ids) if found]
+    return max(numbers, default=-1) + 1
+
+
+_CALL_ID = re.compile(r"call(\d{5,})")
+
+
+def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:
+    """An assistant message holding ``text`` and ``calls``, each under the id it carries, or, where it carries none, numbered from ``first_id``."""
+    numbered = itertools.count(first_id)
     return {"role": "assistant", "content": text, "tool_calls": [
-        {"id": call_id(first_id + k), "type": "function",
+        {"id": call.id or call_id(next(numbered)), "type": "function",
          "function": {"name": call.name, "arguments": copy.deepcopy(call.arguments)}}
-        for k, call in enumerate(calls)]}
+        for call in calls]}
 
 
 def result_message(name: str, tool_call_id: str, text: str) -> dict:
@@ -155,7 +178,7 @@ def as_history(messages: list[dict]) -> list:
             + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
             steps += said + [ToolCall(c["function"]["name"],
-                                      copy.deepcopy(c["function"]["arguments"]))
+                                      copy.deepcopy(c["function"]["arguments"]), c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":
             steps.append(ToolResult(message["name"], message["content"]))

@@ -98,7 +98,7 @@ def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
     from llama_chat.tools import ToolRegistry
     from tests.fake_context import ScriptedCall
     registry = ToolRegistry()
-    registry.register(lambda: "12:00", "Uhrzeit.", name="uhr", parameters={"type": "object"})
+    registry.tool(lambda: "12:00", description="Uhrzeit.", name="uhr", parameters={"type": "object"})
     fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=[
         ScriptedCall("fn:uhr{}", before="<thought>Erst fragen</thought>"),
         "<thought>Jetzt antworten</thought>Zwölf."])

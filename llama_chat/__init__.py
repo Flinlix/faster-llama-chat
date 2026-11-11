@@ -20,9 +20,9 @@ being recovered from that template.
 
 from .cache_context import CacheContext
 from .config import Config, InvalidSettingError, Sampling
-from .tools import Thought, ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from .tools import Thought, ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
-                    StopReason)
+                    StopReason, ToolCallPolicy)
 from .wrapper import ChatWrapper
 
 __all__ = [
@@ -35,8 +35,10 @@ __all__ = [
     "ReplyStream",
     "StopReason",
     "STOP_REASONS",
+    "ToolCallPolicy",
     "TOOL_CALL_POLICIES",
     "ToolCall",
+    "ToolCallStatus",
     "ToolResult",
     "ToolTurn",
     "Thought",

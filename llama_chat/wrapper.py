@@ -8,9 +8,10 @@ design_history.md, "The render is the conversation's encoding".
 
 from __future__ import annotations
 
+import contextlib
 import math
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import replace
 
 from .addon_files import addon_file, with_model_sampling
@@ -20,10 +21,10 @@ from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
-from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream
+from .reply import TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
-from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
+from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique
 
 
 class ChatWrapper:
@@ -92,10 +93,13 @@ class ChatWrapper:
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
+        self._holder: int | None = None         # the thread that holds it, while one does
+        # The policy the newest turn was started with, which a reply going on with it keeps.
+        self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
-              tools: list[ToolSpec] | None = None, *,
+              tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
@@ -119,8 +123,9 @@ class ChatWrapper:
                 half the context, at least the newest exchange, and no more
                 than ``max_history_exchanges``. Older ones are dropped
                 unrendered.
-            tools: Tools to declare, written where this model's template
-                declares them; nothing else of them is kept. Refused up front
+            tools: Tools to declare, a list of specs or a registry, written
+                where this model's template declares them; nothing else of
+                them is kept. Refused up front
                 where this model could not use them, rather than at the first
                 call.
             reasoning: Whether the model reasons before each answer, as its
@@ -141,20 +146,22 @@ class ChatWrapper:
             TypeError: If the system prompt or a history message's text is
                 not a ``str``, or a history item is of another form.
             ValueError: If a history message has another role, or a
-                dictionary other keys; if ``tools`` names anything or the
-                history holds a tool turn and this model cannot call tools; if
-                ``reasoning`` is asked of a model that cannot reason; if the
-                template has no system turn and a system prompt is given; or if
-                the template refuses to write the conversation. The previous
-                conversation is left intact either way.
+                dictionary other keys; if ``tools`` names one tool twice; if
+                ``tools`` names anything or the history holds a tool turn and
+                this model cannot call tools; if ``reasoning`` is asked of a
+                model that cannot reason; if the template has no system turn
+                and a system prompt is given; if two calls of the history carry
+                one id; or if the template refuses to write the conversation.
+                The previous conversation is left intact either way.
         """
         ensure_text(system_prompt, "the system prompt")
         messages = messages or []
-        with self._lock:
+        with self._held():
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
             specs = list(tools or [])
+            ensure_names_unique(specs)
             template = self._templates.for_conversation(bool(specs))
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 template.ensure_tools_usable()
@@ -165,7 +172,9 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
-            return self._conversation.start(system_prompt, messages, specs, reasoning)
+            kept = self._conversation.start(system_prompt, messages, specs, reasoning)
+            self._turn_policy = None        # a turn the history leaves open was started by no reply
+            return kept
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> int:
@@ -197,13 +206,13 @@ class ChatWrapper:
         """
         ensure_role(role)
         ensure_text(text, "an injected message's text")
-        with self._lock:
+        with self._held():
             self._ensure_open()
             return self._conversation.add(role, text)
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
-              tool_call_policy: str | ToolRegistry = "refuse",
+              tool_call_policy: ToolCallPolicy | ToolRegistry | None = None,
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
               stop: list[str] | None = None,
@@ -227,6 +236,9 @@ class ChatWrapper:
                 answers the newest message, a user message already written, or
                 goes on with a turn a call left open once every result is in.
             tool_call_policy: What becomes of a tool call the model makes.
+                ``None``, the default, keeps the policy of the turn this goes
+                on with, where the reply that started it was given one, and is
+                ``"refuse"`` otherwise.
 
                 * ``"withhold"``: the model cannot write a call at all; the
                   token that opens one is never drawn, so the reply is text. A
@@ -240,12 +252,15 @@ class ChatWrapper:
                 * ``"yield"``: each call is handed over as a
                   :class:`~llama_chat.tools.ToolCall` after the text, and the
                   turn stays open. Answer each with :meth:`inject_tool_result`,
-                  in order, then call this again without ``text``.
+                  in order, then call this again without ``text``; that reply
+                  is parted from the text before the call as under
+                  ``"refuse"``.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
-                  the model answers. In the last permitted round a call the
-                  model writes is not recognized and stays text, so the turn
-                  always closes.
+                  the model answers. Each call that runs is handed over in the
+                  stream just before it runs. In the last permitted round a
+                  call the model writes is not recognized and stays text, so
+                  the turn always closes.
             max_calls: Where a registry is given, how many calls one turn may
                 use. ``None`` sets no ceiling; a call past one is answered with
                 an error result rather than run. Only with a registry.
@@ -260,9 +275,10 @@ class ChatWrapper:
                 config's for the fields it sets.
 
         Returns:
-            A :class:`ReplyStream` of the text deltas, and with ``"yield"`` the
-            calls after them; its ``reply`` is the :class:`Reply` once it has
-            ended, summing every generation where calls were run.
+            A :class:`ReplyStream` of the text deltas, with ``"yield"`` the
+            calls after them, and with a registry each call before it runs;
+            its ``reply`` is the :class:`Reply` once it has ended, summing
+            every generation where calls were run.
 
         Raises:
             ValueError: At once, if no conversation has been begun; if a tool
@@ -274,16 +290,23 @@ class ChatWrapper:
                 that could never call one.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
-            RuntimeError: At once, if the wrapper is closed.
-            ContextOverflowError: If too little room remains for the reply, or
-                a result or the error answering a call no longer fits. The
-                turn is then open and cannot be continued.
+            RuntimeError: At once, if the wrapper is closed; at the first
+                iteration, if this thread is still reading another reply.
+            ContextOverflowError: If too little room remains for the reply. A
+                result or the error answering a call that no longer fits
+                raises nothing: the turn closes on what the model wrote, and
+                the reply ends with ``"token_limit"``.
         """
         if text is not None:
             ensure_text(text, "the request's text")
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
+        goes_on = text is None and self._conversation.turn_open
+        if tool_call_policy is None:
+            # Compared with None: an empty registry is false.
+            kept = self._turn_policy if goes_on else None
+            tool_call_policy = "refuse" if kept is None else kept
         runs = isinstance(tool_call_policy, ToolRegistry)
         if not runs and tool_call_policy not in TOOL_CALL_POLICIES:
             raise ValueError(f"tool_call_policy must be "
@@ -299,6 +322,8 @@ class ChatWrapper:
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
+        if not goes_on:
+            self._turn_policy = tool_call_policy
         if tool_call_policy == "yield":
             return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
         if tool_call_policy == "withhold":
@@ -309,11 +334,16 @@ class ChatWrapper:
 
     def _until_call(self, text: str | None,
                     **options) -> Generator[str | ToolCall, None, Reply]:
-        """One generation, from ``text`` or on from the open turn, then the calls it stopped at."""
-        with self._lock:
-            generation = yield from self._generate(text, **options)
+        """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
+
+        Going on with an open turn, it is parted from the turn's text so far as
+        a reply that runs its calls parts its generations.
+        """
+        with self._held():
+            generation = yield from self._read_generation(self._generate(text, **options),
+                                                          after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
-        yield from generation.tool_calls
+        yield from _answerable(generation.tool_calls)
         return generation
 
     def inject_tool_result(self, call: ToolCall, result) -> None:
@@ -326,8 +356,9 @@ class ChatWrapper:
         the README, "Tool calling".
 
         Args:
-            call: The call being answered, as it was handed to you. It must
-                be the oldest unanswered one.
+            call: The call being answered, as it was handed to you, or one
+                built without an id that names the same function with the
+                same arguments. It must be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
 
         Raises:
@@ -337,7 +368,7 @@ class ChatWrapper:
             ContextOverflowError: If not even an empty result leaves room for
                 the reply in what is left of the context.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             self._conversation.add_result(call, result)
 
@@ -361,11 +392,11 @@ class ChatWrapper:
                 the reply shortened to it, as one that writes no empty reply
                 does not write it shortened to ``""``.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
-    def declare_tools(self, tools: list[ToolSpec]) -> int:
+    def declare_tools(self, tools: Iterable[ToolSpec]) -> int:
         """Tell the model about the tools it has not been told about yet.
 
         Written where the template declares tools, never as a message of its
@@ -374,23 +405,27 @@ class ChatWrapper:
         writes the conversation with that template from then on.
 
         Args:
-            tools: What to declare. Nothing to declare does nothing, and
+            tools: What to declare, a list of specs or a registry. Nothing to
+                declare does nothing, and
                 neither does a tool the conversation already declares.
 
         Returns:
             How many messages were evicted to make room.
 
         Raises:
-            ValueError: If no conversation has been begun, if a tool call has
-                left a reply open, if this model cannot call tools at all
+            ValueError: If ``tools`` names one tool twice, if no conversation
+                has been begun, if a tool call has left a reply open, if this
+                model cannot call tools at all
                 (see :meth:`begin`), or if the template with the declarations
                 writes an older exchange otherwise once another follows.
             ContextOverflowError: If the system turn with the declarations
                 would leave no room under ``evict_above_tokens`` for a short
                 question.
         """
-        with self._lock:
+        with self._held():
             self._ensure_open()
+            tools = list(tools)
+            ensure_names_unique(tools)
             known = {spec.name for spec in self._conversation.tools}
             specs = [spec for spec in tools if spec.name not in known]
             if not specs:
@@ -431,7 +466,12 @@ class ChatWrapper:
 
         Returns:
             ``True`` if the wrapper went idle, ``False`` on timeout.
+
+        Raises:
+            RuntimeError: If this thread is reading a reply, which would never
+                end while it waits.
         """
+        self._ensure_not_holding()
         if not self._lock.acquire(timeout=-1 if timeout_s is None else timeout_s):
             return False
         self._lock.release()
@@ -519,7 +559,7 @@ class ChatWrapper:
         Waits for any in-flight generation. Closes a context passed to the
         constructor as well. Every action after close raises ``RuntimeError``.
         """
-        with self._lock:
+        with self._held():
             if self._closed:
                 return
             self._closed = True
@@ -535,8 +575,10 @@ class ChatWrapper:
     def _generate_until_answered(
         self, text: str, *, registry: ToolRegistry | None,
         max_calls: int | None = None,
-        **kwargs) -> Generator[str, None, Reply]:
+        **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
+
+        Each call that runs is handed over in the stream before it runs.
 
         Args:
             registry: What to run calls against. ``None`` refuses every call
@@ -547,8 +589,8 @@ class ChatWrapper:
             text, **kwargs: As :meth:`reply`.
 
         The lock is held for the whole exchange, tools running included, so
-        no other action comes between its rounds; a tool must not call back
-        into the wrapper.
+        no other action comes between its rounds; a tool that calls back into
+        the wrapper is refused.
 
         Raises:
             ValueError: If ``registry`` holds tools this model could never
@@ -556,7 +598,7 @@ class ChatWrapper:
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
-        with self._lock:
+        with self._held():
             # A registry is the same promise a declaration is, so it is checked the
             # same way: an exchange that cannot run a tool is refused before it
             # starts, not after the model has asked for one.
@@ -573,7 +615,7 @@ class ChatWrapper:
                     generation = yield from self._read_generation(
                         deltas, after="".join(g.text for g in generations))
                     generations.append(generation)
-                    if not generation.tool_calls:
+                    if not _answerable(generation.tool_calls):
                         if self._conversation.turn_open:
                             # An unreadable call: its result is already written, and
                             # the turn wants the reply that follows it. Nothing is
@@ -593,11 +635,21 @@ class ChatWrapper:
                         return _sum_generations(generations,
                                                 any_call_asked and calls_left == 0)
                     any_call_asked = True
-                    settled, calls_left = self._settle_calls(
-                        generation.tool_calls, registry, calls_left, max_calls)
+                    settled, calls_left = yield from self._settle_calls(
+                        _answerable(generation.tool_calls), registry, calls_left, max_calls)
                     may_call_again = registry is not None and calls_left > 0
-                    for call, result in settled:
-                        self._conversation.add_result(call, _explain_failure(result, may_call_again))
+                    try:
+                        for call, result in settled:
+                            self._conversation.add_result(
+                                call, _explain_failure(result, may_call_again))
+                    except ContextOverflowError:
+                        # No room is left to answer: the turn closes on what the model
+                        # wrote, as one the reply cap cuts does.
+                        dropped = self._conversation.close_unanswered()
+                        generations[-1] = replace(
+                            generations[-1], stop_reason="token_limit",
+                            n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                        return _sum_generations(generations, calls_left == 0)
                     deltas = self._generate(None, recognizes_calls=may_call_again, **kwargs)
             finally:
                 deltas.close()
@@ -621,9 +673,21 @@ class ChatWrapper:
                 delta = separator + delta
             yield delta
 
+    def _open_turn_text(self) -> str:
+        """What the model has written so far in the turn a call left open; empty where none is open."""
+        if not self._conversation.turn_open:
+            return ""
+        written = []
+        for message in reversed(self._conversation.messages):
+            if message["role"] not in ("assistant", "tool"):
+                break
+            if message["role"] == "assistant":
+                written.append(message["content"])
+        return "".join(reversed(written))
+
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):
-        """Decide what every call of one round gets back, running what may run.
+        """Decide what every call of one round gets back, running what may run, and hand over each call that runs before it runs.
 
         Settled before any of it is written, because what a failure tells the
         model to do next depends on the budget the last call leaves. In the
@@ -640,6 +704,7 @@ class ChatWrapper:
                 result = {"error": "tools_not_run",
                           "message": "no tool can be run for this request"}
             elif calls_left > 0:
+                yield call
                 result = registry.call(call)
                 calls_left -= 1
             else:
@@ -711,7 +776,7 @@ class ChatWrapper:
             n_generated_tokens=len(generated.token_ids),
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
-            tool_calls=conversation.pending_calls,
+            tool_calls=_reported_calls(generated, conversation.pending_calls),
             n_reasoning_tokens=reply_text.thought_pieces,
             thought=reply_text.thought,
         )
@@ -748,7 +813,7 @@ class ChatWrapper:
             return []
         try:
             return self._template.read_calls(generated.tool_call)
-        except (ValueError, RecursionError):
+        except ValueError:
             return []
 
     @property
@@ -759,6 +824,43 @@ class ChatWrapper:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("ChatWrapper is closed")
+
+    @contextlib.contextmanager
+    def _held(self):
+        """Hold the wrapper for one action, refusing one the thread that already holds it asks for."""
+        self._ensure_not_holding()
+        with self._lock:
+            self._holder = threading.get_ident()
+            try:
+                yield
+            finally:
+                self._holder = None
+
+    def _ensure_not_holding(self) -> None:
+        """Refuse an action on the thread whose reply still holds the wrapper, which would wait for itself.
+
+        Raises:
+            RuntimeError: Naming the reply this thread is reading.
+        """
+        if self._holder == threading.get_ident():
+            raise RuntimeError(
+                "the reply this thread is reading still holds this conversation, and an "
+                "action now would wait for that reply for ever; read the reply to its end "
+                "or close it first, and call nothing on the wrapper from a tool it runs")
+
+
+def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
+    """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
+    if generated.stop_reason == "unreadable_tool_call":
+        return [ToolCall("", {}, status="unreadable")]
+    if generated.cut_inside_call:
+        return [ToolCall("", {}, status="unfinished")]
+    return pending
+
+
+def _answerable(calls: list[ToolCall]) -> list[ToolCall]:
+    """Of the calls a generation reports, those that were read, which a result answers."""
+    return [call for call in calls if call.status == "complete"]
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:

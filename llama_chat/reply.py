@@ -15,7 +15,8 @@ StopReason = Literal["end_of_turn", "stop_string", "token_limit", "interrupted",
 STOP_REASONS: tuple[str, ...] = get_args(StopReason)
 
 # What becomes of a call the model makes, where a request names it rather than passing a registry.
-TOOL_CALL_POLICIES: tuple[str, ...] = ("withhold", "refuse", "yield")
+ToolCallPolicy = Literal["withhold", "refuse", "yield"]
+TOOL_CALL_POLICIES: tuple[str, ...] = get_args(ToolCallPolicy)
 
 
 class ContextOverflowError(ValueError):
@@ -46,7 +47,9 @@ class Reply:
             set, a call was made, or a call was made that could not be read.
         tool_calls: The calls the model made, in the order it made them.
             Reported whatever became of them, so a call that was refused rather
-            than run still says what the model asked for.
+            than run still says what the model asked for, and one that could
+            not be read or was cut short is reported with that
+            :attr:`~llama_chat.tools.ToolCall.status`.
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran with a call it wrote left as text. Always ``False``
             where no call was asked for.

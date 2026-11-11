@@ -1,5 +1,7 @@
 """Wrappers on the model-free cache that several test files build, and their consistency check."""
 
+import dataclasses
+
 from llama_chat.config import Config
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
@@ -129,12 +131,17 @@ def _occurrences(text: str, piece: str, start: int) -> list[int]:
     return found
 
 
+def without_ids(calls) -> list:
+    """``calls`` with their ids left out, to compare with calls built by hand."""
+    return [dataclasses.replace(call, id="") for call in calls]
+
+
 def weather_registry():
     registry = ToolRegistry()
-    registry.register(lambda city: {"city": city, "celsius": 18},
-                      "Wetter.", name="weather",
-                      parameters={"type": "object",
-                                  "properties": {"city": {"type": "string"}}})
+    registry.tool(lambda city: {"city": city, "celsius": 18},
+                  description="Wetter.", name="weather",
+                  parameters={"type": "object",
+                              "properties": {"city": {"type": "string"}}})
     return registry
 
 

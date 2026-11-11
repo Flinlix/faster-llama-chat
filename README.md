@@ -112,7 +112,10 @@ it in a `with`. To stop a generation from another thread, pass
 
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
-model and makes later actions raise.
+model and makes later actions raise. A reply holds the lock while it is read,
+so an action on the thread that reads it, a tool the reply runs included,
+would wait for itself; it is refused instead with a `RuntimeError` that names
+the reply.
 
 ## What to call, by task
 
@@ -120,8 +123,8 @@ model and makes later actions raise.
 |------|------|
 | starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns how many history items it kept. A history message is a `(role, text)` pair or a `{"role": ..., "content": ...}` dictionary, its role `"user"` or `"assistant"`, a reply's dictionary with its thought under `"reasoning_content"` where it has one; a turn that called tools is a `ToolTurn`. Any other form or role is refused, naming it. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question, where the newest exchange cannot fit, or a history with no user message, which nothing can be evicted from, cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
 | adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
-| asking | `reply(text=None, *, tool_call_policy="refuse", max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str` and a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
-| answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply(tool_call_policy="yield")` |
+| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str` and a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
+| answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
 | telling the model about more tools | `declare_tools(tools)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
 | reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (tool turns and the thoughts the template keeps included), `tools` (those `declare_tools` added included) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
@@ -170,25 +173,29 @@ from llama_chat import ChatWrapper, Config, ToolCall, ToolRegistry
 
 registry = ToolRegistry()
 
-@registry.tool("Current weather for a city.")
+@registry.tool
 def get_weather(city: str) -> dict:
+    """Current weather for a city."""
     return {"city": city, "celsius": 18}
 
 chat = ChatWrapper(Config(model_path="model.gguf"))
-chat.begin("You are a terse assistant.", tools=registry.specs())
+chat.begin("You are a terse assistant.", tools=registry)
 print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).finish().text)
 ```
 
 `tool_call_policy` says what becomes of a call the model makes, whether or not
 tools were declared, since a model may write a call tag unasked. It is one of
-`TOOL_CALL_POLICIES` or a `ToolRegistry`:
+`TOOL_CALL_POLICIES` (the type `ToolCallPolicy`) or a `ToolRegistry`. Left
+out, it is the policy the open turn was started with, where the reply goes on
+with one, and `"refuse"` otherwise; a reply that goes on after results thus
+keeps its turn's policy unless it is given another:
 
 | `tool_call_policy=` | what happens | what the stream yields |
 |------|------|------|
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool. Where the template's call opens with plain text rather than one of the model's tags, no token can be withheld: a call the model writes is not recognized and stays in the reply's text | text |
-| `"refuse"` (the default) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
-| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply(tool_call_policy="yield")` again | text, then each `ToolCall` |
-| a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`, and where it is not a whole number of at least 0 | text |
+| `"refuse"` (the default for a new turn) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words | text |
+| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again | text, then each `ToolCall` |
+| a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, a call the model writes is not recognized and stays text, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`, and where it is not a whole number of at least 0. A stream closed at a call handed over leaves that call unrun and owed, as under `"yield"` | text, and each `ToolCall` that runs, just before it runs |
 
 ```python
 with chat.reply("What is the weather in Munich?", tool_call_policy="yield") as stream:
@@ -197,15 +204,21 @@ with chat.reply("What is the weather in Munich?", tool_call_policy="yield") as s
             chat.inject_tool_result(event, registry.call(event))
         else:
             print(event, end="", flush=True)
-rest = chat.reply(tool_call_policy="yield").finish()        # the turn stays open until this
+rest = chat.reply().finish()        # the turn stays open until this, and keeps "yield"
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
-since the model reads its own call back. The turn keeps the tokens it was
+since the model reads its own call back. Where the text after a call would
+join the text before it without whitespace, a blank line parts them, whether
+the call ran or was handed to you: the reply that goes on after a result then
+starts with it. The turn keeps the tokens it was
 generated as, so an action after which the template's render no longer shows
 where that turn stands is refused with a `ValueError`, the conversation left
 as it was. Every call is reported on
-`Reply.tool_calls`, whatever became of it. Where calls run, the `Reply` sums
+`Reply.tool_calls`, whatever became of it: one that was read with its
+`ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
+and one the reply cap or a cancel cut short as `"unfinished"`, the last two
+without a name, arguments or id, and never handed over in the stream. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
 out.
@@ -214,15 +227,27 @@ out.
 `begin(tools=...)`, `declare_tools` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
 readable argument spelling, and a block for the result. `can_call_tools`
-answers the same question up front.
+answers the same question up front. A declaration that names one tool twice is
+refused there too, since the model could reach only one of them.
 
-**Registering.** `@registry.tool(description)` makes a function runnable and
-describes it; the parameters come from its annotations, postponed ones
-included, and `parameters=` takes an explicit JSON Schema where they cannot be
-described. `registry.register(fn, description)` is the same for a function
-written elsewhere. `registry.specs()` gives each tool's `ToolSpec`, the
-declaration the model is told; a `ToolSpec` of your own declares a tool that
-this process does not run.
+**Registering.** `@registry.tool` makes a function runnable and describes it:
+its docstring is the description, and its annotations, postponed ones
+included, are the parameters. `@registry.tool("...")` or `description=` gives
+the description instead, `name=` the name the model calls, and `parameters=`
+an explicit JSON Schema where the annotations cannot be described.
+`registry.tool(fn, description="...")` is the same for a function written
+elsewhere. Text, numbers, truth values, lists, dicts with text keys, optional
+values (`str | None`), choices (`Literal["c", "f"]`) and enums are described,
+with each default, and `Annotated[str, "the city"]` describes a parameter in
+words. Before a tool runs, the model's arguments are checked against those
+types, so arguments that do not fit are told to the model, which may try
+again; a number where text is asked is taken as the text it was written as,
+and an enum's value reaches the function as its member. A function that is
+asynchronous, takes a parameter only by position, or has no description is
+refused when it is registered. A registry lists its tools, so
+`begin(tools=registry)` declares them; `registry.specs()` gives each tool's
+`ToolSpec`, the declaration the model is told, and a `ToolSpec` of your own
+declares a tool that this process does not run.
 
 **When the model is told.** `begin(tools=...)` declares the specs it is given
 when it writes the conversation, and `declare_tools` adds more later, skipping
@@ -251,12 +276,18 @@ not be read. A result that a registered tool returns as a dict carrying
 result handed to `inject_tool_result` is written as given, a dict carrying
 `error` included, with nothing added to it; one that JSON cannot write is
 refused there, and the call stays owed.
+A call whose arguments are no object, such as a list or `null`, or nest
+deeper than 100 levels of lists and objects, is unreadable, and its tool does
+not run.
 
 **Nothing is evicted while a turn is open**, since that would cut into the turn
 being written, so a turn of many calls grows towards `context_size`. A result
-too large for what is left is clipped to leave `min_reply_tokens`; one whose
-wrapping alone leaves no room for the reply raises `ContextOverflowError`, the
-call stays owed and nothing is written, and the conversation must begin again.
+too large for what is left is clipped to leave `min_reply_tokens`. Where the
+result's wrapping alone leaves no room for the reply, `inject_tool_result`
+raises `ContextOverflowError`, the call stays owed and nothing is written, and
+the conversation must begin again; a reply that answers its calls itself,
+under `"refuse"` or a registry, closes the turn instead on what the model
+wrote, as the reply cap closes one, and ends with `"token_limit"`.
 
 **A history with tool turns** goes into `begin` as `ToolTurn`s, each holding the
 turn's steps in order: the model's text as `str`, its thought as
@@ -264,6 +295,17 @@ turn's steps in order: the model's text as `str`, its thought as
 written as the template writes a past turn.
 A history ending on a result leaves that turn open, and `reply(tool_call_policy="yield")`
 goes on with it.
+
+**Every call has an id**, `ToolCall.id`, that no other call of the
+conversation has. A call handed over in the stream, in `Reply.tool_calls`, in
+`pending_calls` and in `conversation()` carries it, so one call reads the
+same in all of them. A `ToolCall` of a history keeps the id it carries, and
+`begin` gives one to a call that carries none, so `begin(**chat.conversation())`
+keeps every id; a history that gives two calls one id is refused. A call made
+after a `begin` takes an id that none of the history's calls had, those that
+did not fit included. `inject_tool_result` takes the call as it was handed
+over, or one built by hand without an id that names the same function with
+the same arguments.
 
 ## Reasoning
 

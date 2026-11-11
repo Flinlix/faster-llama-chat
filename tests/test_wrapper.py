@@ -8,12 +8,13 @@ including across evictions.
 
 import dataclasses
 import threading
+import typing
 
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tools import ToolCall, ToolRegistry
-from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError
+from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy
 from llama_chat.generation import generate
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
@@ -263,7 +264,7 @@ def test_a_reply_resumed_after_a_result_reports_the_tokens_the_result_left():
 
 def test_a_request_that_ran_calls_reports_its_last_generations_tokens():
     registry = ToolRegistry()
-    registry.register(lambda: "12:00", "The time.", name="clock")
+    registry.tool(lambda: "12:00", description="The time.", name="clock")
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
@@ -788,6 +789,13 @@ def test_a_restart_says_how_much_history_it_kept():
     assert w.begin("s") == 0
 
 
+# ----- the tool call policies ----------------------------------------------
+def test_the_tool_call_policies_are_read_from_the_type_reply_takes():
+    assert typing.get_args(ToolCallPolicy) == TOOL_CALL_POLICIES
+    taken = typing.get_type_hints(ChatWrapper.reply)["tool_call_policy"]
+    assert set(typing.get_args(taken)) == {ToolCallPolicy, ToolRegistry, type(None)}
+
+
 # ----- sampling per request ------------------------------------------------
 @pytest.mark.parametrize("tool_call_policy", [*TOOL_CALL_POLICIES, "registry"])
 def test_every_tool_call_policy_hands_its_sampling_to_the_generation(tool_call_policy):
@@ -917,8 +925,8 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
     cancel, options = threading.Event(), {}
     if nothing == "cancelled-by-a-tool":
         registry = ToolRegistry()
-        registry.register(lambda city: (cancel.set(), "18 Grad")[1], "Wetter.",
-                          name=WEATHER.name, parameters=WEATHER.parameters)
+        registry.tool(lambda city: (cancel.set(), "18 Grad")[1], description="Wetter.",
+                      name=WEATHER.name, parameters=WEATHER.parameters)
         w.begin("", tools=registry.specs())
         fake.replies = [ScriptedCall('{"name": "get_weather", "arguments": {"city": "Bonn"}}')]
         options = dict(tool_call_policy=registry, cancel=cancel)

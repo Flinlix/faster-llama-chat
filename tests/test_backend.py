@@ -12,6 +12,7 @@ import ctypes
 import inspect
 import logging
 import re
+import threading
 import dataclasses
 from dataclasses import fields
 from pathlib import Path
@@ -422,6 +423,26 @@ def test_a_tag_no_call_follows_stays_the_replys():
     shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
         call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
     assert out.stop_reason == "end_of_turn" and shown == "<|python_tag|>hi"
+
+
+@pytest.mark.parametrize("cut_by", ["token_limit", "interrupted"])
+def test_a_tag_a_call_may_follow_never_reaches_a_reply_that_was_cut(cut_by):
+    """Cut before the call could follow, the tag is the start of a call, not the answer's."""
+    context, _ = _plain_context(["Sure.", "<|python_tag|>", " ", "x"])
+    cancel = threading.Event()
+    sampled = context._backend.sample
+    if cut_by == "interrupted":
+        def sample(sampler, ctx):
+            token = sampled(sampler, ctx)
+            if token == " ":
+                cancel.set()
+            return token
+        context._backend.sample = sample
+    out = GenerationAccumulator()
+    shown = "".join(generate(context, 0, 3 if cut_by == "token_limit" else 20, out=out,
+                             cancel=cancel, boundary=CallBoundary(
+                                 call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+    assert out.stop_reason == cut_by and shown == out.text == "Sure."
 
 
 def test_a_thoughts_closing_tag_a_call_follows_stays_the_replys():

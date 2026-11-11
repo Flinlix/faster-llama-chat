@@ -2150,3 +2150,167 @@ without the sentence a registry's failure gets. And a context of one's own
 must keep its token ids from -65,536 to 1,048,575: the search for a dropped
 stretch spells each id as one character, offset by 65,536, and Python's
 characters end at 1,114,111.
+
+## 2026-11-11: Tools and tool calls
+
+The user's decisions on declaring tools and on the calls a model makes, each
+under the ID it was decided by.
+
+**268.8: a type for the tool call policies.** The policies a request names
+were a plain tuple of strings, so a type checker could not tell a misspelled
+policy from a real one. They are now the type `ToolCallPolicy`, as the stop
+reasons are `StopReason`, and `TOOL_CALL_POLICIES` is read from that type, so
+the list and the type cannot disagree. `reply` takes the type.
+
+**270.11: one name, one tool.** A declaration that held two tools of one name
+declared both, and the model could reach only one of them, without a way to
+tell which. `begin` and `declare_tools` now refuse such a declaration with a
+`ValueError` naming the tool, before anything is written. A tool that the
+conversation already declares is still skipped by `declare_tools`, as before.
+
+**267.3: the tool decorator in full.** `@registry.tool` now works bare, with
+the function's docstring as the description; a string given to it is still
+the description, as `@registry.tool("...")`, and `name=`, `description=` and
+`parameters=` override by keyword. `register` is folded into it:
+`registry.tool(fn, description="...")` registers a function written
+elsewhere, so there is one way to register. The annotations describe lists,
+dicts with text keys, optional values, `Literal` choices, enums, defaults and
+`Annotated` descriptions, and the same reading of each annotation builds both
+the schema and the check of the model's argument, so the two cannot disagree.
+Arguments that do not fit are answered as `wrong_arguments`, naming the
+parameter and what it must be, before the tool runs; the model is told and
+may try again. A number where text is asked is taken as its text, since a
+call format that marks no strings reads `42` as a number, and refusing it
+would tell a model to write what its format cannot. A registry lists its
+tools, so `begin(tools=registry)` declares them. Four defects of the old code
+are fixed: a bare `@registry.tool` registered nothing and replaced the
+function with the inner decorator; a parameter taken only by position was
+declared, but every call passes arguments by name, so the tool could never
+run; an asynchronous function registered, and every call answered the model
+with "unwritable result" while the coroutine never ran; and a parameter that
+cannot be described, on a callable without a `__name__` such as a partial,
+raised `AttributeError` instead of the documented `TypeError`. A fifth was
+found on the way: an explicit `parameters=` schema was kept by reference, so
+changing the caller's dict later changed the declaration; it is copied now,
+and `specs()` hands out copies. A tool with no description, neither a
+docstring nor `description=`, is refused, since the model would read nothing
+about it.
+
+**270.9: arguments that are no object, and arguments nested too deeply.** A
+call whose arguments were a JSON list or `null` was read as a call with no
+arguments, and its tool ran with none of what the model gave. Such a call is
+now unreadable, and the model is told so. Very deep nesting was read on one
+path and not on another: the JSON reader followed thousands of levels, while
+copying the arguments into the conversation and rendering them did not, so a
+call 600 levels deep raised `RecursionError` out of the reply, measured with
+the test stand-in. The reading now refuses arguments that nest deeper than
+`MAX_ARGUMENT_DEPTH`, 100 levels, on every path, and a reader that runs out
+of recursion refuses the call as unreadable too, so the wrapper treats only a
+`ValueError` as an unreadable call.
+
+**268.5: an id for every call.** The ids a conversation's calls are written
+with were numbered from the count of calls the conversation held. After a
+`begin` that dropped older exchanges the count was smaller than the highest
+number kept, so the next call took an id that a kept call already had, and a
+template that pairs a result with its call by id paired it with the wrong
+one. `ToolCall` now carries its `id`, and every place a call is handed out
+carries it: the stream, `Reply.tool_calls`, `pending_calls` and
+`conversation()`. A call of a history keeps its id; one without takes a new
+one, and the next call of the conversation is numbered past the highest id
+the history holds, counted before the oldest exchanges are dropped, so no
+call takes the id of one that did not fit. A history that gives one id to two
+calls is refused. The service kept its own list of ids for this
+reason and can read the id from what the library returns instead.
+`inject_tool_result` still takes a call built by hand without an id, matched
+by its name and arguments, as before; a call that carries an id must carry
+the owed call's.
+
+**270.6: a turn that ends inside a call closed by a tag.** Where a call
+closes with text, a turn that ended inside the call had the call closed as the
+template closes one, and the call was read. Where it closes with a tag of its
+own, the same turn ended as `"end_of_turn"`, and the call was dropped without
+a word, its tokens left in the cache. The closing tag is now decoded after the
+call's last token, and the call is read and answered as any other, so both
+kinds of closing end the same.
+
+**270.12: a held tag on a reply that was cut.** Where a call opens with
+plain text, a tag of the model's own is held back while a call may follow it,
+since the tag is then the call's. A reply that the cap or a cancel cut right
+after such a tag released it into the answer. It is now dropped there, with
+whatever followed it, as the thought filter drops the start of a thought's
+tag on a cut reply. A reply that ends of its own accord after the tag keeps
+it, as before.
+
+**270.13: an action on the thread whose reply is being read.** A reply holds
+the wrapper's lock while it is read, so an action on the same thread, such as
+a tool that the reply runs calling back into the wrapper, or an `inject` made
+between two deltas of the stream, waited for the lock it already held and
+hung for ever. The wrapper now records which thread holds the lock, and every
+action, `wait_idle` and `close` included, refuses on that thread with a
+`RuntimeError` naming the open reply. A tool that does so is answered as a
+tool that raised, so the model is told, and the reply ends. Another thread
+still waits for the reply, as before. A stream resumed on another thread than
+the one that began it is outside this check, as the stream is to be driven
+from one thread at a time.
+
+**270.10: one separator around a call.** A reply that runs its calls parts
+the text before a call from the text after it with a blank line where the two
+would join without whitespace. Under `"yield"` the text after the call comes
+from the next `reply`, which knew nothing of the text before, so the two
+joined ("Ich sehe nach.Es ist neun."). A reply that goes on with an open turn
+now reads what the model wrote in that turn so far and applies the same rule,
+so the stream and `Reply.text` start with the blank line where it is needed.
+The history keeps each text as the model wrote it, as before.
+
+**268.2: a reply that goes on keeps its turn's policy.** `reply` took
+`"refuse"` whenever no policy was given, so a caller answering calls under
+`"yield"` who went on with `reply()` had the model's next call refused, and
+had to repeat the policy at every step. The policy now defaults to `None`: a
+reply that goes on with an open turn keeps the policy the reply that started
+the turn was given, and any other reply takes `"refuse"`, as before. A policy
+given to a reply that goes on holds for that reply alone. A turn that a
+history leaves open was started by no reply, so going on with it takes
+`"refuse"` unless a policy is given. The wrapper holds that policy, a
+registry included, until the next turn starts or the conversation begins
+again.
+
+**270.8: no room left to answer a call inside a running reply.** Where a
+reply answers its calls itself, under `"refuse"` or a registry, and the
+context had no room left for a result's wrapping, the reply raised
+`ContextOverflowError` and left the turn open, a call owed and no reply able
+to answer it, so only a new `begin` recovered. The turn now closes as the reply
+cap closes one: the reply is kept as the model wrote it, without the calls
+that could not be answered, results already written for them are taken out
+again, the cache is brought to the template's render, and the reply ends with
+`"token_limit"`, the context having run out. This is the path a call that
+could not be read already took where its error had no room.
+`inject_tool_result` still raises, since the caller holds the call there and
+decides what follows.
+
+**270.7: every call reported.** The README promised that every call is
+reported on `Reply.tool_calls`, but a call that could not be read, and one the
+reply cap or a cancel cut short, were missing from it. `ToolCall` now carries
+a `status`, the type `ToolCallStatus`: `"complete"` for a call that was read,
+`"unreadable"` and `"unfinished"` for the other two, which are reported with
+no name, arguments or id, since none could be read, and are never handed over
+in the stream, since nothing answers them. The history keeps an unreadable
+call as before, under the name a result is written with where none was read.
+The related find is fixed with it: answering an unreadable call took every
+`ValueError` for "no room, or no result block" and recorded the reply without
+its call, so a refusal to place a kept turn took that quiet path too. The
+template's result block is now checked before the answer is written, and only
+`ContextOverflowError` counts as no room; any other refusal is raised.
+
+**268.9: a call the library runs is handed over before it runs.** Where a
+registry runs the calls, the stream held only text, so an app could not show
+what was being looked up while a tool ran. Each call that runs is now handed
+over in the stream as its `ToolCall` just before it runs, so the stream holds
+calls besides text in that mode too, as it does under `"yield"`. A call that
+does not run, refused for a spent `max_calls`, is not handed over, since
+nothing is being looked up for it; it is reported on `Reply.tool_calls` as
+before. A stream closed at a call handed over leaves that call unrun and owed
+a result, as under `"yield"`, and the reply that goes on after its result
+keeps the registry (268.2). Verified on the CPU with MiniCPM5-2B Q4_K_M and a
+tool registered by the bare decorator: the call was handed over before the
+tool ran, and the stream, `Reply.tool_calls` and `conversation()` carried the
+same id; the exchange took 1.9 s.

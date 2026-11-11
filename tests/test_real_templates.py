@@ -184,7 +184,7 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     # gpt-oss writes a call's opening as plain text its replies also hold.
     known = fixture("gpt-oss")
     registry = ToolRegistry()
-    registry.register(lambda: "12:00", "The time.", name="clock")
+    registry.tool(lambda: "12:00", description="The time.", name="clock")
 
     # An add-on file of its own that names the template and says nothing of a call.
     (tmp_path / "model.json").write_text(json.dumps(

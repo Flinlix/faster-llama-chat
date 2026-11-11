@@ -818,7 +818,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     run.begin(tools=[WEATHER])
     events = list(run.chat.reply("Weather in Bonn?", tool_call_policy="yield"))
     call, = [event for event in events if isinstance(event, ToolCall)]
-    assert call == ToolCall(WEATHER.name, {"city": "Bonn"})
+    assert (call.name, call.arguments) == (WEATHER.name, {"city": "Bonn"}) and call.id
     run.chat.inject_tool_result(call, '{"weather": "sunny"}')
     tags = run.template.reasoning
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
@@ -946,7 +946,7 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     calls = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     run.chat.inject_tool_result(calls[0], "sunny")
     calls = [e for e in run.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
-    assert calls == [ToolCall(WEATHER.name, {"city": "Bonn"})]
+    assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": "Bonn"})]
     run.chat.inject_tool_result(calls[0], "sunny")
     assert run.chat.reply().finish().text == "Sunny twice."
     run.chat.reply("Thanks.").finish()

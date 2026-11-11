@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
-                       result_message, system_part)
+                       next_call_number, result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
@@ -242,6 +242,9 @@ class RenderedCache:
             self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history)
+            # Counted before the oldest are dropped, so that no later call takes the id of one.
+            self._state.n_calls = next_call_number(
+                c["id"] for m in self._state.messages for c in m.get("tool_calls") or ())
             self._state.kept, self._state.kept_at = [], {}
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
@@ -259,7 +262,6 @@ class RenderedCache:
                     "context_size/evict_above_fraction")
             self._drop_while_over(limit, generation_prompt=False)
             self._ensure_within(limit, "shorten the history")
-            self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -558,12 +560,21 @@ class RenderedCache:
                      and k in self._state.kept_at), None)
 
     def _write_unreadable(self) -> bool:
-        """Answer a call that could not be read, where the context has room; whether it was."""
-        try:
-            self.add_result(ToolCall(UNKNOWN_FUNCTION, {}), _UNREADABLE_RESULT)
-            return True
-        except ValueError:          # no room for it, or the template writes no result
+        """Answer a call that could not be read, where the template writes a result and the context has room; whether it was."""
+        call = self.pending_calls[0]
+        if not self._renders_result(result_message(call.name, call.id,
+                                                   result_text(_UNREADABLE_RESULT))):
             return False
+        try:
+            self.add_result(call, _UNREADABLE_RESULT)
+            return True
+        except ContextOverflowError:
+            return False
+
+    def _renders_result(self, message: dict) -> bool:
+        """Whether the template writes ``message``, a result, after the conversation."""
+        return self._rendering.render(self._state.messages + [message], False) not in (
+            None, self._rendering.render(self._state.messages, False))
 
     def _forget_calls(self) -> None:
         """Record the newest reply without the call it made, which could be told nothing; its tokens stay as generated."""
@@ -574,6 +585,17 @@ class RenderedCache:
                             if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
         self._publish()
+
+    def close_unanswered(self) -> int:
+        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history items were dropped.
+
+        The newest reply is kept without those calls, its tokens as generated,
+        and the results already written for them are taken out again.
+        """
+        calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
+        del self._state.messages[calling + 1:]
+        self._forget_calls()
+        return self._settle()
 
     def add_result(self, call: ToolCall, result) -> None:
         """Record what the oldest owed call returned, clipped where it cannot fit; after the last one, decode the prompt for the reply.
@@ -592,14 +614,13 @@ class RenderedCache:
             if not waiting:
                 raise ValueError("no tool call is waiting for a result")
             owed, owed_id = waiting[0]
-            if call != owed:
+            if not isinstance(call, ToolCall) or replace(call, id=call.id or owed.id) != owed:
                 raise ValueError(
                     f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
             message = result_message(owed.name, owed_id, text)
-            if self._rendering.render(self._state.messages + [message], False) in (
-                    None, self._rendering.render(self._state.messages, False)):
+            if not self._renders_result(message):
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             room = self._max_prompt_tokens
@@ -1137,8 +1158,8 @@ def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     if calling is None or any(m["role"] not in ("tool",) for m in messages[calling + 1:]):
         return []
     answered = len(messages) - calling - 1
-    return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"])), c["id"])
-            for c in messages[calling]["tool_calls"][answered:]]
+    return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
+             c["id"]) for c in messages[calling]["tool_calls"][answered:]]
 
 
 def _is_plain(text: str, reader) -> bool:
