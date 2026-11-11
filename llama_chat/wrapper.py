@@ -702,6 +702,7 @@ class ChatWrapper:
             stop_reason=generated.stop_reason,
             tool_calls=conversation.pending_calls,
             n_reasoning_tokens=reply_text.thought_pieces,
+            thought=reply_text.thought,
         )
 
     def _turn_end_test(self, reply_text: ReplyText) -> Callable[[int], bool] | None:
@@ -761,6 +762,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
+        thought="\n\n".join(t.thought for t in generations if t.thought),
     )
 
 

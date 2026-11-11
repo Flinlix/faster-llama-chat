@@ -1991,3 +1991,13 @@ whose arguments cannot be read, such as one written in C, is taken as it is.
 A negative `max_calls` was taken as a ceiling already spent; `reply` now
 refuses with a `ValueError` a `max_calls` that is not a whole number of at
 least 0, `True` included. `inject(role="tool")` is refused with 268.6.
+
+**268.4: the reply hands back its thought.** A reasoning model's thought was
+kept out of the stream and out of `Reply.text`, and only its approximate
+length came back, as `n_reasoning_tokens`. `Reply.thought` now holds its
+text, as the stream's filter collected it: without its tags and the
+whitespace around them, whether or not the template keeps a past reply's
+thought. A request that took several generations, around tool calls, joins
+each generation's thought in order, with a blank line between two.
+The stream still yields the answer alone, so a caller who shows only the
+answer changes nothing.

@@ -142,8 +142,9 @@ model and makes later actions raise.
 `Reply` also carries `text`, `n_prefilled_tokens`, `n_prompt_tokens` (the
 tokens the cache held when the reply's last generation drew its first, which
 is all that generation was conditioned on), `n_generated_tokens`,
-`n_evicted_messages`, `tool_calls`, `tool_limit_reached` and
-`n_reasoning_tokens`. A stream closed early has no `Reply`; what it generated
+`n_evicted_messages`, `tool_calls`, `tool_limit_reached`,
+`n_reasoning_tokens` and `thought`, the thought's text, empty where the model
+thought nothing. A stream closed early has no `Reply`; what it generated
 is recorded all the same.
 
 **What fails at startup.** Whatever can be settled once is settled while the
@@ -266,6 +267,7 @@ goes on with it.
 chat.begin("You are a helpful assistant.", reasoning=True)
 reply = chat.reply("Why is the sky blue?").finish()
 reply.text                  # the answer alone
+reply.thought               # what the model thought before it, without its tags
 reply.n_reasoning_tokens    # about how many tokens the thought took
 ```
 
