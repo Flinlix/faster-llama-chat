@@ -103,3 +103,20 @@ def test_the_ministral_3_file_holds_the_temperature_its_card_recommends_for_prod
     assert read_addon_file(path)["sampling"] == {"temperature": 0.05}
     assert ("Use a temperature below 0.1 for daily-driver and production environments"
             in json.loads(path.read_text())["source"])
+
+
+@pytest.mark.parametrize("penalty", ["presence_penalty", "frequency_penalty"])
+def test_an_add_on_file_may_set_a_presence_or_a_frequency_penalty(tmp_path, penalty):
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps({"sampling": {penalty: 1.5}}))
+    found = read_addon_file(path)
+    assert getattr(with_model_sampling(Config(), {}, found), penalty) == 1.5
+    assert getattr(with_model_sampling(Config(), {"temperature": 0.7}, _addon({})), penalty) == 0.0
+    assert getattr(Config(), penalty) is None
+
+
+def test_the_qwen_3_5_file_holds_the_presence_penalty_its_card_recommends():
+    path = SHIPPED_ADDONS / "qwen3.5.json"
+    assert read_addon_file(path)["sampling"]["presence_penalty"] == 1.5
+    assert "presence_penalty=1.5" in json.loads(path.read_text())["source"]
+

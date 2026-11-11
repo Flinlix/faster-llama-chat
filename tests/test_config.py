@@ -78,7 +78,7 @@ def test_config_rejects_invalid_values(field, value):
 # Every setting, with a value of a type it does not take.
 _WRONG_TYPES = {
     "model_path": 3, "temperature": "hot", "top_k": 2.5, "top_p": "0.9", "min_p": True,
-    "repetition_penalty": [1.1], "presence_penalty": "1.5", "frequency_penalty": None,
+    "repetition_penalty": [1.1], "presence_penalty": "1.5", "frequency_penalty": [0.1],
     "penalty_window_tokens": 64.0, "seed": "7", "context_size": "4096",
     "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64",
     "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,

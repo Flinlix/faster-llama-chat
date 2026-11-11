@@ -1659,3 +1659,15 @@ the values a fine-tune that keeps the template states in its own GGUF; a file
 next to that GGUF, or the caller's own values, are how to override it. Of the
 GGUFs on the machine this was built on, none both states sampling values and
 matches a shipped file, so the change alters no model's sampling there.
+
+**265.2: presence and frequency penalties in add-on files.** An add-on file
+could carry only the five sampling values a GGUF can state, although makers
+publish penalties too: Qwen 3.5's model card recommends `presence_penalty=1.5`
+for every mode but precise coding. `presence_penalty` and `frequency_penalty`
+are now "the model's" fields like the other five: unset by default, taken from
+the add-on file where it gives them, else off (0). No GGUF key states either,
+so they come only from an add-on file or the caller. The Qwen 3.5 file now
+holds 1.5, cited from the card's Best Practices for thinking mode on general
+tasks, the mode whose other values it already held. Verified on the CPU with
+Qwen3.5-9B Q4_K_M: the wrapper ran with presence penalty 1.5 and the file's
+other values and answered.

@@ -15,15 +15,16 @@ from pathlib import Path
 from .config import Config
 
 SHIPPED_ADDONS = Path(__file__).parent / "addons"
-SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty")
+SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty",
+                   "presence_penalty", "frequency_penalty")
 CALL_FIELDS = ("opening", "name_close", "closing")
 _FILE_KEYS = {"templates", "source", "sampling", "call"}
 # llama.cpp's own defaults, for a model that recommends nothing.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
-                    "repetition_penalty": 1.0}
+                    "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0}
 # What a field no source states stands at, where another field is stated: switched off.
 UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
-                     "repetition_penalty": 1.0}
+                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0}
 
 
 def template_fingerprint(template: str) -> str:

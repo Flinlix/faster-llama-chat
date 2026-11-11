@@ -31,8 +31,8 @@ class InvalidSettingError(ValueError):
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`, every value checked where it is made.
 
-    The five model sampling fields, ``temperature`` to
-    ``repetition_penalty``, left ``None`` take the model's own when it loads,
+    The seven model sampling fields, ``temperature`` to
+    ``frequency_penalty``, left ``None`` take the model's own when it loads,
     value by value: its add-on file's, else what its GGUF states, else
     switched off; where neither states any, llama.cpp's defaults. See the
     README, "Configuration".
@@ -103,8 +103,8 @@ class Config:
     top_p: float | None = None
     min_p: float | None = None
     repetition_penalty: float | None = None
-    presence_penalty: float = 0.0
-    frequency_penalty: float = 0.0
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
     penalty_window_tokens: int = 64
     seed: int | None = None
 
