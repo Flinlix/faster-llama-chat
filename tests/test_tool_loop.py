@@ -1709,3 +1709,28 @@ def test_a_template_for_tools_that_fails_the_load_check_refuses_the_model():
               "{%- endfor -%}{%- if add_generation_prompt -%}model: {%- endif -%}"}
     with pytest.raises(ValueError, match="generation would never stop"):
         _with_a_template_for_tools(broken)
+
+
+def _counting_clock():
+    """A registry whose one tool, ``clock``, notes each run in the list returned beside it."""
+    ran = []
+    registry = ToolRegistry()
+    registry.tool(lambda: ran.append(1) or "12:00", description="Die Zeit.", name="clock")
+    return registry, ran
+
+
+def test_the_policy_a_turn_keeps_is_the_one_of_the_reply_that_started_it():
+    """Two replies asked for before either runs: the turn keeps the policy of the one that opened it."""
+    registry, ran = _counting_clock()
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    opening = wrapper.reply("wie spät?", tool_call_policy="yield")
+    refused = wrapper.reply("und jetzt?", tool_call_policy=registry)
+    call, = [event for event in opening if isinstance(event, ToolCall)]
+    with pytest.raises(ValueError):
+        refused.finish()                        # the turn is open
+    wrapper.inject_tool_result(call, "12:00")
+    fake.call_script = ["fn:clock{}"]
+    handed = [event for event in wrapper.reply() if isinstance(event, ToolCall)]
+    assert ran == [] and handed and wrapper.pending_calls == handed     # yielded again, not run

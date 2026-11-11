@@ -2367,3 +2367,15 @@ errors, so no `INFO` or `DEBUG` line appeared. The example now adds
 libraries' debug output stays hidden, while the records `llama_chat.engine`
 passes at its own level reach the handler. A test runs the example in a fresh
 interpreter and reads a debug line back from stderr.
+
+**R7: the policy a turn keeps is noted under the lock.** `reply` read whether
+it went on with an open turn from the live state, without the lock, and noted
+its policy as the turn's when it was called, before the reply ran. Two replies
+asked for before either ran left the policy of the one called last, so a turn
+opened under `"yield"` could go on under the other reply's registry and run a
+call nobody was handed. `reply` now reads the published state, as its other
+checks before the stream do, and the policy is noted when the generation
+starts, under the lock, and only where that reply opens the turn. A reply
+given no policy still reads the kept one when it is called; that read, like
+every check before the stream, is advisory, and the reply is checked again
+under the lock.

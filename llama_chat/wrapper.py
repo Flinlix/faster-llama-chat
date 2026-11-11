@@ -302,7 +302,7 @@ class ChatWrapper:
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
-        goes_on = text is None and self._conversation.turn_open
+        goes_on = text is None and self._conversation.published_turn_open()
         if tool_call_policy is None:
             # Compared with None: an empty registry is false.
             kept = self._turn_policy if goes_on else None
@@ -322,17 +322,16 @@ class ChatWrapper:
         self._ensure_open()
         # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        if not goes_on:
-            self._turn_policy = tool_call_policy
         if tool_call_policy == "yield":
-            return ReplyStream(self._until_call(text, recognizes_calls=True, **options))
-        if tool_call_policy == "withhold":
-            return ReplyStream(self._until_call(text, recognizes_calls=False, withhold=True,
+            return ReplyStream(self._until_call(text, tool_call_policy, recognizes_calls=True,
                                                 **options))
+        if tool_call_policy == "withhold":
+            return ReplyStream(self._until_call(text, tool_call_policy, recognizes_calls=False,
+                                                withhold=True, **options))
         return ReplyStream(self._generate_until_answered(
-            text, registry=tool_call_policy if runs else None, max_calls=max_calls, **options))
+            text, policy=tool_call_policy, max_calls=max_calls, **options))
 
-    def _until_call(self, text: str | None,
+    def _until_call(self, text: str | None, policy: ToolCallPolicy,
                     **options) -> Generator[str | ToolCall, None, Reply]:
         """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
 
@@ -340,6 +339,7 @@ class ChatWrapper:
         a reply that runs its calls parts its generations.
         """
         with self._held():
+            self._keep_turn_policy(policy)
             generation = yield from self._read_generation(self._generate(text, **options),
                                                           after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
@@ -573,7 +573,7 @@ class ChatWrapper:
 
     # ----- internals -----------------------------------------------------------
     def _generate_until_answered(
-        self, text: str, *, registry: ToolRegistry | None,
+        self, text: str, *, policy: ToolRegistry | ToolCallPolicy,
         max_calls: int | None = None,
         **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
@@ -581,11 +581,11 @@ class ChatWrapper:
         Each call that runs is handed over in the stream before it runs.
 
         Args:
-            registry: What to run calls against. ``None`` refuses every call
-                with an error result.
+            policy: The registry to run calls against, or ``"refuse"``, which
+                answers every call with an error result.
             max_calls: How many tools one turn may use, ``None`` for no
-                ceiling. Nothing is run where ``registry`` is ``None``, so it
-                does not bind there.
+                ceiling. Nothing is run under ``"refuse"``, so it does not bind
+                there.
             text, **kwargs: As :meth:`reply`.
 
         The lock is held for the whole exchange, tools running included, so
@@ -602,8 +602,10 @@ class ChatWrapper:
             # A registry is the same promise a declaration is, so it is checked the
             # same way: an exchange that cannot run a tool is refused before it
             # starts, not after the model has asked for one.
+            registry = policy if isinstance(policy, ToolRegistry) else None
             if registry is not None and len(registry) > 0:
                 self._template.ensure_tools_usable()
+            self._keep_turn_policy(policy)
             deltas = self._generate(text, recognizes_calls=True, **kwargs)
             # An absent ceiling counts down without ever reaching zero, so the
             # three places that read it need no case of their own.
@@ -684,6 +686,11 @@ class ChatWrapper:
             if message["role"] == "assistant":
                 written.append(message["content"])
         return "".join(reversed(written))
+
+    def _keep_turn_policy(self, policy: ToolCallPolicy | ToolRegistry) -> None:
+        """Note ``policy`` as the one a reply going on with the turn keeps, where this reply opens the turn; the lock must be held."""
+        if not self._conversation.turn_open:
+            self._turn_policy = policy
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       calls_left, max_calls: int | None):
