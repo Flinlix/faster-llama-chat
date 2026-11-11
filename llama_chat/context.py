@@ -28,7 +28,8 @@ class KVContext:
             because a raise aborts the load.
 
     Raises:
-        ValueError: If ``config.model_path`` is unset.
+        ValueError: If ``config.model_path`` is unset, or the chat template
+            the model ships is not valid template code.
         FileNotFoundError: If it names no file.
         RuntimeError: If the model or the context cannot be created, or this
             build cannot perform one of the cache edits eviction rests on.

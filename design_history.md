@@ -1579,3 +1579,11 @@ lost the separator and made the call's closing text run to the end of the
 turn, `</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜>` in place of
 `</｜DSML｜ invoke>`. Whether that model's vocabulary holds `<｜DSML｜` as a tag
 decides which reading is right; this waits for the user's decision.
+
+**270.15: A template that is not template code is refused at load.** A chat
+template the renderer cannot compile, such as one with a block never closed
+or a filter the renderer lacks, failed with the renderer's own parser error,
+which is no `ValueError` and named no refusal. The renderer's construction now
+turns that error into a `ValueError` that says the template is not valid
+template code and names the line and the cause, at load, as every other
+template that cannot be used is refused.

@@ -151,8 +151,9 @@ wrapper is built, so a deployment that could never work says so then: every
 `Config` field and the combinations no call could succeed under, that
 `model_path` names a file, each cache edit tried once on the empty cache, that
 a context of your own answers everything called on it and holds the
-`context_size` asked for, that the generation prompt and the closing after a
-reply are where the template writes them and the closing begins with one of the
+`context_size` asked for, that the chat template is valid template code (a
+`ValueError` naming the line and the cause where it is not), that the
+generation prompt and the closing after a reply are where the template writes them and the closing begins with one of the
 model's tags, and whether tool calling works (`can_call_tools`). A setting
 refused is an `InvalidSettingError`, a `ValueError` whose `field` names it.
 What is left is what only a conversation can know: whether a request fits
