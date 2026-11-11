@@ -2314,3 +2314,74 @@ keeps the registry (268.2). Verified on the CPU with MiniCPM5-2B Q4_K_M and a
 tool registered by the bare decorator: the call was handed over before the
 tool ran, and the stream, `Reply.tool_calls` and `conversation()` carried the
 same id; the exchange took 1.9 s.
+
+## 2026-11-11: Tests that name no model
+
+At the user's decision (263.4A), the tests name no model, family or vendor,
+and write no tag of a real template. Before, about twenty places in the tests
+named one, and some checked what was true of one named template only. The
+name check read only the library's modules, so none of this was caught.
+
+**What changed.** A test written for one named template now chooses its
+templates by what they do, and runs on every template that does it: writing
+the date, a system prompt that a later question moves, a reply the template
+cannot write empty, a reply that ends at a text where a call parts from its
+closing, an opening the model writes before its answer, a call that opens with
+plain text, and a shipped add-on file that says how a call is written or sets
+sampling. What a test expects of one template stands in that template's own
+file in `tests/templates/`, beside `marks_thought`, `can_reason` and
+`calls_tools`: `turn_end_token`, `turn_end_text`, `answer_opening`,
+`call_opens_as_text`, `writes_empty_reply`, `can_take_system_prompt`,
+`date_format`, `lost_arguments`, the fragments and call body extraction must
+find, and the sampling a model's card recommends with the card's words. A key
+a file leaves out holds what most templates do; `tests/chat_templates.py`
+lists those values. Where a key selects the templates a test runs on,
+`tests/test_real_templates.py` checks the key against what the template does,
+on every template: `date_format` stands exactly where the template reads the
+clock, and its render holds the date in that format; `writes_empty_reply` is
+false exactly where the template refuses an empty reply. A check of a typed
+value, written for one template, became a property: wherever a template
+writes the text `"42"` otherwise than the number `42`, the text reads back as
+text. Tag literals of real templates in tests became invented tags; a test
+that needs a template's own tag reads it from that template's file or render.
+
+**What counts as a model file.** A test template and what its file says of
+it, in `tests/templates/`, and an add-on file in `llama_chat/addons/`. The
+publisher and chat format names the check needs beyond a file's source moved
+from `tests/test_neutral.py` into the template files (`publisher`,
+`chat_format`, and `publisher_is_a_word` for a publisher whose name is also an
+everyday word), so the check names none itself.
+
+**What the widened check exempts.** It reads every file of the project except
+hidden folders, `__pycache__`, `*.egg-info` and files that are not text, and
+exempts:
+
+- the model files;
+- `design_history.md`;
+- the README's install section, from `## Install` to the next section;
+- `install.sh` and `pyproject.toml`, which install the engine and name the
+  maker of the GPU its build is for.
+
+In the engine's module `llama_chat/_backend.py` and its tests
+`tests/test_backend.py`, the engine's own function and constant names, those
+that begin with the first word of the engine module's name, are allowed. The
+library's and the engine's own names are never taken for a model. The tag rule
+is the one the library's modules had: no tag longer than three characters that
+a test template writes. A rule for one family's tags alone was rejected: a chat
+format's tags are shared by several families and identify the format as its
+name does. Besides the parts of a name split at `_`, before capitals and
+between letters and digits, the check now also tries the parts split at `_`
+and before capitals alone, so that a vendor whose name holds digits is found
+inside an identifier.
+
+**What was kept narrower.** The test that a reply kept as generated is not
+shortened searches over context sizes for one that leaves the error result no
+room; it ran on one real template and now runs on an invented template that
+calls tools, since the search on every template that calls tools would
+lengthen the suite for no other gain. The date tests begin without a system
+prompt, since some templates write the date only then; the old test, on a
+template that writes it either way, began with one. The fragments and call
+bodies extraction must find are stated for the templates that had them
+before; the other templates are checked through whole renders in
+`tests/test_conversations.py`, and values computed by the code under test
+would add no check of their own.
