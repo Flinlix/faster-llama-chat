@@ -1,4 +1,9 @@
-"""The library's modules name no model, family or vendor."""
+"""No file but a model file names a model, family or vendor, or writes a tag of a real template.
+
+A model file is a test template or what its file says of it, in
+``tests/templates/``, or an add-on file in ``llama_chat/addons/``. The other
+exemptions are listed below.
+"""
 
 import json
 import re
@@ -6,93 +11,137 @@ from pathlib import Path
 
 import pytest
 
-from .chat_templates import STEMS, fixture
+from .chat_templates import STEMS, expected, fixture
 from .fake_context import TAG
 
-_PACKAGE = Path(__file__).parent.parent / "llama_chat"
-_ENGINE_MODULE, _ENGINE_WORDS = "_backend.py", {"llama", "llama-cpp-python"}
+_ROOT = Path(__file__).parent.parent
+_PACKAGE = _ROOT / "llama_chat"
 _ADDONS = sorted((_PACKAGE / "addons").glob("*.json"))
+
+# Folders of model files, and files that may name a model: the design history, and the
+# files that install the engine, which name the build for a GPU's maker.
+_MODEL_FOLDERS = (Path(__file__).parent / "templates", _PACKAGE / "addons")
+_EXEMPT = {_ROOT / "design_history.md", _ROOT / "install.sh", _ROOT / "pyproject.toml"}
+# The README's install section, which names what gets installed, up to the next section.
+_INSTALL_SECTION = re.compile(r"(?ms)^## Install$.*?(?=^## )")
+
+# The library's and its engine's own names, which hold a family's letters.
+_OWN_NAMES = ("llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
+_OWN_NAME = re.compile("|".join(map(re.escape, _OWN_NAMES)), re.IGNORECASE)
+# The engine's module and its tests, which name the engine's functions: the words its
+# module's name begins with, alone or before an underscore.
+_ENGINE_FILES = {_PACKAGE / "_backend.py", Path(__file__).parent / "test_backend.py"}
+_ENGINE_PREFIX = "llama_cpp".split("_")[0]
+
+
+def _checked_files() -> list[Path]:
+    """Every file of the project that is not hidden, built, exempt or a model file."""
+    def skipped(path):
+        parts = path.relative_to(_ROOT).parts
+        return (any(part.startswith(".") or part == "__pycache__" or part.endswith(".egg-info")
+                    for part in parts)
+                or path in _EXEMPT or any(folder in path.parents for folder in _MODEL_FOLDERS))
+    return [path for path in sorted(_ROOT.rglob("*")) if path.is_file() and not skipped(path)]
+
+
+def _checked_text(path: Path) -> str:
+    """The text of ``path`` that must name no model, the README without its install section."""
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError:
+        return ""                       # not text, so no name a reader sees
+    if path == _ROOT / "README.md":
+        assert _INSTALL_SECTION.search(text), "the README's install section is no longer found"
+        text = _INSTALL_SECTION.sub("", text)
+    return text
+
+
+def _known_files() -> list[dict]:
+    """Every test template's file and every add-on file, as each holds it."""
+    return [fixture(stem) for stem in STEMS] + [json.loads(path.read_text()) for path in _ADDONS]
 
 
 def _families() -> set[str]:
-    """The leading letters of each known file's name, such as ``qwen`` for ``qwen3-coder``."""
+    """The leading letters of each known file's name, up to its first digit or other sign."""
     return {re.match("[a-z]+", name.lower()).group()
             for name in [*STEMS, *(path.stem for path in _ADDONS)]}
 
 
-# Publishers and chat formats the known files do not spell out themselves.
-_NAMED = {"meta", "ibm", "microsoft", "alibaba", "moonshot", "zhipu", "google", "openai",
-          "mistralai", "nvidia", "tencent", "cohere", "deepseek", "chatml", "hermes", "harmony"}
-
-
 def _vendors() -> set[str]:
-    """The publisher each known file's ``source`` names before its slash, and the names above."""
-    sources = [*(fixture(stem).get("source", "") for stem in STEMS),
-               *(json.loads(path.read_text()).get("source", "") for path in _ADDONS)]
-    return {source.split("/")[0].lower() for source in sources if "/" in source} | _NAMED
+    """The publisher each known file's ``source`` names before its slash, and each publisher and chat format a test template's file names."""
+    sources = [known.get("source", "") for known in _known_files()]
+    named = {expected(fixture(stem), key) for stem in STEMS for key in ("publisher", "chat_format")}
+    return {source.split("/")[0].lower() for source in sources if "/" in source} | (named - {None})
 
 
-# The library's and its engine's own names, which hold a family's letters.
-_OWN_NAMES = {"llama_chat", "llama.cpp", "llama_cpp", "llama-cpp-python"}
+def _words_first() -> set[str]:
+    """Publishers whose name is also an everyday word, which as a part of a name means the word."""
+    return {expected(fixture(stem), "publisher") for stem in STEMS
+            if expected(fixture(stem), "publisher_is_a_word")}
 
 
 def _parts(word: str) -> list[str]:
-    """``word`` whole and in its parts: split at ``_``, between letters and digits, and before capitals."""
-    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])|_", " ", word)
-    return [word.lower()] + spaced.lower().split()
+    """``word`` whole and in its parts: split at ``_`` and before capitals, and those split again between letters and digits."""
+    pieces = re.sub(r"(?<=[a-z])(?=[A-Z])|_", " ", word).lower().split()
+    spaced = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", " ".join(pieces))
+    return [word.lower()] + pieces + spaced.split()
 
 
-# Publishers whose name is also an everyday word, which as a part of a name means the word.
-_WORDS_FIRST = {"meta"}
-
-
-def _names_a_model(word: str, families: set[str], vendors: set[str]) -> bool:
+def _names_a_model(word: str, families: set[str], vendors: set[str], words_first: set[str]) -> bool:
     if word.lower() in _OWN_NAMES:
         return False
     whole, *parts = _parts(word)
     if whole in vendors:
         return True
     for part in [whole, *parts]:
-        if part in families or (part in vendors and part not in _WORDS_FIRST):
+        if part in families or (part in vendors and part not in words_first):
             return True
         if any(re.fullmatch(re.escape(family) + r"(\d[\d.]*|-.+)", part) for family in families):
             return True
     return False
 
 
-@pytest.mark.parametrize("module", sorted(_PACKAGE.rglob("*.py")),
-                         ids=lambda path: str(path.relative_to(_PACKAGE)))
-def test_a_module_names_no_model_family_or_vendor(module):
-    families, vendors = _families(), _vendors()
-    text = re.sub(r"(?i)llama_chat|llama[._-]cpp(?:-python)?", " ", module.read_text())
-    words = set(re.findall(r"[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*", text))
-    if module.name == _ENGINE_MODULE:      # the engine's own module may name the engine
-        words = {w for w in words if w.lower() not in _ENGINE_WORDS
-                 and not w.lower().startswith("llama_")}
-    assert not sorted(word for word in words if _names_a_model(word, families, vendors))
+def _is_the_engines(word: str) -> bool:
+    return word.lower() == _ENGINE_PREFIX or word.lower().startswith(_ENGINE_PREFIX + "_")
 
 
-@pytest.mark.parametrize("word", ["qwen", "qwen3", "qwen2.5", "gpt-oss", "llama-3", "openai",
-                                  "is_qwen", "qwen_tags", "deepseek_v3", "qwen3coder",
-                                  "QwenTags", "harmony_format"])
-def test_a_model_family_or_vendor_name_is_recognized(word):
-    assert _names_a_model(word, _families(), _vendors())
+@pytest.mark.parametrize("path", _checked_files(), ids=lambda path: str(path.relative_to(_ROOT)))
+def test_a_file_names_no_model_family_or_vendor(path):
+    names = (_families(), _vendors(), _words_first())
+    words = set(re.findall(r"[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*", _OWN_NAME.sub(" ", _checked_text(path))))
+    if path in _ENGINE_FILES:
+        words = {word for word in words if not _is_the_engines(word)}
+    assert not sorted(word for word in words if _names_a_model(word, *names))
 
 
-@pytest.mark.parametrize("word", ["llama_chat", "llama.cpp", "llama_cpp", "sampling",
-                                  "max_batch_tokens", "ThoughtFilter"])
-def test_the_library_and_its_engine_are_not_taken_for_a_model(word):
-    assert not _names_a_model(word, _families(), _vendors())
+def _recognized_forms() -> list[str]:
+    """Each family and vendor as names spell it: alone, versioned, inside an identifier and in camel case."""
+    words_first = _words_first()
+    forms = [form for family in sorted(_families()) for form in (
+        family, f"{family}3", f"{family}2.5", f"{family}-3", f"is_{family}", f"{family}_tags",
+        f"{family}3coder", f"{family.capitalize()}Tags")]
+    return forms + [form for vendor in sorted(_vendors()) for form in (
+        (vendor,) if vendor in words_first else (vendor, f"{vendor}_format"))]
+
+
+def test_a_model_family_or_vendor_name_is_recognized_in_every_form():
+    names = (_families(), _vendors(), _words_first())
+    assert not [form for form in _recognized_forms() if not _names_a_model(form, *names)]
+
+
+@pytest.mark.parametrize("word", [*_OWN_NAMES, "sampling", "max_batch_tokens", "ThoughtFilter",
+                                  *(f"{word}_value" for word in sorted(_words_first()))])
+def test_the_library_its_engine_and_an_everyday_word_are_not_taken_for_a_model(word):
+    assert not _names_a_model(word, _families(), _vendors(), _words_first())
 
 
 def _template_tags() -> set[str]:
     return {tag for stem in STEMS for tag in TAG.findall(fixture(stem)["chat_template"])}
 
 
-@pytest.mark.parametrize("module", sorted(_PACKAGE.rglob("*.py")),
-                         ids=lambda path: str(path.relative_to(_PACKAGE)))
-def test_a_module_writes_no_tag_of_a_real_template(module):
-    text = module.read_text()
+@pytest.mark.parametrize("path", _checked_files(), ids=lambda path: str(path.relative_to(_ROOT)))
+def test_a_file_writes_no_tag_of_a_real_template(path):
+    text = _checked_text(path)
     assert not sorted(tag for tag in _template_tags() if len(tag) > 3 and tag in text)
 
 

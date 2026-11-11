@@ -7,6 +7,7 @@ including across evictions.
 """
 
 import dataclasses
+import json
 import threading
 import typing
 
@@ -15,7 +16,9 @@ import pytest
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tools import ToolCall, ToolRegistry
 from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy
+from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from llama_chat.generation import generate
+from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
@@ -815,16 +818,28 @@ def test_a_stream_and_a_resume_hand_it_over_as_well():
     assert fake.samplings == [generation_sampling(w.config, sampling)] * 2
 
 
-def test_a_context_of_your_own_gets_the_add_on_file_and_what_the_model_recommends():
-    # The shipped Qwen 3 file names this template; nothing the model states is used beside it.
-    from tests.chat_templates import fixture
-    fake = FakeContext(fixture("qwen-3"), ["Fine."])
+def _shipped_sampling() -> dict:
+    """The sampling each shipped add-on file sets, by the test template it names."""
+    by_fingerprint = {}
+    for path in SHIPPED_ADDONS.glob("*.json"):
+        found = json.loads(path.read_text())
+        by_fingerprint.update(dict.fromkeys(found["templates"], found.get("sampling")))
+    return {stem: by_fingerprint[fingerprint] for stem in STEMS
+            if by_fingerprint.get(fingerprint := template_fingerprint(fixture(stem)["chat_template"]))}
+
+
+@pytest.mark.parametrize("stem, sampling", sorted(_shipped_sampling().items()))
+def test_a_context_of_your_own_gets_the_add_on_file_that_names_its_template(stem, sampling):
+    # The shipped file names this template; nothing the model states is used beside it.
+    fake = FakeContext(fixture(stem), ["Fine."])
     w = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=fake)
-    assert (w.config.temperature, w.config.top_k, w.config.top_p) == (0.6, 20, 0.95)
+    assert {key: getattr(w.config, key) for key in sampling} == sampling
     w.begin("")
     w.reply("hi").finish()
-    assert (fake.samplings[0].temperature, fake.samplings[0].top_k) == (0.6, 20)
+    assert {key: getattr(fake.samplings[0], key) for key in sampling} == sampling
 
+
+def test_a_context_of_your_own_gets_what_the_model_recommends():
     # A model that states its own and has no add-on file.
     stating = FakeContext(PLAIN)
     stating.recommended = {"temperature": 0.4, "min_p": 0.07}
@@ -913,12 +928,12 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
     _as_rendered(w, fake)
 
 
-@pytest.mark.parametrize("stem", ["mistral-3", "devstral-2", "mistral-large-4"])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if not expected(fixture(stem), "writes_empty_reply")])
 @pytest.mark.parametrize("nothing", ["cancelled-at-once", "ends-at-once", "cancelled-by-a-tool"])
 def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_question_back(
         stem, nothing):
     """These templates write no empty reply, so the request is taken back whole and the next question is answered."""
-    from tests.chat_templates import WEATHER, fixture
     from tests.fake_context import ScriptedCall
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)

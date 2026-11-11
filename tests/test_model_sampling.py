@@ -10,7 +10,7 @@ from llama_chat.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
 from llama_chat.config import Config, InvalidSettingError
-from tests.chat_templates import STEMS, fixture
+from tests.chat_templates import STEMS, expected, fixture
 
 _TEMPLATE = "{{ messages }}"
 
@@ -140,11 +140,14 @@ def test_every_shipped_file_names_a_template_the_tests_run():
         assert set(json.loads(path.read_text())["templates"]) & fixtures, path.name
 
 
-def test_the_ministral_3_file_holds_the_temperature_its_card_recommends_for_production():
-    path = SHIPPED_ADDONS / "ministral-3.json"
-    assert read_addon_file(path)["sampling"] == {"temperature": 0.05}
-    assert ("Use a temperature below 0.1 for daily-driver and production environments"
-            in json.loads(path.read_text())["source"])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "card_sampling")])
+def test_a_shipped_file_holds_the_sampling_its_models_card_recommends_and_quotes_the_card(stem):
+    known = fixture(stem)
+    fingerprint = template_fingerprint(known["chat_template"])
+    path, = [path for path in SHIPPED_ADDONS.glob("*.json")
+             if fingerprint in json.loads(path.read_text())["templates"]]
+    assert read_addon_file(path)["sampling"] == expected(known, "card_sampling")
+    assert expected(known, "card_quote") in json.loads(path.read_text())["source"]
 
 
 @pytest.mark.parametrize("penalty", ["presence_penalty", "frequency_penalty"])
@@ -155,12 +158,6 @@ def test_an_add_on_file_may_set_a_presence_or_a_frequency_penalty(tmp_path, pena
     assert getattr(with_model_sampling(Config(), {}, found), penalty) == 1.5
     assert getattr(with_model_sampling(Config(), {"temperature": 0.7}, _addon({})), penalty) == 0.0
     assert getattr(Config(), penalty) is None
-
-
-def test_the_qwen_3_5_file_holds_the_presence_penalty_its_card_recommends():
-    path = SHIPPED_ADDONS / "qwen3.5.json"
-    assert read_addon_file(path)["sampling"]["presence_penalty"] == 1.5
-    assert "presence_penalty=1.5" in json.loads(path.read_text())["source"]
 
 
 @pytest.mark.parametrize("contents, named", [

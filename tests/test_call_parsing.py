@@ -8,15 +8,15 @@ from llama_chat.tools import ToolCall
 from tests.invented_templates import CALL_BODY
 
 
-_KEY_VALUE = CallBody(name_close="", key_open="<arg_key>", key_close="</arg_key><arg_value>",
-                      pair_sep="</arg_value><arg_key>", body_close="</arg_value>",
+_KEY_VALUE = CallBody(name_close="", key_open="<key_is>", key_close="</key_is><value_is>",
+                      pair_sep="</value_is><key_is>", body_close="</value_is>",
                       empty_close="")
 
 
 _ELEMENTS = CallBody(name_close='">|', key_open="<", key_close=">", pair_sep="|</{key}>|<",
                      body_close="|</{key}>|", empty_close="", key_in_close=True,
                      member_open="|<{key}>", member_close="|</{key}>",
-                     item_open="|<item>", item_close="|</item>")
+                     item_open="|<entry>", item_close="|</entry>")
 
 
 # ----- reading a call back -------------------------------------------------
@@ -164,12 +164,12 @@ def test_a_grammar_with_no_pair_separator_reads_one_argument():
 
 # ----- reading values back out of a call -----------------------------------
 def test_a_bare_string_that_looks_nested_stays_a_string():
-    call, = parse_calls("f<arg_key>x</arg_key><arg_value>{x}</arg_value>", _KEY_VALUE)
+    call, = parse_calls("f<key_is>x</key_is><value_is>{x}</value_is>", _KEY_VALUE)
     assert call == ToolCall("f", {"x": "{x}"})
 
 
 def test_whitespace_after_the_last_value_is_not_part_of_it():
-    call, = parse_calls("f<arg_key>city</arg_key><arg_value>Berlin</arg_value>\n", _KEY_VALUE)
+    call, = parse_calls("f<key_is>city</key_is><value_is>Berlin</value_is>\n", _KEY_VALUE)
     assert call == ToolCall("f", {"city": "Berlin"})
 
 
@@ -200,8 +200,8 @@ def test_a_value_closed_by_a_tag_naming_its_key_is_read_to_that_tag():
 
 
 def test_nested_values_in_the_model_s_own_elements_are_read_by_depth():
-    text = ('f">|<a>|<a>|<a>1|</a>|</a>|</a>|<rows>|<item>|<x>1|</x>|<y>b|</y>|</item>'
-            '|<item>|<item>2|</item>|</item>|</rows>|')
+    text = ('f">|<a>|<a>|<a>1|</a>|</a>|</a>|<rows>|<entry>|<x>1|</x>|<y>b|</y>|</entry>'
+            '|<entry>|<entry>2|</entry>|</entry>|</rows>|')
     assert parse_calls(text, _ELEMENTS) == [ToolCall("f", {"a": {"a": {"a": 1}},
                                                           "rows": [{"x": 1, "y": "b"}, [2]]})]
 
@@ -211,7 +211,7 @@ def test_a_string_that_opens_like_a_member_stays_a_string():
 
 
 def test_an_object_whose_only_key_is_the_items_name_reads_as_the_list_it_is_written_as():
-    assert parse_calls('f">|<a>|<item>1|</item>|</a>|', _ELEMENTS) == [ToolCall("f", {"a": [1]})]
+    assert parse_calls('f">|<a>|<entry>1|</entry>|</a>|', _ELEMENTS) == [ToolCall("f", {"a": [1]})]
 
 
 def test_nested_delimiters_come_whole_or_not_at_all():

@@ -194,8 +194,8 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
 
 
 # ----- a thought marked by tags of another shape ----------------------------
-_TURNS = ("{%- for m in messages -%}<|{{ m.role }}|>"
-          "{{ m.content.split('◁/think▷')[-1] if m.role == 'assistant' else m.content }}<|end|>"
+_TURNS = ("{%- for m in messages -%}<|{{ m.role }}_says|>"
+          "{{ m.content.split('◁/think▷')[-1] if m.role == 'assistant' else m.content }}<|said|>"
           "{%- endfor -%}")
 
 
@@ -209,15 +209,15 @@ def tags_of_another_shape(monkeypatch):
 
 @pytest.mark.parametrize("prompt", [
     # Only the prompt without reasoning shows the thought, empty.
-    "{%- if add_generation_prompt -%}<|assistant|>"
+    "{%- if add_generation_prompt -%}<|assistant_says|>"
     "{%- if not enable_thinking -%}◁think▷◁/think▷{%- endif -%}{%- endif -%}",
     # Only a past reply shows it, by leaving it out.
-    "{%- if add_generation_prompt -%}<|assistant|>{%- endif -%}",
+    "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}",
 ], ids=["empty-thought", "removed-thought"])
 def test_a_thought_whose_tags_are_not_angle_brackets_is_read_by_the_models_own_tags(
         tags_of_another_shape, prompt):
     template = ResolvedTemplate(FakeContext(
-        {"chat_template": _TURNS + prompt, "eos_token": "<|end|>",
+        {"chat_template": _TURNS + prompt, "eos_token": "<|said|>",
          "render_variables": {"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}}))
     assert (template.reasoning.thought_open, template.reasoning.thought_close) == \
         ("◁think▷", "◁/think▷")
@@ -247,23 +247,23 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
 def test_a_header_naming_another_reader_is_never_shown():
     from llama_chat.reply_text import ReplyText, reply_header
     from llama_chat.template import Reasoning
-    tags = Reasoning(thought_open=" to=self<|message|>", thought_close="<|eom|>",
+    tags = Reasoning(thought_open=" to=self<|body|>", thought_close="<|call_ends|>",
                      generation_prompt="")
-    assert reply_header(" to=user<|message|>", tags) == ("to=", "<|message|>")
-    reply = ReplyText(tags, " to=user<|message|>", "", [])
+    assert reply_header(" to=user<|body|>", tags) == ("to=", "<|body|>")
+    reply = ReplyText(tags, " to=user<|body|>", "", [])
     assert reply.feed(" to=get_wea") + reply.feed("ther") == ""
     assert reply.finish("tool_call") == ""                # held at a call: never shown
-    reply = ReplyText(tags, " to=user<|message|>", "", [])
-    assert reply.feed(" to=user<|message|>Hallo") + reply.finish("end_of_turn") == "Hallo"
-    reply = ReplyText(tags, " to=user<|message|>", "", [])
-    assert reply.feed(" to=notes<|message|>Text") + reply.finish("end_of_turn") == "Text"
+    reply = ReplyText(tags, " to=user<|body|>", "", [])
+    assert reply.feed(" to=user<|body|>Hallo") + reply.finish("end_of_turn") == "Hallo"
+    reply = ReplyText(tags, " to=user<|body|>", "", [])
+    assert reply.feed(" to=notes<|body|>Text") + reply.finish("end_of_turn") == "Text"
 
 
 def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_shared_ends():
     from llama_chat.reply_text import reply_header
     from llama_chat.template import Reasoning
     def tags(thought_open):
-        return Reasoning(thought_open=thought_open, thought_close="<|eom|>", generation_prompt="")
+        return Reasoning(thought_open=thought_open, thought_close="<|call_ends|>", generation_prompt="")
     assert reply_header("<|a|>user<|a|>", tags("<|a|>")) is None
     assert reply_header("<|a|>", tags("<|a|>self<|a|>")) is None
     assert reply_header("<|a|>user<|b|>", tags("<|a|>self<|b|>")) == ("<|a|>", "<|b|>")
@@ -273,11 +273,11 @@ def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_sha
 # A template whose default does not reason, yet writes an empty thought for the
 # effort "none", so that the template alone reads the default as on.
 _DEFAULT_WITHOUT_THOUGHT = {
-    "chat_template": _TURNS.replace("◁/think▷", "</think>")
-                     + "{%- if add_generation_prompt -%}<|assistant|>"
-                     "{%- if reasoning_effort == 'none' -%}<think></think>"
-                     "{%- elif reasoning_effort == 'high' -%}<think>{%- endif -%}{%- endif -%}",
-    "eos_token": "<|end|>",
+    "chat_template": _TURNS.replace("◁/think▷", "</reason>")
+                     + "{%- if add_generation_prompt -%}<|assistant_says|>"
+                     "{%- if reasoning_effort == 'none' -%}<reason></reason>"
+                     "{%- elif reasoning_effort == 'high' -%}<reason>{%- endif -%}{%- endif -%}",
+    "eos_token": "<|said|>",
     "render_variables": {"off": {"reasoning_effort": "none"}, "on": {"reasoning_effort": "high"}}}
 _QUESTION = [{"role": "user", "content": "hi"}]
 
@@ -285,16 +285,16 @@ _QUESTION = [{"role": "user", "content": "hi"}]
 def test_without_an_add_on_file_such_a_template_reasons_as_its_default_writes():
     template = ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT))
     assert template.render(_QUESTION, generation_prompt=True,
-                           reasoning=True).endswith("<|assistant|>")
+                           reasoning=True).endswith("<|assistant_says|>")
 
 
 def test_the_add_on_files_reasoning_on_is_what_reasoning_on_renders():
     template = ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT),
                                 reasoning_on={"reasoning_effort": "high"})
     assert template.render(_QUESTION, generation_prompt=True,
-                           reasoning=True).endswith("<|assistant|><think>")
+                           reasoning=True).endswith("<|assistant_says|><reason>")
     assert template.render(_QUESTION, generation_prompt=True,
-                           reasoning=False).endswith("<|assistant|><think></think>")
+                           reasoning=False).endswith("<|assistant_says|><reason></reason>")
     assert template.can_reason
 
 
@@ -313,7 +313,7 @@ def test_a_wrapper_takes_reasoning_on_from_the_add_on_file_next_to_the_model(tmp
     w = ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
                            evict_above_fraction=1.0), context=fake)
     w.begin("s", [("user", "hi")], reasoning=True)
-    assert held_text(fake).endswith("<|assistant|><think>")
+    assert held_text(fake).endswith("<|assistant_says|><reason>")
 
 
 @pytest.mark.parametrize("addon, recommended, cause", [

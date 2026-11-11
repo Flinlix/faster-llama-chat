@@ -18,7 +18,7 @@ from llama_chat.model_template import names_read
 from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_fragments, reasoning_switch
 
-from .chat_templates import STEMS, fixture
+from .chat_templates import STEMS, expected, fixture
 from .fake_context import FakeContext
 
 
@@ -33,18 +33,19 @@ def _real(stem):
     return FakeContext(fixture(stem)).render_with_model_template
 
 
-def test_gemma_user_assistant_fragments():
-    f = extract_fragments(_real("gemma-3"))
-    assert f.user_prefix == "<start_of_turn>user\n"
-    assert f.user_suffix == "<end_of_turn>\n"
-    assert f.assistant_prefix == "<start_of_turn>model\n"
-    assert f.assistant_suffix == "<end_of_turn>\n"
+_TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 
 
-def test_chatml_extracts_its_tags():
-    f = extract_fragments(_real("qwen-3"))
-    assert f.user_prefix == "<|im_start|>user\n"
-    assert f.assistant_prefix == "<|im_start|>assistant\n"
+def _stems_with(key):
+    """The test templates whose file states ``key``."""
+    return [stem for stem in STEMS if expected(fixture(stem), key)]
+
+
+@pytest.mark.parametrize("stem", _stems_with("fragments"))
+def test_a_templates_turn_fragments_are_the_tags_it_writes(stem):
+    known = expected(fixture(stem), "fragments")
+    f = extract_fragments(_real(stem))
+    assert {name: getattr(f, name) for name in known} == known
 
 
 def test_no_template_returns_none():
@@ -73,36 +74,30 @@ def test_inconsistent_multi_message_render_falls_back_to_user_tags():
 
 def _prefix_only_render(messages, **_options):
     """Degenerate template whose tags only open a turn (empty suffixes)."""
-    return "".join(f"<{m['role']}>{m['content']}" for m in messages)
+    return "".join(f"<[{m['role']}>{m['content']}" for m in messages)
 
 
 def test_empty_suffix_template_extracts_without_crashing():
     f = extract_fragments(_prefix_only_render)
-    assert f.user_prefix == "<user>"
+    assert f.user_prefix == "<[user>"
     assert f.user_suffix == ""
-    assert f.assistant_prefix == "<assistant>"
+    assert f.assistant_prefix == "<[assistant>"
     assert f.assistant_suffix == ""
 
 
-def test_a_tool_calling_template_yields_its_call_tags():
-    tools = _tool_fragments(_real("gemma-4"))
+@pytest.mark.parametrize("stem", _stems_with("tool_fragments"))
+def test_a_tool_calling_template_yields_its_call_tags(stem):
+    tools = _tool_fragments(_real(stem))
     assert tools is not None
-    assert tools.call_open == "<|tool_call>call:"
-    # The argument's own text is gone; what is left is the call's closing tag
-    # plus the punctuation every body ends with.
-    assert tools.call_close == "}<tool_call|><|tool_response>"
+    # The argument's own text is gone from the closing; what is left is the
+    # call's closing tag, with what the template writes around it.
+    known = expected(fixture(stem), "tool_fragments")
+    assert {name: getattr(tools, name) for name in known} == known
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if not fixture(stem)["calls_tools"]])
 def test_a_template_that_cannot_call_tools_has_no_tool_fragments(stem):
     assert _tool_fragments(_real(stem)) is None
-
-
-def test_tool_extraction_does_not_disturb_the_role_fragments():
-    f = extract_fragments(_real("gemma-4"))
-    assert f.user_prefix == "<|turn>user\n"
-    assert f.user_suffix == "<turn|>\n"
-    assert f.assistant_prefix == "<|turn>model\n"
 
 
 def _untagged_call_render(messages, **_options):
@@ -139,30 +134,23 @@ def test_a_template_that_drops_arguments_yields_no_tool_fragments():
     assert _tool_fragments(_argless_call_render) is None
 
 
-def test_the_call_body_of_a_delimited_model():
-    render = _real("gemma-4")
-    body = extract_call_body(render, _tool_fragments(render).call_open, "<tool_call|>")
-    assert body == CallBody(name_close="{", key_open="", key_close=":",
-                            pair_sep=",", body_close="}", empty_close="}",
-                            quote_open='<|"|>', quote_close='<|"|>')
+@pytest.mark.parametrize("stem", _stems_with("call_body"))
+def test_the_call_body_is_spelled_as_the_template_writes_it(stem):
+    known = fixture(stem)
+    render = _real(stem)
+    body = extract_call_body(render, _tool_fragments(render).call_open,
+                             expected(known, "call_closing_tag"))
+    assert body == CallBody(**expected(known, "call_body"))
 
 
-def test_the_call_body_of_an_element_shaped_model():
-    render = _real("qwen-3-coder")
-    body = extract_call_body(render, _tool_fragments(render).call_open, "</tool_call>")
-    # Every field differs from the delimited model's, and nothing is quoted.
-    assert body == CallBody(name_close=">\n<", key_open="parameter=",
-                            key_close=">\n",
-                            pair_sep="\n</parameter>\n<parameter=",
-                            body_close="\n</parameter>\n</function>\n",
-                            empty_close="/function>\n",
-                            quote_open="", quote_close="")
-
-
-def test_a_model_that_renders_no_call_has_no_body_either():
-    render = _real("gemma-4")
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_a_model_that_renders_no_call_has_no_body_either(stem):
+    render = _real(stem)
+    tools = _tool_fragments(render)
+    if tools is None:
+        return                          # no call tags to measure from at all
     # A closing tag this template never emits leaves nothing to measure.
-    assert extract_call_body(render, _tool_fragments(render).call_open, "<nope>") is None
+    assert extract_call_body(render, tools.call_open, "<nope>") is None
 
 
 # ----- giving up rather than guessing -------------------------------------
@@ -295,15 +283,18 @@ def test_quoting_that_depends_on_position_has_no_body():
                              tools.call_open, "</call>") is None
 
 
-def _no_tool_render(messages, **_options):
-    """A template that refuses a message carrying a tool call outright."""
-    if any(m.get("tool_calls") for m in messages):
-        return None
-    return _real("qwen-3")(messages)
+def _no_tool_render(render):
+    """``render``, refusing a message carrying a tool call outright."""
+    def refusing(messages, **options):
+        if any(m.get("tool_calls") for m in messages):
+            return None
+        return render(messages, **options)
+    return refusing
 
 
-def test_a_template_that_refuses_tool_calls_has_no_tool_fragments():
-    assert _tool_fragments(_no_tool_render) is None
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_a_template_that_refuses_tool_calls_has_no_tool_fragments(stem):
+    assert _tool_fragments(_no_tool_render(_real(stem))) is None
 
 
 def _dropped_assistant_render(messages, **_options):
@@ -413,32 +404,32 @@ _SHARED_FLAG = ({"enable_thinking": True}, {"enable_thinking": False})
 
 @pytest.mark.parametrize("ending, names, switch_on, switch_off", [
     # Reads the shared variable: it stays the switch.
-    (lambda v: "<think>" if v.get("enable_thinking") else "<think></think>", (), *_SHARED_FLAG),
+    (lambda v: "<reason>" if v.get("enable_thinking") else "<reason></reason>", (), *_SHARED_FLAG),
     # Reads only an effort, and that opens the thought: the effort is the switch.
-    (lambda v: "<think>" if v.get("reasoning_effort") == "high" else "<think></think>", (),
+    (lambda v: "<reason>" if v.get("reasoning_effort") == "high" else "<reason></reason>", (),
      {"reasoning_effort": "high"}, {}),
     # Reasons unless the effort is none: none is off, and the template's own default is on.
-    (lambda v: "<think></think>" if v.get("reasoning_effort") == "none" else "<think>", (),
+    (lambda v: "<reason></reason>" if v.get("reasoning_effort") == "none" else "<reason>", (),
      {}, {"reasoning_effort": "none"}),
     # Reasons by default, writes more for high, and stops only for none: the default
     # stays on rather than the higher effort.
-    (lambda v: {"none": "<think></think>", "high": "<effort><think>"}.get(
-        v.get("reasoning_effort"), "<think>"), (),
+    (lambda v: {"none": "<reason></reason>", "high": "<more><reason>"}.get(
+        v.get("reasoning_effort"), "<reason>"), (),
      {}, {"reasoning_effort": "none"}),
     # An effort that changes nothing after the user turn is not a switch.
     (lambda v: "", (), *_SHARED_FLAG),
     # A flag of another name that opens the thought is the switch.
-    (lambda v: "<think>" if v.get("thinking") is True else "<think></think>",
+    (lambda v: "<reason>" if v.get("thinking") is True else "<reason></reason>",
      ("messages", "thinking"), {"thinking": True}, {"thinking": False}),
     # An effort of another name is read by the effort's rule.
-    (lambda v: "<think></think>" if v.get("reasoning_strength") == "none" else "<think>",
+    (lambda v: "<reason></reason>" if v.get("reasoning_strength") == "none" else "<reason>",
      ("reasoning_strength",), {}, {"reasoning_strength": "none"}),
     # The shared variable is tried first, where the template reads another as well.
-    (lambda v: "<think>" if v.get("enable_thinking") or v.get("thinking") else "<think></think>",
+    (lambda v: "<reason>" if v.get("enable_thinking") or v.get("thinking") else "<reason></reason>",
      ("thinking",), *_SHARED_FLAG),
     # A variable whose name speaks of neither thinking nor reasoning is no switch,
     # however it changes what follows the user turn.
-    (lambda v: "<think>" if v.get("low_effort") is False else "<think></think>",
+    (lambda v: "<reason>" if v.get("low_effort") is False else "<reason></reason>",
      ("low_effort",), *_SHARED_FLAG),
     # Nor is one that speaks of thinking and changes nothing after the user turn.
     (lambda v: "", ("keep_thinking",), *_SHARED_FLAG),

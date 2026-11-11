@@ -12,7 +12,8 @@ from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from llama_chat import ChatWrapper, ContextOverflowError
-from tests.fake_context import FakeContext, ScriptedCall
+from tests.chat_templates import STEMS, WEATHER, expected, fixture
+from tests.fake_context import FakeContext, ScriptedCall, written_call
 from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN,
                                       RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
@@ -617,7 +618,7 @@ def test_a_call_this_parser_cannot_read_still_closes_the_turn():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     # A body in another model's format, which this model's fragments cannot read.
-    fake.call_script = ["fn:\n<function=clock>\n<parameter=x>\n1\n</parameter>\n</function>\n"]
+    fake.call_script = ["fn:\n<fun=clock>\n<arg=x>\n1\n</arg>\n</fun>\n"]
 
     list(wrapper.reply("wie spät?", tool_call_policy="yield"))
 
@@ -629,7 +630,7 @@ def test_a_call_this_parser_cannot_read_still_closes_the_turn():
 def test_an_unreadable_call_says_why():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
-    fake.call_script = ["fn:<function=clock>"]
+    fake.call_script = ["fn:<fun=clock>"]
 
     events = wrapper.reply("wie spät?", tool_call_policy="yield")
     while True:
@@ -1617,15 +1618,17 @@ def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
     assert not wrapper.turn_open
 
 
-def test_a_call_that_opens_with_plain_text_cannot_be_withheld_and_stays_text():
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "call_opens_as_text")])
+def test_a_call_that_opens_with_plain_text_cannot_be_withheld_and_stays_text(stem):
     """No token opens it, so none can be kept from being drawn."""
-    from tests.chat_templates import WEATHER, fixture
-    fake = FakeContext(fixture("llama-3.2"))
+    fake = FakeContext(fixture(stem))
     wrapper = ChatWrapper(Config(context_size=8192), context=fake)
     wrapper.begin("", tools=[WEATHER])
-    fake.replies = [ScriptedCall('get_weather", "parameters": {"city": "Bonn"}}')]
+    reader = FakeContext(fixture(stem))
+    opener, body, _closer = written_call(ResolvedTemplate(reader), reader, WEATHER.name, {"city": "Bonn"})
+    fake.replies = [ScriptedCall(body)]
     reply = wrapper.reply("Wetter?", tool_call_policy="withhold").finish()
-    assert reply.text.startswith('{"name": "get_weather"')
+    assert reply.text.startswith(opener + WEATHER.name)
     assert (reply.tool_calls, wrapper.turn_open) == ([], False)
 
 
@@ -1656,7 +1659,7 @@ def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whol
     """Only what a written call can cause counts as an unreadable call; a fault in the library is raised."""
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
-    fake.call_script = ['fn:<function=clock>{}</function>']
+    fake.call_script = ['fn:<fun=clock>{}</fun>']
 
     def faulty(*args, **kwargs):
         raise TypeError("a fault in the library")

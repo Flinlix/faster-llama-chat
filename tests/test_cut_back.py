@@ -8,7 +8,7 @@ from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from tests.chat_templates import fixture
+from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
@@ -102,7 +102,8 @@ def test_a_prefilled_reply_keeps_the_templates_opening_when_cut():
     assert "Zwei" not in held_text(fake)
 
 
-@pytest.mark.parametrize("stem", ["mistral-3", "devstral-2", "mistral-large-4"])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if not expected(fixture(stem), "writes_empty_reply")])
 def test_a_cut_to_a_reply_the_template_does_not_write_is_refused(stem):
     """These templates write no empty reply, so a reply cut to nothing could be neither held nor followed."""
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
@@ -234,10 +235,11 @@ def test_a_context_that_saves_states_must_restore_them():
 
 
 # ----- a reply ended by its closing text -----------------------------------
-def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows():
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "turn_end_text")])
+def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows(stem):
     """A cache that cannot cut at its end goes back to a saved state instead."""
     # A template whose reply ends where a text its closing opens with is written.
-    known = fixture("kimi-k3")
+    known = fixture(stem)
     closing = ResolvedTemplate(FakeContext(known)).call_boundary().turn_end_text
     for can_shift in (True, False):
         # The reply, then its closing, which leaves the reply again.

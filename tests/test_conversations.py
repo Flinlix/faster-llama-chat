@@ -23,8 +23,8 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 
 from . import internals
-from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, fixture, in_each_thought_form
-from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call
+from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
+from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call, written_call
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -32,9 +32,9 @@ _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # template that wrote anything of a message's text, its length say, beyond the
 # text itself would be refused.
 _FALLBACK = {
-    "source": "written for this test", "eos_token": "<|end|>", "marks_thought": False,
+    "source": "written for this test", "eos_token": "<|said|>", "marks_thought": False,
     "can_reason": False, "calls_tools": False, "render_variables": {"off": {}},
-    "chat_template": "{%- for m in messages -%}<|{{ m.role }}|>{{ m.content }}<|end|>"
+    "chat_template": "{%- for m in messages -%}<|{{ m.role }}_says|>{{ m.content }}<|said|>"
                      "{%- endfor -%}{%- if add_generation_prompt -%}"
                      "<|assistant_{{ messages|length }}|>{%- endif -%}"}
 _EVERY = sorted(_FIXTURES) + ["fallback"]
@@ -228,8 +228,8 @@ def test_a_question_the_stand_in_cannot_stand_for_is_rendered_as_it_comes(stem):
 def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_as_it_comes():
     # The template escapes a quote, so a question holding one cannot be put in the stand-in's place.
     escaping = dict(_FALLBACK, chat_template=(
-        "{%- for m in messages -%}<|{{ m.role }}|>{{ m.content|e }}<|end|>{%- endfor -%}"
-        "{%- if add_generation_prompt -%}<|assistant|>{%- endif -%}"))
+        "{%- for m in messages -%}<|{{ m.role }}_says|>{{ m.content|e }}<|said|>{%- endfor -%}"
+        "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}"))
     context = FakeContext(escaping, ANSWERS)
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")
@@ -308,13 +308,15 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
         _assert_each_reply_followed_what_was_sent(run, asked)
 
 
-def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_where_one_does():
-    assert _Run("gemma-3").chat.can_take_system_prompt      # written into the first user turn
-    moves = _Run("ministral-2410")                           # written before the newest question
-    assert not moves.chat.can_take_system_prompt
-    with pytest.raises(ValueError, match="does not keep a system prompt in place"):
-        moves.chat.begin("persona")
-    moves.chat.begin("")
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_where_one_does(stem):
+    run = _Run(stem)
+    takes = expected(run.fixture, "can_take_system_prompt")
+    assert run.chat.can_take_system_prompt == takes
+    if not takes:
+        with pytest.raises(ValueError, match="does not keep a system prompt in place"):
+            run.chat.begin("persona")
+    run.chat.begin("persona" if takes else "")
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -492,9 +494,9 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
 
 
 def test_a_reply_kept_as_generated_is_not_shortened():
-    for size in range(700, 900, 2):
-        context = FakeContext(_fixture("qwen-3"),
-                                      [ScriptedCall("not a call", before="Moment. ")])
+    from tests.invented_templates import TOOLS
+    for size in range(200, 900, 2):
+        context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
         chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
                                   min_reply_tokens=120), context=context)
         try:
@@ -524,10 +526,10 @@ def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so()
     chat.begin("")
     seen = []
     context.before_reply = lambda text: seen.append(list(context.cache))
-    chat.reply("Is <|end|> a tag?").finish()
+    chat.reply("Is <|said|> a tag?").finish()
     # The template's own text around the question is its own; the question, tag and all, is text.
-    expected = (context.tokenize("<|user|><![CDATA[") + context.tokenize("Is <|end|> a tag?", parse_special=False)
-                + context.tokenize("]]><|end|><|assistant_1|>"))
+    expected = (context.tokenize("<|user_says|><![CDATA[") + context.tokenize("Is <|said|> a tag?", parse_special=False)
+                + context.tokenize("]]><|said|><|assistant_1|>"))
     assert seen == [expected]
 
 
@@ -600,52 +602,69 @@ def test_a_template_that_writes_an_older_exchange_otherwise_once_another_follows
         chat.begin("")
 
 
-def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable():
-    run = _Run("qwen-2.5", context_size=300)
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable(stem):
+    run = _Run(stem, context_size=8192)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     history, held = run.chat.conversation()["messages"], list(run.context.cache)
     with pytest.raises(ValueError):
-        run.chat.begin("x" * 400)               # longer than the limit
+        run.chat.begin("x" * 9000)              # longer than the limit
     assert run.chat.conversation()["messages"] == history and run.context.cache == held
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
 
 
-# ----- the clock a template reads -----------------------------------------------------
-@pytest.fixture
-def clock(monkeypatch):
-    import llama_cpp.llama_chat_format as chat_format
-    today = [real_datetime.datetime(2026, 11, 7, 23, 59)]
 
-    class _Clock:
-        @staticmethod
-        def now():
-            return today[0]
-
-    monkeypatch.setattr(chat_format, "datetime", _Clock)
-    return today
-
-
-def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(clock):
-    run = _Run("llama-3.2")
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_shortened_reply_is_kept_as_the_template_writes_it(stem):
+    run = _Run(stem)
     run.begin()
-    assert "07 Nov 2026" in run.context.text_of(run.context.cache)
+    run.chat.reply("Hi.").finish()
+    run.chat.truncate_last_reply("Answer")
+    run.chat.reply("Go on.").finish()
+    assert run.seen[-1] == run.render([{"role": "user", "content": "Hi."},
+                                       {"role": "assistant", "content": "Answer"},
+                                       {"role": "user", "content": "Go on."}])
+
+
+# ----- the clock a template reads -----------------------------------------------------
+_DATED = [stem for stem in sorted(_FIXTURES) if expected(_FIXTURES[stem], "date_format")]
+
+
+def _dated_run(stem):
+    """A conversation on ``stem`` without a system prompt, beside which every such template writes the date."""
+    run = _Run(stem)
+    run.system = ""
+    return run
+
+
+def _date(run, clock):
+    """The date as the template writes it, at the clock's time."""
+    return clock[0].strftime(expected(run.fixture, "date_format"))
+
+
+@pytest.mark.parametrize("stem", _DATED)
+def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(stem, clock):
+    run = _dated_run(stem)
+    run.begin()
+    assert _date(run, clock) in run.context.text_of(run.context.cache)
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    assert "08 Nov 2026" in run.seen[-1] and run.seen[-1] == run.render(
+    assert _date(run, clock) in run.seen[-1] and run.seen[-1] == run.render(
         [{"role": "user", "content": QUESTIONS[0]}])
 
 
-def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_again_once(clock):
-    run = _Run("llama-3.2")
+@pytest.mark.parametrize("stem", _DATED)
+def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_again_once(stem, clock):
+    run = _dated_run(stem)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     resets = run.context.resets
     for question in QUESTIONS[1:4]:
         run.chat.reply(question).finish()
-    assert all("08 Nov 2026" in cached for cached in run.seen[1:])
+    assert all(_date(run, clock) in cached for cached in run.seen[1:])
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, first_reply=1)
     assert run.context.resets == resets
     # Once from the date on, then only the newest exchange each reply.
@@ -653,8 +672,9 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
     assert len([cut for cut in cuts if cut[1] < len(run.seen[0]) // 2]) == 1
 
 
+@pytest.mark.parametrize("stem", [stem for stem in _DATED if _FIXTURES[stem]["calls_tools"]])
 def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
-        clock, monkeypatch):
+        stem, clock, monkeypatch):
     from llama_chat import rendered_cache
     checked = []
     for name in ("ensure_history_stays_written", "windows_are_exact"):
@@ -662,7 +682,7 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
         monkeypatch.setattr(rendered_cache, name,
                             lambda *args, check=check, name=name: (checked.append(name),
                                                                    check(*args))[1])
-    run = _Run("llama-3.2")
+    run = _dated_run(stem)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     both = ["ensure_history_stays_written", "windows_are_exact"]
@@ -699,10 +719,12 @@ def test_a_past_replys_thought_stays_in_the_cache_wherever_the_template_keeps_it
     assert kept == ([0, 1, 2] if run.template.reasoning.past_keeps_thought else [0, 0, 0])
 
 
-def test_the_answers_opening_a_model_writes_after_an_empty_thought_stays_out_of_answer_and_history():
-    """North Mini Code's prompt without reasoning ends in an empty thought; the model opens its answer itself."""
-    opening = "<|START_TEXT|>"
-    run = _Run("cohere-2", replies=[opening + answer for answer in ANSWERS])
+@pytest.mark.parametrize("stem", [stem for stem in sorted(_FIXTURES)
+                                  if expected(_FIXTURES[stem], "answer_opening")])
+def test_the_answers_opening_a_model_writes_itself_stays_out_of_answer_and_history(stem):
+    """A prompt without reasoning may end before the answer's opening, such as after an empty thought; the model opens its answer itself."""
+    opening = expected(_FIXTURES[stem], "answer_opening")
+    run = _Run(stem, replies=[opening + answer for answer in ANSWERS])
     run.answers = list(ANSWERS)
     run.begin()
     answers = [run.chat.reply(question).finish().text for question in QUESTIONS[:3]]
@@ -770,18 +792,12 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
 
 def _call_body(run, arguments):
     """A call's body as the template writes a past call: what the model generates between its tags."""
-    template = run.template
-    rendered = run.context.stated_render(
-        [{"role": "user", "content": "x"},
-         {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function",
-              "function": {"name": WEATHER.name, "arguments": arguments}}]}])
-    opener, closer = call_marks(template, run.reader)
     addon_call = shipped_addon_call(run.fixture["chat_template"])
     if addon_call:
         # The template shows no call it could be read from; the model writes the add-on file's.
+        opener, closer = call_marks(run.template, run.reader)
         return opener, WEATHER.name + addon_call["name_close"] + json.dumps(arguments), closer
-    return opener, rendered.rsplit(opener, 1)[1].split(closer, 1)[0], closer
+    return written_call(run.template, run.reader, WEATHER.name, arguments)
 
 
 def _spaced(run, body):
@@ -911,35 +927,30 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     assert run.seen_tokens[-1] == _expected_tokens(run, asked, tools)
 
 
-# ----- one template's own cases ------------------------------------------------------
-def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call():
-    # Llama 3.2 opens a call with plain text; a reply quoting it is still prose.
-    run = _Run("llama-3.2", replies=['Write {"name": "x"} in the file.'])
+# ----- a call that opens with plain text ---------------------------------------------
+_TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opens_as_text")]
+
+
+@pytest.mark.parametrize("stem", _TEXT_OPENED)
+def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
+    # The template opens a call with plain text; a reply quoting it is still prose.
+    opener, _body, _closer = _call_body(_Run(stem), {"city": "x"})
+    run = _Run(stem, replies=[f"Write {opener}x in the file."])
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
     assert run.chat.conversation()["messages"][-1] == ("assistant", "Write")
 
 
-def test_a_shortened_reply_is_kept_as_the_template_writes_it():
-    run = _Run("llama-3.2")
-    run.begin()
-    run.chat.reply("Hi.").finish()
-    run.chat.truncate_last_reply("Answer")
-    run.chat.reply("Go on.").finish()
-    assert run.seen[-1] == run.render([{"role": "user", "content": "Hi."},
-                                       {"role": "assistant", "content": "Answer"},
-                                       {"role": "user", "content": "Go on."}])
-
-
-def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_turn():
-    # Llama 3.2 writes no text beside a call; what the model wrote before one
-    # stays only in the tokens its turn keeps, and the next call still reads.
+@pytest.mark.parametrize("stem", _TEXT_OPENED)
+def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_turn(stem):
+    # What the model wrote before a call stays in the tokens its turn keeps, also
+    # where the template writes no text beside a call, and the next call still reads.
     # A call that opens with plain text follows the tag the model writes first.
-    probe = _Run("llama-3.2")
+    probe = _Run(stem)
     opener, body, closer = _call_body(probe, {"city": "Bonn"})
-    run = _Run("llama-3.2", replies=["x"])
-    before = "Once more. <|python_tag|>"
+    run = _Run(stem, replies=["x"])
+    before = "Once more. <|lead|>"
     run.context.replies = [ScriptedCall(body), ScriptedCall(body, before=before),
                             "Sunny twice.", "Bye."]
     run.begin(tools=[WEATHER])
@@ -953,6 +964,7 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     assert before + opener + body + closer in run.seen[-1]
 
 
+# ----- one template's own cases ------------------------------------------------------
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
     from tests.invented_templates import TOOLS
     from tests.wrappers import weather_registry
@@ -972,7 +984,7 @@ def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limit
 def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refused():
     switching = dict(_FALLBACK, chat_template=_FALLBACK["chat_template"].replace(
         "<|assistant_{{ messages|length }}|>",
-        "<|assistant|>{% if '/no_think' in messages[-1].content %}<|nothink|>{% endif %}"))
+        "<|assistant_says|>{% if '/no_think' in messages[-1].content %}<|nothink|>{% endif %}"))
     context = FakeContext(switching, ["Fine.", "Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     chat.begin("")

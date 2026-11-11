@@ -370,23 +370,23 @@ def test_a_reply_ends_where_its_closing_parts_from_a_call():
 def _plain_context(sampled):
     context, decoded, removed = _sampling_context(sampled)
     context._backend.is_special = lambda vocab, token: token.startswith("<|")
-    context._backend.is_eog = lambda vocab, token: token in ("<end>", "<|call|>")
+    context._backend.is_eog = lambda vocab, token: token in ("<end>", "<|call_done|>")
     return context, decoded
 
 
-_PLAIN = ("assistant to=functions.", "<|call|>")
+_PLAIN = ("assistant to=functions.", "<|call_done|>")
 
 
 @pytest.mark.parametrize("sampled", [
-    ["assistant", " to=", "functions.", "clock", "{}", "<|call|>"],                   # the start
-    ["Denken.", "<|start|>", "assistant", " to=", "functions.", "clock", "{}", "<|call|>"],  # a tag
+    ["assistant", " to=", "functions.", "clock", "{}", "<|call_done|>"],                   # the start
+    ["Denken.", "<|begin|>", "assistant", " to=", "functions.", "clock", "{}", "<|call_done|>"],  # a tag
 ])
 def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
     context, decoded = _plain_context(sampled)
     out = GenerationAccumulator()
     "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
-    assert decoded[-1] == "<|call|>"        # the end-of-generation token that closes it is kept
+    assert decoded[-1] == "<|call_done|>"        # the end-of-generation token that closes it is kept
 
 
 def test_a_plain_text_opening_inside_a_sentence_is_text():
@@ -397,38 +397,38 @@ def test_a_plain_text_opening_inside_a_sentence_is_text():
 
 
 def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
-    """Llama 3 ends a call with one end-of-turn token where its template writes another."""
-    context, decoded = _plain_context(['{"', 'name": "', 'clock', '"}', "<|eom|>"])
-    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    """A model may end a call with one end-of-turn token where its template writes another."""
+    context, decoded = _plain_context(['{"', 'name": "', 'clock', '"}', "<|call_ends|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     context.tokenize = lambda text, add_special=False, parse_special=True: [text]
     out = GenerationAccumulator()
-    "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+    "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock"}'
-    assert decoded[-1] == "<|eot|>" and "<|eom|>" not in decoded
+    assert decoded[-1] == "<|turn_ends|>" and "<|call_ends|>" not in decoded
 
 
 def test_a_tag_a_call_follows_is_the_calls_and_never_shown():
-    """Llama 3.2 writes a tag of its own before a call its template opens with plain text."""
-    context, decoded = _plain_context(["Sure.", "<|python_tag|>", '{"name": "', "clock", '"}', "<|eot|>"])
-    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    """A model may write a tag of its own before a call its template opens with plain text."""
+    context, decoded = _plain_context(["Sure.", "<|lead|>", '{"name": "', "clock", '"}', "<|turn_ends|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
-        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+        call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == "tool_call" and shown == out.text == "Sure."
 
 
 def test_a_tag_no_call_follows_stays_the_replys():
-    context, _ = _plain_context(["<|python_tag|>", "hi", "<end>"])
+    context, _ = _plain_context(["<|lead|>", "hi", "<end>"])
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
-        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
-    assert out.stop_reason == "end_of_turn" and shown == "<|python_tag|>hi"
+        call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
+    assert out.stop_reason == "end_of_turn" and shown == "<|lead|>hi"
 
 
 @pytest.mark.parametrize("cut_by", ["token_limit", "interrupted"])
 def test_a_tag_a_call_may_follow_never_reaches_a_reply_that_was_cut(cut_by):
     """Cut before the call could follow, the tag is the start of a call, not the answer's."""
-    context, _ = _plain_context(["Sure.", "<|python_tag|>", " ", "x"])
+    context, _ = _plain_context(["Sure.", "<|lead|>", " ", "x"])
     cancel = threading.Event()
     sampled = context._backend.sample
     if cut_by == "interrupted":
@@ -441,25 +441,25 @@ def test_a_tag_a_call_may_follow_never_reaches_a_reply_that_was_cut(cut_by):
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 3 if cut_by == "token_limit" else 20, out=out,
                              cancel=cancel, boundary=CallBoundary(
-                                 call_texts=('{"name": "', "<|eot|>"), opens_as_text=True)))
+                                 call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == cut_by and shown == out.text == "Sure."
 
 
 def test_a_thoughts_closing_tag_a_call_follows_stays_the_replys():
-    context, _ = _plain_context(["Hm.", "<|/think|>", '{"name": "', "clock", '"}', "<|eot|>"])
-    context._backend.is_eog = lambda vocab, token: token in ("<|eom|>", "<|eot|>")
+    context, _ = _plain_context(["Hm.", "<|/thought|>", '{"name": "', "clock", '"}', "<|turn_ends|>"])
+    context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
-        call_texts=('{"name": "', "<|eot|>"), opens_as_text=True, thought_tags=("<|/think|>",))))
-    assert out.stop_reason == "tool_call" and shown == "Hm.<|/think|>"
+        call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True, thought_tags=("<|/thought|>",))))
+    assert out.stop_reason == "tool_call" and shown == "Hm.<|/thought|>"
 
 
 def test_with_calls_off_a_tag_in_a_reply_that_ends_in_text_is_shown():
-    context, _ = _plain_context(["Hi", "<|start|>", "there", "<|end|>", "<end>"])
+    context, _ = _plain_context(["Hi", "<|begin|>", "there", "<|fin|>", "<end>"])
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
-        opens_as_text=True, turn_end_text="<|end|>")))
-    assert out.stop_reason == "end_of_turn" and shown == "Hi<|start|>there"
+        opens_as_text=True, turn_end_text="<|fin|>")))
+    assert out.stop_reason == "end_of_turn" and shown == "Hi<|begin|>there"
 
 
 def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
@@ -745,13 +745,13 @@ def _engine_records(caplog, *calls):
 
 def test_each_engine_line_becomes_a_record_at_the_python_level_its_own_level_names(caplog):
     assert _engine_records(
-        caplog, (_DEBUG, "load: control token: 105 '<start_of_turn>' is not marked as EOG\n"),
-        (_INFO, "llama_model_loader: loaded meta data\n"),
+        caplog, (_DEBUG, "load: control token: 105 '<begin_turn>' is not marked as EOG\n"),
+        (_INFO, "llama_model_loader: dumping metadata keys/values\n"),
         (_WARN, "llama_kv_cache_iswa: using full-size SWA cache\n"),
         (_ERROR, "llama_model_load: error loading model\n"),
         (0, "a line with no level\n")) == [
-        (logging.DEBUG, "load: control token: 105 '<start_of_turn>' is not marked as EOG"),
-        (logging.INFO, "llama_model_loader: loaded meta data"),
+        (logging.DEBUG, "load: control token: 105 '<begin_turn>' is not marked as EOG"),
+        (logging.INFO, "llama_model_loader: dumping metadata keys/values"),
         (logging.WARNING, "llama_kv_cache_iswa: using full-size SWA cache"),
         (logging.ERROR, "llama_model_load: error loading model"),
         (logging.INFO, "a line with no level")]
