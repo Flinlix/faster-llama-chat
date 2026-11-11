@@ -329,7 +329,7 @@ that request. `Sampling` refuses, where it is built, any value `Config` refuses.
 | field | default | meaning |
 |------|------|------|
 | `gpu_layers` | `0` | layers offloaded to the GPU; `-1` for all |
-| `kv_cache_on_gpu` | `False` | the KV cache in VRAM, or in host RAM |
+| `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
 | `decode_threads` | `None` | CPU threads for decode; `None` lets llama.cpp decide |
 | `prefill_threads` | `None` | CPU threads for prefill; `None` means as many as `decode_threads` |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |

@@ -1538,3 +1538,15 @@ before a user message that would open one exchange too many, and while a reply
 runs its question may open one more until the reply settles; a turn that
 called tools outgrows it until the turn closes. `n_evicted_messages` and the
 counts `inject` and `declare_tools` return still count history items.
+
+**266.5: the KV cache goes where the model is.** `kv_cache_on_gpu` defaulted
+to `False`, so the README's quick start, with `gpu_layers=-1`, put the model
+on the graphics card and its cache in host RAM, where every decode reads it
+across the bus. It now defaults to `True`, which is llama.cpp's own
+`offload_kqv` default: the engine places each layer's cache on the device
+that layer runs on, so with `gpu_layers=0` the whole cache stays in host RAM
+and with a partial offload each part follows its layer. `False` still forces
+all of it into host RAM, to free VRAM. That placement is llama.cpp's
+(`llama_kv_cache` takes each layer's buffer type from the layer's device when
+offloading is on); it was not measured here, since the GPU was in use by
+another process.

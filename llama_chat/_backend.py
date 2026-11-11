@@ -179,7 +179,7 @@ class Backend:
         return ctx
 
     def _set_kv_cache_on_gpu(self, cparams, enable: bool) -> None:
-        """Place the KV cache in VRAM (``True``) or in host RAM (``False``)."""
+        """Keep each layer's KV cache where the layer runs (``True``), or all of it in host RAM (``False``)."""
         cparams.offload_kqv = enable
 
     def _set_flash_attn(self, cparams, enable: bool) -> None:

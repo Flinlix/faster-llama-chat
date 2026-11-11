@@ -42,9 +42,9 @@ def test_every_kv_cache_type_is_accepted_with_flash_attention(kind):
     assert Config(kv_cache_type=kind, flash_attention=True).kv_cache_type == kind
 
 
-def test_kv_cache_on_gpu_defaults_off():
-    # KV cache stays in host RAM unless explicitly offloaded to the GPU.
-    assert Config().kv_cache_on_gpu is False
+def test_the_kv_cache_follows_the_model_by_default():
+    # Each layer's cache where that layer runs, in VRAM for the layers on the GPU.
+    assert Config().kv_cache_on_gpu is True
 
 
 @pytest.mark.parametrize("field,value", [

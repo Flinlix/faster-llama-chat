@@ -77,8 +77,9 @@ class Config:
             entirely free.
         gpu_layers: Layers to offload to GPU. ``0`` for a CPU-only build,
             ``-1`` for all of them.
-        kv_cache_on_gpu: ``True`` places the KV cache in VRAM, ``False`` keeps
-            it in host RAM. Ignored on a CPU-only build.
+        kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
+            layer runs, in VRAM for the layers ``gpu_layers`` offloads;
+            ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
         decode_threads: CPU threads for decode. ``None`` lets llama.cpp decide.
         prefill_threads: CPU threads for prefill. ``None`` means as many as
             ``decode_threads``.
@@ -117,7 +118,7 @@ class Config:
     # Backend / hardware
 
     gpu_layers: int = 0
-    kv_cache_on_gpu: bool = False
+    kv_cache_on_gpu: bool = True
     decode_threads: int | None = None
     prefill_threads: int | None = None
     max_batch_tokens: int = 2048

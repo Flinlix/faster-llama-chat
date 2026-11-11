@@ -437,6 +437,33 @@ def test_loading_ends_by_decoding_a_full_batch_and_a_single_token_and_leaves_the
     assert performed[-4:] == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
 
 
+def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
+    """What a model loaded under ``settings`` asks of the engine's context, by keyword."""
+    asked = {}
+    backend = SimpleNamespace(
+        load_model=lambda path, layers, progress: "model",
+        metadata_value=lambda model, key: None,
+        kv_cache_type_id=lambda name: 0,
+        new_context=lambda *args, **kwargs: asked.update(kwargs) or "ctx",
+        vocab=lambda model: None, token_eos=lambda vocab: 2, can_shift=lambda ctx: True,
+        kv_seq_rm=lambda ctx, seq, p0, p1: True, kv_seq_add=lambda *args: None,
+        decode=lambda *args: None, kv_clear=lambda ctx: None)
+    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    model = tmp_path / "model.gguf"
+    model.touch()
+    KVContext(Config(model_path=str(model), **settings))
+    return asked
+
+
+@pytest.mark.parametrize("gpu_layers", [0, 10, -1])
+def test_the_kv_cache_stays_with_its_layers_unless_forced_into_host_ram(
+        tmp_path, monkeypatch, gpu_layers):
+    assert _context_settings(tmp_path, monkeypatch,
+                             gpu_layers=gpu_layers)["kv_cache_on_gpu"] is True
+    assert _context_settings(tmp_path, monkeypatch, gpu_layers=gpu_layers,
+                             kv_cache_on_gpu=False)["kv_cache_on_gpu"] is False
+
+
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
     assert tokenize_pieces(_merging_context(), [], add_special=True) == ["BOS"]
 
