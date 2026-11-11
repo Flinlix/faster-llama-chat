@@ -127,6 +127,13 @@ NO_RESULT_BLOCK = _invented(calls_tools=True, writes_results=False)
 RESULT_LINES = _invented(calls_tools=True, result_lines=True)
 REASONING = _invented(calls_tools=True, can_reason=True)
 REASONING_KEEPING_THOUGHTS = _invented(calls_tools=True, can_reason=True, keeps_thought=True)
+# A model whose default template knows no tools, and which ships a template of its own for a
+# conversation that declares tools, in another format, so that a switch shows in every turn.
+TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN = {
+    **TOOLS, "calls_tools": True,
+    "chat_template": "{%- for m in messages -%}<[say>{{ m.role }}\n{{ m.content }}<said]>\n"
+                     "{%- endfor -%}{%- if add_generation_prompt -%}<[say>assistant\n{%- endif -%}",
+    "tool_use_template": TOOLS["chat_template"]}
 
 # Every invented template, by the name it goes by here.
 INVENTED = {name: value for name, value in globals().items()

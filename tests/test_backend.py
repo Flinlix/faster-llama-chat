@@ -72,23 +72,52 @@ def test_every_cache_edit_is_performed_while_loading(reports_shift):
         [("seq_add", 0, 0, 0)] if reports_shift else [])
 
 
-def _probed_context(reports_shift, cuts_tail):
-    """A context over a backend reporting a shift and taking or refusing a cut at its end."""
+def _probed_context(reports_shift, cuts_tail, saves=True):
+    """A context over a backend reporting a shift, taking or refusing a cut at its end, and saving a state or not."""
     performed = []
+
+    def save_state(ctx, seq):
+        if not saves:
+            raise RuntimeError("the cache did not save its state")
+        performed.append(("save",))
+        return "state"
+
+    def kv_seq_rm(ctx, seq, p0, p1):
+        # Every removal that stops before the end succeeds, as a running state's does,
+        # and so does one from where a restored state ends.
+        restored = bool(performed) and performed[-1][0] == "restore"
+        performed.append(("seq_rm", p0, p1))
+        return cuts_tail or p1 >= 0 or restored
+
     context = object.__new__(KVContext)
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._backend = SimpleNamespace(
         can_shift=lambda ctx: reports_shift,
         token_eos=lambda vocab: 2,
         decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", tokens, pos)),
-        # Every removal that stops before the end succeeds, as a running state's does.
-        kv_seq_rm=lambda ctx, seq, p0, p1: performed.append(("seq_rm", p0, p1)) or (
-            cuts_tail or p1 >= 0),
+        kv_seq_rm=kv_seq_rm,
         kv_seq_add=lambda ctx, seq, p0, p1, d: performed.append(("seq_add", p0, p1, d)),
         kv_clear=lambda ctx: performed.append(("clear",)),
+        save_state=save_state,
+        restore_state=lambda ctx, seq, state: performed.append(("restore", state)),
     )
     context._settle_cache_edits()
     return context, performed
+
+
+def test_a_cache_that_cannot_be_cut_saves_and_restores_a_state_while_loading():
+    """It is brought back with saved states, so a build that cannot says so at load, not at a reply."""
+    _context, performed = _probed_context(reports_shift=True, cuts_tail=False)
+    saved = performed.index(("save",))
+    assert ("restore", "state") in performed[saved:]
+    assert performed[-1] == ("clear",)
+    with pytest.raises(RuntimeError, match="cannot save and restore"):
+        _probed_context(reports_shift=True, cuts_tail=False, saves=False)
+
+
+def test_a_cache_that_can_be_cut_is_not_asked_for_a_state_while_loading():
+    _context, performed = _probed_context(reports_shift=False, cuts_tail=True)
+    assert ("save",) not in performed
 
 
 def test_a_cache_that_refuses_a_cut_at_its_end_is_never_shifted_whatever_it_reports():
@@ -307,6 +336,24 @@ def test_a_call_without_a_tag_of_its_own_is_read_by_its_texts():
     assert decoded == out.token_ids and decoded[-1] == "<sep>"
 
 
+@pytest.mark.parametrize("sampled", [
+    # Written as the template writes it, whitespace around the texts included.
+    ["Gleich.", "\n", "<open>", "call:", "\n", "clock{}", "\n", "<close>", "x"],
+    # Without that whitespace, as a model may write it.
+    ["Gleich.", "<open>", "call:", "clock{}", "<close>", "x"],
+    # With more of it.
+    ["Gleich.", " \n\n", "<open>", "call:", "  ", "clock{}", " \n", "<close>", "x"],
+], ids=["as-written", "without-whitespace", "more-whitespace"])
+def test_a_calls_texts_are_matched_without_the_whitespace_around_them_as_a_thoughts_tags_are(
+        sampled):
+    context, decoded, _ = _sampling_context(sampled)
+    out = GenerationAccumulator()
+    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+        call_texts=("\n<open>call:\n", "\n<close>"))))
+    assert shown == out.text == "Gleich."
+    assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
+
+
 def test_a_reply_ends_where_its_closing_parts_from_a_call():
     context, decoded, removed = _sampling_context(
         ["Pa", "ris", "<close>", "resp", "<sep>", "<close>", "msg", "<end>"])
@@ -449,7 +496,8 @@ def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
         new_context=lambda *args, **kwargs: asked.update(kwargs) or "ctx",
-        vocab=lambda model: None, token_eos=lambda vocab: 2, can_shift=lambda ctx: True,
+        vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
+        can_shift=lambda ctx: True,
         kv_seq_rm=lambda ctx, seq, p0, p1: True, kv_seq_add=lambda *args: None,
         decode=lambda *args: None, kv_clear=lambda ctx: None)
     monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
@@ -499,6 +547,29 @@ def test_the_sampling_a_gguf_states_is_read_by_the_names_a_request_gives_it():
 def test_a_gguf_sampling_value_that_is_no_number_is_refused_naming_its_key():
     with pytest.raises(ValueError, match="general.sampling.top_p"):
         _gguf_stating({"general.sampling.top_p": "high"}).recommended_sampling()
+
+
+def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, monkeypatch):
+    stored = {"tokenizer.chat_template": "default:{{ messages[0].content }}",
+              "tokenizer.chat_template.tool_use": "tools:{{ messages[0].content }}"}
+    backend = SimpleNamespace(
+        load_model=lambda path, layers, progress: "model",
+        metadata_value=lambda model, key: stored.get(key),
+        kv_cache_type_id=lambda name: 0, new_context=lambda *args, **kwargs: "ctx",
+        vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
+        can_shift=lambda ctx: True, kv_seq_rm=lambda ctx, seq, p0, p1: True,
+        kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
+        decode=lambda *args: None, kv_clear=lambda ctx: None)
+    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    model = tmp_path / "model.gguf"
+    model.touch()
+    context = KVContext(Config(model_path=str(model), context_size=32, max_batch_tokens=8,
+                               min_reply_tokens=0))
+    question = [{"role": "user", "content": "hi"}]
+    assert context.render_with_model_template(question) == "default:hi"
+    assert context.render_with_model_template(question, template_name="tool_use") == "tools:hi"
+    assert context.chat_template_text("tool_use") == stored["tokenizer.chat_template.tool_use"]
+    assert context.chat_template_text("rag") is None
 
 
 def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():

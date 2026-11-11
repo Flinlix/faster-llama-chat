@@ -1704,3 +1704,211 @@ how to override it; a value another source replaces cannot stop the load. A
 name it recommends that is no model sampling field is refused too, for a
 cache context of your own. A test now pins that no two shipped files name one
 template, since the first in file order would win and the other be dead.
+
+## 2026-11-11: Templates, reasoning and the load check
+
+The user decided these items; each is a commit of its own.
+
+**264.2: The names a template reads, parsed as it renders.** The search for
+the variable that moves declarations into the system turn read the names a
+template reads with a plain `jinja2.Environment`. The renderer's environment
+knows tags and extensions a plain one does not, such as `break`, `continue`
+and `{% generation %}`, so the plain parse failed on 7 of the 52 test
+templates and returned no names at all. The names are now parsed by the
+renderer's own environment, so every template the renderer can render has its
+names read. No test template's declaration variable changed.
+
+**264.3: The reasoning switch among the names a template reads.** This
+revises "How reasoning is read". The switch was looked for only in
+`enable_thinking` and `reasoning_effort`; templates also switch reasoning
+with `thinking`, `thinking_mode`, `thinking_option`, `reasoning_strength` or
+`reasoning`, and the test templates that do worked only because they read one
+of the two as well. The two are still tried first, by their rules as before.
+After them comes each other name the template reads that holds "think" or
+"reason": first as a flag, `True` for on and `False` for off, then by the
+effort's rule, `"none"` for off where it changes what follows the user turn.
+A discovered name counts only where it changes what follows the user turn.
+Both limits keep out variables that change the prompt for another purpose:
+over the 52 test templates, every name read was tried as a flag and as an
+effort, and `low_effort`, `medium_effort` and `tool_choice` (`"none"`) each
+change what follows the user turn without being a reasoning switch. No test
+template's switch changed. A caller's variable of the switch's name now
+replaces the switch's value instead of making the render fail, since a
+discovered switch may share its name with a variable a caller passes.
+
+A switch whose values are words of the template's own, such as
+`thinking_option` (`"on"` and `"off"`) or `thinking_mode` (`"thinking"` and
+`"chat"`), is found by neither rule. The words could be read from the
+comparisons in the template's source, but nothing in a render tells which of
+them is off where the template's default does not reason; this waits for the
+user's decision.
+
+**261.5: Whether reasoning can be turned off.** Reasoning off is the
+template's own off, and some templates have none: of the 37 test templates
+that mark a thought, 12 write the prompt the same with reasoning on and off,
+among them those of DeepSeek R1, gpt-oss, Muse Glimmer and Ministral 3
+Reasoning. `begin(reasoning=False)` was accepted on them without a word,
+though the model may reason in every reply. `can_turn_off_reasoning` now says
+so: it is true where the switch writes the generation prompt with reasoning
+off otherwise than with it on, and where the template marks no thought at
+all, since then nothing is known to turn off. Nothing is refused: such a
+conversation is written as the template writes it, and the thought is kept out
+of the answer as before. Read as: the property is the switch's effect on the
+prompt, the one place the renders show whether an off exists.
+
+**261.3: The answer's opening after an empty thought.** Measured on North
+Mini Code: with reasoning off, every answer began with a stray
+`<|START_TEXT|>`, in 8 of 8 real replies, and the tag was kept with each past
+reply, so the model read it twice from then on. Its generation prompt without
+reasoning ends in an empty thought, `<|START_THINKING|><|END_THINKING|>`,
+where a past reply's tag holds `<|START_TEXT|>` instead; the answer's opening
+was recognised only where the prompt is the start of the tag, as on a
+template that routes replies through channels. Where the prompt, past what it
+shares with the tag, is a thought opened and closed with nothing in it, and
+the tag's rest completes that thought's closing, the tag's rest is now the
+answer's opening, which the model writes and the answer leaves out. The
+condition asks for the closing in the prompt, so an opened thought, as the
+prompt with reasoning on writes it, is no such case. Of the 52 test
+templates, only cohere-2's opening without reasoning changed.
+
+**264.1: A past thought in the form the template reads.** This broke
+invariant 1, measured on Ministral 3 Reasoning: a past reply's thought was
+handed to every template as `reasoning_content`, while the load check found
+the thought through any of three forms, that field, a `thinking` field or a
+content block of its own. That template reads a thought only from a content
+block, so the check said it keeps a past thought, the reply was recorded with
+its thought, and the render left the thought out: it was lost from the cache
+after the next question. The load check now records the form a past reply
+keeps its thought in, trying the form the thought's tags were read from
+first, and the template's render is the one place that hands a recorded
+thought over in that form. The conversation itself keeps the thought under
+`reasoning_content`, so its content stays one text everywhere else. A
+template that prints a content block as text rather than reading it is not
+taken to keep the thought: the check now looks for each block printed, not
+only the whole list, which kept hunyuan-4, lfm-2.5 and lfm-3 from being read
+as keeping thoughts in blocks they only print. Of the 52 test templates, only
+mistral-3-reasoning's form changed. The tests' own check of the cache renders
+each reply's thought in each of the three forms, written out in the tests,
+and accepts the cache where it matches one of them.
+
+**264.5: A thought's tags read from the model's own tags.** Three places
+that read a thought took a tag to be text in angle brackets: the empty
+thought a prompt without reasoning ends in was matched by a pattern of two
+`<...>` texts, the opening of a thought a template removes from a past reply
+was the closing's text with `</` replaced by `<`, and the last tag before a
+thought was the text from the run's last `<`. A model marking its thought as
+`◁think▷` slipped through all three. Each now reads the model's own tags: the
+empty thought is two of them at the prompt's end, the removed thought's
+opening is the tag that reads as its closing without the first slash, so
+`[/THINK]` and `◁/think▷` count as well, and the last tag is the last of them
+in the text. Over the 52 test templates nothing read changed. The stand-in
+tokenizer of the tests listed only the tags a template spells in its source;
+it now also lists those the template builds from parts and writes, as
+hunyuan-3 and hunyuan-4 build their thought tags, since a real vocabulary
+holds them too.
+
+A fourth place, the separator between two calls of one turn, finds each
+call's opening at a `<` inside the opening a template writes. It was left as
+it is: on deepseek-v4.1 the call opens with `<｜DSML｜ invoke`, which no tag of
+the stand-in vocabulary starts, and reading the model's tags there instead
+lost the separator and made the call's closing text run to the end of the
+turn, `</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜>` in place of
+`</｜DSML｜ invoke>`. Whether that model's vocabulary holds `<｜DSML｜` as a tag
+decides which reading is right; this waits for the user's decision.
+
+**270.15: A template that is not template code is refused at load.** A chat
+template the renderer cannot compile, such as one with a block never closed
+or a filter the renderer lacks, failed with the renderer's own parser error,
+which is no `ValueError` and named no refusal. The renderer's construction now
+turns that error into a `ValueError` that says the template is not valid
+template code and names the line and the cause, at load, as every other
+template that cannot be used is refused.
+
+**270.18: A kept turn that cannot be placed refuses the action.** A turn that
+called tools is held as the tokens it was generated as, in place of the
+template's version of it. Where a render held such a turn but could not place
+it, the turn was left out of the placement and the template's own version of
+it stood in the cache without notice, which breaks invariant 1. The target of
+a render now raises a `ValueError` for a kept turn among its messages that it
+cannot place, so the action that rendered it fails and leaves the
+conversation as it was. A kept turn whose messages the render does not hold,
+such as one outside a window, is no such case. Only a change to how the
+template writes the conversation can make a placed turn unplaceable, such as a
+declaration, so that is the action that is refused. The test stands the
+unplaceable render in by replacing the placement, since none of the 52 test
+templates writes a kept turn where it cannot be placed. Seen while testing:
+answering a call that could not be read catches every `ValueError` as "no
+room, or no result block" and then records the reply without its call; a
+placement refusal there would take that path too.
+
+**270.19: The checks of what renders allow run wherever their inputs change.**
+Two checks read the template's renders with the conversation's system turn,
+declarations and clock: that an older exchange stays written as it was once
+another follows, and whether windows of the conversation stand for its whole
+render. `begin` ran both; `declare_tools` ran only the second, though the
+declarations it adds are among the first's inputs; and an action that found
+the clock moved, so that the template writes another date, only pinned the
+new opening. All three now run both checks through one method, so a
+template that rewrites older exchanges only with tools declared, or only on a
+later date, is refused there rather than kept by a check made for other
+inputs. The test records that both checks run at each of the three, since none
+of the 52 test templates rewrites an older exchange under either change.
+
+**270.22: Saving and restoring a state is tried at load.** A cache that
+cannot be cut at its end, such as one with a running state, is brought back
+to an earlier point from a state saved there, and decodes the whole
+conversation again where none can be saved. Loading tried the cut and the
+shift but not the save and the restore, so a build that cannot do either was
+found only at the first reply that needed it, and then decoded everything
+again without a word. Where the cache cannot be cut, loading now decodes one
+token, saves the state, decodes two more, and goes back to the saved state
+through the same restore a conversation uses, then clears the cache; a build
+that cannot is refused there with a `RuntimeError`, as one missing the shift
+is. Measured on Qwen 3.5 9B on the CPU, whose cache cannot be cut: the probe
+passes at load and the model answers as before.
+
+**270.23: A call's texts take the tolerance a thought's tags take.** A
+thought's tags are matched without the whitespace around them, which a model
+does not always reproduce; the texts a call opens and closes with, where the
+call has no tag of its own, had to match exactly as the template writes them,
+so a model that left out a line break before its closing ran the call to the
+end of the reply. Both texts are now matched without their surrounding
+whitespace. The call's text is read without whitespace at its ends, and the
+reading puts back the opening's own text after its last tag as before, so a
+call written exactly as the template writes it reads as it did. Whitespace
+right before an opening that begins with whitespace stays the call's, as it
+was while the whole opening had to match. The closing a call is given where
+the reply ends inside it is still the template's whole closing.
+
+**264.4: A template of its own for tools.** At the user's choice (B). A GGUF
+can hold further named chat templates beside `tokenizer.chat_template`, among
+them `tokenizer.chat_template.tool_use` for a conversation that declares
+tools; only the default one was read. The engine context now reads that one
+too, and the two members of a cache context that hand out the template, its
+render and its text, take a `template_name`, `None` for the default one, so
+that a context of one's own can offer the same. Where the model ships a
+template for tools, it is recovered and checked at load exactly as the
+default one is, and a model whose template for tools fails that check is
+refused. A conversation is written with that template from the moment it
+declares tools, and with the default one while it declares none; the choice
+is made in one place, from the conversation's declarations, and everything
+that renders or generates reads the template from there. `can_call_tools`
+answers for the template a conversation with tools is written with. A
+`declare_tools` that switches templates is the render changing, as any
+declaration in the system turn changes it: the cache is compared with the new
+render and decoded again from the first token that differs, which for two
+templates of different formats is the whole conversation, once. A turn kept as
+generated under the default template that the template for tools cannot place
+refuses the declaration, as 270.18 refuses any such action. None of the
+models in the local cache ships a template for tools, so the tests run an
+invented pair: a default template that knows no tools, and the invented tool
+template in another format.
+
+Open, for the user: whether a `declare_tools` that switches templates should
+decode the conversation again once in the new form, as built, or be refused
+in favour of a `begin` with the tools; which template `can_reason`,
+`can_turn_off_reasoning` and `can_take_system_prompt` answer for, now the
+current conversation's (before any `begin`, the default one), while `begin`
+checks the template its own `tools` select; and which template a history
+holding tool turns but declaring no tools is written with, now the default
+one, which refuses it where only the template for tools can call tools.

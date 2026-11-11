@@ -41,6 +41,24 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     assert _describes_a_call(template) == known["calls_tools"]
 
 
+@pytest.mark.parametrize("stem", _REASONING_STEMS)
+def test_reasoning_can_be_turned_off_exactly_where_the_template_writes_its_off_otherwise(stem):
+    context, template = _load(stem)
+    question = [{"role": "user", "content": "x"}]
+    on, off = (context.stated_render(question, generation_prompt=True, reasoning=reasoning)
+               for reasoning in (True, False))
+    assert template.can_turn_off_reasoning == (on != off)
+
+
+@pytest.mark.parametrize("stem", ["deepseek-r1-qwen3", "gpt-oss", "muse-glimmer",
+                                  "mistral-3-reasoning"])
+def test_a_template_without_an_off_says_so_and_still_begins_without_reasoning(stem):
+    context = FakeContext(fixture(stem))
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
+    assert chat.can_reason and not chat.can_turn_off_reasoning
+    chat.begin("", reasoning=False)             # nothing that works today is refused
+
+
 def _describes_a_call(template):
     """Whether the template writes a call at all, whatever else tool calling lacks."""
     try:

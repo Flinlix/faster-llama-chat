@@ -125,7 +125,7 @@ model and makes later actions raise.
 | telling the model about more tools | `declare_tools(tools)` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()`: the system prompt and the history together, what `begin` takes, tool turns included, so `begin(*chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads both as the newest finished change left them |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_take_system_prompt`, `reply_open`, `owed_calls`, `wait_idle(timeout_s)` |
+| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `reply_open`, `owed_calls`, `wait_idle(timeout_s)` |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
@@ -151,8 +151,9 @@ wrapper is built, so a deployment that could never work says so then: every
 `Config` field and the combinations no call could succeed under, that
 `model_path` names a file, each cache edit tried once on the empty cache, that
 a context of your own answers everything called on it and holds the
-`context_size` asked for, that the generation prompt and the closing after a
-reply are where the template writes them and the closing begins with one of the
+`context_size` asked for, that the chat template is valid template code (a
+`ValueError` naming the line and the cause where it is not), that the
+generation prompt and the closing after a reply are where the template writes them and the closing begins with one of the
 model's tags, and whether tool calling works (`can_call_tools`). A setting
 refused is an `InvalidSettingError`, a `ValueError` whose `field` names it.
 What is left is what only a conversation can know: whether a request fits
@@ -198,7 +199,10 @@ rest = chat.reply(tool_call_policy="yield").finish()        # the turn stays ope
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
-since the model reads its own call back. Every call is reported on
+since the model reads its own call back. The turn keeps the tokens it was
+generated as, so an action after which the template's render no longer shows
+where that turn stands is refused with a `ValueError`, the conversation left
+as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
@@ -225,6 +229,15 @@ those already declared; a tool to be declared later is left out of the list
 declarations. Where that is the system turn, a later declaration decodes the
 conversation after it again once. Neither keeps a registry: a request whose
 calls are to run is handed one.
+
+**A template of its own for tools.** A GGUF may ship, beside its default chat
+template, one for a conversation that declares tools
+(`tokenizer.chat_template.tool_use`). Where it does, both pass the check a
+model meets at load, `can_call_tools` answers for that one, and a conversation
+is written with it from the moment it declares tools: from `begin(tools=...)`
+on, or from a `declare_tools`, which then decodes the conversation again once
+in that template's form. A conversation that declares none is written with
+the default template.
 
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
@@ -257,12 +270,17 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 
 Reasoning is chosen per conversation, at `begin`, because a template may switch
 it in the system turn. `can_reason` says whether `begin` accepts
-`reasoning=True`, which it does where the template marks a thought. Every
+`reasoning=True`, which it does where the template marks a thought. Reasoning
+off is the template's own off: `can_turn_off_reasoning` says whether the
+template has one. Where it has none, as on a template that always reasons, a
+conversation begun without reasoning is written as the template writes it,
+and the model may reason in every reply all the same. Every
 stream yields the answer alone, with or without reasoning, and a header a
 template writes for another reader is kept out of it too. Stop strings are
 matched against the answer only. A finished reply is kept as the template
-writes a past reply, without its thought where the template leaves one out.
-Where that differs from what was generated, the cache is brought to that form
+writes a past reply, without its thought where the template leaves one out,
+and with it, handed over in the form the template reads one in, where the
+template keeps it. Where that differs from what was generated, the cache is brought to that form
 right after the reply, while it is read. A turn that called tools keeps the
 tokens it was generated as.
 
@@ -435,6 +453,10 @@ reply is generated by the library's own loop through four steps:
 `sampled_tokens` draws, `decode_generated` decodes what the generation adds,
 and `ends_generation` and `token_bytes` read a drawn token, so a call is told
 apart and a reply ends the same on every context.
+`render_with_model_template` and `chat_template_text` take a `template_name`:
+`None` for the default template, else the name of a further one the model
+ships, such as `TOOL_USE_TEMPLATE` from `llama_chat.cache_context`; a name the
+model ships no template of answers `None`.
 `tests/fake_context.py` is a worked one over a list of ints.
 
 ## Verify

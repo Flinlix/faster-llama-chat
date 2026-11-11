@@ -12,6 +12,7 @@ import os
 from collections.abc import Callable, Mapping
 
 from ._backend import Backend
+from .cache_context import TOOL_USE_TEMPLATE
 from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling
 from .model_template import ModelTemplate
 
@@ -33,6 +34,8 @@ class KVContext:
 
     Raises:
         InvalidSettingError: If ``config.model_path`` is unset or names no file.
+        ValueError: If the chat template the model ships is not valid template
+            code.
         RuntimeError: If the model or the context cannot be created, or this
             build cannot perform one of the cache edits eviction rests on.
     """
@@ -63,8 +66,11 @@ class KVContext:
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
             self._warm_up()
-            self._model_template = (ModelTemplate(template, self._backend.eos_text(self._vocab))
-                                    if template else None)
+            # The default template under None, and each further one the GGUF ships by its name.
+            texts = {None: template, TOOL_USE_TEMPLATE: self._backend.metadata_value(
+                self._model, f"tokenizer.chat_template.{TOOL_USE_TEMPLATE}")}
+            self._model_templates = {name: ModelTemplate(text, self._backend.eos_text(self._vocab))
+                                     for name, text in texts.items() if text}
             self._special_tokens = None
         except BaseException:
             # Free whatever was created before the failure.
@@ -117,17 +123,19 @@ class KVContext:
                                    tools: list[dict] | None = None, *,
                                    generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   variables: Mapping[str, object] | None = None) -> str | None:
-        """Render ``messages`` with the model's own chat template; see :meth:`ModelTemplate.render`.
+                                   variables: Mapping[str, object] | None = None,
+                                   template_name: str | None = None) -> str | None:
+        """Render ``messages`` with the model's own chat template of that name; see :meth:`ModelTemplate.render`.
 
-        ``None`` where the model ships no template or the template rejects
-        this message shape. BOS is left out: the sequence opener is the
-        tokenizer's to add.
+        ``None`` where the model ships no template of that name or the
+        template rejects this message shape. BOS is left out: the sequence
+        opener is the tokenizer's to add.
         """
-        if self._model_template is None:
+        model_template = self._model_templates.get(template_name)
+        if model_template is None:
             return None
-        return self._model_template.render(messages, tools, generation_prompt=generation_prompt,
-                                           reasoning=reasoning, variables=variables)
+        return model_template.render(messages, tools, generation_prompt=generation_prompt,
+                                     reasoning=reasoning, variables=variables)
 
     def recommended_sampling(self) -> dict[str, float]:
         """The sampling the model's GGUF states, by :class:`Sampling`'s names.
@@ -148,9 +156,10 @@ class KVContext:
             stated[name] = int(number) if name == "top_k" and number.is_integer() else number
         return stated
 
-    def chat_template_text(self) -> str | None:
-        """The source of the model's own chat template, or ``None`` where it ships none."""
-        return None if self._model_template is None else self._model_template.text
+    def chat_template_text(self, template_name: str | None = None) -> str | None:
+        """The source of the model's own chat template of that name, or ``None`` where it ships none."""
+        model_template = self._model_templates.get(template_name)
+        return None if model_template is None else model_template.text
 
     def reset(self) -> None:
         self._backend.kv_clear(self._engine_context)
@@ -245,6 +254,30 @@ class KVContext:
         # Shifted by nothing, so a build missing the shift fails at load, not at an eviction.
         if self._can_shift:
             self._backend.kv_seq_add(self._engine_context, SEQ, 0, 0, 0)
+        if not self._can_cut_tail:
+            self._probe_saved_state()
+
+    def _probe_saved_state(self) -> None:
+        """Save the state one decoded token leaves, decode two more, and go back to it, cleared either way.
+
+        Raises:
+            RuntimeError: If this build cannot save a state or go back to one,
+                which a cache that cannot be cut goes back with.
+        """
+        token = max(self._backend.token_eos(self._vocab), 0)
+        try:
+            self._backend.decode(self._engine_context, [token], 0, SEQ, False,
+                                 self._max_batch_tokens)
+            state = self.save_state()
+            self._backend.decode(self._engine_context, [token] * 2, 1, SEQ, False,
+                                 self._max_batch_tokens)
+            self.restore_state(state, 1)
+        except RuntimeError as error:
+            raise RuntimeError(f"this build cannot save and restore the state of a cache "
+                               f"that cannot be cut, which it is brought back with: {error}"
+                               ) from error
+        finally:
+            self._backend.kv_clear(self._engine_context)
 
     def _probe_tail_cut(self) -> bool:
         """Whether three decoded tokens can be cut back to one, cleared either way."""

@@ -29,7 +29,7 @@ from .render_checks import (STAND_IN, ensure_history_stays_written, question_spl
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
-from .resolved_template import ResolvedTemplate
+from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
 from .tokenizing import split_at_tags
@@ -123,13 +123,14 @@ class RenderedCache:
     raises, the conversation and the cache as they were before it.
     """
 
-    def __init__(self, context, template: ResolvedTemplate, config: Config) -> None:
+    def __init__(self, context, templates: ResolvedTemplates, config: Config) -> None:
         self._context = context
-        self._template = template
+        self._templates = templates
         self._config = config
         self._memory = CacheSync(context)
         self._state = _ConversationState()
-        self._rendering = ConversationRendering(context, template, lambda: self._state)
+        self._rendering = ConversationRendering(context, lambda: self.template,
+                                                lambda: self._state)
         # Left as they are by a failed action. The newest generation: where it began,
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
@@ -159,6 +160,11 @@ class RenderedCache:
                 ``asks_question``, as :meth:`ask` does where a reply is open.
         """
         _ensure_can_reply(self._published, asks_question)
+
+    @property
+    def template(self) -> ResolvedTemplate:
+        """The template the conversation is written with: the model's template for tools once it declares any."""
+        return self._templates.for_conversation(bool(self._state.tools))
 
     @property
     def tools(self) -> list[ToolSpec]:
@@ -230,9 +236,7 @@ class RenderedCache:
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
-            ensure_history_stays_written(self._rendering.render, system)
-            self._state.windows = windows_are_exact(self._rendering.render, system,
-                                                    self._rendering.tag_from)
+            self._check_renders()
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
                          or self._rendering.length(self._state.messages, False) > limit):
                 raise ContextOverflowError(
@@ -440,7 +444,7 @@ class RenderedCache:
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.reply_open, before_question)
         room = (self._config.context_size - len(self._memory.tokens)
-                - self._template.n_closing_tokens)
+                - self.template.n_closing_tokens)
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
@@ -626,7 +630,9 @@ class RenderedCache:
                 is written; one that raises refuses the declarations.
 
         Raises:
-            ValueError: If no conversation was begun or a reply is open.
+            ValueError: If no conversation was begun or a reply is open, or the
+                template with them writes an older exchange otherwise once
+                another follows.
             ContextOverflowError: If the system prompt with them leaves no room
                 under ``evict_above_tokens`` for a short question.
         """
@@ -638,8 +644,7 @@ class RenderedCache:
             self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
-            self._state.windows = windows_are_exact(self._rendering.render, self._system_part(),
-                                                    self._rendering.tag_from)
+            self._check_renders()
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._memory.pin(self._rendering.opening_length(self._system_part()))
             n_before = len(as_history(self._state.messages))
@@ -647,6 +652,18 @@ class RenderedCache:
             self._render_ahead(dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
+
+    def _check_renders(self) -> None:
+        """Check again what the template's renders allow, as the system turn, the declarations and the clock now leave them.
+
+        Raises:
+            ValueError: If the template writes an older exchange otherwise once
+                another follows.
+        """
+        system = self._system_part()
+        ensure_history_stays_written(self._rendering.render, system)
+        self._state.windows = windows_are_exact(self._rendering.render, system,
+                                                self._rendering.tag_from)
 
     def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.
@@ -876,7 +893,7 @@ class RenderedCache:
 
     def _moves_declarations(self) -> bool:
         """Whether the declarations move with the newest question, leaving a stretch behind."""
-        return bool(self._state.tools) and self._template.declares_before_newest_turn
+        return bool(self._state.tools) and self.template.declares_before_newest_turn
 
     def _prompted(self) -> Target:
         """The conversation with the generation prompt after it, noting the template text a reply follows."""
@@ -998,6 +1015,7 @@ class RenderedCache:
             opening = self._rendering.opening_render(self._system_part())
             if opening != self._state.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
+                self._check_renders()
                 self._state.opening = opening
                 self._memory.pin(self._rendering.opening_length(self._system_part()))
         saved = self._state.copied()

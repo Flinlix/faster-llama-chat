@@ -55,15 +55,19 @@ class ConversationRendering:
     the declarations, the reasoning switch or the clock may have changed.
     """
 
-    def __init__(self, context, template: ResolvedTemplate,
+    def __init__(self, context, template: Callable[[], ResolvedTemplate],
                  inputs: Callable[[], RenderInputs]) -> None:
         self._context = context
-        self._template = template
+        self._template_of = template
         self._inputs = inputs
         self._reader = MemoTokenizer(context)
         self._memo: dict = {}             # renders and splits, by what was rendered
-        self._tag_tokens = {text: token for token in (template.call_boundary().tool_tokens or ())
-                            if (text := context.token_text(token))}
+        self._tag_tokens: dict = {}       # each template's call tags, by their texts
+
+    @property
+    def _template(self) -> ResolvedTemplate:
+        """The template the conversation is written with now."""
+        return self._template_of()
 
     def forget_renders(self) -> None:
         """Render everything again from now on."""
@@ -105,7 +109,8 @@ class ConversationRendering:
             upto: Where in the render to stop.
 
         Raises:
-            ValueError: If the template refuses to write them.
+            ValueError: If the template refuses to write them, or writes a kept
+                turn among them where it cannot be placed.
         """
         if not messages:
             return Target(self.tokenize([], add_special=True), {})     # the opener alone
@@ -114,9 +119,18 @@ class ConversationRendering:
             raise ValueError("the template refuses to write this conversation")
         end = len(split.text) if upto is None else upto
         turns = self._inputs().kept
-        placed = sorted(found for kept in turns
-                        if (found := self.place(kept, messages, split)) is not None
-                        and found[1] <= end)
+        placed = []
+        for kept in turns:
+            if not all(any(m is end for m in messages) for end in (kept.first, kept.last)):
+                continue            # a turn these messages do not hold
+            found = self.place(kept, messages, split)
+            if found is None:
+                raise ValueError("this model's template writes a turn that called tools where "
+                                 "it cannot be told apart, so the turn could not keep the tokens "
+                                 "it was generated as")
+            if found[1] <= end:
+                placed.append(found)
+        placed.sort()
         tokens, at, kept_at = [], 0, {}
         for start, stop, n in placed:
             assert start >= at, "two kept turns overlap"
@@ -176,7 +190,16 @@ class ConversationRendering:
     def tokenize(self, pieces: list[tuple[str, bool]], add_special: bool = False) -> list[int]:
         """``pieces`` as a render tokenizes them, a call's tags as the single tokens a generated call holds."""
         return tokenize_pieces(self._reader, pieces, add_special=add_special,
-                               tag_tokens=self._tag_tokens)
+                               tag_tokens=self._call_tags())
+
+    def _call_tags(self) -> dict[str, int]:
+        """The tokens the template's call tags are, by their texts."""
+        template = self._template
+        if template not in self._tag_tokens:
+            self._tag_tokens[template] = {
+                text: token for token in (template.call_boundary().tool_tokens or ())
+                if (text := self._context.token_text(token))}
+        return self._tag_tokens[template]
 
     # ----- kept turns -----------------------------------------------------------------
     def place(self, kept: KeptTurn, messages: list[dict], split: SplitRender):

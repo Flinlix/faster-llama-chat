@@ -7,6 +7,8 @@ from collections.abc import Sequence
 
 from dataclasses import dataclass
 
+from .messages import THOUGHT_FORMS
+
 
 @dataclass(frozen=True)
 class CallBoundary:
@@ -15,7 +17,8 @@ class CallBoundary:
     Attributes:
         tool_tokens: The ``(open, close)`` tokens bracketing a call, where a
             call has tags of its own.
-        call_texts: The ``(open, close)`` texts around a call, where it has none.
+        call_texts: The ``(open, close)`` texts around a call, where it has
+            none, matched in a generation without the whitespace around them.
         opens_as_text: Whether the opening of ``call_texts`` is plain text,
             which opens a call only at the reply's start or right after a tag.
         turn_end_text: Text that ends a reply where generated, removed from the
@@ -167,12 +170,19 @@ class Reasoning:
             reasons, the assistant tag included.
         past_keeps_thought: Whether the template writes a past reply's thought
             into the conversation, rather than leaving it out.
+        past_thought_form: Which of
+            :data:`~llama_chat.messages.THOUGHT_FORMS` the template reads a
+            past reply's thought in, where it keeps one.
+        can_turn_off: Whether the template's switch writes a reply without
+            reasoning otherwise than one with it.
     """
 
     thought_open: str
     thought_close: str
     generation_prompt: str
     past_keeps_thought: bool = False
+    past_thought_form: str = THOUGHT_FORMS[0]
+    can_turn_off: bool = False
 
 
 def common_prefix_length(one: Sequence, other: Sequence) -> int:

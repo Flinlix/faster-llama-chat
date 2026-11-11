@@ -617,7 +617,7 @@ def test_close_is_idempotent_and_blocks_actions():
         w.declare_tools([])     # even with nothing to declare
 
 
-@pytest.mark.parametrize("failing", ["ResolvedTemplate", "RenderedCache"])
+@pytest.mark.parametrize("failing", ["ResolvedTemplates", "RenderedCache"])
 def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing):
     closed = []
     loaded = FakeContext(PLAIN)

@@ -1,5 +1,6 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
+import re
 import sys
 
 import pytest
@@ -22,7 +23,7 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     template = ResolvedTemplate(FakeContext(REASONING))
     assert template.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
-        generation_prompt="<[turn>model\n")
+        generation_prompt="<[turn>model\n", can_turn_off=True)
     assert template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
 
 
@@ -34,6 +35,13 @@ def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation()
     with pytest.raises(ValueError, match="reasoning"):
         w.begin("t", reasoning=True)
     assert [m["text"] for m in rows(w)] == ["s", "hi"]
+
+
+def test_reasoning_can_be_turned_off_with_a_switch_and_where_no_thought_is_marked():
+    for template in (REASONING, PLAIN):
+        w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                        context=FakeContext(template))
+        assert w.can_turn_off_reasoning
 
 
 def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
@@ -158,6 +166,36 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     before = len(fake.cache)
     list(w.reply(tool_call_policy="yield"))
     assert fake.cache[before:before + 2] == fake.tokenize("ok")
+
+
+# ----- a thought marked by tags of another shape ----------------------------
+_TURNS = ("{%- for m in messages -%}<|{{ m.role }}|>"
+          "{{ m.content.split('◁/think▷')[-1] if m.role == 'assistant' else m.content }}<|end|>"
+          "{%- endfor -%}")
+
+
+@pytest.fixture
+def tags_of_another_shape(monkeypatch):
+    """The stand-in vocabulary holding ``◁think▷`` and ``◁/think▷`` as tags too."""
+    from tests import fake_context
+    monkeypatch.setattr(fake_context, "TAG",
+                        re.compile(fake_context.TAG.pattern + "|◁/?think▷"))
+
+
+@pytest.mark.parametrize("prompt", [
+    # Only the prompt without reasoning shows the thought, empty.
+    "{%- if add_generation_prompt -%}<|assistant|>"
+    "{%- if not enable_thinking -%}◁think▷◁/think▷{%- endif -%}{%- endif -%}",
+    # Only a past reply shows it, by leaving it out.
+    "{%- if add_generation_prompt -%}<|assistant|>{%- endif -%}",
+], ids=["empty-thought", "removed-thought"])
+def test_a_thought_whose_tags_are_not_angle_brackets_is_read_by_the_models_own_tags(
+        tags_of_another_shape, prompt):
+    template = ResolvedTemplate(FakeContext(
+        {"chat_template": _TURNS + prompt, "eos_token": "<|end|>",
+         "render_variables": {"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}}))
+    assert (template.reasoning.thought_open, template.reasoning.thought_close) == \
+        ("◁think▷", "◁/think▷")
 
 
 # ----- stop strings and a reasoning reply ----------------------------------

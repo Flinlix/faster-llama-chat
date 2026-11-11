@@ -83,11 +83,33 @@ def template_renderer(template: str, eos_token: str, generation_prompt: bool = F
 
     BOS is left out: the sequence opener is the tokenizer's to add.
     Template variables pass through as keywords.
+
+    Raises:
+        ValueError: If ``template`` is not valid template code, naming where
+            and why.
     """
+    import jinja2
     from llama_cpp.llama_chat_format import Jinja2ChatFormatter
-    return Jinja2ChatFormatter(template=template, eos_token=eos_token,
-                               bos_token="",
-                               add_generation_prompt=generation_prompt)
+    try:
+        return Jinja2ChatFormatter(template=template, eos_token=eos_token,
+                                   bos_token="",
+                                   add_generation_prompt=generation_prompt)
+    except jinja2.TemplateSyntaxError as error:
+        raise ValueError(f"the model's chat template is not valid template code, so no "
+                         f"conversation could be written with it: line {error.lineno}: "
+                         f"{error.message}") from error
+
+
+def template_names_read(renderer) -> frozenset[str]:
+    """Every name the template of ``renderer``, one :func:`template_renderer` built, reads.
+
+    Parsed by the renderer's own environment, so a tag only that environment
+    knows parses as it renders.
+    """
+    import jinja2
+    parsed = renderer._environment.environment.parse(renderer.template)
+    return frozenset(node.name for node in parsed.find_all(jinja2.nodes.Name)
+                     if node.ctx == "load")
 
 
 def _parameter_count(fn) -> int:

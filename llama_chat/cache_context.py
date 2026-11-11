@@ -18,6 +18,9 @@ from .config import Sampling
 # render's ``variables`` holds one of them.
 RENDERER_VARIABLES = frozenset({"messages", "tools", "add_generation_prompt", "bos_token",
                                 "eos_token", "raise_exception", "strftime_now"})
+# The name of the further chat template a GGUF may ship for a conversation that
+# declares tools, beside its default one.
+TOOL_USE_TEMPLATE = "tool_use"
 
 
 @dataclass
@@ -66,14 +69,18 @@ class ModelReader(Protocol):
     def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
                                    *, generation_prompt: bool = False,
                                    reasoning: bool | None = None,
-                                   variables: Mapping[str, object] | None = None) -> str | None:
-        """``None`` where the model ships no template or it refuses the shape.
+                                   variables: Mapping[str, object] | None = None,
+                                   template_name: str | None = None) -> str | None:
+        """``None`` where the model ships no template of that name or it refuses the shape.
 
         ``variables`` reach the template by name, any name it reads but those of
-        :data:`RENDERER_VARIABLES`.
+        :data:`RENDERER_VARIABLES`. ``template_name`` names one of the further
+        templates a model may ship, such as :data:`TOOL_USE_TEMPLATE`; ``None``
+        is its default template.
         """
 
-    def chat_template_text(self) -> str | None: ...
+    def chat_template_text(self, template_name: str | None = None) -> str | None:
+        """The source of the model's template of that name, ``None`` where it ships none."""
 
     def recommended_sampling(self) -> Mapping[str, float]:
         """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none.

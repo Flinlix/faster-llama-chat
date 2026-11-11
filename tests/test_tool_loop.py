@@ -13,9 +13,10 @@ from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolT
 from llama_chat import ChatWrapper, ContextOverflowError
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN,
-                                      RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN)
+                                      RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
+                                      TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
-from tests.wrappers import (assert_consistent, held_renders, newest_turn, system_turn,
+from tests.wrappers import (assert_consistent, held_renders, held_text, newest_turn, system_turn,
                             tool_wrapper, weather_registry, rows)
 
 
@@ -1344,3 +1345,46 @@ def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whol
         wrapper.reply("wie spät?", tool_call_policy="yield").finish()
     monkeypatch.undo()
     assert wrapper.reply("noch einmal?").finish().text
+
+
+# ----- a template of its own for a conversation that declares tools -------------------
+def _with_a_template_for_tools(fixture=TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN):
+    fake = FakeContext(fixture, gen_tokens=6, gen_text="Sonnig")
+    return ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9), context=fake), fake
+
+
+def test_a_model_whose_template_for_tools_calls_them_can_call_tools_though_its_default_cannot():
+    assert _with_a_template_for_tools()[0].can_call_tools
+    without = {**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, "tool_use_template": None}
+    assert not _with_a_template_for_tools(without)[0].can_call_tools
+
+
+def test_a_conversation_is_written_with_the_template_for_tools_once_it_declares_them():
+    chat, fake = _with_a_template_for_tools()
+    chat.begin("persona")
+    chat.reply("hallo?").finish()
+    assert "<[say>" in held_text(fake) and "<[turn>" not in held_text(fake)
+    chat.declare_tools(weather_registry().specs())
+    assert "<[say>" not in held_text(fake) and "<decl>weather</decl>" in held_text(fake)
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    reply = chat.reply("wetter?", tool_call_policy=weather_registry()).finish()
+    assert reply.text == "Sonnig" and [call.name for call in reply.tool_calls] == ["weather"]
+    chat.begin("persona")                       # without tools: the default template again
+    assert "<[say>" in held_text(fake) and "<[turn>" not in held_text(fake)
+
+
+def test_a_conversation_begun_with_tools_is_written_with_the_template_for_tools():
+    chat, fake = _with_a_template_for_tools()
+    specs = weather_registry().specs()
+    chat.begin("persona", tools=specs)
+    chat.reply("hallo?").finish()
+    assert "<decl>weather</decl>" in held_text(fake) and "<[say>" not in held_text(fake)
+
+
+def test_a_template_for_tools_that_fails_the_load_check_refuses_the_model():
+    # Its closing after a reply is plain text, which a reply could never stop on.
+    broken = {**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, "tool_use_template":
+              "{%- for m in messages -%}{{ m.role }}: {{ m.content }} END<turn]>\n"
+              "{%- endfor -%}{%- if add_generation_prompt -%}model: {%- endif -%}"}
+    with pytest.raises(ValueError, match="generation would never stop"):
+        _with_a_template_for_tools(broken)

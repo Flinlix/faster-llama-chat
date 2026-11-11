@@ -58,6 +58,23 @@ def result_message(name: str, tool_call_id: str, text: str) -> dict:
     return {"role": "tool", "name": name, "tool_call_id": tool_call_id, "content": text}
 
 
+# The forms chat templates read a reply's thought in: a field of its own under
+# either of two names, or a content block of its own ahead of the text.
+THOUGHT_FORMS = ("reasoning_content", "thinking", "content_block")
+
+
+def with_thought_as(message: dict, form: str) -> dict:
+    """``message``, whose thought is held under ``reasoning_content``, with that thought in ``form``, one of :data:`THOUGHT_FORMS`."""
+    thought = message.get("reasoning_content")
+    if not thought or form == THOUGHT_FORMS[0]:
+        return message
+    rest = {key: value for key, value in message.items() if key != THOUGHT_FORMS[0]}
+    if form == THOUGHT_FORMS[1]:
+        return {**rest, THOUGHT_FORMS[1]: thought}
+    return {**rest, "content": [{"type": "thinking", "thinking": thought},
+                                {"type": "text", "text": message["content"]}]}
+
+
 def as_history(messages: list[dict]) -> list:
     """The messages back as ``begin`` takes them."""
     history, steps = [], []
