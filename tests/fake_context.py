@@ -101,6 +101,18 @@ def call_marks(template, context) -> tuple[str, str]:
     return context.token_text(opener), context.token_text(closer)
 
 
+def written_call(template, context, name: str, arguments: dict) -> tuple[str, str, str]:
+    """A past call to ``name`` with ``arguments`` as the template writes it: its opening, its body and its closing."""
+    rendered = context.stated_render(
+        [{"role": "user", "content": "x"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": "call00000", "type": "function",
+              "function": {"name": name, "arguments": arguments}}]}])
+    opener, closer = call_marks(template, context)
+    # The last call: a declaration may show an example call first.
+    return opener, rendered.rsplit(opener, 1)[1].split(closer, 1)[0], closer
+
+
 class FakeContext:
     """A cache context without a model: a template's renderer, a tokenizer stand-in, a list as the cache, and a scripted model.
 
