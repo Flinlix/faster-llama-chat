@@ -18,11 +18,13 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolRegistry
 
-from .chat_templates import STEMS, WEATHER, fixture
-from .fake_context import FakeContext, call_marks, shipped_addon_call
+from .chat_templates import STEMS, WEATHER, expected, fixture
+from .fake_context import FakeContext, call_marks, shipped_addon_call, written_call
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
+# The templates that show no call, whose shipped add-on file says how the model writes one.
+_ADDON_CALL_STEMS = [stem for stem in _TOOL_STEMS if shipped_addon_call(fixture(stem)["chat_template"])]
 
 
 def _load(stem):
@@ -39,6 +41,7 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     assert (template.reasoning is not None) == known["marks_thought"]
     assert template.can_reason == known["can_reason"]
     assert _describes_a_call(template) == known["calls_tools"]
+    assert template.answer_opening() == expected(known, "answer_opening")
 
 
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
@@ -50,12 +53,12 @@ def test_reasoning_can_be_turned_off_exactly_where_the_template_writes_its_off_o
     assert template.can_turn_off_reasoning == (on != off)
 
 
-@pytest.mark.parametrize("stem", ["deepseek-r1-qwen3", "gpt-oss", "muse-glimmer",
-                                  "mistral-3-reasoning"])
-def test_a_template_without_an_off_says_so_and_still_begins_without_reasoning(stem):
-    context = FakeContext(fixture(stem))
-    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    assert chat.can_reason and not chat.can_turn_off_reasoning
+@pytest.mark.parametrize("stem", _REASONING_STEMS)
+def test_a_template_with_or_without_an_off_says_so_and_still_begins_without_reasoning(stem):
+    _context, template = _load(stem)
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
+                       context=FakeContext(fixture(stem)))
+    assert chat.can_reason and chat.can_turn_off_reasoning == template.can_turn_off_reasoning
     chat.begin("", reasoning=False)             # nothing that works today is refused
 
 
@@ -81,16 +84,17 @@ def test_a_reply_that_reasons_streams_only_its_answer(stem):
     assert reply.thought == "Denken" and reply.thought_pieces > 0
 
 
-@pytest.mark.parametrize("stem, first_tag", [("cohere-aya", "<|END_RESPONSE|>"),
-                                             ("qwen-3.6", "<|im_end|>")])
-def test_a_reply_ends_at_the_first_tag_of_its_closing(stem, first_tag):
+@pytest.mark.parametrize("stem", STEMS)
+def test_a_reply_ends_at_the_first_tag_of_its_closing(stem):
     context, template = _load(stem)
-    assert context.token_text(template.turn_end_token) == first_tag
+    turn_end = template.turn_end_token
+    found = context.token_text(turn_end) if turn_end is not None else None
+    assert found == expected(fixture(stem), "turn_end_token")
 
 
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
-    """A thought may close with the tag that also closes the turn, as gpt-oss's does; only the turn's own closing ends the reply."""
+    """A thought may close with the tag that also closes the turn; only the turn's own closing ends the reply."""
     context, template = _load(stem)
     tags, turn_end = template.reasoning, template.turn_end_token
     prompt = template.generation_prompt(True)
@@ -135,6 +139,7 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
 def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem):
     context, template = _load(stem)
     boundary = template.call_boundary()
+    assert boundary.opens_as_text == expected(fixture(stem), "call_opens_as_text")
     if boundary.call_texts is None:
         return
     assert boundary.tool_tokens is None
@@ -145,44 +150,36 @@ def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem)
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
 
 
-def test_kimi_k3_ends_a_reply_where_its_closing_parts_from_a_call():
-    context, template = _load("kimi-k3")
-    assert template.call_boundary().turn_end_text == "<|close|>response<|sep|><|close|>"
-    assert template.turn_end_token is None
-    # A value written with the type a string is written with reads back as the text it is.
-    rendered = context.stated_render(
-        [{"role": "user", "content": "Weather?"},
-         {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function", "function": {
-                 "name": "get_weather", "arguments": {"city": "42"}}}]}],
-        tools=[WEATHER.as_declaration()])
-    opener, closer = call_marks(template, context)
-    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
-    assert template.read_calls(body) == [ToolCall("get_weather", {"city": "42"})]
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_a_reply_ends_where_its_closing_parts_from_a_call(stem):
+    _context, template = _load(stem)
+    assert template.call_boundary().turn_end_text == expected(fixture(stem), "turn_end_text")
 
 
-@pytest.mark.parametrize("stem", ["gpt-oss", "muse-glimmer"])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "answer_opening")])
 def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
     _context, template = _load(stem)
     opening = template.answer_opening()
-    assert opening
     generated = opening + "Antwort."
     reply = ReplyText(template.reasoning, opening, template.generation_prompt(), [])
     shown = "".join(reply.feed(c) for c in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
 
 
-def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one():
-    # Qwen 3.6 marks its calls with tags of their own; a file that says otherwise loses.
-    context = FakeContext(fixture("qwen-3.6"))
-    boundary = ResolvedTemplate(
-        context, {"opening": "CALL:", "name_close": " ", "closing": "END"}).call_boundary()
+@pytest.mark.parametrize("stem", _TOOL_STEMS)
+def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one(stem):
+    _context, template = _load(stem)
+    if template.call_boundary().tool_tokens is None:
+        return                          # no tag of its own marks a call
+    # The template marks its calls with tags of their own; a file that says otherwise loses.
+    boundary = ResolvedTemplate(FakeContext(fixture(stem)),
+                                {"opening": "CALL:", "name_close": " ", "closing": "END"}).call_boundary()
     assert boundary.tool_tokens is not None and boundary.call_texts is None
 
 
-def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable(tmp_path):
-    # gpt-oss writes a call's opening as plain text its replies also hold.
-    known = fixture("gpt-oss")
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callable(tmp_path, stem):
+    known = fixture(stem)
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="The time.", name="clock")
 
@@ -206,38 +203,63 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     assert ResolvedTemplate(context, call).read_calls(written) == [ToolCall("clock", {})]
 
 
-def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused():
-    context = FakeContext(fixture("gpt-oss"))
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused(stem):
+    known = fixture(stem)
     with pytest.raises(ValueError, match="add-on file closes a call"):
-        ResolvedTemplate(context, {"opening": "<|channel|>commentary to=functions.",
-                                   "name_close": " <|constrain|>json<|message|>",
-                                   "closing": "<|never|>"})
+        ResolvedTemplate(FakeContext(known), {**shipped_addon_call(known["chat_template"]),
+                                              "closing": "<|never|>"})
 
 
 _ARGUMENTS = [{}, {"title": "Zahnarzt"}, {"title": "Zahnarzt", "minutes": 30},
               {"where": {"city": "Bern"}}, {"days": [1, 2]},
               {"title": "a,b:c"}, {"flag": True}, {"nothing": None},
               {"inner": {"inner": {"n": 1}}}, {"rows": [{"x": 1, "y": "b"}, [2, "c"]]}]
-# Arguments that do not come back as made, and why.
-_LOST = {
-    ("minimax-m3.1", "nothing"): "the template leaves a null out of the call",
-}
+_ARGUMENT_STEMS = [stem for stem in _TOOL_STEMS
+                   if not addon_file(None, fixture(stem)["chat_template"])["call"]]
+
+
+def _call_body(context, template, arguments):
+    """The body of a past call to ``fn`` with ``arguments``, as the template writes it."""
+    return written_call(template, context, "fn", arguments)[1]
 
 
 @pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
-@pytest.mark.parametrize("stem", [stem for stem in _TOOL_STEMS
-                                  if not addon_file(None, fixture(stem)["chat_template"])["call"]])
+@pytest.mark.parametrize("stem", _ARGUMENT_STEMS)
 def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, arguments):
     context, template = _load(stem)
-    rendered = context.stated_render(
-        [{"role": "user", "content": "x"},
-         {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function",
-              "function": {"name": "fn", "arguments": arguments}}]}])
-    opener, closer = call_marks(template, context)
-    body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
-    read = template.read_calls(body)
-    if any((stem, key) in _LOST for key in arguments):
-        assert read != [ToolCall("fn", arguments)], "now read back: drop it from _LOST"
+    read = template.read_calls(_call_body(context, template, arguments))
+    if set(arguments) & set(expected(fixture(stem), "lost_arguments")):
+        assert read != [ToolCall("fn", arguments)], "now read back: drop it from the template's file"
     else:
         assert read == [ToolCall("fn", arguments)]
+
+
+@pytest.mark.parametrize("stem", _ARGUMENT_STEMS)
+def test_a_text_that_reads_as_a_number_reads_back_as_text_where_the_template_writes_it_as_one(stem):
+    context, template = _load(stem)
+    as_text = _call_body(context, template, {"city": "42"})
+    if as_text == _call_body(context, template, {"city": 42}):
+        return                          # written alike, so it cannot be told from the number
+    assert template.read_calls(as_text) == [ToolCall("fn", {"city": "42"})]
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_an_empty_reply_is_written_where_the_templates_file_says(stem):
+    context = FakeContext(fixture(stem))
+    replied = [{"role": "user", "content": "x"}, {"role": "assistant", "content": ""}]
+    written = (context.stated_render(replied) is not None
+               or context.stated_render(replied + [{"role": "user", "content": "y"}],
+                                        generation_prompt=True) is not None)
+    assert written == expected(fixture(stem), "writes_empty_reply")
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_a_template_that_reads_the_clock_writes_the_date_as_its_file_says(stem, clock):
+    known = fixture(stem)
+    date_format = expected(known, "date_format")
+    assert (date_format is not None) == ("strftime_now" in known["chat_template"])
+    if date_format is not None:
+        rendered = FakeContext(known).stated_render([{"role": "user", "content": "x"}],
+                                                    generation_prompt=True)
+        assert clock[0].strftime(date_format) in rendered
