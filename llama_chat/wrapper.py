@@ -14,7 +14,8 @@ from collections.abc import Callable, Generator
 from dataclasses import replace
 
 from .addon_files import addon_file, with_model_sampling
-from .cache_context import CACHE_CONTEXT, GenerationAccumulator, ensure_answers
+from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers,
+                            ensure_can_go_back)
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .rendered_cache import RenderedCache
@@ -56,8 +57,9 @@ class ChatWrapper:
             InvalidSettingError: If ``model_path`` names no file, where the
                 wrapper loads the model itself.
             ValueError: If the model ships no chat template, if its template
-                fails validation against the model, or if ``config`` asks for
-                a larger context than ``context`` holds.
+                fails validation against the model, if ``config`` asks for
+                a larger context than ``context`` holds, or if ``context`` can
+                neither shift its cache, cut its end nor save a state.
         """
         if config is None:
             config = Config()
@@ -74,6 +76,8 @@ class ChatWrapper:
                 raise ValueError(
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
+            if not owns_context:
+                ensure_can_go_back(self._context)    # a loaded one is tried at load
             addon = addon_file(config.model_path, self._context.chat_template_text())
             self._config = with_model_sampling(
                 config, self._context.recommended_sampling(), addon)

@@ -1939,3 +1939,15 @@ The text is what an add-on file names a template by, and what the
 declaration variables are read from, so such a context ran without either.
 Reading the template now refuses it first, with the same `ValueError` as a
 model that ships no chat template.
+
+**270.5: a context of one's own must be able to go back.** A cache is brought
+back to an earlier point by a shift, a cut at its end, or a saved state; one
+that can do none of the three decodes the whole conversation again after
+every reply that changes what it holds, which invariant 2 refuses. The engine's
+own context already tries saving and restoring a state at load where its
+cache cannot be cut (270.22 under "Templates, reasoning and the load check").
+A context of one's own is now checked where the wrapper adopts it: where it
+can neither shift nor cut, `save_state` is called once on it, and a `None`
+or a `RuntimeError` refuses it with a `ValueError`. The engine's own context
+is left to its load check, so the save is not tried twice. A context that
+stops saving later is still decoded again whole, as before.

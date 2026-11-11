@@ -188,6 +188,22 @@ def test_what_a_reply_decodes_again_is_counted(can_shift):
     assert reply.n_prefilled_tokens == fake.total_prefilled() - before
 
 
+@pytest.mark.parametrize("refusal", ["none", "raises"])
+def test_a_context_of_your_own_that_can_neither_shift_cut_nor_save_is_refused(refusal):
+    """It could go back to an earlier point only by decoding the whole conversation again."""
+    class _NoWayBack(FakeContext):
+        def save_state(self):
+            if refusal == "raises":
+                raise RuntimeError("no state to save")
+
+    with pytest.raises(ValueError, match="neither shift"):
+        ChatWrapper(Config(context_size=500),
+                    context=_NoWayBack(PLAIN, can_shift=False, can_cut_tail=False))
+    for can_shift, can_cut_tail in ((True, False), (False, True)):
+        ChatWrapper(Config(context_size=500), context=_NoWayBack(
+            PLAIN, can_shift=can_shift, can_cut_tail=can_cut_tail)).begin("s")
+
+
 def test_a_context_that_saves_states_must_restore_them():
     with pytest.raises(TypeError, match="restore_state"):
         ChatWrapper(Config(context_size=500),

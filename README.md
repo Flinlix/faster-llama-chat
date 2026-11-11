@@ -150,8 +150,9 @@ is recorded all the same.
 wrapper is built, so a deployment that could never work says so then: every
 `Config` field and the combinations no call could succeed under, that
 `model_path` names a file, each cache edit tried once on the empty cache, that
-a context of your own answers everything called on it and holds the
-`context_size` asked for, that the chat template is valid template code (a
+a context of your own answers everything called on it, holds the
+`context_size` asked for, and can shift its cache, cut its end or save a
+state, that the chat template is valid template code (a
 `ValueError` naming the line and the cause where it is not), that the
 generation prompt and the closing after a reply are where the template writes them and the closing begins with one of the
 model's tags, and whether tool calling works (`can_call_tools`). A setting
@@ -438,7 +439,11 @@ past midnight is decoded again once, from the date on.
 sampling it recommends, and the cache a conversation is decoded into, with the
 type one of its members takes: `Sampling`, from `llama_chat`.
 Nothing to subclass or register; the members are checked where the context is
-adopted, so a missing one is a `TypeError` from the constructor. The wrapper
+adopted, so a missing one is a `TypeError` from the constructor. A cache that
+can neither shift (`can_shift`), cut its end (`can_cut_tail`) nor save a state
+(`save_state` giving something other than `None`) is refused there with a
+`ValueError`: it could go back to an earlier point only by decoding the whole
+conversation again. The wrapper
 reads the [add-on file](#add-on-files) itself, by `model_path` where one is set
 and by the template `chat_template_text` gives, and merges the sampling, so a
 context of your own gets both as one the wrapper loads does;

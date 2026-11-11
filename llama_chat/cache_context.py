@@ -158,3 +158,23 @@ def ensure_answers(context, members: tuple[str, ...]) -> None:
     if missing:
         raise TypeError(f"{type(context).__name__} does not answer {missing}, "
                         "which this library calls on a cache context")
+
+
+def ensure_can_go_back(context) -> None:
+    """Refuse a context whose cache can neither shift, cut its end nor save a state.
+
+    Raises:
+        ValueError: If ``save_state`` gives ``None`` or raises where the cache
+            can neither shift nor cut.
+    """
+    if context.can_shift or context.can_cut_tail:
+        return
+    try:
+        state = context.save_state()
+    except RuntimeError:
+        state = None
+    if state is None:
+        raise ValueError(
+            f"{type(context).__name__} can neither shift its cache, cut its end nor save a "
+            "state, so it could go back to an earlier point only by decoding the whole "
+            "conversation again; let it do one of the three")
