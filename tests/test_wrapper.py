@@ -596,6 +596,36 @@ def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
     assert rows(w) == before
 
 
+def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
+    """Nothing in it can be evicted, since an eviction drops up to the next user message."""
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
+    w.begin("s", [("user", "hi"), ("assistant", "yo")])
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ContextOverflowError, match="no user message follows"):
+        w.begin("s", [("assistant", "x" * 200)] * 3)
+    assert w.conversation() == before and fake.cache == held
+    # With a later question, the replies before it are evicted instead.
+    w.begin("s", [("assistant", "x" * 200)] * 3 + [("user", "q"), ("assistant", "r")])
+    assert w.conversation()["messages"] == [("user", "q"), ("assistant", "r")]
+
+
+@pytest.mark.parametrize("history", [[], [("user", "q")]], ids=["no-question", "after-a-question"])
+def test_replies_injected_in_a_row_are_refused_once_they_no_longer_fit(history):
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
+    w.begin("s", history)
+    with pytest.raises(ContextOverflowError, match="no user message follows"):
+        for _ in range(8):
+            before, held = w.conversation(), list(fake.cache)
+            w.inject("y" * 150, role="assistant")
+            assert w.total_tokens <= w.config.evict_above_tokens
+    assert w.conversation() == before and fake.cache == held
+    w.inject("Und jetzt?")                      # a question lets them go
+    w.inject("y" * 150, role="assistant")
+    assert w.total_tokens <= w.config.evict_above_tokens
+
+
 # ----- construction / lifecycle --------------------------------------------
 def test_the_config_cannot_be_changed_once_a_wrapper_runs_with_it():
     """A change would not reach the context, already built with the old size."""

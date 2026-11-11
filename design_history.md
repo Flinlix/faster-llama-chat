@@ -2076,3 +2076,20 @@ drop already passed this on, so that the stretch is found and removed and the
 rest shifted; this one now does too. On the plain invented template the test
 asks the fourth question of a limit of two: the cache is shifted once, cut
 never, and 22 tokens are decoded where 44 were.
+
+**270.4: what no question follows is refused once it no longer fits.** An
+eviction drops the oldest exchange up to the next user message, so the
+messages after the newest user message, or every message of a history that
+holds none, can never be dropped while no question follows them. A `begin`
+with a history of replies alone, or replies injected one after another,
+therefore grew the cache past the context size (630 tokens in 500, and 1,320
+in 500, as measured for the decision). As settled with the user, replies
+before a later question are still evicted first; only where the conversation
+still renders longer than the eviction threshold after every exchange that
+can go was dropped is the action refused, with a `ContextOverflowError` that
+says no user message follows what is left, and the conversation and the
+cache stay as they were. The check, `_ensure_within`, runs where `begin` has
+dropped what it can and where `inject` has dropped for a message it does not
+splice; a question `inject` splices is a user message, which opens an
+exchange of its own. The threshold is the bound, as for a message checked
+alone, so that a reply has room under the context size.

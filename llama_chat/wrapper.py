@@ -136,7 +136,8 @@ class ChatWrapper:
             ContextOverflowError: If the system prompt and its declarations
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
-                on, cannot fit beside them.
+                on, cannot fit beside them, or ``messages`` hold no user
+                message and cannot fit beside them either.
             TypeError: If the system prompt or a history message's text is
                 not a ``str``, or a history item is of another form.
             ValueError: If a history message has another role, or a
@@ -189,8 +190,10 @@ class ChatWrapper:
                 been begun, if a tool call has left a reply open, or if the
                 template does not write such a message here.
             ContextOverflowError: If the message cannot fit even after
-                evicting every non-system message. Raised before anything is
-                evicted.
+                evicting every non-system message, raised before anything is
+                evicted; or if the conversation with it cannot fit once every
+                exchange that can go is evicted, since no user message follows
+                the rest.
         """
         ensure_role(role)
         ensure_text(text, "an injected message's text")

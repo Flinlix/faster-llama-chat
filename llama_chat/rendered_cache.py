@@ -258,6 +258,7 @@ class RenderedCache:
                     "fit beside the system prompt; shorten it or raise "
                     "context_size/evict_above_fraction")
             self._drop_while_over(limit, generation_prompt=False)
+            self._ensure_within(limit, "shorten the history")
             self._state.n_calls = sum(len(m.get("tool_calls") or ()) for m in self._state.messages)
             self._state.begun = False
             self._memory.reset()
@@ -410,6 +411,7 @@ class RenderedCache:
             if role != "user" or not fits or not self._splice(message, room):
                 self._state.messages.append(message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
+                self._ensure_within(limit, "shorten the message or inject a user message first")
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
@@ -727,6 +729,22 @@ class RenderedCache:
                 f"the system prompt and its declarations need {needed} tokens with a short "
                 f"question but the eviction threshold is {limit}; {remedy}, or raise "
                 "context_size/evict_above_fraction")
+
+    def _ensure_within(self, limit: int, remedy: str) -> None:
+        """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped.
+
+        What is left over then has no user message after it, and an eviction
+        drops only up to the next one.
+
+        Raises:
+            ContextOverflowError: With ``remedy`` as what to do instead.
+        """
+        needed = self._rendering.length(self._state.messages, generation_prompt=False)
+        if needed > limit:
+            raise ContextOverflowError(
+                f"the conversation needs {needed} tokens but the eviction threshold is "
+                f"{limit}, and the messages no user message follows cannot be evicted; "
+                f"{remedy}, or raise context_size/evict_above_fraction")
 
     def _with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
