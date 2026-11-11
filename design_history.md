@@ -1554,3 +1554,28 @@ as keeping thoughts in blocks they only print. Of the 52 test templates, only
 mistral-3-reasoning's form changed. The tests' own check of the cache renders
 each reply's thought in each of the three forms, written out in the tests,
 and accepts the cache where it matches one of them.
+
+**264.5: A thought's tags read from the model's own tags.** Three places
+that read a thought took a tag to be text in angle brackets: the empty
+thought a prompt without reasoning ends in was matched by a pattern of two
+`<...>` texts, the opening of a thought a template removes from a past reply
+was the closing's text with `</` replaced by `<`, and the last tag before a
+thought was the text from the run's last `<`. A model marking its thought as
+`◁think▷` slipped through all three. Each now reads the model's own tags: the
+empty thought is two of them at the prompt's end, the removed thought's
+opening is the tag that reads as its closing without the first slash, so
+`[/THINK]` and `◁/think▷` count as well, and the last tag is the last of them
+in the text. Over the 52 test templates nothing read changed. The stand-in
+tokenizer of the tests listed only the tags a template spells in its source;
+it now also lists those the template builds from parts and writes, as
+hunyuan-3 and hunyuan-4 build their thought tags, since a real vocabulary
+holds them too.
+
+A fourth place, the separator between two calls of one turn, finds each
+call's opening at a `<` inside the opening a template writes. It was left as
+it is: on deepseek-v4.1 the call opens with `<｜DSML｜ invoke`, which no tag of
+the stand-in vocabulary starts, and reading the model's tags there instead
+lost the separator and made the call's closing text run to the end of the
+turn, `</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜>` in place of
+`</｜DSML｜ invoke>`. Whether that model's vocabulary holds `<｜DSML｜` as a tag
+decides which reading is right; this waits for the user's decision.

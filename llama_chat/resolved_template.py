@@ -339,7 +339,7 @@ class ResolvedTemplate:
     def _resolve_reasoning(self) -> Reasoning | None:
         """What turns this model's reasoning on, recovered from its template."""
         render = self._render
-        found = extract_reasoning(render, self._fragments, self._tool_calls)
+        found = extract_reasoning(render, self._fragments, self._tool_calls, self._tag_texts)
         if found is None:
             found = extract_removed_thought(render, self._fragments, self._tag_texts)
         return found

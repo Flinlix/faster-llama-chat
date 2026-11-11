@@ -16,7 +16,6 @@ A pure function of the render callable, so it is testable without a model.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Iterable
 from typing import Callable
 
@@ -177,7 +176,8 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
 
 
 def extract_reasoning(render: Render, fragments: TemplateFragments,
-                      tool_calls: ToolCallFragments | None) -> Reasoning | None:
+                      tool_calls: ToolCallFragments | None,
+                      tags: tuple[str, ...]) -> Reasoning | None:
     """Recover what turns this template's reasoning on, and how a thought is marked.
 
     Args:
@@ -185,6 +185,7 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         fragments: The recovered turn tags.
         tool_calls: The recovered call tags, for a template that writes a
             thought only in a turn that calls a tool.
+        tags: The texts of the model's own tags.
 
     Returns:
         The reasoning, or ``None`` where the template marks no thought that can
@@ -192,10 +193,11 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         may, in every reply.
     """
     render = as_probes_read(render)
-    found = _thought_tags(render, fragments, tool_calls) or _empty_thought_tags(render)
+    found = (_thought_tags(render, fragments, tool_calls, tags)
+             or _empty_thought_tags(render, tags))
     if found is None:
         return None
-    tags, form = found
+    (thought_open, thought_close), form = found
     prompt = fragments.generation_prompt_without_reasoning
     messages = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
     on = render(messages, generation_prompt=True, reasoning=True)
@@ -205,8 +207,9 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         prompt = _prompt_added(render, True)
         if prompt is None:
             return None
-    return Reasoning(thought_open=tags[0], thought_close=tags[1], generation_prompt=prompt,
-                     can_turn_off=switches, **_past_thought(render, form))
+    return Reasoning(thought_open=thought_open, thought_close=thought_close,
+                     generation_prompt=prompt, can_turn_off=switches,
+                     **_past_thought(render, form))
 
 
 def extract_removed_thought(render: Render, fragments: TemplateFragments,
@@ -214,15 +217,15 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
     """The thought of a template that writes none but removes one from a past reply.
 
     Tried with each of the model's tags: the closing tag is the one after which
-    a past reply keeps only its answer, and the opening tag the one of the same
-    name without the slash. Such a template has no switch, so the model may
-    reason in every reply.
+    a past reply keeps only its answer, and the opening tag the one that reads
+    as the closing without its first slash. Such a template has no switch, so
+    the model may reason in every reply.
     """
     render = as_probes_read(render)
     known = set(tags)
     for close in tags:
-        opening = "<" + close[2:]
-        if not close.startswith("</") or opening not in known:
+        opening = close.replace("/", "", 1)
+        if opening == close or opening not in known:
             continue
         rendered = render([{"role": "user", "content": USER_SENTINEL},
                            {"role": "assistant", "content": _THOUGHT + close + ASSISTANT_SENTINEL},
@@ -233,19 +236,31 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
     return None
 
 
-def _empty_thought_tags(render: Render) -> tuple[tuple[str, str], None] | None:
+def _empty_thought_tags(render: Render, tags: tuple[str, ...]
+                        ) -> tuple[tuple[str, str], None] | None:
     """The tags of the empty thought only the generation prompt without reasoning ends in.
 
-    Read where a template writes no thought into a reply: two tags with nothing
-    but whitespace between them, which the prompt with reasoning lacks.
+    Read where a template writes no thought into a reply: two of the model's
+    ``tags`` with nothing but whitespace between them, which the prompt with
+    reasoning lacks.
     """
     off, on = _prompt_added(render, False), _prompt_added(render, True)
     if off is None or on is None or off == on:
         return None
-    found = re.search(r"(<[^<>\s]+>)\s*(<[^<>\s]+>)\s*$", off)
-    if found is None or found.group(1) == found.group(2) or on.endswith(found.group(0)):
+    close = _ending_tag(off, tags)
+    before = off.rstrip()[:-len(close)] if close else ""
+    opening = _ending_tag(before, tags)
+    if not close or not opening or opening == close:
         return None
-    return found.groups(), None
+    if on.endswith(off[len(before.rstrip()) - len(opening):]):
+        return None
+    return (opening, close), None
+
+
+def _ending_tag(text: str, tags: tuple[str, ...]) -> str:
+    """The longest of ``tags`` that ``text`` ends with, whitespace after it aside; empty where none."""
+    stripped = text.rstrip()
+    return max((tag for tag in tags if tag and stripped.endswith(tag)), key=len, default="")
 
 
 def _past_thought(render: Render, found_in: str | None) -> dict:
@@ -359,7 +374,7 @@ def _whole_prompt(render: Render, assistant_prefix: str) -> str:
 
 
 def _thought_tags(render: Render, fragments: TemplateFragments,
-                  tool_calls: ToolCallFragments | None
+                  tool_calls: ToolCallFragments | None, tags: tuple[str, ...]
                   ) -> tuple[tuple[str, str], str] | None:
     """The tags around a reply's thought, read from a newest reply that holds one, and the form it was read in.
 
@@ -396,7 +411,7 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
         else:
             thought_open = before[shared_tags_length(before, fragments.assistant_prefix):]
         if not thought_open.strip():
-            thought_open = _last_tag(before)
+            thought_open = _last_tag(before, tags)
         thought_close = rest.split(after, 1)[0] if after in rest else ""
         if thought_open.strip() and thought_close.strip():
             return (thought_open, thought_close), form
@@ -410,18 +425,11 @@ def _prints_blocks(turn: str, content) -> bool:
         for printed in (str(value), json.dumps(value)))
 
 
-def _last_tag(text: str) -> str:
-    """The last tag in ``text`` and what follows it.
-
-    A tag holds no whitespace, and of a run of tags written together the last
-    is the one that starts at the run's last ``<``.
-    """
-    stripped = text.rstrip()
-    if not stripped:
-        return ""
-    run = stripped.rsplit(None, 1)[-1]
-    start = len(stripped) - len(run) + max(run.rfind("<"), 0)
-    return text[start:]
+def _last_tag(text: str, tags: tuple[str, ...]) -> str:
+    """The last of the model's ``tags`` in ``text``, and what follows it; empty where none is."""
+    starts = [text.rfind(tag) for tag in tags if tag]
+    start = max(starts, default=-1)
+    return text[start:] if start >= 0 else ""
 
 
 # Characters a template may write otherwise in content, as an escaping filter does.

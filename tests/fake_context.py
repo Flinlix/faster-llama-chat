@@ -99,8 +99,8 @@ class FakeContext:
     first time it is met: a stand-in for a vocabulary that holds every tag,
     such as one closing each argument of a call. A tag typed into a message,
     which is tokenized with parsing off, stays its characters and cannot
-    become the model's own. The tags it lists are those the template spells,
-    and the opening of each closing tag among them. Where the fixture says
+    become the model's own. The tags it lists are those the template spells
+    or writes, and each closing tag among them without its slash. Where the fixture says
     ``adds_bos``, :data:`BOS` comes first where the opener is asked for.
 
     A generation is the library's own loop drawing, in this order: the next of
@@ -134,9 +134,9 @@ class FakeContext:
         self._adds_bos = fixture.get("adds_bos", False)
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: dict[int, str] = {}
-        found = set(TAG.findall(self._template))
+        found = set(TAG.findall(self._template)) | self._rendered_tags()
         self._listed = tuple(self._tag_token(tag) for tag in sorted(
-            found | {"<" + tag[2:] for tag in found if tag.startswith("</")}))
+            found | {tag.replace("/", "", 1) for tag in found if "/" in tag}))
         self._call_mark_tokens = None
         self.cache: list[int] = []
         self.can_shift = can_shift
@@ -178,6 +178,29 @@ class FakeContext:
             tokens.append(self._tag_token(found.group()))
             at = found.end()
         return tokens + [ord(c) for c in text[at:]]
+
+    def _rendered_tags(self) -> set[str]:
+        """The tag-shaped texts the template writes, those it builds from parts as well, in a conversation that holds every kind of turn."""
+        call = {"id": "call00000", "type": "function",
+                "function": {"name": "fn", "arguments": {"key": "value"}}}
+        conversation = [
+            {"role": "system", "content": "s"}, {"role": "user", "content": "u"},
+            {"role": "assistant", "content": "a", "reasoning_content": "t"},
+            {"role": "user", "content": "u"},
+            {"role": "assistant", "content": "", "tool_calls": [call, call]},
+            {"role": "tool", "name": "fn", "tool_call_id": "call00000", "content": "r"},
+            {"role": "user", "content": "u"}]
+        tools = [{"type": "function", "function": {"name": "fn", "description": "d",
+                                                   "parameters": {"type": "object"}}}]
+        found = set()
+        for mode in self._stated:
+            for messages in (conversation, conversation[:3]):
+                for generation_prompt in (False, True):
+                    rendered = self._model.render(messages, tools,
+                                                  generation_prompt=generation_prompt,
+                                                  variables=self._stated[mode])
+                    found |= set(TAG.findall(rendered or ""))
+        return found
 
     def _tag_token(self, tag: str) -> int:
         """The one token ``tag`` is, given an id of its own the first time it is met."""
