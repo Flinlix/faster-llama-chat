@@ -163,7 +163,9 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
 def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem):
     context, template = _load(stem)
     boundary = template.call_boundary()
-    assert boundary.opens_as_text == expected(fixture(stem), "call_opens_as_text")
+    opening = expected(fixture(stem), "call_opening_text")
+    assert boundary.opens_as_text == (opening is not None)
+    assert opening is None or boundary.call_texts[0] == opening
     if boundary.call_texts is None:
         return
     assert boundary.tool_tokens is None

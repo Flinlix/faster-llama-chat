@@ -21,7 +21,7 @@ _UNSTATED = {
     "turn_end_token": None,             # the text of the tag that ends a reply
     "turn_end_text": None,              # the text that ends a reply, where a call opens with the start of its closing
     "answer_opening": "",               # what a reply opens with before its answer
-    "call_opens_as_text": False,        # a call opens with plain text, no tag
+    "call_opening_text": None,          # the text a call opens with, where no tag opens it
     "writes_empty_reply": True,
     "can_take_system_prompt": True,     # no later question moves a system prompt
     "date_format": None,                # how the date is written, where the template reads the clock

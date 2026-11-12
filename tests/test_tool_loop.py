@@ -1619,17 +1619,17 @@ def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
     assert not wrapper.turn_open
 
 
-@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "call_opens_as_text")])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "call_opening_text")])
 def test_a_call_that_opens_with_plain_text_cannot_be_withheld_and_stays_text(stem):
     """No token opens it, so none can be kept from being drawn."""
     fake = FakeContext(fixture(stem))
     wrapper = ChatWrapper(Config(context_size=8192), context=fake)
     wrapper.begin("", tools=[WEATHER])
     reader = FakeContext(fixture(stem))
-    opener, body, _closer = written_call(ResolvedTemplate(reader), reader, WEATHER.name, {"city": "Bonn"})
+    _opener, body, _closer = written_call(ResolvedTemplate(reader), reader, WEATHER.name, {"city": "Bonn"})
     fake.replies = [ScriptedCall(body)]
     reply = wrapper.reply("Wetter?", tool_call_policy="withhold").finish()
-    assert reply.text.startswith(opener + WEATHER.name)
+    assert reply.text.startswith(expected(fixture(stem), "call_opening_text") + WEATHER.name)
     assert (reply.tool_calls, wrapper.turn_open) == ([], False)
 
 

@@ -10,7 +10,7 @@
   }
  },
  "turn_end_token": "<|eot_id|>",
- "call_opens_as_text": true,
+ "call_opening_text": "{\"name\": \"",
  "date_format": "%d %b %Y",
  "publisher": "meta",
  "everyday_words": [

@@ -2738,3 +2738,12 @@ the template's render, and the date tests run each such template a second
 time with a system prompt. The refused restart on a template that writes the
 date runs with and without one on every dated template that takes one, since
 it asserts no date.
+
+**T4: the opening of a call that opens with plain text is stated, not
+computed.** The tests of a call that opens with plain text took the opening
+they expected from the library's own reading of the template, so an opening
+the extraction found wrongly would have been expected wrongly too. Each such
+test template's file now states the opening under `call_opening_text`, which
+replaces the flag `call_opens_as_text`; `tests/test_real_templates.py` checks
+that the extraction finds that opening, and the tests that quote an opening
+or look for it in the cache read it from the file.

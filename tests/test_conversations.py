@@ -935,13 +935,13 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
 
 
 # ----- a call that opens with plain text ---------------------------------------------
-_TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opens_as_text")]
+_TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opening_text")]
 
 
 @pytest.mark.parametrize("stem", _TEXT_OPENED)
 def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
     # The template opens a call with plain text; a reply quoting it is still prose.
-    opener, _body, _closer = _call_body(_Run(stem), {"city": "x"})
+    opener = expected(_FIXTURES[stem], "call_opening_text")
     run = _Run(stem, replies=[f"Write {opener}x in the file."])
     run.begin()
     run.chat.reply("How do I name it?").finish()
@@ -954,8 +954,8 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     # What the model wrote before a call stays in the tokens its turn keeps, also
     # where the template writes no text beside a call, and the next call still reads.
     # A call that opens with plain text follows the tag the model writes first.
-    probe = _Run(stem)
-    opener, body, closer = _call_body(probe, {"city": "Bonn"})
+    _opener, body, closer = _call_body(_Run(stem), {"city": "Bonn"})
+    opener = expected(_FIXTURES[stem], "call_opening_text")
     run = _Run(stem, replies=["x"])
     before = "Once more. <|lead|>"
     run.context.replies = [ScriptedCall(body), ScriptedCall(body, before=before),
