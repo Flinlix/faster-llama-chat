@@ -3459,7 +3459,214 @@ a template that writes the results inside the turn, or writes earlier text
 otherwise once a result follows, it would have to be taken back when the
 result arrives.
 
-Not changed: `begin` with a history that ends on an owed call renders the
+Not changed here, and revised by "Second round of review fixes (final review
+F1 to F11)": `begin` with a history that ends on an owed call renders the
 conversation as it stands. On qwen-3, qwen-3-hermes and mistral-small-3.2 the
 result then takes back 50 to 66 tokens, by a cut or by restoring a saved
 state, and decodes them again.
+
+## 2026-11-12: Second round of review fixes (final review F1 to F11)
+
+### A reply's tokens cost the same at its end as at its start
+
+The hold code that keeps back what could still begin a call's opening asked,
+on every token of a template whose call opens with plain text (llama-3.2,
+minicpm-5, deepseek-v4.1), which token the text before the held part ended
+in, by scanning every earlier token. On the fake context, 8,000 generated
+tokens took 1.70 s instead of 0.03 s, the last tenth of them 0.37 s. Three
+further costs grew with the reply on every template: the decoded text, the
+accumulator's text and the answer behind the stop strings were each
+extended with `+=` on an attribute, which CPython copies whole every time
+(80,000 appends of five characters took 2.3 s, 40,000 took 0.43 s), and a
+call that closes with text joined all of its pieces on every token.
+
+Now the text buffer keeps only what is not shown yet, and tracks where the
+text ends without its trailing whitespace, so the hold code reads a bounded
+tail; the token a position falls in is found by binary search, and only
+where an opening may begin; the accumulated texts are lists joined when
+read; and a call that closes with text keeps only the end its closing may
+begin in. After the change, 80,000 tokens take 0.28 s to 0.40 s on every
+template, the last tenth about as long as the first. The test counts the
+library's bytecode steps per token, which does not depend on the machine:
+on every test template, in each reasoning mode and under each policy, the
+last eighth of a 400 token reply costs no more than 1.1 times the second
+eighth. Before the change it failed on the three templates above, in each
+of their reasoning modes and under each policy.
+
+### An empty description is not marked
+
+The split render marks each description so that a tag typed into it stays
+text. gemma-4 and gpt-oss leave out a `description` that is empty, so the
+marker for an empty one was written where the empty text was not, and
+`begin` refused the declarations as writing a message's text otherwise than
+in its place; before that marking, an empty description was accepted. Only a
+description with text is marked now: an empty one holds no tag to keep as
+text. The test declares a tool and a parameter with empty descriptions on
+every test template that calls tools; it failed on those two.
+
+### A cut result leaves room for the results still owed
+
+A result is cut to the room left, measured with the generation prompt. Where
+the model called twice and the first result was long, cutting it filled all
+of that room; the second result then did not fit even cut to nothing, so the
+turn closed and both results were dropped, and the model saw neither (fake
+context, 400 tokens, a first result of 5,000 characters and a second of 10).
+Now each result still owed after the one being written is measured with it,
+as the note a result cut to nothing carries, of a result as long as the one
+being written; the eviction before the cut measures the same. That stand-in
+is the smallest form a later result can take, short of being empty, so a
+later result whose note needs more digits than the stand-in's still does not
+fit, and the turn then closes as before. Reserving an empty result instead
+was rejected: a later result that does not fit whole is written with its
+note, so the room for an empty one would not take it.
+
+A turn closed for want of room also clears the list of cut results, which
+the next reply reported although the results it names were dropped with the
+turn.
+
+### When a reply ends on a call that could not be read
+
+The README said a reply ends with `"unreadable_tool_call"` only where the
+template has no result block. Since a call that cannot be read is answered
+under `"yield"` as well, a reply also ends so where the context has no room
+left for that answer: on the fake context, with every call unreadable and no
+reply cap, 15 failed calls and 390 tokens at a context of 2,048, 59 calls and
+1,534 tokens at 8,192, after which the question was taken back as well. The
+README row and the docstrings now say this. Whether the tries under
+`"yield"` get a limit of their own is the user's open decision; until then
+only the reply cap and the context bound them.
+
+### The reply cap covers the whole reply under every policy
+
+316.26 made the generations of one reply under `"yield"` share one
+`max_reply_tokens`; under `"refuse"` and a registry each generation still had
+a cap of its own. A caller that reads the cap as one for the reply, as a
+server's `max_tokens` is read, got more: a refused call and the answer after
+it gave 24 tokens for a cap of 12. Now every policy counts the generations of
+one `reply` together, each getting what the earlier ones left, and the one the
+cap cuts closes the turn with `"token_limit"`, as under `"yield"`. A reply
+that goes on with an open turn (`reply()` without text, after the results
+under `"yield"`) is a request of its own and has a cap of its own. The
+`Config` and `reply` docstrings and the README say this in one sentence. The
+README's row for `"yield"` also lost "as under a registry": under a registry
+`max_calls` bounds the tries after a call that cannot be read, under
+`"yield"` only the room left does.
+
+### Thread counts without a topology, and under a CPU quota
+
+Hardening of "Unset thread counts follow the processors"; which threads
+prefill takes by default stays the user's open decision.
+
+Where `/sys/devices/system/cpu` does not say which core a thread runs on
+(macOS, Windows, a container without `/sys`), every thread used to count as a
+core, so decode ran on every logical processor, which the measurement above
+shows to be the slower choice under load. The standard library has no count
+of physical cores, so the fallback is the one llama.cpp uses where it cannot
+read the topology either: every thread up to four, and half of them beyond.
+On a processor without simultaneous multithreading that leaves half the cores
+idle for decode; a `decode_threads` set by the caller still wins.
+
+A Linux CPU quota now bounds both counts: `cpu.max` under `/sys/fs/cgroup`
+(cgroup v2), else `cpu/cpu.cfs_quota_us` and `cpu/cpu.cfs_period_us` (v1).
+The bound is the quota divided by the period, rounded down, at least one, as
+the Rust standard library's `available_parallelism` counts it: llama.cpp's
+workers spin while they wait, so a thread beyond the quota is throttled rather
+than idle. Only the files at the top of `/sys/fs/cgroup` are read, which is
+the process's own cgroup inside a container with a cgroup namespace; on a
+host, the quota of a cgroup further down is not followed.
+
+### A value without quotes is read against every branch of its schema
+
+316.16 reads a value a call format writes without a type mark by the type its
+parameter declares, but only through a plain `type` field. A string parameter
+declared as `anyOf` a string or null, as pydantic writes an optional string,
+or through a `$ref`, still turned `01234` into `1234`. Now the types are
+collected from the schema and from every schema its `anyOf`, `oneOf` and
+`$ref` lead to, a `$ref` being followed where it points into the parameters'
+own schema (`#/$defs/...`, `#/definitions/...`, or any other path in it), and
+the rule stays as it was: the text is kept where some branch asks for a string
+and none for the literal it spells. An `enum` of any branch that lists the
+text keeps it too, and the parts of an object or a list are read against the
+matching parts of every branch. A `$ref` that leads back to a schema already
+on the path is not followed again, so a recursive schema ends. A `$ref` that
+points outside the schema contributes no type: with no branch asking for a
+string the value is the literal it spells, as before. `allOf` is not read;
+the schemas the registry writes use none of these keywords.
+
+### Closing a turn for want of room is one action
+
+`close_unanswered` takes out the results written for the newest calls, drops
+the calls and publishes that before it settles the cache, outside an action.
+Where the settle failed, `inject_tool_result` raised with the turn half closed:
+the call no longer owed, its reply empty, against principle 5. It now runs as
+one action, so a failure puts the conversation and the cache back with the
+call still owed. The test fails the cache at each of its operations while a
+result closes the turn, and checks that the conversation is as before and
+goes on.
+
+### A long result on a cache that cannot shift drops only the history it needs
+
+Where the cache cannot shift, an eviction brings the conversation down to
+what a short question alone takes plus half the room after it (266.3), so
+that the cache is decoded again only every few turns. A result that needs
+room drops the oldest exchanges the same way, the open turn kept whole. Where
+the open turn alone takes more than that bound, which a result longer than
+about half the room does, no eviction reaches it, and every exchange went:
+on gemma-4, 24 of 24 history items at a context of 3,000, where a cache
+that shifts dropped 4 for the same result. Now, for a result, where the system turn and the open turn
+alone pass the usual bound, the bound is what they take plus half the room
+after them: the history kept is well below the room the open turn leaves it.
+Where the open turn stays under the usual bound, nothing changes. Measured on
+the fake context, context 3,000, 12 padded exchanges, a result 100 tokens
+longer than the room left: 2 to 14 of 24 items go on the 41 test templates
+that call tools, instead of all 24 on most of them. The reply to the result is
+then generated with the newest history in view.
+
+What it costs: the history kept is decoded again once, after the cut, where
+before only the open turn's question and call were (gemma-4: 579 tokens
+instead of 100). The reply's own eviction afterwards is unchanged: the
+conversation then passes the eviction threshold, and on a cache that cannot
+shift that eviction may still drop everything, the long turn included, so
+the history kept serves the reply to the result. The rolling memory holds:
+over 8 turns, every fourth with a result longer than the room left, a cache
+that cannot shift decodes more than one shifting does (by more than two
+exchanges and 80 tokens) in at most a third of the turns, on every test
+template that calls tools, for a cache that cuts and for one that only
+restores saved states.
+
+Found while testing, not changed: on a cache that can neither shift nor cut,
+a template that writes the declarations before the newest question
+(mistral-small-3.2, ministral-2410) decodes every tool turn of the
+conversation again on each turn (5 turns: 321, 406, 503, 600, 697 tokens,
+against 214 each on a cache that shifts; plain exchanges cost 236 each). A
+tool turn rests the cache after the call and after each result, and the two
+newest saved states then no longer include the one saved before the
+declarations, so the reply's settling goes back to the state pinned after the
+system turn. The test marks those two cases as expected to fail.
+
+### A history that ends on an owed call is decoded only as far as the results leave it
+
+Follows "While a call is owed, the cache ends with its turn", whose "Not
+changed" note this replaces. `begin` with a history that ends on a call
+still owed a result decoded the conversation as the template renders it
+without the result. qwen-3 and qwen-3-hermes then write an empty thought
+before the call, since the call is the last message, and drop it once a
+result follows; mistral-small-3.2 leaves out the declarations before the
+question until a result follows. The result then took back 50 to 66 tokens,
+by a cut or by restoring a saved state, and decoded them again (6 of 148
+cases: each tool template, each reasoning mode, a cache that shifts and one
+that cannot). Where some results of the round were in the history and one was
+still owed, it was worse: the history ended on a result, so `begin` decoded
+the generation prompt after it, which the next result took back, on most of
+the templates that call tools.
+
+Now `begin` with a call owed decodes the render only as far as it agrees
+with the render that has a stand-in result for each owed call, to the last
+token both share. The results then only append: the rest of the call's turn,
+each result and the generation prompt are decoded once, with the last result,
+as after a live call. The end-of-test check accepts a cache that holds an
+owed call and no kept turn only where it ends exactly there, and its own test
+shows that it fails on such a cache one token off. Measured with the same 148
+cases and with one result of two already in the history, on every test
+template that calls tools in each reasoning mode: no cut, no restore, and
+every token decoded after `begin` is one the cache keeps.
