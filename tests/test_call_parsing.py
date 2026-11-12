@@ -39,6 +39,33 @@ def test_a_value_written_without_a_type_mark_keeps_its_spelling_where_the_schema
     assert all(type(value) is str for value in [call.arguments["text"], *call.arguments["items"]])
 
 
+_TEXT_OR_NOTHING = [{"type": "string"}, {"type": "null"}]
+
+
+@pytest.mark.parametrize("text, items, definitions, read_as", [
+    ({"anyOf": _TEXT_OR_NOTHING}, {"type": "array", "items": {"anyOf": _TEXT_OR_NOTHING}}, {},
+     "01234"),
+    ({"oneOf": _TEXT_OR_NOTHING}, {"anyOf": [{"type": "array", "items": {"oneOf": _TEXT_OR_NOTHING}},
+                                             {"type": "null"}]}, {}, "01234"),
+    ({"$ref": "#/$defs/Text"}, {"type": "array", "items": {"$ref": "#/$defs/Text"}},
+     {"$defs": {"Text": {"anyOf": _TEXT_OR_NOTHING}}}, "01234"),
+    ({"$ref": "#/definitions/Text"}, {"$ref": "#/definitions/Texts"},
+     {"definitions": {"Text": {"anyOf": _TEXT_OR_NOTHING},
+                      "Texts": {"type": "array", "items": {"$ref": "#/definitions/Text"}}}},
+     "01234"),
+    # A branch that asks for the number it spells reads it as that number.
+    ({"anyOf": [{"$ref": "#/$defs/Number"}, {"$ref": "#/$defs/Text"}]},
+     {"type": "array", "items": {"type": ["string", "null"]}},
+     {"$defs": {"Number": {"type": "number"}, "Text": {"type": "string"}}}, 1234),
+], ids=["any-of", "one-of", "ref-to-defs", "ref-to-definitions", "any-of-refs"])
+def test_a_value_written_without_a_type_mark_keeps_its_spelling_where_any_branch_asks_for_text(
+        text, items, definitions, read_as):
+    schema = {"say": {"type": "object", "properties": {"text": text, "items": items},
+                      **definitions}}
+    call, = parse_calls("fn:say{text:01234,items:[01234,null]}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"text": read_as, "items": ["01234", None]}
+
+
 def test_a_value_written_without_a_type_mark_is_the_literal_it_spells_where_the_schema_allows_it():
     schema = {"set": {"type": "object", "properties": {
         "n": {"type": "integer"}, "x": {"type": ["string", "null"]},

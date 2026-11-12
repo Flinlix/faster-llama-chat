@@ -55,7 +55,8 @@ def parse_calls(body: str, call_body: CallBody | None,
         if _nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
             raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
     schemas = parameters or {}
-    return [replace(call, arguments=_typed(call.arguments, schemas.get(call.name)))
+    return [replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
+                                           schemas.get(call.name)))
             for call in calls]
 
 
@@ -254,30 +255,56 @@ class _Unmarked(str):
     """A value a call format wrote without marking its type, read by :func:`_typed`."""
 
 
-def _typed(value, schema) -> Any:
-    """``value`` with each :class:`_Unmarked` text in it read against the part of ``schema`` it fills."""
-    schema = schema if isinstance(schema, dict) else {}
+def _typed(value, schema, root) -> Any:
+    """``value`` with each :class:`_Unmarked` text in it read against the part of ``schema`` it fills, ``root`` holding what a ``$ref`` names."""
+    branches = _branches(schema, root, frozenset())
     if isinstance(value, _Unmarked):
-        return _read_unmarked(str(value), schema)
+        return _read_unmarked(str(value), branches)
     if isinstance(value, dict):
-        properties = schema.get("properties")
-        properties = properties if isinstance(properties, dict) else {}
-        return {key: _typed(item, properties.get(key, schema.get("additionalProperties")))
-                for key, item in value.items()}
+        def part(key):
+            return {"anyOf": [_properties(branch).get(key, branch.get("additionalProperties"))
+                              for branch in branches]}
+        return {key: _typed(item, part(key), root) for key, item in value.items()}
     if isinstance(value, list):
-        return [_typed(item, schema.get("items")) for item in value]
+        items = {"anyOf": [branch.get("items") for branch in branches]}
+        return [_typed(item, items, root) for item in value]
     return value
 
 
-def _read_unmarked(text: str, schema: dict) -> Any:
-    """``text`` as the literal it spells, unless ``schema`` asks for text and not for that literal."""
-    choices = schema.get("enum")
-    if isinstance(choices, list) and text in choices:
-        return text
+def _branches(schema, root, seen: frozenset[int]) -> list[dict]:
+    """``schema`` and every schema its ``anyOf``, ``oneOf`` and ``$ref`` into ``root`` lead to, each once along a path."""
+    if not isinstance(schema, dict) or id(schema) in seen:
+        return []
+    seen = seen | {id(schema)}
+    found = [schema]
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        target = root
+        for name in ref[2:].split("/"):
+            name = name.replace("~1", "/").replace("~0", "~")
+            target = target.get(name) if isinstance(target, dict) else None
+        found += _branches(target, root, seen)
+    for key in ("anyOf", "oneOf"):
+        if isinstance(schema.get(key), list):
+            found += [branch for item in schema[key] for branch in _branches(item, root, seen)]
+    return found
+
+
+def _properties(schema: dict) -> dict:
+    properties = schema.get("properties")
+    return properties if isinstance(properties, dict) else {}
+
+
+def _read_unmarked(text: str, branches: list[dict]) -> Any:
+    """``text`` as the literal it spells, unless one of ``branches`` asks for text and none for that literal."""
+    allowed = set()
+    for branch in branches:
+        choices = branch.get("enum")
+        if isinstance(choices, list) and text in choices:
+            return text
+        kind = branch.get("type")
+        allowed |= {kind} if isinstance(kind, str) else set(kind) if isinstance(kind, list) else set()
     literal = _literal(text)
-    allowed = schema.get("type")
-    allowed = {allowed} if isinstance(allowed, str) else set(allowed) \
-        if isinstance(allowed, list) else set()
     if "string" in allowed and not allowed & _json_types(literal):
         return text
     return literal
