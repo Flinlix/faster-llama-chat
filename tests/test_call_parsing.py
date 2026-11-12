@@ -28,6 +28,25 @@ def test_a_call_parses_into_a_name_and_typed_arguments():
                                        "all_day": False})
 
 
+@pytest.mark.parametrize("written", ["01234", "1e5", "nan", "True", "None", "null"])
+def test_a_value_written_without_a_type_mark_keeps_its_spelling_where_the_schema_asks_for_text(
+        written):
+    schema = {"say": {"type": "object", "properties": {"text": {"type": "string"},
+                                                       "items": {"type": "array",
+                                                                 "items": {"type": "string"}}}}}
+    call, = parse_calls(f"fn:say{{text:{written},items:[01234,nan]}}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"text": written, "items": ["01234", "nan"]}
+    assert all(type(value) is str for value in [call.arguments["text"], *call.arguments["items"]])
+
+
+def test_a_value_written_without_a_type_mark_is_the_literal_it_spells_where_the_schema_allows_it():
+    schema = {"set": {"type": "object", "properties": {
+        "n": {"type": "integer"}, "x": {"type": ["string", "null"]},
+        "on": {"type": ["boolean", "string"]}, "pick": {"enum": ["01", 2]}}}}
+    call, = parse_calls("fn:set{n:01234,x:null,on:true,pick:01,free:2}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"n": 1234, "x": None, "on": True, "pick": "01", "free": 2}
+
+
 def test_a_quoted_argument_may_hold_the_separators():
     call, = parse_calls("fn:say{text:'a,b:c{d}'}", CALL_BODY, "fn:")
     assert call.arguments == {"text": "a,b:c{d}"}

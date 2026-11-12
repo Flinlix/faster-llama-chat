@@ -498,8 +498,12 @@ class ResolvedTemplate:
                             turn_end_text=self._boundary.turn_end_text,
                             withheld_tokens=(tokens[0],) if tokens and withhold else ())
 
-    def read_calls(self, generated_call_text: str) -> list[ToolCall]:
+    def read_calls(self, generated_call_text: str,
+                   parameters: dict[str, dict] | None = None) -> list[ToolCall]:
         """The calls in what a model generated between a call's opening and its closing.
+
+        ``parameters`` is the parameter schema of each declared tool, by its
+        name, as :func:`~llama_chat.call_parsing.parse_calls` reads it.
 
         Raises:
             ValueError: If the text is not a call this model's format reads.
@@ -507,7 +511,7 @@ class ResolvedTemplate:
         text = generated_call_text
         if self._boundary.call_texts is not None:
             text = self._call_lead_in + text    # the opening text holds the lead-in's start
-        return parse_calls(text, self._call_body, self._call_lead_in)
+        return parse_calls(text, self._call_body, self._call_lead_in, parameters)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
         """Whether a plain-text opening begins with text of a reply's own opening.

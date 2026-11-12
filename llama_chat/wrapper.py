@@ -911,7 +911,9 @@ class ChatWrapper:
         if generated.stop_reason != "tool_call":
             return []
         try:
-            return self._template.read_calls(generated.tool_call)
+            return self._template.read_calls(
+                generated.tool_call,
+                {spec.name: spec.parameters for spec in self._conversation.tools})
         except ValueError:
             return []
 

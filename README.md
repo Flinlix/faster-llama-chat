@@ -244,8 +244,10 @@ values (`str | None`), choices (`Literal["c", "f"]`) and enums are described,
 with each default, and `Annotated[str, "the city"]` describes a parameter in
 words. Before a tool runs, the model's arguments are checked against those
 types, so arguments that do not fit are told to the model, which may try
-again; a number where text is asked is taken as the text it was written as,
-and an enum's value reaches the function as its member. A function that is
+again. A value that a call format writes without marking its type is read by
+the type declared for it, so text keeps its spelling (`01234` stays
+`"01234"`); a number where text is asked is taken as the text it was written
+as, and an enum's value reaches the function as its member. A function that is
 asynchronous, takes a parameter only by position, or has no description is
 refused when it is registered. A registry lists its tools, so
 `begin(tools=registry)` declares them; `registry.specs()` gives each tool's

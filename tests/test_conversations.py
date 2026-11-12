@@ -892,6 +892,22 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     assert before_thanks.rsplit(answer, 1)[1] == after.rsplit(answer, 1)[1]
 
 
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_text_argument_reaches_the_caller_as_the_model_spelled_it(stem):
+    """A format that marks no strings writes text that reads as a number or a literal; the declared type decides."""
+    spellings = ["01234", "1e5", "nan", "True", "None"]
+    run = _Run(stem)
+    run.context.replies = [ScriptedCall(_call_body(run, {"city": city})[1]) for city in spellings]
+    run.begin(tools=[WEATHER])
+    for city in spellings:
+        calls = [e for e in run.chat.reply("Weather?" if city == spellings[0] else None,
+                                            tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": city})]
+        run.chat.inject_tool_result(calls[0], "sunny")
+    run.chat.reply().finish()
+
+
 # ----- a tag typed into any text stays text ----------------------------------------
 def _expected_tokens(run, messages, tools=None):
     """The render tokenized as the model must hold it, worked out here on its own: the template's text with its tags, each text of the caller's as plain text."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import replace
 from typing import Any
 
 from .template import CallBody
@@ -21,7 +22,7 @@ MAX_ARGUMENT_DEPTH = 100
 
 
 def parse_calls(body: str, call_body: CallBody | None,
-                lead_in: str = "") -> list[ToolCall]:
+                lead_in: str = "", parameters: dict[str, dict] | None = None) -> list[ToolCall]:
     """Read the calls out of the text a model generated between its call tags.
 
     A body that is JSON names itself and needs no ``call_body``; anything else
@@ -32,6 +33,10 @@ def parse_calls(body: str, call_body: CallBody | None,
         call_body: This model's argument spelling, or ``None`` where only the
             JSON shape can be read.
         lead_in: Fixed text the model writes before the function name.
+        parameters: The parameter schema of each declared tool, by its name.
+            A value written without a type mark is text where its schema asks
+            for text and not for the literal it spells, and that literal
+            otherwise.
 
     Returns:
         One :class:`ToolCall` per call, in the order the model wrote them.
@@ -49,7 +54,9 @@ def parse_calls(body: str, call_body: CallBody | None,
     for call in calls:
         if _nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
             raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
-    return calls
+    schemas = parameters or {}
+    return [replace(call, arguments=_typed(call.arguments, schemas.get(call.name)))
+            for call in calls]
 
 
 def _read_calls(body: str, call_body: CallBody | None, lead_in: str) -> list[ToolCall]:
@@ -241,6 +248,44 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
                     for item in _split_on(text[1:-1], call_body.pair_sep, call_body)]
         except ValueError:
             return text             # a string a template wrote as it stands
+    return _Unmarked(text)
+
+
+class _Unmarked(str):
+    """A value a call format wrote without marking its type, read by :func:`_typed`."""
+
+
+def _typed(value, schema) -> Any:
+    """``value`` with each :class:`_Unmarked` text in it read against the part of ``schema`` it fills."""
+    schema = schema if isinstance(schema, dict) else {}
+    if isinstance(value, _Unmarked):
+        return _read_unmarked(str(value), schema)
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        return {key: _typed(item, properties.get(key, schema.get("additionalProperties")))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_typed(item, schema.get("items")) for item in value]
+    return value
+
+
+def _read_unmarked(text: str, schema: dict) -> Any:
+    """``text`` as the literal it spells, unless ``schema`` asks for text and not for that literal."""
+    choices = schema.get("enum")
+    if isinstance(choices, list) and text in choices:
+        return text
+    literal = _literal(text)
+    allowed = schema.get("type")
+    allowed = {allowed} if isinstance(allowed, str) else set(allowed) \
+        if isinstance(allowed, list) else set()
+    if "string" in allowed and not allowed & _json_types(literal):
+        return text
+    return literal
+
+
+def _literal(text: str) -> Any:
+    """The JSON or Python literal ``text`` spells, or ``text`` itself where it spells none."""
     # Both spellings: JSON literals, and a template interpolating Python ones.
     if text in ("true", "false", "True", "False"):
         return text.lower() == "true"
@@ -252,6 +297,17 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
         except ValueError:
             pass
     return text
+
+
+def _json_types(value) -> set[str]:
+    """The JSON Schema types ``value`` satisfies."""
+    if value is None:
+        return {"null"}
+    if isinstance(value, bool):
+        return {"boolean"}
+    if isinstance(value, int):
+        return {"integer", "number"}
+    return {"number"} if isinstance(value, float) else {"string"}
 
 
 def _parse_elements(text: str, call_body: CallBody) -> Any:
