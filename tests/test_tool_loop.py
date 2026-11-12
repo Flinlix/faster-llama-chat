@@ -950,6 +950,25 @@ def test_retrying_an_unreadable_call_under_yield_is_bounded_by_the_reply_cap():
     assert reply.stop_reason == "token_limit" and not wrapper.turn_open
 
 
+@pytest.mark.parametrize("cap_from", ["request", "config"])
+@pytest.mark.parametrize("policy", ["refuse", "registry", "yield"])
+def test_the_reply_cap_bounds_every_generation_of_a_reply_together(policy, cap_from):
+    fake = FakeContext(TOOLS, gen_tokens=80)
+    wrapper = ChatWrapper(Config(context_size=2048, evict_above_fraction=0.9,
+                                 max_reply_tokens=40 if cap_from == "config" else None),
+                          context=fake)
+    wrapper.begin("persona")
+    # Under "yield" only a call that cannot be read is answered within the reply.
+    fake.call_script = ["fn:nonsense with no name" if policy == "yield" else 'fn:weather{"city":"Bonn"}']
+
+    reply = wrapper.reply("wie spät?", tool_call_policy=(
+        weather_registry() if policy == "registry" else policy),
+        max_reply_tokens=40 if cap_from == "request" else None).finish()
+
+    assert len(reply.tool_calls) == 1 and not fake.call_script     # a call, then text
+    assert reply.n_generated_tokens == 40 and reply.stop_reason == "token_limit"
+
+
 def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")

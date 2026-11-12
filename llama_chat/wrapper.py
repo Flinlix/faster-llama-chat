@@ -277,8 +277,7 @@ class ChatWrapper:
                   is parted from the text before the call as under
                   ``"refuse"``. A call that cannot be read is answered with a
                   failure and the reply goes on; the model may write another
-                  call as long as there is room, all its generations within
-                  one ``max_reply_tokens``.
+                  call as long as there is room.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
@@ -290,9 +289,9 @@ class ChatWrapper:
                 going on with a turn, keeps what is left of the turn's; a call
                 past one is answered with an error result rather than run. Only
                 with a registry.
-            max_reply_tokens: This request's cap on tokens per generation, in
-                place of the config's; under ``"yield"``, on the generations
-                of the reply together.
+            max_reply_tokens: This request's cap on the tokens of the reply,
+                every generation of it together, a thought included, in place
+                of the config's.
             stop: Texts that end the answer, matched against the answer
                 only. Read when this is called, so a later change to the list
                 changes nothing.
@@ -667,7 +666,8 @@ class ChatWrapper:
     # ----- internals -----------------------------------------------------------
     def _generate_until_answered(
         self, text: str | None, *, policy: ToolRegistry | ToolCallPolicy, budget: _CallBudget,
-        on_started: Callable[[], None], **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        on_started: Callable[[], None], max_reply_tokens: int | None,
+        **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
 
         Each call that runs is handed over in the stream before it runs. The
@@ -681,7 +681,7 @@ class ChatWrapper:
             budget: The calls the turn may still run. Nothing is run under
                 ``"refuse"``, so it does not bind there.
             on_started: As :meth:`_generate`, for the first generation.
-            text, **kwargs: As :meth:`reply`.
+            text, max_reply_tokens, **kwargs: As :meth:`reply`.
 
         Raises:
             ValueError: If ``policy`` is a registry holding tools this model
@@ -694,15 +694,20 @@ class ChatWrapper:
             self._template.ensure_tools_usable()
         any_call_asked = self._conversation.turn_open      # a turn going on has called
         open_turn_text = self._open_turn_text()
+        reply_cap = self._reply_cap(max_reply_tokens)
+        generations: list[Reply] = []
 
         def may_call_after_unreadable() -> bool:
             """Whether a call is read again after an unreadable one, which spends one."""
             return registry is not None and budget.calls_left > 1
 
+        def tokens_left() -> int:
+            """What the reply cap leaves the next generation."""
+            return max(0, reply_cap - sum(g.n_generated_tokens for g in generations))
+
         deltas = self._generate(text, recognizes_calls=True,
                                 may_call_again=may_call_after_unreadable(),
-                                on_started=on_started, **kwargs)
-        generations: list[Reply] = []
+                                max_reply_tokens=reply_cap, on_started=on_started, **kwargs)
         try:
             while True:
                 generation = yield from self._read_generation(
@@ -721,7 +726,7 @@ class ChatWrapper:
                             budget.calls_left -= 1
                         deltas = self._generate_round(
                             registry is not None and budget.calls_left > 0,
-                            may_call_after_unreadable(), **kwargs)
+                            may_call_after_unreadable(), max_reply_tokens=tokens_left(), **kwargs)
                         continue
                     # The ceiling binds only once a call has been asked for:
                     # without one the last generation kept its call tokens.
@@ -744,7 +749,8 @@ class ChatWrapper:
                         generations[-1], stop_reason="token_limit",
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
-                deltas = self._generate_round(may_call_again, may_call_after_unreadable(), **kwargs)
+                deltas = self._generate_round(may_call_again, may_call_after_unreadable(),
+                                              max_reply_tokens=tokens_left(), **kwargs)
         finally:
             deltas.close()
 
@@ -866,7 +872,9 @@ class ChatWrapper:
         the turn open for a result. The lock must be held.
 
         Args:
-            text, max_reply_tokens, stop, cancel: As :meth:`reply`.
+            text, stop, cancel: As :meth:`reply`.
+            max_reply_tokens: The cap on this generation's tokens, ``None``
+                for the config's.
             sampling: Every value the generation draws with.
             recognizes_calls: ``False`` leaves a call the model writes as text,
                 so this generation cannot end on a call and the turn is certain
@@ -930,7 +938,7 @@ class ChatWrapper:
         )
 
     def _reply_cap(self, max_reply_tokens: int | None) -> int:
-        """The cap on a generation's tokens: ``max_reply_tokens``, else the config's, else the context's size."""
+        """The cap on a reply's tokens: ``max_reply_tokens``, else the config's, else the context's size."""
         return next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
                     self._config.context_size)
 
