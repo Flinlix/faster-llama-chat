@@ -244,9 +244,10 @@ class RenderedCache:
               reasoning: bool) -> int:
         """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context; how many items were kept.
 
-        A history that ends on a call keeps it owed a result. ``tools`` other
-        than ``None``, even empty, writes the conversation with the model's
-        template for tools.
+        A history that ends on a call keeps it owed a result, and the cache
+        holds the render only as far as the results cannot change it.
+        ``tools`` other than ``None``, even empty, writes the conversation with
+        the model's template for tools.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations leave
@@ -289,7 +290,9 @@ class RenderedCache:
             self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._memory.pin(self._rendering.opening_length(self._system_part()))
-            if self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
+            if self.pending_calls:
+                self._sync(self._settled_while_owed(), logits=False)
+            elif self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 prompted = self._prompted()
                 opening = self._prompt_text_start(prompted.tokens)
                 if opening < len(prompted.tokens):
@@ -298,13 +301,20 @@ class RenderedCache:
                     self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False)
                     self._memory.rest()
                 self._sync(prompted)
-            elif self.pending_calls:
-                self._sync(self._rendering.target(self._state.messages, generation_prompt=False))
             else:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
             return kept_items(history, len(self._state.messages) - len(self._system_part()))
+
+    def _settled_while_owed(self) -> Target:
+        """The render of the conversation as far as the results still owed cannot change it: what the cache holds until they are in."""
+        standing = self._rendering.target(self._state.messages, generation_prompt=False)
+        answered = self._rendering.target(
+            self._state.messages + [result_message(call.name, call_id, STAND_IN)
+                                    for call, call_id in _unanswered(self._state.messages)],
+            generation_prompt=False)
+        return Target(standing.tokens[:common_prefix_length(standing.tokens, answered.tokens)], {})
 
     def _keep_newest_history(self, bound: int) -> None:
         """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.

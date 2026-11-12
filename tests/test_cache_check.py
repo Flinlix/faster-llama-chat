@@ -2,7 +2,7 @@
 
 import pytest
 
-from llama_chat.tools import ToolCall
+from llama_chat.tools import ToolCall, ToolTurn
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)
@@ -33,6 +33,13 @@ def _with_a_kept_turn():
     return w, fake
 
 
+def _owed_from_a_history():
+    w, fake = tool_wrapper()
+    w.begin("persona", [("user", "wie spät?"), ToolTurn((ToolCall("clock", {}),))])
+    assert w.pending_calls
+    return w, fake
+
+
 def _one_token_off(tokens):
     """Every list one token away from ``tokens``: one inserted, removed or replaced at each position."""
     for at in range(len(tokens) + 1):
@@ -42,8 +49,9 @@ def _one_token_off(tokens):
             yield tokens[:at] + [_MARK] + tokens[at + 1:]
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn],
-                         ids=["plain", "reasoning", "kept-turn"])
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+                                          _owed_from_a_history],
+                         ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
         conversation, _the_cache_reads_as_the_template_renders_the_conversation):
     w, fake = conversation()
@@ -56,8 +64,9 @@ def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
     fake.cache = sound
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn],
-                         ids=["plain", "reasoning", "kept-turn"])
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+                                          _owed_from_a_history],
+                         ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_same_or_stops_short(
         conversation):
     w, fake = conversation()
@@ -73,8 +82,9 @@ def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_sam
     overwrite_held_tokens(w, sound)
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn],
-                         ids=["plain", "reasoning", "kept-turn"])
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+                                          _owed_from_a_history],
+                         ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_that_reads_the_same_with_its_tags_held_as_their_letters_is_caught(conversation):
     w, fake = conversation()
     sound = list(fake.cache)

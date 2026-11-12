@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import os
 import re
 
 from llama_chat.config import Config
@@ -172,7 +173,9 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     first, as the next action would bring it back. While a call is owed a
     result, what the template writes after the newest kept turn is decoded
     with the results, so a cache that ends with that turn reads as the render
-    of the conversation with its results up to it.
+    of the conversation with its results up to it; one that holds no kept
+    turn reads as far as that render and the render without the results
+    agree, to the last whole token.
     """
     internals.bring_cache_back(wrapper)
     assert fake.cache == internals.held_tokens(wrapper), \
@@ -188,11 +191,17 @@ def assert_cache_reads_as_rendered(wrapper, fake):
                 messages[i] = {**messages[i], "content": ""}
     owed = wrapper.pending_calls
     answered = messages + [result_message(call.name, call.id, "stand-in") for call in owed]
-    renders = [render for written in ([messages, answered] if owed else [messages])
-               for render in held_renders(fake, written, internals.declarations(wrapper),
-                                          reasoning=internals.reasons(wrapper),
-                                          for_tools=internals.uses_tool_template(wrapper),
-                                          typed=True)]
+    standing, completed = (held_renders(fake, written, internals.declarations(wrapper),
+                                        reasoning=internals.reasons(wrapper),
+                                        for_tools=internals.uses_tool_template(wrapper),
+                                        typed=True)
+                           for written in (messages, answered))
+    if owed and not internals.kept_turns(wrapper):
+        assert typed_text(fake, fake.cache) in [_shared_whole_tokens(one, other)
+                                                for one in standing for other in completed], \
+            "the cache does not read as the template renders the conversation while a call is owed"
+        return
+    renders = standing + (completed if owed else [])
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
     kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
@@ -205,6 +214,12 @@ def assert_cache_reads_as_rendered(wrapper, fake):
         assert placed is not None, "a turn kept as generated was lost"
         assert placed[0] < placed[1], \
             "a turn kept as generated stands in for none of the template's text"
+
+
+def _shared_whole_tokens(one: str, other: str) -> str:
+    """The start two typed renders share, ending before a tag it would cut in two."""
+    shared = os.path.commonprefix([one, other])
+    return shared[:shared.rfind(_TAG_MARK)] if shared.count(_TAG_MARK) % 2 else shared
 
 
 def _reply_closing(fake, reasoning: bool) -> str:

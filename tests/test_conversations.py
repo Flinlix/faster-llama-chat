@@ -876,6 +876,28 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
     assert evicted
 
 
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("answered", [0, 1], ids=["none-answered", "one-answered"])
+@pytest.mark.parametrize("stem, reasoning", _each_mode(_TOOL_TEMPLATES))
+def test_a_result_owed_to_a_call_a_history_ends_on_only_adds_to_the_cache(
+        stem, reasoning, answered, can_shift):
+    run = _Run(stem, reasoning=reasoning, can_shift=can_shift)
+    calls = (ToolCall(WEATHER.name, {"city": "Bonn"}), ToolCall(WEATHER.name, {"city": "Rom"}))
+    owed = ToolTurn(calls + (ToolResult(WEATHER.name, "sunny"),) * answered)
+    try:
+        run.begin([("user", "Weather?"), owed], tools=[WEATHER])
+    except ValueError as refused:       # a template that writes no call without its result
+        assert "refuses" in str(refused)
+        return
+    assert_cache_reads_as_rendered(run.chat, run.context)
+    held, edits, decoded = list(run.context.cache), len(run.context.edits), run.context.total_prefilled()
+    for call in run.chat.pending_calls:
+        run.chat.inject_tool_result(call, "sunny")
+    assert run.context.cache[:len(held)] == held
+    assert [edit for edit in run.context.edits[edits:] if edit[0] != "shift"] == []
+    assert run.context.total_prefilled() - decoded == len(run.context.cache) - len(held)
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_shortened_reply_is_kept_as_the_template_writes_it(stem):
     run = _Run(stem)
