@@ -2,7 +2,7 @@
  "templates": [
   "114f55ebdc1804c1af371197b9fdf2d6bb925966c9dfe46b73782a71bc07965e"
  ],
- "source": "meta-models/Muse-Glimmer-30B, generation_config.json",
+ "source": "meta-models/Muse-Glimmer-30B, generation_config.json: \"temperature\": 1.0, \"top_p\": 0.95, \"top_k\": 64",
  "sampling": {
   "temperature": 1.0,
   "top_k": 64,

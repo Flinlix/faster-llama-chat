@@ -2,7 +2,7 @@
  "templates": [
   "68197fcd30cd6038c527e01d27fb808d67e5ae03cc8c7e7eaa58d30082611e08"
  ],
- "source": "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B, model card, text reasoning",
+ "source": "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B, model card, Benchmark Results: \"Audio/voice understanding and text reasoning use reasoning enabled, temperature 0.6, top-p 0.95, top-k disabled\"",
  "sampling": {
   "temperature": 0.6,
   "top_k": 0,

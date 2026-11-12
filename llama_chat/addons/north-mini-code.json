@@ -2,7 +2,7 @@
  "templates": [
   "f7287caba6e436a1b2471b07d048d38a72f0eaca13d05d200380ef9e58baf579"
  ],
- "source": "CohereLabs/North-Mini-Code-1.0, model card",
+ "source": "CohereLabs/North-Mini-Code-1.0, model card, Model Summary: \"We recommend using the following set of sampling parameters for generation: `temperature=1.0`, `top_p=0.95`.\"",
  "sampling": {
   "temperature": 1.0,
   "top_p": 0.95

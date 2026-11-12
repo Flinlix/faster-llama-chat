@@ -2,7 +2,7 @@
  "templates": [
   "7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4"
  ],
- "source": "google/gemma-3-1b-it, generation_config.json",
+ "source": "google/gemma-3-1b-it, generation_config.json, read from its copy at unsloth/gemma-3-1b-it: \"top_k\": 64, \"top_p\": 0.95",
  "sampling": {
   "top_k": 64,
   "top_p": 0.95

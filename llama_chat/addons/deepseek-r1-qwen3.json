@@ -2,7 +2,7 @@
  "templates": [
   "97ee3167ef705d0e9e5dc1610dd019322c60b51dd3823ad51eb5562092e320bc"
  ],
- "source": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B, model card",
+ "source": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B, model card, Evaluation Results: \"For benchmarks requiring sampling, we use a temperature of 0.6, a top-p value of 0.95\"",
  "sampling": {
   "temperature": 0.6,
   "top_p": 0.95

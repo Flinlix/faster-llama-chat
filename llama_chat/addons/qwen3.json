@@ -2,7 +2,7 @@
  "templates": [
   "5da44855ab7e0641774d5ed0ff0b4f89671d01df7d316e54d06557a962211cb4"
  ],
- "source": "Qwen/Qwen3-8B, generation_config.json",
+ "source": "Qwen/Qwen3-8B, generation_config.json: \"temperature\": 0.6, \"top_k\": 20, \"top_p\": 0.95",
  "sampling": {
   "temperature": 0.6,
   "top_k": 20,

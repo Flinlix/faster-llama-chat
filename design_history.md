@@ -2762,3 +2762,24 @@ not restated: the ones for the R1 distill of Qwen3 8B, Gemma 3 1B, Llama 3.2
 3B, Muse Glimmer 30B, Nemotron 3.5 Transcribe, North Mini Code, Qwen2.5
 Coder 7B, Qwen3 Coder 30B and Qwen3 8B. Each needs its card's words quoted in
 its add-on file's `source` before its values can be checked.
+
+## 2026-11-12: Model cards quoted in the add-on files
+
+The nine shipped add-on files that set sampling without quoting their source
+now quote it, and the test template each one names states the values under
+`card_sampling` and the quoted words under `card_quote`, so that every shipped
+sampling value is checked against the words it was taken from. Each source was
+read online on 2026-11-12: the model card where the file cites a card, and the
+`generation_config.json` where it cites that file, whose sampling keys and
+values are quoted as they stand in it. A card is quoted as its page reads,
+without the Markdown escapes and the math markup of its raw text. The
+`generation_config.json` of google/gemma-3-1b-it is gated, so it was read from
+its copy at unsloth/gemma-3-1b-it, as the Llama 3.2 file already was from its
+copy. Every value read matched the value the file holds, so none was changed.
+Two of the quotes are narrower than a general recommendation. The card of the
+R1 distill of Qwen3 8B states its temperature and top-p for the benchmarks that
+sample, and the temperature of 0.6 alone for its own web and application
+environments. The card of Nemotron 3.5 Transcribe states temperature 0 without
+reasoning for transcription, translation and language identification, and the
+values the file holds for audio understanding and text reasoning, where "top-k
+disabled" is the `top_k` of 0 that the file sets.

@@ -2,7 +2,7 @@
  "templates": [
   "87710339d25b4e789c1d723f93c91ee861a86d305bb3d20a845536f251d6ea8a"
  ],
- "source": "Qwen/Qwen3-Coder-30B-A3B-Instruct, generation_config.json",
+ "source": "Qwen/Qwen3-Coder-30B-A3B-Instruct, generation_config.json: \"repetition_penalty\": 1.05, \"temperature\": 0.7, \"top_p\": 0.8, \"top_k\": 20",
  "sampling": {
   "temperature": 0.7,
   "top_k": 20,
