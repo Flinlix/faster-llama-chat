@@ -2747,3 +2747,18 @@ test template's file now states the opening under `call_opening_text`, which
 replaces the flag `call_opens_as_text`; `tests/test_real_templates.py` checks
 that the extraction finds that opening, and the tests that quote an opening
 or look for it in the cache read it from the file.
+
+**T3: the card sampling is stated wherever the add-on file's source quotes
+it.** A shipped add-on file's sampling was checked against the card's values
+only for two templates; for the others the tests read the values from the
+file under test, so a wrong value `Config` accepts went unnoticed. The values
+are stated in a test template's file only where the add-on file's own
+`source` gives them in words, so that the test compares two texts that can be
+read side by side: that is now also the reasoning model of the family whose
+instruct model was already stated. The other add-on files that set sampling
+name a model card or a `generation_config.json` without quoting it, and
+neither is in the repository or the local model cache, so their values were
+not restated: the ones for the R1 distill of Qwen3 8B, Gemma 3 1B, Llama 3.2
+3B, Muse Glimmer 30B, Nemotron 3.5 Transcribe, North Mini Code, Qwen2.5
+Coder 7B, Qwen3 Coder 30B and Qwen3 8B. Each needs its card's words quoted in
+its add-on file's `source` before its values can be checked.
