@@ -385,6 +385,20 @@ def test_the_stop_texts_are_the_ones_given_when_the_reply_was_asked_for():
     assert stream.finish().text == "hello"
 
 
+@pytest.mark.parametrize("options", [
+    {"sampling": {"temperature": 0.1}}, {"stop": [1]}, {"stop": "END"}, {"stop": 5},
+    {"cancel": True}], ids=["sampling-dict", "stop-number", "stop-str", "stop-int", "cancel-bool"])
+def test_a_request_option_of_the_wrong_kind_is_refused_before_the_question_is_written(options):
+    fake = FakeContext(PLAIN, gen_tokens=10, gen_text="helloENDx")
+    w = ChatWrapper(Config(context_size=400), context=fake)
+    w.begin("s")
+    before = w.conversation()
+    with pytest.raises(TypeError):
+        w.reply("hi", **options)
+    assert w.conversation() == before
+    assert w.reply("hi", stop=["END"]).finish().text == "hello"
+
+
 def test_stop_texts_are_a_request_option_and_no_setting():
     assert "stop_strings" not in {field.name for field in dataclasses.fields(Config)}
 

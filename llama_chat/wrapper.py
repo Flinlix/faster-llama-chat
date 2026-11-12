@@ -308,7 +308,10 @@ class ChatWrapper:
                 iteration, if a registry holding tools is given to a model
                 that could never call one, or if ``max_calls`` is given and
                 the turn the reply goes on with by then runs no call.
-            TypeError: At once, if ``text`` is neither ``None`` nor a ``str``.
+            TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
+                ``stop`` is a ``str`` or holds anything but ``str``, ``cancel``
+                has no ``is_set``, or ``sampling`` is neither ``None`` nor a
+                :class:`~llama_chat.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed; at the first
                 iteration, if this thread is still reading another reply.
@@ -320,8 +323,10 @@ class ChatWrapper:
         if text is not None:
             ensure_text(text, "the request's text")
         ensure_reply_cap(max_reply_tokens)
-        options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
-                       sampling=sampling)
+        stop_texts = _stop_texts(stop)
+        _ensure_cancel_and_sampling(cancel, sampling)
+        options = dict(max_reply_tokens=max_reply_tokens, stop=stop_texts, cancel=cancel,
+                       sampling=generation_sampling(self._config, sampling))
         if tool_call_policy is not None and not isinstance(tool_call_policy, ToolRegistry) \
                 and tool_call_policy not in TOOL_CALL_POLICIES:
             raise ValueError(f"tool_call_policy must be "
@@ -800,7 +805,7 @@ class ChatWrapper:
 
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
-                  cancel: threading.Event | None, sampling: Sampling | None,
+                  cancel: threading.Event | None, sampling: Sampling,
                   withhold: bool = False,
                   on_started: Callable[[], None] = lambda: None) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end and record what it left, as a Reply.
@@ -811,7 +816,8 @@ class ChatWrapper:
         the turn open for a result. The lock must be held.
 
         Args:
-            text, max_reply_tokens, stop, cancel, sampling: As :meth:`reply`.
+            text, max_reply_tokens, stop, cancel: As :meth:`reply`.
+            sampling: Every value the generation draws with.
             recognizes_calls: ``False`` leaves a call the model writes as text,
                 so this generation cannot end on a call and the turn is certain
                 to close.
@@ -839,7 +845,7 @@ class ChatWrapper:
                                conversation.prompt_text, list(stop))
         pieces = conversation.generate(
             cap, generated, cancel=cancel,
-            sampling=generation_sampling(self._config, sampling),
+            sampling=sampling,
             ends_turn=self._turn_end_test(reply_text, generated),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
         on_started()
@@ -970,6 +976,33 @@ def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -
     if generated.cut_inside_call:
         return [ToolCall("", {}, status="unfinished")]
     return pending
+
+
+def _stop_texts(stop) -> tuple[str, ...]:
+    """A request's stop texts, read once.
+
+    Raises:
+        TypeError: If ``stop`` is a ``str`` itself, or not a list of ``str``.
+    """
+    if isinstance(stop, str):
+        raise TypeError(f"stop must be a list of str, such as [{stop!r}], not a str")
+    texts = tuple(stop) if isinstance(stop, Iterable) else stop
+    if texts is not None and (not isinstance(texts, tuple)
+                              or not all(isinstance(text, str) for text in texts)):
+        raise TypeError(f"stop must be a list of str, not {stop!r}")
+    return texts or ()
+
+
+def _ensure_cancel_and_sampling(cancel, sampling) -> None:
+    """Refuse a request's ``cancel`` or ``sampling`` of a kind :meth:`ChatWrapper.reply` cannot use.
+
+    Raises:
+        TypeError: Naming the option and what it must be.
+    """
+    if cancel is not None and not callable(getattr(cancel, "is_set", None)):
+        raise TypeError(f"cancel must be a threading.Event, not {cancel!r}")
+    if sampling is not None and not isinstance(sampling, Sampling):
+        raise TypeError(f"sampling must be a Sampling, not {sampling!r}")
 
 
 def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int | None) -> None:
