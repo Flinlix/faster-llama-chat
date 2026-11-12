@@ -112,7 +112,8 @@ it in a `with`. To stop a generation from another thread, pass
 
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
-model and makes later actions raise. A reply holds the lock while it is read,
+model and makes later actions raise, while `conversation()` and what says
+where it stands still answer. A reply holds the lock while it is read,
 so an action on the thread that reads it, a tool the reply runs included,
 would wait for itself; it is refused instead with a `RuntimeError` that names
 the reply. A reply handed to another thread is read by that thread from then
@@ -562,7 +563,7 @@ reads the [add-on file](#add-on-files) itself, by `model_path` where one is set
 and by the template `chat_template_text` gives, and merges the sampling, so a
 context of your own gets both as one the wrapper loads does;
 `recommended_sampling` gives what the model states for itself, by `Sampling`'s
-field names, and each `sampled_tokens` call is handed every value it draws
+field names other than `seed`, and each `sampled_tokens` call is handed every value it draws
 with. What the template is read for comes from its
 renders alone, and where the model's tags lie in a text from its tokenizer
 alone: `special_tokens` lists the tags, `is_special` tells one among the tokens

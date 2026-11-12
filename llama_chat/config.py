@@ -1,4 +1,4 @@
-"""Runtime configuration: the only thing that differs between deployment targets."""
+"""Runtime configuration: every setting but what an add-on file gives and what one request passes."""
 
 from __future__ import annotations
 

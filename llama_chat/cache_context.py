@@ -34,8 +34,7 @@ class GenerationAccumulator:
     Attributes:
         token_ids: Every token decoded into the cache.
         text: Visible reply text so far.
-        stop_reason: ``"end_of_turn"``, ``"token_limit"``, ``"interrupted"`` or
-            ``"tool_call"``.
+        stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
         tool_call: What the model generated between its call tags, tags
             excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
             ``text``.

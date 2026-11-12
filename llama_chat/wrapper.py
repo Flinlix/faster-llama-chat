@@ -60,8 +60,11 @@ class ChatWrapper:
         Raises:
             TypeError: If ``context`` does not answer everything the wrapper
                 calls on it.
-            InvalidSettingError: If ``model_path`` names no file, where the
-                wrapper loads the model itself.
+            InvalidSettingError: If ``model_path`` is unset or names no
+                file, where the wrapper loads the model itself.
+            RuntimeError: Where the wrapper loads the model itself, if the
+                model or its context cannot be created, or the cache cannot
+                perform one of the edits eviction rests on.
             ValueError: If the model ships no chat template, if its template
                 fails validation against the model, if ``config`` asks for
                 a larger context than ``context`` holds, or if ``context`` can
@@ -196,18 +199,18 @@ class ChatWrapper:
     def inject(self, text: str, role: str = "user") -> int:
         """Prefill one message as context without generating.
 
-        Evicts the oldest exchanges until the new message fits inside both
-        eviction limits, then prefills it. A question goes where the next one
-        was prepared for, as :meth:`reply` puts one, and is evicted for after
-        its reply, unless ``max_history_exchanges`` is reached first.
-
-        Returns:
-            The number of messages evicted to make room.
+        A question goes where the next one was prepared for, as :meth:`reply`
+        puts one, and the oldest exchanges are evicted for it after its reply.
+        An assistant message, or a question once ``max_history_exchanges`` is
+        reached, evicts them first, until it fits inside both eviction limits.
 
         Args:
             text: The message's text.
             role: ``"user"`` or ``"assistant"``. The system prompt is
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
+
+        Returns:
+            The number of messages evicted to make room.
 
         Raises:
             TypeError: If ``text`` is not a ``str``.
@@ -643,7 +646,9 @@ class ChatWrapper:
         """Free the underlying context and model. Idempotent and thread-safe.
 
         Waits for any in-flight generation. Closes a context passed to the
-        constructor as well. Every action after close raises ``RuntimeError``.
+        constructor as well. Every action after close raises ``RuntimeError``
+        once its arguments are checked; :meth:`conversation` and the
+        properties that say where it stands still answer.
         """
         with self._held():
             if self._closed:
@@ -659,7 +664,7 @@ class ChatWrapper:
 
     # ----- internals -----------------------------------------------------------
     def _generate_until_answered(
-        self, text: str, *, policy: ToolRegistry | ToolCallPolicy, budget: _CallBudget,
+        self, text: str | None, *, policy: ToolRegistry | ToolCallPolicy, budget: _CallBudget,
         on_started: Callable[[], None], **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
 
@@ -677,8 +682,8 @@ class ChatWrapper:
             text, **kwargs: As :meth:`reply`.
 
         Raises:
-            ValueError: If ``registry`` holds tools this model could never
-                call, which is what
+            ValueError: If ``policy`` is a registry holding tools this model
+                could never call, which is what
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """

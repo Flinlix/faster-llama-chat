@@ -35,7 +35,9 @@ class Reply:
         text: The assistant's reply, trimmed at any stop string, its thought
             left out.
         n_prefilled_tokens: Tokens decoded for the request, the opening of
-            each resumption, and a reply decoded again as a past reply.
+            each resumption, a reply decoded again as a past reply, and what
+            is decoded after the reply: its closing and the start of the next
+            question.
         n_prompt_tokens: Tokens the cache held when the last generation drew
             its first token: everything it was generated from, its generation
             prompt included.

@@ -144,6 +144,13 @@ class FakeContext:
             holds it.
         replies: What the model generates, one per generation in order: a
             text, or a :class:`ScriptedCall`.
+        gen_tokens: How many tokens a generation with nothing scripted
+            draws.
+        gen_text: What such a generation spells, cut or padded to
+            ``gen_tokens``.
+        can_shift: Whether the cache takes an eviction's shift.
+        can_cut_tail: Whether a cache that cannot shift takes a cut at its
+            end.
         tokens_spell_text: Whether a generated token is its character's own,
             as the tokenizer would give it; otherwise an id no tokenization
             gives, as a model that generates a word in other pieces than its
