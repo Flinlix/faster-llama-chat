@@ -299,6 +299,32 @@ def test_a_result_that_leaves_no_room_for_the_reply_closes_the_turn_and_the_conv
     pytest.fail("no question length left the result without room")
 
 
+def test_a_turn_closing_for_want_of_room_that_fails_part_way_leaves_the_call_owed():
+    def owing():
+        fake = _Flaky(TOOLS)
+        w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=40),
+                        context=fake)
+        w.begin("s")
+        fake.call_script = ["fn:clock{}"]
+        call, = [e for e in w.reply("q" * 210, tool_call_policy="yield") if isinstance(e, ToolCall)]
+        fake.operations = 0
+        return w, fake, call
+
+    w, fake, call = owing()
+    w.inject_tool_result(call, "12:00")
+    assert not w.turn_open and fake.operations > 0     # the turn closes, the cache settled after it
+    for at in range(fake.operations):
+        w, fake, call = owing()
+        before = _state(w)
+        fake.fail_at = at
+        with pytest.raises(RuntimeError):
+            w.inject_tool_result(call, "12:00")
+        assert _state(w) == before
+        _go_on(w, fake)
+        assert_cache_reads_as_rendered(w, fake)
+        w.close()
+
+
 _UNWRITABLE = [{"when": real_datetime.date(2026, 11, 8)}, {"t": float("nan")},
                [float("inf")]]
 

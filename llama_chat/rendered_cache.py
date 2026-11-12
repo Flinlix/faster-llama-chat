@@ -655,15 +655,16 @@ class RenderedCache:
         template writes nothing of what is left of it, it is taken back with its
         request, as an empty reply is.
         """
-        calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
-        del self._state.messages[calling + 1:]
-        self._state.results_cut = []
-        self._forget_calls()
-        if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
-            # Nothing the template writes is left of the reply: taken back with its request.
-            starts = exchange_starts(self._state.messages)
-            return self._remove_from(starts[-1] if starts else len(self._system_part()))
-        return self._settle()
+        with self._action():
+            calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
+            del self._state.messages[calling + 1:]
+            self._state.results_cut = []
+            self._forget_calls()
+            if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
+                # Nothing the template writes is left of the reply: taken back with its request.
+                starts = exchange_starts(self._state.messages)
+                return self._remove_from(starts[-1] if starts else len(self._system_part()))
+            return self._settle()
 
     def add_result(self, call: ToolCall, result) -> int:
         """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply; how many history items were dropped for it.
