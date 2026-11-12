@@ -1092,6 +1092,48 @@ def test_an_action_on_the_thread_reading_a_reply_is_refused_and_names_the_reply(
     assert wrapper.reply("weiter").finish().text == "reply"
 
 
+def test_an_action_on_the_thread_a_reply_was_handed_to_is_refused_rather_than_hanging():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    stream = wrapper.reply("hallo")
+    first_read, release = threading.Event(), threading.Event()
+
+    def read_first():
+        next(stream)
+        first_read.set()
+        release.wait(10)        # still alive while another thread reads on
+
+    first = threading.Thread(target=read_first, daemon=True)
+    first.start()
+    first_read.wait(10)
+
+    def read_on_and_act():
+        next(stream)
+        try:
+            wrapper.inject("Notiz")
+        finally:
+            stream.close()
+
+    try:
+        with pytest.raises(RuntimeError, match="the reply this thread is reading"):
+            _within_seconds(read_on_and_act)
+    finally:
+        release.set()
+        first.join(10)
+    assert wrapper.reply("weiter").finish().text == "reply"
+
+
+def test_a_thread_that_reads_no_reply_waits_for_one_rather_than_being_refused():
+    """A thread started after the reader ended may carry the reader's number; it is not the reader."""
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    stream = wrapper.reply("hallo")
+    _within_seconds(lambda: next(stream))
+    for _ in range(3):
+        assert _within_seconds(lambda: wrapper.wait_idle(timeout_s=0.01)) is False
+    stream.close()
+
+
 # ----- a model that writes a batch -----------------------------------------
 def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
     wrapper, fake = tool_wrapper()

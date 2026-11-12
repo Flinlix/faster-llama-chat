@@ -115,7 +115,8 @@ Actions that change the cache are serialized by one lock. `close()`, or
 model and makes later actions raise. A reply holds the lock while it is read,
 so an action on the thread that reads it, a tool the reply runs included,
 would wait for itself; it is refused instead with a `RuntimeError` that names
-the reply.
+the reply. A reply handed to another thread is read by that thread from then
+on, so the refusal follows it there.
 
 ## What to call, by task
 
@@ -128,7 +129,7 @@ the reply.
 | telling the model about more tools | `declare_tools(tools)`. Where the model ships a [template of its own for tools](#tool-calling), only into a conversation begun with `tools` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
 | reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
+| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `total_tokens`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):

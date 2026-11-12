@@ -880,6 +880,29 @@ def test_every_generation_is_handed_every_sampling_value():
                for f in dataclasses.fields(Sampling) if f.name != "seed")
 
 
+def test_what_the_model_can_do_is_read_from_the_conversation_as_the_newest_finished_change_left_it():
+    from tests.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
+
+    # The template for tools can reason, the default template cannot.
+    fake = FakeContext({**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN,
+                        "tool_use_template": REASONING["chat_template"]})
+    w = ChatWrapper(Config(context_size=512), context=fake)
+    w.begin("s")
+    seen = []
+    prefill = fake.prefill
+
+    def read_while_beginning(*args, **kwargs):
+        seen.append((w.can_reason, w.can_turn_off_reasoning, w.can_take_system_prompt))
+        raise RuntimeError("the cache refused the batch")
+
+    fake.prefill = read_while_beginning
+    with pytest.raises(RuntimeError, match="refused the batch"):
+        w.begin("s", tools=[])
+    fake.prefill = prefill
+    assert seen and seen[0] == (w.can_reason, w.can_turn_off_reasoning, w.can_take_system_prompt)
+    assert w.can_reason is False
+
+
 # ----- what an action is given, refused where it enters ---------------------
 def test_a_message_that_is_not_text_is_refused_where_it_enters_naming_it():
     w, fake = begun_wrapper()

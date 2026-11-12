@@ -101,7 +101,8 @@ class ChatWrapper:
         # One KV sequence is shared across generations, so concurrent decodes
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
-        self._holder: int | None = None         # the thread that holds it, while one does
+        # The thread that holds it while one does: for a reply, the one that read it last.
+        self._holder: threading.Thread | None = None
         # The policy the newest turn was started with, or for a turn the history opened the
         # first one a reply gave it, and the calls it may still run, which a reply going on
         # with it keeps.
@@ -346,7 +347,29 @@ class ChatWrapper:
             tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        return ReplyStream(self._replying(text, tool_call_policy, max_calls, **options))
+        return ReplyStream(self._noting_each_reader(
+            self._replying(text, tool_call_policy, max_calls, **options)))
+
+    def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
+                            ) -> Generator[str | ToolCall, None, Reply]:
+        """``steps``, the thread that takes each step noted as the one holding the wrapper, while the reply holds it."""
+        holds = False
+        try:
+            while True:
+                if holds:
+                    self._holder = threading.current_thread()
+                try:
+                    step = next(steps)
+                except StopIteration as ended:
+                    return ended.value
+                holds = self._holder is threading.current_thread()
+                yield step
+        except GeneratorExit:
+            # Closed at a step: ``steps`` still waits there, and is closed on this thread.
+            if holds:
+                self._holder = threading.current_thread()
+            steps.close()
+            raise
 
     def _replying(self, text: str | None, given: ToolCallPolicy | ToolRegistry | None,
                   max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
@@ -565,8 +588,8 @@ class ChatWrapper:
 
     @property
     def can_reason(self) -> bool:
-        """Whether :meth:`begin` may be asked to have the model reason."""
-        return self._template.can_reason
+        """Whether :meth:`begin` may be asked to have the model reason; safe from any thread, as the newest finished change left it."""
+        return self._conversation.published_template().can_reason
 
     @property
     def can_turn_off_reasoning(self) -> bool:
@@ -575,14 +598,15 @@ class ChatWrapper:
         Reasoning off is the template's own off. Where the template has none,
         a model that reasons does so in every reply, ``reasoning`` or not,
         and its thought is kept out of the answer either way. True where the
-        template marks no thought.
+        template marks no thought. Safe from any thread, as the newest
+        finished change left it.
         """
-        return self._template.can_turn_off_reasoning
+        return self._conversation.published_template().can_turn_off_reasoning
 
     @property
     def can_take_system_prompt(self) -> bool:
-        """Whether :meth:`begin` accepts a system prompt: the template writes one where no later question moves it."""
-        return self._template.has_system_turn
+        """Whether :meth:`begin` accepts a system prompt: the template writes one where no later question moves it; safe from any thread, as the newest finished change left it."""
+        return self._conversation.published_template().has_system_turn
 
     @property
     def turn_open(self) -> bool:
@@ -948,7 +972,7 @@ class ChatWrapper:
         """Hold the wrapper for one action, refusing one the thread that already holds it asks for."""
         self._ensure_not_holding()
         with self._lock:
-            self._holder = threading.get_ident()
+            self._holder = threading.current_thread()
             try:
                 yield
             finally:
@@ -960,7 +984,7 @@ class ChatWrapper:
         Raises:
             RuntimeError: Naming the reply this thread is reading.
         """
-        if self._holder == threading.get_ident():
+        if self._holder is threading.current_thread():
             raise RuntimeError(
                 "the reply this thread is reading still holds this conversation, and an "
                 "action now would wait for that reply for ever; read the reply to its end "

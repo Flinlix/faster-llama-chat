@@ -168,6 +168,10 @@ class RenderedCache:
         """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
         return self._published.turn_open
 
+    def published_template(self) -> ResolvedTemplate:
+        """The template the conversation is written with, from the newest publication; safe to read unlocked."""
+        return self._templates.for_conversation(self._published.tools is not None)
+
     def ensure_can_reply(self, asks_question: bool) -> None:
         """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.
 
