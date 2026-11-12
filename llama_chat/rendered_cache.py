@@ -672,6 +672,8 @@ class RenderedCache:
         as a question does, the turn it answers kept whole. Where it still
         cannot fit, it is cut, :data:`RESULT_CUT_NOTE` after it telling the
         model how much was kept, and its call is noted in :attr:`results_cut`.
+        The room left keeps space for each result still owed after it, as
+        that note with nothing kept.
 
         Raises:
             ValueError: If no call is waiting, this is not the one owed, the

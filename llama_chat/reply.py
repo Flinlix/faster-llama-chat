@@ -46,7 +46,8 @@ class Reply:
             eviction limits.
         stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
             a stop string was met, the reply cap was reached, ``cancel`` was
-            set, a call was made, or a call was made that could not be read.
+            set, a call was made, or a call was made that could not be read
+            and whose failure could not be written for the model to read.
         tool_calls: The calls the model made, in the order it made them.
             Reported whatever became of them, so a call that was refused rather
             than run still says what the model asked for, and one that could

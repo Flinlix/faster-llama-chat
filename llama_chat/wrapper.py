@@ -276,8 +276,9 @@ class ChatWrapper:
                   in order, then call this again without ``text``; that reply
                   is parted from the text before the call as under
                   ``"refuse"``. A call that cannot be read is answered with a
-                  failure and the reply goes on, as under a registry, all its
-                  generations within one ``max_reply_tokens``.
+                  failure and the reply goes on; the model may write another
+                  call as long as there is room, all its generations within
+                  one ``max_reply_tokens``.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
