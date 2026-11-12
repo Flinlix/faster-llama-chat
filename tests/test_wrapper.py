@@ -707,6 +707,20 @@ def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on
     assert undocumented == []
 
 
+def test_the_readme_imports_only_exported_names_and_names_every_one():
+    """Every name a caller is told to take from the package is exported, and every export is told of."""
+    import re
+    from pathlib import Path
+    import llama_chat
+    readme = (Path(llama_chat.__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    told = set(re.findall(r"`(\w+)`,? from `(llama_chat[\w.]*)`", readme))
+    for module, imported in re.findall(r"from (llama_chat[\w.]*) import ([\w, ]+)", readme):
+        told |= {(name.strip(), module) for name in imported.split(",")}
+    assert told and all(module == "llama_chat" and name in llama_chat.__all__
+                        for name, module in told)
+    assert [name for name in llama_chat.__all__ if f"`{name}" not in readme] == []
+
+
 def test_begin_rejects_system_prompt_over_threshold():
     fake = FakeContext(PLAIN)
     # threshold = 100 tokens; a 100-char system prompt with its tags can never fit.

@@ -221,7 +221,8 @@ as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it: one that was read with its
 `ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
 and one the reply cap or a cancel cut short as `"unfinished"`, the last two
-without a name, arguments or id, and never handed over in the stream. An
+without a name, arguments or id, and never handed over in the stream. The
+status is of the type `ToolCallStatus`. An
 unreadable call carries in `ToolCall.text` what the model wrote between the
 call's opening and its closing. A `ToolCall` may be kept in a set or used as a
 dict key, and equals another only where every field does. Where calls run, the `Reply` sums
@@ -573,7 +574,7 @@ and `ends_generation` and `token_bytes` read a drawn token, so a call is told
 apart and a reply ends the same on every context.
 `render_with_model_template` and `chat_template_text` take a `template_name`:
 `None` for the default template, else the name of a further one the model
-ships, such as `TOOL_USE_TEMPLATE` from `llama_chat.cache_context`; a name the
+ships, such as `TOOL_USE_TEMPLATE` from `llama_chat`; a name the
 model ships no template of answers `None`. A context whose `chat_template_text()`
 answers `None` is refused where it is adopted, as a model that ships no chat
 template is, whatever it renders.
