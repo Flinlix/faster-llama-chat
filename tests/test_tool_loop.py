@@ -657,7 +657,7 @@ def test_an_unreadable_call_says_why():
             reply = done.value
             break
 
-    assert reply.stop_reason == "unreadable_tool_call"
+    assert reply.stop_reason == "end_of_turn"       # told so, the model answered
     # Reported with what the model wrote, though nothing of it is handed over to be answered.
     assert reply.tool_calls == [ToolCall("", {}, status="unreadable", text="fn:<fun=clock>")]
 
@@ -843,6 +843,45 @@ def test_an_unreadable_call_may_be_written_again():
     assert [(c.name, c.status, c.text) for c in reply.tool_calls] == [
         ("", "unreadable", "fn:nonsense with no name"), ("clock", "complete", "")]
     assert not wrapper.turn_open
+
+
+def test_an_unreadable_call_under_yield_is_written_again_in_the_same_reply():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name", "fn:clock{}"]
+
+    stream = wrapper.reply("wie spät?", tool_call_policy="yield")
+    handed_over = [(e.name, e.arguments) for e in stream if isinstance(e, ToolCall)]
+
+    assert handed_over == [("clock", {})]
+    assert [(c.name, c.status) for c in stream.reply.tool_calls] == [
+        ("", "unreadable"), ("clock", "complete")]
+    assert stream.reply.stop_reason == "tool_call"
+    wrapper.inject_tool_result(wrapper.pending_calls[0], "12:00")
+    assert wrapper.reply().finish().text == "reply" and not wrapper.turn_open
+
+
+def test_an_unreadable_call_under_yield_is_answered_in_the_same_reply():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"]
+
+    reply = wrapper.reply("wie spät?", tool_call_policy="yield").finish()
+
+    assert (reply.text, reply.stop_reason) == ("reply", "end_of_turn")
+    assert not wrapper.turn_open and wrapper.pending_calls == []
+
+
+def test_retrying_an_unreadable_call_under_yield_is_bounded_by_the_reply_cap():
+    wrapper, fake = tool_wrapper(context_size=2048)
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"] * 20      # 26 tokens a call
+
+    reply = wrapper.reply("wie spät?", tool_call_policy="yield", max_reply_tokens=60).finish()
+
+    assert reply.n_generated_tokens <= 60
+    assert len(fake.call_script) == 17                  # two tries, and a third cut by the cap
+    assert reply.stop_reason == "token_limit" and not wrapper.turn_open
 
 
 def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():

@@ -268,7 +268,9 @@ class ChatWrapper:
                   turn stays open. Answer each with :meth:`inject_tool_result`,
                   in order, then call this again without ``text``; that reply
                   is parted from the text before the call as under
-                  ``"refuse"``.
+                  ``"refuse"``. A call that cannot be read is answered with a
+                  failure and the reply goes on, as under a registry, all its
+                  generations within one ``max_reply_tokens``.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
@@ -281,7 +283,8 @@ class ChatWrapper:
                 past one is answered with an error result rather than run. Only
                 with a registry.
             max_reply_tokens: This request's cap on tokens per generation, in
-                place of the config's.
+                place of the config's; under ``"yield"``, on the generations
+                of the reply together.
             stop: Texts that end the answer, matched against the answer
                 only. Read when this is called, so a later change to the list
                 changes nothing.
@@ -348,11 +351,13 @@ class ChatWrapper:
             if policy not in ("yield", "withhold"):
                 return (yield from self._generate_until_answered(
                     text, policy=policy, budget=budget, **options))
-            generation = yield from self._read_generation(
-                self._generate(text, recognizes_calls=policy == "yield",
-                               may_call_again=policy == "yield",
-                               withhold=policy == "withhold", **options),
-                after=self._open_turn_text())
+            if policy == "yield":
+                generation = yield from self._generate_until_called(text, **options)
+            else:
+                generation = yield from self._read_generation(
+                    self._generate(text, recognizes_calls=False, may_call_again=False,
+                                   withhold=True, **options),
+                    after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from _answerable(generation.tool_calls)
         return generation
@@ -695,6 +700,29 @@ class ChatWrapper:
                               may_call_again=may_call_again, withhold=not recognizes_calls,
                               **kwargs)
 
+    def _generate_until_called(self, text: str | None, *, max_reply_tokens: int | None,
+                               **kwargs) -> Generator[str, None, Reply]:
+        """Generate until the model makes a call that can be handed over, or answers.
+
+        A call that cannot be read is answered with a failure and the reply
+        goes on, every generation of it within one reply cap. The lock must be
+        held.
+        """
+        cap = self._reply_cap(max_reply_tokens)
+        open_turn_text = self._open_turn_text()
+        generations: list[Reply] = []
+        while True:
+            used = sum(g.n_generated_tokens for g in generations)
+            generation = yield from self._read_generation(
+                self._generate(text, recognizes_calls=True, may_call_again=True,
+                               max_reply_tokens=max(0, cap - used), **kwargs),
+                after=open_turn_text + "".join(g.text for g in generations))
+            generations.append(generation)
+            if _answerable(generation.tool_calls) or not self._conversation.turn_open:
+                return generation if len(generations) == 1 else _sum_generations(generations, False)
+            text = None
+            kwargs.pop("on_started", None)
+
     def _read_generation(self, deltas: Generator[str, None, Reply], after: str):
         """Yield one generation's text, and return the :class:`Reply` describing it.
 
@@ -802,8 +830,7 @@ class ChatWrapper:
             n_evicted_messages = conversation.ask(text)
         elif not conversation.turn_open:
             conversation.prompt()
-        cap = next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
-                   self._config.context_size)       # no generation outgrows the context
+        cap = self._reply_cap(max_reply_tokens)
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
@@ -843,6 +870,11 @@ class ChatWrapper:
             n_reasoning_tokens=reply_text.thought_pieces,
             thought=reply_text.thought,
         )
+
+    def _reply_cap(self, max_reply_tokens: int | None) -> int:
+        """The cap on a generation's tokens: ``max_reply_tokens``, else the config's, else the context's size."""
+        return next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
+                    self._config.context_size)
 
     def _turn_end_test(self, reply_text: ReplyText,
                        generated: GenerationAccumulator) -> Callable[[int], bool] | None:

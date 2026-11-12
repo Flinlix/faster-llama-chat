@@ -68,7 +68,8 @@ class Config:
             eviction drops; what a history holds before its first user message
             is one more. ``None`` leaves the token threshold as the only
             trigger; otherwise at least ``1``.
-        max_reply_tokens: Cap on tokens per generation, a thought included.
+        max_reply_tokens: Cap on tokens per generation, a thought included,
+            and under ``"yield"`` on the generations of one reply together.
             ``None`` sets none, so a reply may run until the context is full;
             generation never crosses ``context_size`` either way.
         min_reply_tokens: Refuse a request with

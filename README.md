@@ -140,7 +140,7 @@ the reply.
 | `"token_limit"` | `max_reply_tokens` ran out, or the context did |
 | `"interrupted"` | `cancel` was set |
 | `"tool_call"` | the reply stopped on a call, and the turn is open for its result |
-| `"unreadable_tool_call"` | it stopped on a call whose body could not be read; the model is told, and this is the final reason only where calls are handed to you, or where the template has no result block |
+| `"unreadable_tool_call"` | it stopped on a call whose body could not be read; the model is told, and this is the final reason only where the template has no result block |
 
 `Reply` also carries `text`, `n_prefilled_tokens`, `n_prompt_tokens` (the
 tokens the cache held when the reply's last generation drew its first, which
@@ -195,7 +195,7 @@ results thus keeps its turn's policy unless it is given another:
 |------|------|------|
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool. Where the template's call opens with plain text rather than one of the model's tags, no token can be withheld: a call the model writes is not recognized and stays in the reply's text | text |
 | `"refuse"` (the default for a new turn) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words, the token that opens a call no longer drawn, as under `"withhold"` | text |
-| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again | text, then each `ToolCall` |
+| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again. A call the library cannot read is answered with a failure and the reply goes on by itself, as under a registry, all its generations within one `max_reply_tokens` | text, then each `ToolCall` |
 | a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, the token that opens a call is never drawn, as under `"withhold"`, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`, and where it is not a whole number of at least 0. A stream closed at a call handed over leaves that call and the rest of its round unrun and owed, as under `"yield"`, and the results of the calls before it that ran written. `max_calls` counts every call handed over, and a reply that goes on with the turn without a `max_calls` of its own keeps what is left of it | text, and each `ToolCall` that runs, just before it runs |
 
 ```python
@@ -423,7 +423,7 @@ value `Config` refuses.
 | `context_size` | `4096` | the hard limit in tokens |
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
 | `max_history_exchanges` | `None` | a second eviction trigger: the most exchanges kept, at least `1`. An exchange is one user message and everything after it up to the next, the unit an eviction drops; what a history holds before its first user message counts as one more. The question of a `reply` may open one exchange more while its reply runs, and the oldest is dropped once the reply ends, so that no eviction for this limit delays a reply |
-| `max_reply_tokens` | `None` | cap on tokens per generation, a thought included; `None` sets none, so a reply may run until the context is full |
+| `max_reply_tokens` | `None` | cap on tokens per generation, a thought included, and under `"yield"` on the generations of one reply together; `None` sets none, so a reply may run until the context is full |
 | `min_reply_tokens` | `32` | refuse a request with `ContextOverflowError` when fewer would be left for the reply; `0` disables |
 
 **Backend and hardware**
