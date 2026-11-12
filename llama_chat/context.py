@@ -29,6 +29,8 @@ _WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
 _WHOLE_CONTEXT_WINDOW = -1
 # Where the system describes each processor's package and core, on Linux.
 _CPU_TOPOLOGY = Path("/sys/devices/system/cpu")
+# Where it states the process's CPU quota, on Linux.
+_CGROUP = Path("/sys/fs/cgroup")
 
 
 class KVContext:
@@ -334,22 +336,31 @@ class KVContext:
 
 
 def _processor_counts() -> tuple[int, int]:
-    """The physical cores and the threads this process may run on.
+    """The physical cores and the threads this process may run on, neither above its CPU quota.
 
-    Each thread counts as a core of its own where the system does not say
-    which core it runs on.
+    Where the system does not say which core a thread runs on, the threads
+    past four are taken to run two to a core.
     """
     cpus = (sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
             else range(os.cpu_count() or 1))
-    cores = set()
-    for cpu in cpus:
-        topology = _CPU_TOPOLOGY / f"cpu{cpu}" / "topology"
+    threads = len(cpus)
+    try:
+        cores = len({tuple((_CPU_TOPOLOGY / f"cpu{cpu}" / "topology" / name).read_text().strip()
+                           for name in ("physical_package_id", "core_id")) for cpu in cpus})
+    except OSError:
+        cores = threads if threads <= 4 else threads // 2
+    try:
+        quota, period = (_CGROUP / "cpu.max").read_text().split()
+    except OSError:
         try:
-            cores.add(tuple((topology / name).read_text().strip()
-                            for name in ("physical_package_id", "core_id")))
+            quota, period = ((_CGROUP / "cpu" / name).read_text().strip()
+                             for name in ("cpu.cfs_quota_us", "cpu.cfs_period_us"))
         except OSError:
-            return len(cpus), len(cpus)
-    return len(cores), len(cpus)
+            quota = "max"
+    if quota in ("max", "-1"):
+        return cores, threads
+    allowed = max(1, int(quota) // int(period))
+    return min(cores, allowed), min(threads, allowed)
 
 
 def _flash_attention(config: Config) -> bool | None:

@@ -590,6 +590,7 @@ def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, in
         (topology / "physical_package_id").write_text(f"{package}\n")
         (topology / "core_id").write_text(f"{core}\n")
     monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "cpu")
+    monkeypatch.setattr("llama_chat.context._CGROUP", tmp_path / "cgroup")
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(cores_of), raising=False)
 
 
@@ -608,11 +609,28 @@ def test_the_physical_cores_and_threads_are_counted_among_those_this_process_may
     assert _processor_counts() == (cores, len(cores_of))
 
 
-def test_where_the_system_does_not_say_each_usable_thread_counts_as_a_core(
-        tmp_path, monkeypatch):
-    _processor_topology(tmp_path, monkeypatch, {cpu: (0, cpu // 2) for cpu in range(6)})
+@pytest.mark.parametrize("threads, cores", [(1, 1), (4, 4), (6, 3), (16, 8)])
+def test_where_the_system_does_not_say_which_core_a_thread_runs_on_the_threads_past_four_pair_up(
+        tmp_path, monkeypatch, threads, cores):
+    _processor_topology(tmp_path, monkeypatch, {cpu: (0, cpu) for cpu in range(threads)})
     monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "absent")
-    assert _processor_counts() == (6, 6)
+    assert _processor_counts() == (cores, threads)
+
+
+@pytest.mark.parametrize("quota_files, counts", [
+    ({"cpu.max": "max 100000\n"}, (8, 16)),
+    ({"cpu.max": "400000 100000\n"}, (4, 4)),
+    ({"cpu.max": "1000000 100000\n"}, (8, 10)),
+    ({"cpu.max": "50000 100000\n"}, (1, 1)),
+    ({"cpu/cpu.cfs_quota_us": "250000\n", "cpu/cpu.cfs_period_us": "100000\n"}, (2, 2)),
+    ({"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, (8, 16)),
+], ids=["v2-unlimited", "v2-four", "v2-ten", "v2-half", "v1-two-and-a-half", "v1-unlimited"])
+def test_a_cpu_quota_bounds_the_cores_and_the_threads(tmp_path, monkeypatch, quota_files, counts):
+    _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE)
+    for name, text in quota_files.items():
+        (tmp_path / "cgroup" / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "cgroup" / name).write_text(text)
+    assert _processor_counts() == counts
 
 
 @pytest.mark.parametrize("settings, decode_threads, prefill_threads", [
