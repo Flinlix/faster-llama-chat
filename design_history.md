@@ -58,8 +58,10 @@ holds.
 Superseded in part by "The render is the conversation's encoding": the message
 table is gone, and the target is the template's render. Revised by "The
 rethink's remaining decisions": the survivors' shift runs to the cache's end
-(`-1`) instead of to `total`. The triggers, the cache operations and the
-choice between them still hold.
+(`-1`) instead of to `total`. Revised by "The conversation and its surface"
+(270.5): a cache context that can neither shift, cut its end nor save a state
+is refused where it is adopted, so such a context is no longer decoded again.
+The triggers, the cache operations and the choice between them still hold.
 
 Two triggers, OR'd: more than `evict_above_fraction × context_size` tokens, and
 more than `max_history_messages` non-system messages (off by default), so a
