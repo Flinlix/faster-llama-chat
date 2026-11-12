@@ -92,14 +92,13 @@ def _nesting_depth(value) -> int:
 
 
 def _as_json_calls(text: str) -> list[ToolCall]:
-    """Read the calls that name themselves, or nothing if these are not calls."""
+    """Read the calls that name themselves, or nothing where any of them is not a call."""
     try:
         decoded = json.loads(text)
     except ValueError:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
     calls = [_one_json_call(item) for item in batch]
-    # All or nothing: half a batch would silently drop what the model asked for.
     return calls if calls and None not in calls else []
 
 

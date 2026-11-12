@@ -43,10 +43,8 @@ UNKNOWN_FUNCTION = "unknown"
 _WHOLE = object()
 # Where the cache cannot shift, the fraction of the room under the eviction
 # threshold, after a short question, and of ``max_history_exchanges``, that an
-# eviction brings the conversation down to. In (0, 1]: low enough that a cache
-# decoded again after an eviction takes several turns to fill again, high
-# enough to keep history. See design_history.md, "Settings, add-on files and
-# logging", 266.3.
+# eviction brings the conversation down to. In (0, 1]. See design_history.md,
+# "Settings, add-on files and logging", 266.3.
 EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 # What a result cut to fit the room left ends with, so that the model reads how much of it it got.
 RESULT_CUT_NOTE = "\n(cut: {kept} of {total} characters kept)"

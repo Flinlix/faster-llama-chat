@@ -185,10 +185,7 @@ class KVContext:
     def _warm_up(self) -> None:
         """Decode two tokens and then a single one, then clear the cache again.
 
-        The engine prepares itself on its first decodes, so this keeps that
-        cost out of the first generated token; the first larger batch still
-        pays for its own size. See design_history.md, "The warm-up decodes two
-        tokens and then one".
+        See design_history.md, "The warm-up decodes two tokens and then one".
         """
         tok = self._backend.token_eos(self._vocab)
         if tok < 0:  # no EOS; any valid id warms the graph

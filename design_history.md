@@ -3407,3 +3407,26 @@ reads the same with its tags held as letters, in a plain conversation, one
 that reasons and one with a kept turn, and on one with a typed tag held as the
 model's. The check renders each candidate twice now, which made the suite
 take about 134 seconds instead of 120 on the development machine.
+
+## 2026-11-12: Reasons moved out of the code
+
+316.32 (K21). Comments and docstrings that gave the reason for a line now
+leave it here, and the code keeps what it does and a pointer where one helps.
+
+- **Everything is settled while the wrapper is built,** so that a deployment
+  that could never work fails then, not at its first request.
+- **The wrapper's lock is held for a whole action, a generation included.**
+  One cache sequence serves every generation, so two actions whose decodes
+  interleave would corrupt it.
+- **A registry holding tools is checked before its exchange starts,** as a
+  declaration is: a registry is the same promise that the model can call
+  them, and refusing it after the model has asked for a tool would leave a
+  call nobody can answer.
+- **The warm-up's reasons** are in "The warm-up decodes two tokens and then
+  one"; **the fraction an eviction without a shift drops to** is argued in
+  266.3, under "Settings, add-on files and logging".
+- **Reading a call back is a module of its own,** apart from declaring and
+  running tools: an engine reached over a wire emits calls it cannot run, and
+  reads them without a registry.
+- **A batch of calls written as JSON is read whole or not at all.** Reading
+  half of it would drop what the model asked for without a word.

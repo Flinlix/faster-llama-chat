@@ -81,8 +81,7 @@ class ChatWrapper:
             KVContext(config, on_load_progress=on_load_progress)
             if owns_context else context
         )
-        # Everything that can be settled about this model is settled here, so
-        # that what fails, fails while the wrapper is being built.
+        # Everything that can be settled about this model is settled here.
         try:
             ensure_answers(self._context, CACHE_CONTEXT)
             if config.context_size > self._context.context_size:
@@ -101,8 +100,7 @@ class ChatWrapper:
                 self._context.close()
             raise
         self._closed = False
-        # One KV sequence is shared across generations, so concurrent decodes
-        # would corrupt it. It is held for a whole generation, not a decode.
+        # Held for a whole action, a generation included, not for one decode.
         self._lock = threading.Lock()
         # The thread that holds it while one does: for a reply, the one that read it last.
         self._holder: threading.Thread | None = None
@@ -687,9 +685,6 @@ class ChatWrapper:
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
-        # A registry is the same promise a declaration is, so it is checked the
-        # same way: an exchange that cannot run a tool is refused before it
-        # starts, not after the model has asked for one.
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
             self._template.ensure_tools_usable()

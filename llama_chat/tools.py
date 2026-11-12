@@ -1,9 +1,8 @@
 """Declaring tools to a model and running the ones it calls.
 
 Reading a call back is the other half and lives in
-:mod:`llama_chat.call_parsing`: an engine reached over a wire emits calls it
-cannot run, so the two are separate. See design_history.md, "Restructured
-inside the library".
+:mod:`llama_chat.call_parsing`. See design_history.md, "Reasons moved out of
+the code".
 """
 
 from __future__ import annotations
