@@ -179,17 +179,17 @@ class KVContext:
         self._backend.decode(self._engine_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
     def _warm_up(self) -> None:
-        """Decode a full batch and a single token, then clear the cache again.
+        """Decode two tokens and then a single one, then clear the cache again.
 
-        The engine prepares each size of batch the first time it decodes one,
-        so without this the first reply pays that cost: a full batch covers
-        every prefill, the single token every generated token.
+        The engine prepares itself on its first decodes, so this keeps that
+        cost out of the first generated token; the first larger batch still
+        pays for its own size. See design_history.md, "The warm-up decodes two
+        tokens and then one".
         """
         tok = self._backend.token_eos(self._vocab)
         if tok < 0:  # no EOS; any valid id warms the graph
             tok = 0
-        full = min(self._max_batch_tokens, self._config.context_size)
-        for tokens in ([tok] * full, [tok]):
+        for tokens in ([tok] * 2, [tok]):
             self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
             self.reset()  # kv_clear -> cache empty again for the real prefill
 

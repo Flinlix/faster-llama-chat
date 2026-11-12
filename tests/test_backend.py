@@ -483,9 +483,9 @@ def test_the_models_tags_are_the_tokens_the_engine_marks_read_once():
     assert context.is_special(3) and not context.is_special(2)
 
 
-@pytest.mark.parametrize("max_batch_tokens, context_size, full", [(8, 32, 8), (64, 16, 16)])
-def test_loading_ends_by_decoding_a_full_batch_and_a_single_token_and_leaves_the_cache_empty(
-        tmp_path, monkeypatch, max_batch_tokens, context_size, full):
+@pytest.mark.parametrize("max_batch_tokens, context_size", [(8, 32), (2048, 4096)])
+def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cache_empty(
+        tmp_path, monkeypatch, max_batch_tokens, context_size):
     performed = []
     backend = SimpleNamespace(
         load_model=lambda path, layers, progress: "model",
@@ -507,7 +507,7 @@ def test_loading_ends_by_decoding_a_full_batch_and_a_single_token_and_leaves_the
     KVContext(Config(model_path=str(model), context_size=context_size,
                      max_batch_tokens=max_batch_tokens, min_reply_tokens=0))
 
-    assert performed[-4:] == [("decode", full, 0), ("clear",), ("decode", 1, 0), ("clear",)]
+    assert performed[-4:] == [("decode", 2, 0), ("clear",), ("decode", 1, 0), ("clear",)]
 
 
 def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
