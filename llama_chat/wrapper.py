@@ -353,8 +353,9 @@ class ChatWrapper:
         """
         with self._held():
             self._turn_budget_for(policy, None)
-            generation = yield from self._read_generation(self._generate(text, **options),
-                                                          after=self._open_turn_text())
+            generation = yield from self._read_generation(
+                self._generate(text, may_call_again=policy == "yield", **options),
+                after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from _answerable(generation.tool_calls)
         return generation
@@ -623,7 +624,13 @@ class ChatWrapper:
                 self._template.ensure_tools_usable()
             any_call_asked = self._conversation.turn_open      # a turn going on has called
             budget = self._turn_budget_for(policy, max_calls)
-            deltas = self._generate(text, recognizes_calls=True, **kwargs)
+
+            def after_unreadable() -> bool:
+                """Whether a call is read again after an unreadable one, which spends one."""
+                return registry is not None and budget.calls_left > 1
+
+            deltas = self._generate(text, recognizes_calls=True,
+                                    may_call_again=after_unreadable(), **kwargs)
             generations: list[Reply] = []
             try:
                 while True:
@@ -644,7 +651,7 @@ class ChatWrapper:
                             deltas = self._generate(
                                 None,
                                 recognizes_calls=registry is not None and budget.calls_left > 0,
-                                **kwargs)
+                                may_call_again=after_unreadable(), **kwargs)
                             continue
                         # The ceiling binds only once a call has been asked for:
                         # without one the last generation kept its call tokens.
@@ -664,7 +671,8 @@ class ChatWrapper:
                             generations[-1], stop_reason="token_limit",
                             n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                         return _sum_generations(generations, budget.calls_left == 0)
-                    deltas = self._generate(None, recognizes_calls=may_call_again, **kwargs)
+                    deltas = self._generate(None, recognizes_calls=may_call_again,
+                                            may_call_again=after_unreadable(), **kwargs)
             finally:
                 deltas.close()
 
@@ -756,7 +764,7 @@ class ChatWrapper:
         for call, result in settled:
             self._conversation.add_result(call, _explain_failure(result, may_call_again))
 
-    def _generate(self, text: str | None, *, recognizes_calls: bool,
+    def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: Sampling | None,
                   withhold: bool = False) -> Generator[str, None, Reply]:
@@ -772,6 +780,9 @@ class ChatWrapper:
             recognizes_calls: ``False`` leaves a call the model writes as text,
                 so this generation cannot end on a call and the turn is certain
                 to close.
+            may_call_again: Whether a call is read again after a call this
+                generation writes that cannot be read, which the answer to
+                that call tells the model.
             withhold: Also keep a call's opening token from ever being drawn.
         """
         self._ensure_open()
@@ -810,7 +821,7 @@ class ChatWrapper:
         finally:
             pieces.close()
             # Runs on normal completion and on early close alike.
-            n_evicted_messages += self._record_reply(generated, reply_text)
+            n_evicted_messages += self._record_reply(generated, reply_text, may_call_again)
         return Reply(
             text=reply_text.answer,
             n_prefilled_tokens=conversation.decoded - decoded_from,
@@ -831,11 +842,13 @@ class ChatWrapper:
         # Read at each sample: every piece yielded before it has been fed.
         return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end))
 
-    def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText) -> int:
+    def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
+                      may_call_again: bool) -> int:
         """Record what one generation left and settle the cache after it; how many history items were evicted.
 
         A call that could not be read ends the generation as
-        ``"unreadable_tool_call"``.
+        ``"unreadable_tool_call"``, and is answered with a failure that says
+        whether to try again.
         """
         calls = self._read_calls(generated)
         called = generated.stop_reason == "tool_call"
@@ -844,7 +857,8 @@ class ChatWrapper:
         tags, answer = self._template.reasoning, reply_text.answer
         # Given to a template that writes a past reply's thought; another is written without it.
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
-        return self._conversation.record_reply(answer, kept_thought, calls, called)
+        return self._conversation.record_reply(
+            answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again))
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
@@ -932,6 +946,10 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
         thought="\n\n".join(t.thought for t in generations if t.thought),
     )
+
+
+# What a call that could not be read is answered with, before what to do next.
+_UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 
 
 def _explain_failure(result, may_call_again: bool):

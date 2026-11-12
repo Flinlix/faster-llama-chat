@@ -1632,14 +1632,31 @@ def test_a_call_that_opens_with_plain_text_cannot_be_withheld_and_stays_text(ste
     assert (reply.tool_calls, wrapper.turn_open) == ([], False)
 
 
-def test_the_answer_to_an_unreadable_call_says_why_and_gives_no_instruction():
+def _told_of_an_unreadable_call(policy, **options) -> str:
+    """The result the model is told for an unreadable call under ``policy``."""
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona")
+    wrapper.begin("persona", tools=[ToolSpec("clock", "", {})])
     fake.call_script = ["fn:nonsense with no name"]
-    wrapper.reply("los", tool_call_policy="refuse").finish()
-    turn = newest_turn(fake)
-    assert "the call could not be read" in turn
-    assert "try again" not in turn and "do not call again" not in turn
+    wrapper.reply("los", tool_call_policy=policy, **options).finish()
+    return _result_of(fake)
+
+
+@pytest.mark.parametrize("policy, options", [
+    ("yield", {}), (ToolRegistry(), {}), (ToolRegistry(), {"max_calls": 2})],
+    ids=["yield", "registry", "registry-with-a-call-left"])
+def test_the_answer_to_an_unreadable_call_says_why_and_to_try_again_where_another_call_is_read(
+        policy, options):
+    told = _told_of_an_unreadable_call(policy, **options)
+    assert "the tool call failed: the call could not be read" in told
+    assert "try again" in told and "do not call again" not in told
+
+
+@pytest.mark.parametrize("policy, options", [("refuse", {}), (ToolRegistry(), {"max_calls": 1})],
+                         ids=["refuse", "registry-at-its-last-call"])
+def test_the_answer_to_an_unreadable_call_says_not_to_call_again_where_no_call_is_read_after_it(
+        policy, options):
+    told = _told_of_an_unreadable_call(policy, **options)
+    assert "the call could not be read" in told and "do not call again" in told
 
 
 def test_an_error_result_of_the_callers_own_is_written_as_given():

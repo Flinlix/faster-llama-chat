@@ -2553,3 +2553,17 @@ keeps its thought; a tool turn stays a `ToolTurn`. `begin` still takes both
 pairs and dictionaries (268.1A), so a history written by hand stays short,
 and `begin(**chat.conversation())` begins as before, since `begin` reads a
 dictionary as it read the pair.
+
+**302.7A: the answer to an unreadable call says whether to try again.** It
+said only that the call failed and could not be read (270.24), while every
+other failure ends on `try again` or `do not call again`. At the user's
+choice it now ends on the same instruction, decided by the same rule: `try
+again` where a call the model writes next is read, which is under `"yield"`
+and under a registry with a call left after the one the unreadable call
+spends, and `do not call again` under `"refuse"` and at a registry's last
+call, where the next call would stay text. The user's words were "try
+again"; it was read as the rule the other failures follow, since telling a
+model to try again where its next call cannot be read asks for what it
+cannot do ("The mechanism, moved here from the README"). Saying `try again` in every case was
+the other reading. The wrapper words the answer, as it words every other
+failure, and hands it to the conversation, which writes it.

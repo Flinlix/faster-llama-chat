@@ -271,9 +271,9 @@ a `ValueError` that says to begin again with the tools.
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
 arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
-that the call failed, why, and `try again` or `do not call again`, except the
-answer to an unreadable call, which says only that the call failed and could
-not be read. A result that a registered tool returns as a dict carrying
+that the call failed, why, and `try again` where a call the model writes next
+is read, else `do not call again`, as under `"refuse"` or once `max_calls` is
+spent. A result that a registered tool returns as a dict carrying
 `error` counts as a failure too, and so does one that JSON cannot write. A
 result handed to `inject_tool_result` is written as given, a dict carrying
 `error` included, with nothing added to it; one that JSON cannot write is

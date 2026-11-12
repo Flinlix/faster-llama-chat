@@ -39,8 +39,6 @@ from .tools import ToolCall, ToolSpec, result_text
 # that could not be read that far. Which name is used does not change what a
 # template renders around it.
 UNKNOWN_FUNCTION = "unknown"
-_UNREADABLE_RESULT = {"error": "unreadable_call",
-                      "message": "the tool call failed: the call could not be read"}
 # Returned where a window cannot stand for the whole render.
 _WHOLE = object()
 # Where the cache cannot shift, the fraction of the room under the eviction
@@ -486,7 +484,7 @@ class RenderedCache:
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
-                     called: bool) -> int:
+                     called: bool, unreadable_result: dict) -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -508,6 +506,7 @@ class RenderedCache:
                 write or leave out.
             calls: What it called, each owed a result.
             called: Whether it stopped on a call, read or not.
+            unreadable_result: What a call that could not be read is answered with.
 
         Returns:
             How many history items were dropped.
@@ -545,7 +544,7 @@ class RenderedCache:
             return 0                # the generation failed: the next action decodes the cache again
         if unreadable:
             try:
-                written = self._write_unreadable()
+                written = self._write_unreadable(unreadable_result)
             except BaseException:
                 self._forget_calls()        # the cache is decoded again by the next action
                 raise
@@ -569,14 +568,13 @@ class RenderedCache:
         return next((k for k in self._state.kept if k.last is calling and k.on_call
                      and k in self._state.kept_at), None)
 
-    def _write_unreadable(self) -> bool:
-        """Answer a call that could not be read, where the template writes a result and the context has room; whether it was."""
+    def _write_unreadable(self, result: dict) -> bool:
+        """Answer a call that could not be read with ``result``, where the template writes a result and the context has room; whether it was."""
         call = self.pending_calls[0]
-        if not self._renders_result(result_message(call.name, call.id,
-                                                   result_text(_UNREADABLE_RESULT))):
+        if not self._renders_result(result_message(call.name, call.id, result_text(result))):
             return False
         try:
-            self.add_result(call, _UNREADABLE_RESULT)
+            self.add_result(call, result)
             return True
         except ContextOverflowError:
             return False
