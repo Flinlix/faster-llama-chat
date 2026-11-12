@@ -5,6 +5,7 @@ import json
 import re
 
 from llama_chat.config import Config
+from llama_chat.messages import result_message
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
@@ -168,7 +169,10 @@ def assert_cache_reads_as_rendered(wrapper, fake):
 
     The cache is compared as it stands, unless a decode, an edit or a
     generation failed since it was last brought up: then it is brought back
-    first, as the next action would bring it back.
+    first, as the next action would bring it back. While a call is owed a
+    result, what the template writes after the newest kept turn is decoded
+    with the results, so a cache that ends with that turn reads as the render
+    of the conversation with its results up to it.
     """
     internals.bring_cache_back(wrapper)
     assert fake.cache == internals.held_tokens(wrapper), \
@@ -182,15 +186,20 @@ def assert_cache_reads_as_rendered(wrapper, fake):
         for i in range(first, last + 1):
             if messages[i].get("tool_calls"):
                 messages[i] = {**messages[i], "content": ""}
-    renders = held_renders(fake, messages, internals.declarations(wrapper),
-                           reasoning=internals.reasons(wrapper),
-                           for_tools=internals.uses_tool_template(wrapper), typed=True)
+    owed = wrapper.pending_calls
+    answered = messages + [result_message(call.name, call.id, "stand-in") for call in owed]
+    renders = [render for written in ([messages, answered] if owed else [messages])
+               for render in held_renders(fake, written, internals.declarations(wrapper),
+                                          reasoning=internals.reasons(wrapper),
+                                          for_tools=internals.uses_tool_template(wrapper),
+                                          typed=True)]
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
     kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
              closing if not text and not on_call else "")
             for tokens, text, on_call in internals.kept_turns(wrapper)]
-    assert any(_reads_as(typed_text(fake, fake.cache), render, kept) for render in renders), \
+    assert any(_reads_as(typed_text(fake, fake.cache), render, kept, bool(owed))
+               for render in renders), \
         "the cache does not read as the template renders the conversation"
     for placed in internals.kept_turn_places(wrapper):
         assert placed is not None, "a turn kept as generated was lost"
@@ -206,7 +215,8 @@ def _reply_closing(fake, reasoning: bool) -> str:
     return reply.split(marker, 1)[1].lstrip()
 
 
-def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]) -> bool:
+def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]],
+              owed: bool = False) -> bool:
     """Whether ``held`` is ``render`` with each kept turn in place of the template's version of it, everything around them exactly as rendered.
 
     ``held``, ``render`` and each turn's text are spelled as :func:`typed_text`
@@ -217,8 +227,10 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]
     version of a turn begins with the same token, and ends with the same
     token, with that message's text, where that closing begins, or, for a turn
     whose call the template does not write, is where the kept turn begins; so
-    it takes in none of the template's text beside it. A turn's bounds are
-    found by its characters, since a model may write a tag of its turn as text.
+    it takes in none of the template's text beside it. Where a call is
+    ``owed`` and ``held`` ends with the newest kept turn, the rest of the
+    render is not decoded yet. A turn's bounds are found by its characters,
+    since a model may write a tag of its turn as text.
     """
     plain = lambda text: text.replace(_TAG_MARK, "")       # noqa: E731
     pieces, at = [], 0
@@ -239,6 +251,8 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]
         if not plain(render[at:]).startswith(opening):
             return False
         last = n == len(kept) - 1
+        if last and owed and not piece:
+            return True             # the rest of the render is decoded with the results
         ends = [len(render) - len(piece)] if last else _occurrences(render, piece, at)
         ends = [end for end in ends if len(plain(render[at:end])) >= len(opening)
                 and render.startswith(piece, end)

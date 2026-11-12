@@ -868,6 +868,48 @@ def test_a_call_after_a_short_thought_written_in_the_models_own_tags_is_handed_o
     run.chat.reply().finish()
 
 
+def _owing_a_call(stem, reasoning):
+    """A conversation on ``stem`` whose reply made a call under ``"yield"``, after a short thought where it reasons, and the call."""
+    run = _Run(stem, reasoning=reasoning)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    tags, thought = run.template.reasoning, ""
+    if reasoning:
+        opens = begins_in_thought(tags, run.template.generation_prompt(True))
+        thought = ("" if opens else tags.thought_open) + "Kurz." + tags.thought_close
+    run.context.replies = [ScriptedCall(body, before=thought)]
+    run.begin(tools=[WEATHER])
+    call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    return run, call
+
+
+@pytest.mark.parametrize("stem,reasoning", [(stem, reasoning) for stem in _TOOL_TEMPLATES
+                                            for reasoning in _reasoning_modes(stem)])
+def test_a_call_owed_its_result_holds_the_render_up_to_its_turn_and_the_result_only_adds(
+        stem, reasoning):
+    """What the template writes after the call is decoded with the result, so nothing is taken back then."""
+    run, call = _owing_a_call(stem, reasoning)
+    assert_cache_reads_as_rendered(run.chat, run.context)
+    owed = list(run.context.cache)
+    run.chat.inject_tool_result(call, "sunny")
+    assert run.context.cache[:len(owed)] == owed
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_cache_off_the_render_before_a_call_owed_its_result_is_caught(stem):
+    run, _call = _owing_a_call(stem, reasoning=False)
+    sound = list(run.context.cache)
+    start = len(sound) - len(internals.kept_turns(run.chat)[-1][0])
+    mark = ord("#")                     # a token that spells a character no render here holds
+    for broken in (sound[:start - 1] + sound[start:], sound[:1] + [mark] + sound[1:]):
+        run.context.cache = broken
+        internals.overwrite_held_tokens(run.chat, broken)
+        with pytest.raises(AssertionError, match="does not read as the template renders"):
+            assert_cache_reads_as_rendered(run.chat, run.context)
+    run.context.cache = sound
+    internals.overwrite_held_tokens(run.chat, sound)
+
+
 @pytest.mark.parametrize("stem", _thinking("all"))
 def test_a_past_replys_thought_stays_in_the_cache_wherever_the_template_keeps_it(stem):
     run = _Run(stem, reasoning=True)

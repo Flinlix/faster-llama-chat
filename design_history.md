@@ -3432,3 +3432,34 @@ leave it here, and the code keeps what it does and a pointer where one helps.
   reads them without a registry.
 - **A batch of calls written as JSON is read whole or not at all.** Reading
   half of it would drop what the model asked for without a word.
+
+## 2026-11-12: While a call is owed, the cache ends with its turn
+
+A test that ended with a call under `"yield"` still owed a result failed the
+end-of-test check on 26 of the 41 test templates that call tools (49 of 74
+cases, counting each reasoning mode), with reasoning on and off alike, after a
+thought or without one. The cache held the conversation up to the last token
+the model generated for its call; the template's render of a conversation
+that ends on that call closes the turn after it, such as with `<|im_end|>`,
+and on mistral-small-3.2 it also leaves out the declarations before the
+question, which the template writes again once a result follows.
+
+This is a gap in the check, not in the library. While a call is owed, the
+library decodes nothing after the turn: the closing, each result and the
+generation prompt are decoded together once the last result is in. Nothing
+reads the cache in between, since a reply is refused while a result is owed.
+Measured on every test template that calls tools, in each reasoning mode, 74
+cases: the result's arrival only appended to the cache, with no cut and no
+restore. So the cache is the render of the conversation as its results
+complete it, up to the open turn. The check now compares an owed call's cache
+with that render, a stand-in result in place of each owed one, and accepts
+the rest of the render as not decoded where the cache ends with the newest
+kept turn. Decoding the closing as soon as the call is made was rejected: on
+a template that writes the results inside the turn, or writes earlier text
+otherwise once a result follows, it would have to be taken back when the
+result arrives.
+
+Not changed: `begin` with a history that ends on an owed call renders the
+conversation as it stands. On qwen-3, qwen-3-hermes and mistral-small-3.2 the
+result then takes back 50 to 66 tokens, by a cut or by restoring a saved
+state, and decodes them again.
