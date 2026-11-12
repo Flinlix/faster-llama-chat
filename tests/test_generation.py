@@ -23,6 +23,7 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
     ctx._backend = SimpleNamespace(
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == eog,
+        is_special=lambda vocab, token: False,
         decode=lambda *_a: None,
         token_to_piece_bytes=lambda vocab, token: pieces[token],
         free_sampler=lambda sampler: None)
@@ -147,17 +148,35 @@ def test_cancelling_ends_the_stream_within_one_token():
     assert acc.token_ids == [0]
 
 
+def test_only_a_tail_that_could_begin_a_mark_is_held_back():
+    from llama_chat.cache_context import GenerationAccumulator
+
+    acc = GenerationAccumulator()
+    stream = generate(_generating({0: b"ab", 1: b"cZ", 2: b"Zq", 3: b"Z"}, [0, 1, 2, 3]), 0, 4,
+                      out=acc, boundary=CallBoundary(turn_end_text="ZZZZ"))
+    assert list(stream) == ["ab", "c", "ZZq", "Z"]
+    assert acc.text == "abcZZqZ"
+
+
+def test_a_tail_that_could_begin_a_plain_text_opening_is_held_only_where_a_call_may_open():
+    """A call that opens with plain text opens only at the reply's start or after a tag."""
+    pieces = {0: b"{", 1: b"x", 2: b"a {", 3: b"b"}
+    boundary = CallBoundary(call_texts=("{\"n\"", "}"), opens_as_text=True)
+    assert list(generate(_generating(pieces, [0, 1]), 0, 2, boundary=boundary)) == ["{x"]
+    assert list(generate(_generating(pieces, [2, 3]), 0, 2, boundary=boundary)) == ["a {", "b"]
+
+
 def test_the_held_back_tail_is_flushed_when_generation_runs_out():
     from llama_chat.cache_context import GenerationAccumulator
 
     acc = GenerationAccumulator()
-    # A closing text this long holds back three characters at every step, so
-    # without the final flush the reply would end short.
-    stream = generate(_generating({0: b"abc", 1: b"def"}, [0, 1]), 0, 2, out=acc,
+    # The reply ends on text that could still begin the closing, so without the
+    # final flush it would end short.
+    stream = generate(_generating({0: b"abc", 1: b"deZZ"}, [0, 1]), 0, 2, out=acc,
                       boundary=CallBoundary(turn_end_text="ZZZZ"))
-    assert "".join(stream) == "abcdef"
+    assert list(stream) == ["abc", "de", "ZZ"]
     assert acc.stop_reason == "token_limit"
-    assert acc.text == "abcdef"
+    assert acc.text == "abcdeZZ"
 
 
 def test_a_resumed_reply_gathers_its_text_into_one_message():

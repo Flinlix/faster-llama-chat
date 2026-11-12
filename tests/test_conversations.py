@@ -971,6 +971,14 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     assert before + opener + body + closer in run.seen[-1]
 
 
+@pytest.mark.parametrize("stem, reasoning", _each_mode(_EVERY))
+def test_a_reply_that_can_begin_no_call_and_no_ending_streams_each_character_as_it_is_generated(
+        stem, reasoning):
+    run = _Run(stem, replies=["Blue."], reasoning=reasoning)
+    run.begin()
+    assert list(run.chat.reply("Name a colour.")) == list("Blue.")
+
+
 # ----- one template's own cases ------------------------------------------------------
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
     from tests.invented_templates import TOOLS

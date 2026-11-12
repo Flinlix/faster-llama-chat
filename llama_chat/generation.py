@@ -108,8 +108,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                              if boundary.call_texts else (None, None))
     call_opens_as_text = boundary.opens_as_text and open_text is not None
     marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
-    held_chars = max([0] + [len(mark) for mark in (*(boundary.call_texts or ()),
-                                                   boundary.turn_end_text) if mark])
+    opening_owns_space = open_text is not None and boundary.call_texts[0][:1].isspace()
     starts = []            # where each token's text begins in ``visible``
     ended_at_text = False
     marks_from = 0         # where the next search for a mark begins
@@ -195,7 +194,16 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                         del generated.token_ids[kept:]
                         pos = start_pos + kept
             else:
-                upto = len(visible) - (held_chars - 1)
+                upto = len(visible)
+                if boundary.turn_end_text:
+                    upto = _partial_mark_at(visible.text, boundary.turn_end_text, visible.emitted)
+                if open_text is not None:
+                    opens_at = _partial_mark_at(visible.text, open_text, visible.emitted)
+                    if not call_opens_as_text or _after_tag(
+                            context, visible.text, starts, generated.token_ids, opens_at):
+                        if opening_owns_space:
+                            opens_at = len(visible.text[:opens_at].rstrip())
+                        upto = min(upto, opens_at)
             if held_tag is not None and call is None:
                 following = visible.text[held_tag[1]:].lstrip()
                 if following and not open_text.startswith(following[:len(open_text)]):
@@ -230,6 +238,14 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         if delta:
             generated.text += delta
             yield delta
+
+
+def _partial_mark_at(text: str, mark: str, search_from: int) -> int:
+    """Where the longest end of ``text`` from ``search_from`` on that begins ``mark`` starts, ``len(text)`` where none does."""
+    for at in range(max(search_from, len(text) - len(mark) + 1), len(text)):
+        if mark.startswith(text[at:]):
+            return at
+    return len(text)
 
 
 def _after_tag(context: CacheContext, text: str, starts: list[int], tokens: list[int],
