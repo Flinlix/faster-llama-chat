@@ -65,7 +65,8 @@ def _compiled(text: str, eos_text: str) -> _Renders:
 
 # Every tag-shaped text of a test template, the invented ones' turn tags included.
 TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[A-Z_]+\]"
-                 r"|<｜[^｜]+｜>|\]~!?[a-z][\[\]]|\[[a-z]~\[|<\[[a-z]+>|<[a-z]+\]>")
+                 r"|<｜[^｜]+｜>|◁[^◁▷\s]+▷|〈\|[^〈〉\s]+\|〉|<[A-Z][A-Z_]+>"
+                 r"|\]~!?[a-z][\[\]]|\[[a-z]~\[|<\[[a-z]+>|<[a-z]+\]>")
 
 # The sequence opener, which spells no text, and the token that ends a
 # generation, which no text tokenizes into. Tags count down below both.

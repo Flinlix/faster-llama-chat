@@ -26,7 +26,7 @@ _EXEMPT = {_ROOT / "design_history.md", _ROOT / "install.sh", _ROOT / "pyproject
 _INSTALL_SECTION = re.compile(r"(?ms)^## Install$.*?(?=^## )")
 
 # The library's and its engine's own names, which hold a family's letters.
-_OWN_NAMES = ("llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
+_OWN_NAMES = ("faster-llama-chat", "llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
 _OWN_NAME = re.compile("|".join(map(re.escape, _OWN_NAMES)), re.IGNORECASE)
 # The engine's module and its tests, which name the engine's functions: the words its
 # module's name begins with, alone or before an underscore.
@@ -81,18 +81,30 @@ def _words_first() -> set[str]:
             if expected(fixture(stem), "publisher_is_a_word")}
 
 
+def _spelled(word: str) -> str:
+    """``word`` in lower case, a space before each capital that follows a small letter."""
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", word).lower()
+
+
 def _parts(word: str) -> list[str]:
-    """``word`` whole and in its parts: split at ``_`` and before capitals, and those split again between letters and digits."""
-    pieces = re.sub(r"(?<=[a-z])(?=[A-Z])|_", " ", word).lower().split()
+    """``word`` whole and in its parts: split at ``_``, ``-``, ``.`` and before capitals, and those split again between letters and digits."""
+    pieces = re.sub(r"[_.\-]", " ", _spelled(word)).split()
     spaced = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", " ".join(pieces))
     return [word.lower()] + pieces + spaced.split()
+
+
+def _holds_compound(word: str, vendors: set[str]) -> bool:
+    """Whether ``word`` holds, between its separators, a vendor whose name is itself split by one."""
+    spelled = _spelled(word)
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(vendor)}(?![a-z0-9])", spelled)
+               for vendor in vendors if re.search(r"[.\-]", vendor))
 
 
 def _names_a_model(word: str, families: set[str], vendors: set[str], words_first: set[str]) -> bool:
     if word.lower() in _OWN_NAMES:
         return False
     whole, *parts = _parts(word)
-    if whole in vendors:
+    if whole in vendors or _holds_compound(word, vendors):
         return True
     for part in [whole, *parts]:
         if part in families or (part in vendors and part not in words_first):
@@ -116,13 +128,14 @@ def test_a_file_names_no_model_family_or_vendor(path):
 
 
 def _recognized_forms() -> list[str]:
-    """Each family and vendor as names spell it: alone, versioned, inside an identifier and in camel case."""
+    """Each family and vendor as names spell it: alone, versioned, inside an identifier, a compound word or a file name, and in camel case."""
     words_first = _words_first()
     forms = [form for family in sorted(_families()) for form in (
         family, f"{family}3", f"{family}2.5", f"{family}-3", f"is_{family}", f"{family}_tags",
-        f"{family}3coder", f"{family.capitalize()}Tags")]
+        f"{family}3coder", f"{family.capitalize()}Tags", f"my-{family}-model", f"x-{family}",
+        f"a.{family}", f"{family}.gguf", f"{family.capitalize()}-Instruct-3-8B")]
     return forms + [form for vendor in sorted(_vendors()) for form in (
-        (vendor,) if vendor in words_first else (vendor, f"{vendor}_format"))]
+        (vendor,) if vendor in words_first else (vendor, f"{vendor}_format", f"x-{vendor}-3"))]
 
 
 def test_every_publisher_a_source_names_before_a_slash_is_a_vendor():
@@ -144,8 +157,24 @@ def test_the_library_its_engine_and_an_everyday_word_are_not_taken_for_a_model(w
     assert not _names_a_model(word, _families(), _vendors(), _words_first())
 
 
+# The keys of a test template's file whose value is one of the template's tags.
+_TAG_KEYS = ("eos_token", "bos_token", "turn_end_token", "call_closing_tag")
+
+
+def _stated_tags(known: dict) -> set[str]:
+    """The tags a test template's file states beside its template."""
+    stated = {known.get(key) for key in _TAG_KEYS} | set(expected(known, "ends_generation"))
+    return stated - {None}
+
+
 def _template_tags() -> set[str]:
-    return {tag for stem in STEMS for tag in TAG.findall(fixture(stem)["chat_template"])}
+    return {tag for stem in STEMS for tag in (TAG.findall(fixture(stem)["chat_template"])
+                                              + sorted(_stated_tags(fixture(stem))))}
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_every_tag_a_test_templates_file_states_has_a_shape_the_check_reads(stem):
+    assert not [tag for tag in _stated_tags(fixture(stem)) if not TAG.fullmatch(tag)]
 
 
 @pytest.mark.parametrize("path", _checked_files(), ids=lambda path: str(path.relative_to(_ROOT)))

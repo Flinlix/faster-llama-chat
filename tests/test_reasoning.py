@@ -1,7 +1,6 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
 import json
-import re
 import sys
 
 import pytest
@@ -195,32 +194,23 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
 
 # ----- a thought marked by tags of another shape ----------------------------
 _TURNS = ("{%- for m in messages -%}<|{{ m.role }}_says|>"
-          "{{ m.content.split('◁/think▷')[-1] if m.role == 'assistant' else m.content }}<|said|>"
+          "{{ m.content.split('◁/ponder▷')[-1] if m.role == 'assistant' else m.content }}<|said|>"
           "{%- endfor -%}")
-
-
-@pytest.fixture
-def tags_of_another_shape(monkeypatch):
-    """The stand-in vocabulary holding ``◁think▷`` and ``◁/think▷`` as tags too."""
-    from tests import fake_context
-    monkeypatch.setattr(fake_context, "TAG",
-                        re.compile(fake_context.TAG.pattern + "|◁/?think▷"))
 
 
 @pytest.mark.parametrize("prompt", [
     # Only the prompt without reasoning shows the thought, empty.
     "{%- if add_generation_prompt -%}<|assistant_says|>"
-    "{%- if not enable_thinking -%}◁think▷◁/think▷{%- endif -%}{%- endif -%}",
+    "{%- if not enable_thinking -%}◁ponder▷◁/ponder▷{%- endif -%}{%- endif -%}",
     # Only a past reply shows it, by leaving it out.
     "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}",
 ], ids=["empty-thought", "removed-thought"])
-def test_a_thought_whose_tags_are_not_angle_brackets_is_read_by_the_models_own_tags(
-        tags_of_another_shape, prompt):
+def test_a_thought_whose_tags_are_not_angle_brackets_is_read_by_the_models_own_tags(prompt):
     template = ResolvedTemplate(FakeContext(
         {"chat_template": _TURNS + prompt, "eos_token": "<|said|>",
          "render_variables": {"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}}))
     assert (template.reasoning.thought_open, template.reasoning.thought_close) == \
-        ("◁think▷", "◁/think▷")
+        ("◁ponder▷", "◁/ponder▷")
 
 
 # ----- stop strings and a reasoning reply ----------------------------------
@@ -273,7 +263,7 @@ def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_sha
 # A template whose default does not reason, yet writes an empty thought for the
 # effort "none", so that the template alone reads the default as on.
 _DEFAULT_WITHOUT_THOUGHT = {
-    "chat_template": _TURNS.replace("◁/think▷", "</reason>")
+    "chat_template": _TURNS.replace("◁/ponder▷", "</reason>")
                      + "{%- if add_generation_prompt -%}<|assistant_says|>"
                      "{%- if reasoning_effort == 'none' -%}<reason></reason>"
                      "{%- elif reasoning_effort == 'high' -%}<reason>{%- endif -%}{%- endif -%}",

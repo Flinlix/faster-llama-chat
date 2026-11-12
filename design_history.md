@@ -2670,3 +2670,25 @@ from, was not picked up. Every name directly before a slash is now taken. A
 test reads the sources again by splitting them at spaces and punctuation, a
 second construction of the same set, and checks that each name found is a
 vendor and that no vendor holds a space.
+
+**S9: the name check reads compound words, and the tag check every tag a
+template file states.** The check split a word at `_` and before capitals,
+so a name joined by `-` or `.`, as in a model's repository name, a file name
+such as one ending in `.gguf`, or a compound word, was read whole and matched
+no family. Its parts are now split at `-` and `.` as well, and a vendor whose
+own name holds such a separator is found wherever it stands between
+separators inside a word. Splitting so found two names that are not a
+model's: the project's own distribution name, which joins the engine's name
+with `-` and is now among the library's own names, and the name of a GPU
+maker's tool in the engine module's install message, which now says "where
+the GPU driver is found"; the install script and the README's install section
+keep it, as the files that install the engine. The tag check read only the
+tag shapes `TAG` knows, and two end-of-sequence tags that test template files
+state had a shape it did not, so a test could have written them unnoticed;
+one of them is also written by its template, which the stand-in therefore
+spelled as plain characters. `TAG` now reads both shapes and the `◁…▷` form
+some templates mark a thought with, a test checks that every tag a template
+file states has a shape `TAG` reads, and those tags count among the tags no
+other file may write. The test of a thought marked by tags of that form used
+a real template's tag and widened `TAG` for itself; it now uses an invented
+tag of the same shape, which the wider `TAG` reads without a fixture.
