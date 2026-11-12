@@ -3750,3 +3750,19 @@ where every turn decoded the whole conversation before (1,535, 1,683, 1,831,
 1,979). It costs one more saved copy of the model's state in RAM, only for
 such a cache; caches that cut or shift save no states at all. The two cases
 are no longer marked as expected to fail.
+
+### A withheld call that opens with plain text ends the reply
+
+337.10A. Where calls are not read (under `"withhold"`, in the rounds after a
+refused call, and in a registry's last round), the token that opens a call
+is never drawn. A template whose call opens with plain text (llama-3.2,
+minicpm-5 and deepseek-v4.1 among the test templates) has no such token, so a
+call the model wrote anyway reached the caller and the history as raw text,
+for example `{"name": "weather", ...}`, against principle 7. Now
+`ResolvedTemplate.call_boundary` keeps that opening as a mark there, and the
+generation ends where such a call opens, as it ends at a turn's end written as
+text: what the model wrote before it stays, the opening's tokens leave the
+cache, and the template's closing is written whole. A reply that opens with a
+call is therefore empty. A mention of the opening in prose is not a call, as
+before: a plain-text opening counts only at the reply's start or right after
+a tag.

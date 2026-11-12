@@ -214,20 +214,22 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                 mark_at = visible.find(marks, marks_from)
             if mark_at is not None:
                 upto = mark_at
-                if open_text is not None and visible.startswith(open_text, mark_at):
-                    call = [visible.since(mark_at + len(open_text))]
-                    call_tail = call[0]
+                opens_call = open_text is not None and visible.startswith(open_text, mark_at)
+                if opens_call:
                     if opening_owns_space:
                         upto = visible.content_end(mark_at)     # the opening's own
                     if held_tag is not None:
                         upto = held_tag[0]          # the tag the call follows is the call's
+                if opens_call and not boundary.ends_at_call:
+                    call = [visible.since(mark_at + len(open_text))]
+                    call_tail = call[0]
                 else:
                     generated.stop_reason = "end_of_turn"
                     ended_at_text = True
                     # Its tokens leave the reply, and the caller cuts them
                     # from the cache: the closing is written whole.
-                    kept = bisect.bisect_left(starts, mark_at)
-                    if kept < len(starts) and starts[kept] == mark_at:
+                    kept = bisect.bisect_left(starts, upto)
+                    if kept < len(starts) and starts[kept] == upto:
                         generated.cached_beyond = len(generated.token_ids) - kept
                         del generated.token_ids[kept:]
                         pos = start_pos + kept

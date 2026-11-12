@@ -489,10 +489,12 @@ class ResolvedTemplate:
         Without ``recognizes_calls`` no call is recognized, so the reply is certain
         to close. With ``withhold`` a call's opening token is also never
         drawn; a call that opens with plain text cannot be kept from the model
-        that way, and stays text.
+        that way, so the reply ends where such a call opens.
         """
         if recognizes_calls:
             return self._boundary
+        if withhold and self._boundary.opens_as_text and self._boundary.call_texts:
+            return dataclasses.replace(self._boundary, tool_tokens=None, ends_at_call=True)
         tokens = self._boundary.tool_tokens
         return CallBoundary(opens_as_text=self._boundary.opens_as_text,
                             turn_end_text=self._boundary.turn_end_text,

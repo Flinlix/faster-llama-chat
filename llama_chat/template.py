@@ -27,6 +27,8 @@ class CallBoundary:
             call where calls are withheld.
         thought_tags: The tags around a thought, which stay the reply's where
             a call follows them.
+        ends_at_call: Whether a call that opens with plain text ends the reply
+            where it opens instead of being read, where calls are withheld.
     """
 
     tool_tokens: tuple[int, int] | None = None
@@ -35,6 +37,7 @@ class CallBoundary:
     turn_end_text: str | None = None
     withheld_tokens: tuple[int, ...] = ()
     thought_tags: tuple[str, ...] = ()
+    ends_at_call: bool = False
 
 
 @dataclass(frozen=True)
