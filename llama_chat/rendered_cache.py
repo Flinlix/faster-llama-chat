@@ -684,8 +684,9 @@ class RenderedCache:
         as a question does, the turn it answers kept whole. Where it still
         cannot fit, it is cut, :data:`RESULT_CUT_NOTE` after it telling the
         model how much was kept, and its call is noted in :attr:`results_cut`.
-        The room left keeps space for each result still owed after it, as
-        that note with nothing kept.
+        Where it does not fit whole, the room left keeps space for each
+        result still owed after it, as that note with nothing kept, unless
+        not even this one would fit then.
 
         Raises:
             ValueError: If no call is waiting, this is not the one owed, the
@@ -712,25 +713,31 @@ class RenderedCache:
                                  "result cannot be written")
             room = self._max_prompt_tokens
             n_before = len(as_history(self._state.messages))
-            # Each result still owed after this one is held cut to nothing, so room is left for it.
-            owed_after = [result_message(later.name, later_id, _cut(text, 0))
-                          for later, later_id in waiting[1:]]
-            self._state.messages += [message, *owed_after]
-            dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True,
-                                            beside_open_turn=True)
-            at = len(self._state.messages) - len(owed_after) - 1
+            self._state.messages.append(message)
+            at = len(self._state.messages) - 1
+            dropped = False
             if not self._fits(at, text, room):
-                if not text or not self._fits(at, _cut(text, 0), room):
-                    raise ContextOverflowError(
-                        "not even the result cut to nothing leaves room for the reply in what "
-                        "is left of the context")
-                low, high = 0, len(text)
-                while low < high:
-                    middle = (low + high + 1) // 2
-                    low, high = (middle, high) if self._fits(at, _cut(text, middle), room) \
-                        else (low, middle - 1)
-                self._state.messages[at] = {**message, "content": _cut(text, low)}
-                self._state.results_cut.append(owed)
+                # Each result still owed after this one is held cut to nothing, so that
+                # what this one is cut to leaves room for them.
+                self._state.messages += [result_message(later.name, later_id, _cut(text, 0))
+                                         for later, later_id in waiting[1:]]
+                dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True,
+                                                beside_open_turn=True)
+                at = len(self._state.messages) - len(waiting)
+                if not self._fits(at, text, room):
+                    if text and not self._fits(at, _cut(text, 0), room):
+                        del self._state.messages[at + 1:]       # this one first, if only it fits
+                    if not text or not self._fits(at, _cut(text, 0), room):
+                        raise ContextOverflowError(
+                            "not even the result cut to nothing leaves room for the reply in "
+                            "what is left of the context")
+                    low, high = 0, len(text)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        low, high = (middle, high) if self._fits(at, _cut(text, middle), room) \
+                            else (low, middle - 1)
+                    self._state.messages[at] = {**message, "content": _cut(text, low)}
+                    self._state.results_cut.append(owed)
             del self._state.messages[at + 1:]
             if not self.pending_calls:
                 self._sync(self._fitting_prompt(), dropped=dropped)

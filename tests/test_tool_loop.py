@@ -515,6 +515,19 @@ def test_a_result_cut_leaves_room_for_the_results_still_owed_after_it():
     assert wrapper.reply().finish().tool_results_cut == [first]
 
 
+def test_short_results_that_fit_together_are_written_whole_and_keep_the_turn_open():
+    wrapper, fake = tool_wrapper(context_size=400)
+    wrapper.begin("persona")
+    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    first, second = [e for e in wrapper.reply("q" * 230, tool_call_policy="yield")
+                     if isinstance(e, ToolCall)]
+    wrapper.inject_tool_result(first, "a")          # shorter than the note a cut leaves
+    wrapper.inject_tool_result(second, "b")
+    assert wrapper.turn_open and not wrapper.pending_calls
+    fake.call_script = []
+    assert wrapper.reply().finish().tool_results_cut == []
+
+
 def test_a_turn_closed_for_want_of_room_lists_no_result_it_dropped_as_cut():
     wrapper, fake, (first, second) = _two_calls_owed(context_size=400)
     wrapper.inject_tool_result(first, "x" * 5000)
