@@ -29,8 +29,9 @@ _WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
 _WHOLE_CONTEXT_WINDOW = -1
 # Where the system describes each processor's package and core, on Linux.
 _CPU_TOPOLOGY = Path("/sys/devices/system/cpu")
-# Where it states the process's CPU quota, on Linux.
+# Where the control groups that hold CPU quotas are mounted, and which ones this process is in, on Linux.
 _CGROUP = Path("/sys/fs/cgroup")
+_OWN_CGROUPS = Path("/proc/self/cgroup")
 
 
 class KVContext:
@@ -349,17 +350,38 @@ def _physical_cores() -> int:
                            for name in ("physical_package_id", "core_id")) for cpu in cpus})
     except OSError:
         cores = threads if threads <= 4 else threads // 2
+    allowed = _quota_cores()
+    return cores if allowed is None else min(cores, allowed)
+
+
+def _quota_cores() -> int | None:
+    """The whole processors the tightest CPU quota on this process's control groups allows, ``None`` where none is set.
+
+    Each group the process is in is read, and every group above it.
+    """
     try:
-        quota, period = (_CGROUP / "cpu.max").read_text().split()
+        groups = [line.split(":", 2) for line in _OWN_CGROUPS.read_text().splitlines()]
     except OSError:
-        try:
-            quota, period = ((_CGROUP / "cpu" / name).read_text().strip()
-                             for name in ("cpu.cfs_quota_us", "cpu.cfs_period_us"))
-        except OSError:
-            quota = "max"
-    if quota in ("max", "-1"):
-        return cores
-    return min(cores, max(1, int(quota) // int(period)))
+        groups = [["0", "", "/"]]
+    allowed = []
+    for _, controllers, path in groups:
+        if controllers and "cpu" not in controllers.split(","):
+            continue
+        base = _CGROUP if not controllers else _CGROUP / "cpu"
+        leaf = Path(path.lstrip("/"))
+        for level in (leaf, *leaf.parents):
+            folder = base / level
+            try:
+                if controllers:
+                    quota, period = ((folder / name).read_text().strip()
+                                     for name in ("cpu.cfs_quota_us", "cpu.cfs_period_us"))
+                else:
+                    quota, period = (folder / "cpu.max").read_text().split()
+            except (OSError, ValueError):
+                continue
+            if quota not in ("max", "-1"):
+                allowed.append(max(1, int(quota) // int(period)))
+    return min(allowed, default=None)
 
 
 def _flash_attention(config: Config) -> bool | None:

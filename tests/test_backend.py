@@ -582,8 +582,9 @@ def test_a_gguf_penalty_window_of_minus_one_is_read_as_the_whole_context():
                                read_addon_file(None)).penalty_window_tokens == 2048
 
 
-def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, int]]) -> None:
-    """Let this process run on the processors ``cores_of`` lists, each on its (package, core)."""
+def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, int]],
+                        own_cgroups: str = "0::/\n") -> None:
+    """Let this process run on the processors ``cores_of`` lists, each on its (package, core), in the control groups ``own_cgroups`` names."""
     for cpu, (package, core) in cores_of.items():
         topology = tmp_path / "cpu" / f"cpu{cpu}" / "topology"
         topology.mkdir(parents=True)
@@ -591,6 +592,8 @@ def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, in
         (topology / "core_id").write_text(f"{core}\n")
     monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "cpu")
     monkeypatch.setattr("llama_chat.context._CGROUP", tmp_path / "cgroup")
+    monkeypatch.setattr("llama_chat.context._OWN_CGROUPS", tmp_path / "own-cgroups")
+    (tmp_path / "own-cgroups").write_text(own_cgroups)
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(cores_of), raising=False)
 
 
@@ -617,16 +620,20 @@ def test_where_the_system_does_not_say_which_core_a_thread_runs_on_the_threads_p
     assert _physical_cores() == cores
 
 
-@pytest.mark.parametrize("quota_files, cores", [
-    ({"cpu.max": "max 100000\n"}, 8),
-    ({"cpu.max": "400000 100000\n"}, 4),
-    ({"cpu.max": "1000000 100000\n"}, 8),
-    ({"cpu.max": "50000 100000\n"}, 1),
-    ({"cpu/cpu.cfs_quota_us": "250000\n", "cpu/cpu.cfs_period_us": "100000\n"}, 2),
-    ({"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, 8),
-], ids=["v2-unlimited", "v2-four", "v2-ten", "v2-half", "v1-two-and-a-half", "v1-unlimited"])
-def test_a_cpu_quota_bounds_the_cores(tmp_path, monkeypatch, quota_files, cores):
-    _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE)
+@pytest.mark.parametrize("own_cgroups, quota_files, cores", [
+    ("0::/\n", {"cpu.max": "max 100000\n"}, 8),
+    ("0::/\n", {"cpu.max": "400000 100000\n"}, 4),
+    ("0::/\n", {"cpu.max": "1000000 100000\n"}, 8),
+    ("0::/\n", {"cpu.max": "50000 100000\n"}, 1),
+    ("0::/system.slice/chat.service\n", {"system.slice/chat.service/cpu.max": "300000 100000\n"}, 3),
+    ("0::/system.slice/chat.service\n", {"system.slice/cpu.max": "200000 100000\n",
+                                         "system.slice/chat.service/cpu.max": "max 100000\n"}, 2),
+    ("4:cpu,cpuacct:/\n", {"cpu/cpu.cfs_quota_us": "250000\n", "cpu/cpu.cfs_period_us": "100000\n"}, 2),
+    ("4:cpu,cpuacct:/\n", {"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, 8),
+], ids=["v2-unlimited", "v2-four", "v2-ten", "v2-half", "v2-own-group", "v2-group-above",
+        "v1-two-and-a-half", "v1-unlimited"])
+def test_a_cpu_quota_bounds_the_cores(tmp_path, monkeypatch, own_cgroups, quota_files, cores):
+    _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE, own_cgroups)
     for name, text in quota_files.items():
         (tmp_path / "cgroup" / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "cgroup" / name).write_text(text)

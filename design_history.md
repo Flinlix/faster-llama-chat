@@ -3708,3 +3708,15 @@ stopped at the first "E", "N" or "D"; the review fixes then refused a `str`.
 Now a single `str` is taken as one stop text, as most chat interfaces take it,
 and a list still gives several. Anything else is refused before the question
 is written, as before.
+
+### The CPU quota is read along the process's own control groups
+
+The quota was read only at the top of `/sys/fs/cgroup`, which is the
+process's own group inside a container but the root group on a host, where
+no such file exists; a quota on the service or scope the process runs in, or
+on a group above it, was missed (found by the review of this round's fixes).
+Now the groups the process is in are taken from `/proc/self/cgroup`, every
+group from each of them up to the root is read, cgroup v2's `cpu.max` and
+v1's `cpu.cfs_quota_us` with `cpu.cfs_period_us`, and the tightest quota
+bounds the cores. Where `/proc/self/cgroup` cannot be read, the top group
+alone is read, as before.
