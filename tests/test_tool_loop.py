@@ -1002,6 +1002,23 @@ def test_a_reply_reads_at_most_three_unreadable_calls_in_a_row_then_the_model_an
     assert reply.stop_reason == "end_of_turn" and not wrapper.turn_open
 
 
+def test_a_readable_call_starts_the_count_of_unreadable_calls_in_a_row_again():
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(context_size=4096)
+    wrapper.begin("persona")
+    unreadable = "fn:nonsense with no name"
+    fake.call_script = [unreadable, unreadable, "fn:clock{}"] + [unreadable] * 5
+
+    reply = wrapper.reply("wie spät?", tool_call_policy=registry).finish()
+
+    assert len(fake.call_script) == 2
+    assert [c.status for c in reply.tool_calls].count("unreadable") == 5
+    told = held_text(fake)
+    assert told.count("try again") == 4 and told.count("do not call again") == 1
+    assert told.rindex("do not call again") > told.rindex("try again")
+
+
 def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
