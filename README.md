@@ -142,7 +142,7 @@ on, so the refusal follows it there.
 | `"token_limit"` | `max_reply_tokens` ran out, or the context did |
 | `"interrupted"` | `cancel` was set |
 | `"tool_call"` | the reply stopped on a call, and the turn is open for its result |
-| `"unreadable_tool_call"` | it stopped on a call whose body could not be read, and the model could not be told: the template has no result block, or the context has no room left for one. Where it can be told, the reply goes on and ends for another reason; under `"yield"` the model may write another call as long as there is room |
+| `"unreadable_tool_call"` | it stopped on a call whose body could not be read, and the model could not be told: the template has no result block, or the context has no room left for one. Where it can be told, the reply goes on and ends for another reason; under `"yield"` the model may write another call as long as there is room, and after three unreadable calls in a row it is told not to call again |
 
 `Reply` also carries `text`, `n_prefilled_tokens`, `n_prompt_tokens` (the
 tokens the cache held when the reply's last generation drew its first, which

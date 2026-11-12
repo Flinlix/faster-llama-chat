@@ -277,7 +277,9 @@ class ChatWrapper:
                   is parted from the text before the call as under
                   ``"refuse"``. A call that cannot be read is answered with a
                   failure and the reply goes on; the model may write another
-                  call as long as there is room.
+                  call as long as there is room, and after
+                  ``MAX_UNREADABLE_CALLS_IN_A_ROW`` such calls in a row it is
+                  told not to call again.
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the

@@ -3533,8 +3533,8 @@ left for that answer: on the fake context, with every call unreadable and no
 reply cap, 15 failed calls and 390 tokens at a context of 2,048, 59 calls and
 1,534 tokens at 8,192, after which the question was taken back as well. The
 README row and the docstrings now say this. Whether the tries under
-`"yield"` get a limit of their own is the user's open decision; until then
-only the reply cap and the context bound them.
+`"yield"` get a limit of their own was then the user's open decision; it was
+decided afterwards (337.5A), see "At most three unreadable calls in a row".
 
 ### The reply cap covers the whole reply under every policy
 
@@ -3555,7 +3555,8 @@ README's row for `"yield"` also lost "as under a registry": under a registry
 ### Thread counts without a topology, and under a CPU quota
 
 Hardening of "Unset thread counts follow the processors"; which threads
-prefill takes by default stays the user's open decision.
+prefill takes by default was then the user's open decision, decided
+afterwards (337.4A), see "Prefill on the physical cores".
 
 Where `/sys/devices/system/cpu` does not say which core a thread runs on
 (macOS, Windows, a container without `/sys`), every thread used to count as a

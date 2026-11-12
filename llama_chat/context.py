@@ -338,8 +338,8 @@ class KVContext:
 def _physical_cores() -> int:
     """The physical cores this process may run on, at most as many as its CPU quota allows.
 
-    Where the system does not say which core a thread runs on, the threads
-    past four are taken to run two to a core.
+    Where the system does not say which core a thread runs on, more than
+    four threads are taken to run two to a core.
     """
     cpus = (sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
             else range(os.cpu_count() or 1))
