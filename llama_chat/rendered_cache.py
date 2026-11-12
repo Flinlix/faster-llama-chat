@@ -383,8 +383,11 @@ class RenderedCache:
         """Add ``question``, decoded in the stand-in's place in the render made ahead, where that is exact; whether it was."""
         ahead = self._state.ahead
         text = question["content"]
+        # A template may write a message otherwise where a later one repeats its text, which
+        # only a render of the whole conversation shows.
         if (ahead is None or not self._is_current(ahead.made_for)
                 or not _is_plain(text, self._context)
+                or any(m["content"] == text for m in self._state.messages)
                 or not question_splices(self._rendering.render, self._system_part(), text)):
             return False
         rest = [(text if own and piece == STAND_IN else piece, own) for piece, own in ahead.rest]

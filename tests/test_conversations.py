@@ -227,6 +227,23 @@ def test_a_question_the_stand_in_cannot_stand_for_is_rendered_as_it_comes(stem):
     _assert_each_reply_followed_what_was_sent(run, questions)
 
 
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_question_asked_again_is_written_as_the_template_writes_it_or_refused_before_its_reply(stem):
+    run = _Run(stem)
+    tools = [WEATHER] if run.fixture["calls_tools"] else None
+    run.begin(tools=tools)
+    run.chat.reply("Same?").finish()
+    before = run.chat.conversation()
+    try:
+        run.chat.reply("Same?").finish()
+    except ValueError:
+        assert run.chat.conversation() == before and len(run.seen) == 1
+        return
+    asked = [{"role": "user", "content": "Same?"}, {"role": "assistant", "content": ANSWERS[0]},
+             {"role": "user", "content": "Same?"}]
+    assert run.seen[-1] == run.render(asked, tools)
+
+
 def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_as_it_comes():
     # The template escapes a quote, so a question holding one cannot be put in the stand-in's place.
     escaping = dict(_FALLBACK, chat_template=(
