@@ -390,7 +390,11 @@ holds that question. So is a request whose reply the template refuses to
 write, and one whose reply produced nothing, where the template writes no
 empty reply: one cancelled before its first word, one the model ended at
 once, or one cancelled while a tool ran or closed for lack of room after its
-calls, which takes the turn's calls and results back with it.
+calls, which takes the turn's calls and results back with it. Where the
+template writes an empty reply and two questions in a row, a reply to a
+question that has no answer, such as one that only thought or one cancelled
+before its first word, is taken back alone: its question stays, the next
+question follows it, and its thought is not kept.
 
 ## Configuration
 
