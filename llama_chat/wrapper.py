@@ -805,7 +805,7 @@ class ChatWrapper:
         pieces = conversation.generate(
             cap, generated, cancel=cancel,
             sampling=generation_sampling(self._config, sampling),
-            ends_turn=self._turn_end_test(reply_text),
+            ends_turn=self._turn_end_test(reply_text, generated),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
         on_started()
         try:
@@ -836,13 +836,14 @@ class ChatWrapper:
             thought=reply_text.thought,
         )
 
-    def _turn_end_test(self, reply_text: ReplyText) -> Callable[[int], bool] | None:
-        """Whether a sampled token ends the reply, besides the end-of-generation tokens."""
+    def _turn_end_test(self, reply_text: ReplyText,
+                       generated: GenerationAccumulator) -> Callable[[int], bool] | None:
+        """Whether a sampled token ends the reply ``generated`` collects, besides the end-of-generation tokens."""
         turn_end = self._template.turn_end_token
         if turn_end is None:
             return None
-        # Read at each sample: every piece yielded before it has been fed.
-        return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end))
+        return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end),
+                                        generated.token_ids, self._context.token_bytes)
 
     def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
                       may_call_again: bool) -> int:

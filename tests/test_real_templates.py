@@ -125,7 +125,9 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     inside = begins_in_thought(tags, prompt)
     reply_text = ReplyText(tags, template.answer_opening(True), prompt, [])
     # A reply that ends at a text rather than a tag is ended by the generation loop.
-    ends = (reply_text.turn_end_test(turn_end, context.token_text(turn_end))
+    generated = []
+    ends = (reply_text.turn_end_test(turn_end, context.token_text(turn_end), generated,
+                                     context.token_bytes)
             if turn_end is not None else lambda token: False)
     reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close + "Antwort."
              + (template.fragments.assistant_suffix if turn_end is not None else ""))
@@ -133,6 +135,7 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     for token in context.tokenize(reply):
         if ends(token):
             break
+        generated.append(token)
         shown += reply_text.feed(context.token_text(token))
     assert shown + reply_text.finish("end_of_turn") == "Antwort."
 

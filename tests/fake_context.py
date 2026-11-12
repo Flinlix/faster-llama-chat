@@ -148,11 +148,13 @@ class FakeContext:
             as the tokenizer would give it; otherwise an id no tokenization
             gives, as a model that generates a word in other pieces than its
             text tokenizes into.
+        writes_tags: Whether a scripted reply's tags are generated as their
+            tokens, as a model writes its own tags; otherwise as characters.
     """
 
     def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
-                 tokens_spell_text: bool = True) -> None:
+                 tokens_spell_text: bool = True, writes_tags: bool = False) -> None:
         self._fixture = fixture
         self._template = fixture["chat_template"]
         # The default template under None, and the one for tools under its name, where given.
@@ -181,6 +183,7 @@ class FakeContext:
         self.gen_text = gen_text
         self.before_reply = None
         self._tokens_spell_text = tokens_spell_text
+        self._writes_tags = writes_tags
         self._next_generated = _FIRST_GENERATED
         self._generated_chars: dict[int, str] = {}   # what each generated token spells
         # What was asked of it, in order.
@@ -348,7 +351,7 @@ class FakeContext:
             if isinstance(scripted, ScriptedCall):
                 yield from self._call_tokens(scripted)
             else:
-                yield from (self._generated(ch) for ch in scripted)
+                yield from self._written(scripted)
         else:
             for i in range(self.gen_tokens):
                 yield self._generated(self.gen_text[i] if i < len(self.gen_text) else "x")
@@ -375,6 +378,17 @@ class FakeContext:
             self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)
                                            for text in marks)
         return self._call_mark_tokens
+
+    def _written(self, text: str) -> list[int]:
+        """``text`` as this model generates it: each character its token, and with ``writes_tags`` each tag its own."""
+        if not self._writes_tags:
+            return [self._generated(ch) for ch in text]
+        tokens, at = [], 0
+        for found in TAG.finditer(text):
+            tokens += [self._generated(ch) for ch in text[at:found.start()]]
+            tokens.append(self._tag_token(found.group()))
+            at = found.end()
+        return tokens + [self._generated(ch) for ch in text[at:]]
 
     def _generated(self, ch: str) -> int:
         """The token this model generates ``ch`` as."""

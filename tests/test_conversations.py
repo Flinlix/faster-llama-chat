@@ -66,14 +66,15 @@ class _Run:
     through a context of its own, ``reader``.
     """
 
-    def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False):
+    def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
+                 writes_tags=False):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         self.template = ResolvedTemplate(self.reader,
                                          shipped_addon_call(self.fixture["chat_template"]))
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
-                                           can_shift=can_shift)
+                                           can_shift=can_shift, writes_tags=writes_tags)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
         self.system = "Be brief." if self.chat.can_take_system_prompt else ""
@@ -714,6 +715,29 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
     assert answers == ANSWERS[:3]                      # the thought kept out of each
     keeps = run.template.reasoning.past_keeps_thought
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, forms=(_THOUGHT,) if keeps else (None,))
+
+
+@pytest.mark.parametrize("stem", _thinking("all"))
+def test_a_short_thought_written_in_the_models_own_tags_leaves_the_whole_answer(stem):
+    run = _Run(stem, reasoning=True, writes_tags=True)
+    run.begin()
+    answers = [run.chat.reply(question).finish().text for question in QUESTIONS[:2]]
+    assert answers == ANSWERS[:2]
+
+
+@pytest.mark.parametrize("stem", [stem for stem in _thinking("all") if stem in _TOOL_TEMPLATES])
+def test_a_call_after_a_short_thought_written_in_the_models_own_tags_is_handed_over(stem):
+    run = _Run(stem, reasoning=True)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    tags = run.template.reasoning
+    opens = begins_in_thought(tags, run.template.generation_prompt(True))
+    run.context.replies = [ScriptedCall(
+        body, before=("" if opens else tags.thought_open) + "Kurz." + tags.thought_close)]
+    run.begin(tools=[WEATHER])
+    calls = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": "Bonn"})]
+    run.chat.inject_tool_result(calls[0], "sunny")
+    run.chat.reply().finish()
 
 
 @pytest.mark.parametrize("stem", _thinking("all"))

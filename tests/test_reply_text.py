@@ -36,6 +36,16 @@ def test_the_thought_count_never_exceeds_the_pieces_fed():
         assert 0 < reply.thought_pieces <= len(pieces)
 
 
+def test_the_turns_end_closes_a_thought_the_generated_text_is_in_though_none_of_it_was_fed():
+    tags = Reasoning("<|ch|>think<|msg|>", "<|stop|><|ch|>final<|msg|>", "")
+    texts = {1: b"<|ch|>think<|msg|>", 2: b"Kurz.", 3: b"<|stop|>", 4: b"<|ch|>final<|msg|>"}
+    generated = [1, 2]
+    ends = ReplyText(tags, "", "", []).turn_end_test(3, "<|stop|>", generated, texts.__getitem__)
+    assert not ends(3)
+    generated += [3, 4, 2]
+    assert ends(3)
+
+
 # ----- a channel's header --------------------------------------------------
 def test_a_channel_header_cut_short_is_not_answer():
     reply = ReplyText(None, "<|route|>final<|body|>", "", [])

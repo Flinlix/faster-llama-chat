@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 from collections.abc import Callable
 
 from .reply import StopReason
@@ -23,7 +24,8 @@ class ReplyText:
     def __init__(self, reasoning: Reasoning | None, answer_opening: str, prompt_text: str,
                  stops: list[str]) -> None:
         self._reasoning = reasoning
-        self._thought = (_ThoughtFilter(reasoning, begins_in_thought(reasoning, prompt_text))
+        self._opens_in_thought = reasoning is not None and begins_in_thought(reasoning, prompt_text)
+        self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought)
                          if reasoning is not None else None)
         self._opening = _AnswerOpening(answer_opening, reply_header(answer_opening, reasoning))
         self._stops = _AnswerStops(stops)
@@ -62,16 +64,28 @@ class ReplyText:
         """Whether a stop string ended the answer."""
         return self._stops.stopped
 
-    def turn_end_test(self, turn_end: int, turn_end_text: str) -> Callable[[int], bool]:
+    def turn_end_test(self, turn_end: int, turn_end_text: str, generated: list[int],
+                      token_bytes: Callable[[int], bytes]) -> Callable[[int], bool]:
         """Whether a sampled token ends the reply, besides the end-of-generation tokens.
 
         Where a thought's closing begins with the turn's end, that token is the
-        closing's while the reply is inside a thought.
+        closing's while ``generated``, every token generated before it, ends
+        inside a thought, whether or not its text was fed yet.
         """
-        thought = self._thought
-        if thought is not None and self._reasoning.thought_close.strip().startswith(turn_end_text):
-            return lambda token: token == turn_end and not thought.in_thought
-        return lambda token: token == turn_end
+        tags = self._reasoning
+        if tags is None or not tags.thought_close.strip().startswith(turn_end_text):
+            return lambda token: token == turn_end
+        thought = _ThoughtFilter(tags, self._opens_in_thought)
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        read = 0
+
+        def ends(token: int) -> bool:
+            nonlocal read
+            for earlier in generated[read:]:
+                thought.feed(decoder.decode(token_bytes(earlier)))
+            read = len(generated)
+            return token == turn_end and not thought.in_thought
+        return ends
 
 
 class _ThoughtFilter:
