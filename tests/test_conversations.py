@@ -435,6 +435,28 @@ def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decod
     assert run.context.resets == resets
 
 
+@pytest.mark.parametrize("asked", [False, True], ids=["answered", "asked-after"])
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_history_ending_on_a_question_costs_a_cache_that_cannot_be_cut_no_decode_of_it_all(stem, asked):
+    run = _Run(stem, can_shift=False)
+    run.context.can_cut_tail = False
+    history = [item for n in range(12) for item in
+               (("user", f"Old question {n}?"), ("assistant", f"Old answer {n}."))]
+    try:
+        run.begin(history + [("user", "A note.")])
+        decoded = run.context.total_prefilled()
+        if asked:
+            run.chat.reply("Question?").finish()
+        else:
+            run.chat.reply().finish()
+            run.chat.reply("Question?").finish()
+    except ValueError as refused:
+        assert asked and "two user turns" in str(refused)
+        return
+    held = len(run.context.cache)
+    assert run.context.total_prefilled() - decoded < held // 3
+
+
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):

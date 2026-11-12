@@ -282,7 +282,14 @@ class RenderedCache:
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._memory.pin(self._rendering.opening_length(self._system_part()))
             if self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
-                self._sync(self._prompted())
+                prompted = self._prompted()
+                opening = self._prompt_text_start(prompted.tokens)
+                if opening < len(prompted.tokens):
+                    # A state saved before the template's text a reply follows, which a cache
+                    # that cannot be cut goes back to where what follows is written otherwise.
+                    self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False)
+                    self._memory.rest()
+                self._sync(prompted)
             elif self.pending_calls:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False))
             else:
@@ -1027,6 +1034,12 @@ class RenderedCache:
         last = max((end for _, end in split.own), default=0)
         self._note_prompt(split.text[last:], self._reply_opening(split), target.tokens)
         return target
+
+    def _prompt_text_start(self, target: list[int]) -> int:
+        """Where in ``target`` the template text the next reply follows begins, the target's end where it does not end on it."""
+        tokens = self._rendering.tokenize([(self._state.prompt_text, False)])
+        ends = tokens and list(target[-len(tokens):]) == tokens
+        return len(target) - (len(tokens) if ends else 0)
 
     def _reply_opening(self, split: SplitRender) -> list[tuple[str, bool]]:
         """The render ``split`` from where a reply after its newest message begins as a kept turn."""
