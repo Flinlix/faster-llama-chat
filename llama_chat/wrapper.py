@@ -240,11 +240,12 @@ class ChatWrapper:
         stream is returned; everything else waits for the first iteration, the
         headroom check included, and the conversation is checked again there,
         since another thread may change it in between. Closing the stream
-        early still ends the turn and records what was generated, so the next
-        generation stays valid. The stream must be driven from one thread at a
-        time; to interrupt from another, pass ``cancel``. An abandoned stream
-        holds the wrapper's lock until it is collected, so exhaust it, close
-        it, use it in a ``with``, or call :meth:`ReplyStream.finish`.
+        early records what was generated, so the next generation stays valid;
+        a call already handed over stays owed, its turn open for the result.
+        The stream must be driven from one thread at a time; to interrupt from
+        another, pass ``cancel``. An abandoned stream holds the wrapper's lock
+        until it is collected, so exhaust it, close it, use it in a ``with``,
+        or call :meth:`ReplyStream.finish`.
 
         Args:
             text: The user request, tokenized with special-token parsing off.

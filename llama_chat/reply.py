@@ -85,9 +85,10 @@ class ReplyStream(Generic[_Delta]):
     """One request's deltas, and the :class:`Reply` they add up to.
 
     Iterate it for what the model produces, then read :attr:`reply` for the
-    summary. Closing it early ends the turn cleanly and leaves :attr:`reply`
-    unset, there being no summary of a reply nobody read to the end. Closing is
-    what an abandoned stream needs, so it is also a context manager.
+    summary. Closing it early records what was generated and leaves
+    :attr:`reply` unset, there being no summary of a reply nobody read to the
+    end; a call already handed over stays owed, its turn open for the result.
+    Closing is what an abandoned stream needs, so it is also a context manager.
 
     Attributes:
         reply: The summary, ``None`` until the stream has ended of its own
@@ -114,7 +115,7 @@ class ReplyStream(Generic[_Delta]):
             raise
 
     def close(self) -> None:
-        """Stop reading and end the turn. Idempotent, as a generator's is."""
+        """Stop reading, recording what was generated. Idempotent, as a generator's is."""
         self._deltas.close()
 
     def finish(self) -> Reply:
