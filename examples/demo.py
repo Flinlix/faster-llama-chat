@@ -82,7 +82,7 @@ def main() -> None:
     w = ChatWrapper(cfg, context=ctx)
 
     begin(w, "You are a concise, helpful assistant.",
-          [("user", "Remember my name is Felix."), ("assistant", "Got it, Felix.")])
+          [("user", "Remember my name is Sam."), ("assistant", "Got it, Sam.")])
     print(f"begin: prefilled {ctx.prefilled} tokens (system + history)")
     show(w)
 
