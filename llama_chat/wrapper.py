@@ -547,15 +547,18 @@ class ChatWrapper:
         """Block until no generation holds the wrapper; advisory, since one may start right after.
 
         Args:
-            timeout_s: Seconds to wait; ``None`` waits indefinitely.
+            timeout_s: Seconds to wait, at least 0; ``None`` waits indefinitely.
 
         Returns:
             ``True`` if the wrapper went idle, ``False`` on timeout.
 
         Raises:
+            ValueError: If ``timeout_s`` is negative.
             RuntimeError: If this thread is reading a reply, which would never
                 end while it waits.
         """
+        if timeout_s is not None and timeout_s < 0:
+            raise ValueError(f"timeout_s must be None or at least 0, not {timeout_s!r}")
         self._ensure_not_holding()
         if not self._lock.acquire(timeout=-1 if timeout_s is None else timeout_s):
             return False

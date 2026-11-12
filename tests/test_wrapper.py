@@ -697,6 +697,15 @@ def test_the_package_exports_the_one_protocol_a_wrapper_takes():
     assert "ModelReader" not in llama_chat.__all__ and not hasattr(llama_chat, "ModelReader")
 
 
+@pytest.mark.parametrize("timeout_s", [-1, -5, -0.5])
+def test_a_negative_wait_is_refused_naming_its_setting(timeout_s):
+    """Threading reads -1 as waiting for ever and other negatives as an error of its own."""
+    w = ChatWrapper(Config(context_size=800), context=FakeContext(PLAIN))
+    with pytest.raises(ValueError, match="timeout_s must be None or at least 0"):
+        w.wait_idle(timeout_s)
+    assert w.wait_idle(0) is True
+
+
 def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on():
     """An implementer reads the protocol, not the stand-in."""
     from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
