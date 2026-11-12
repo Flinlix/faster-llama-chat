@@ -81,10 +81,11 @@ class Config:
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
-        decode_threads: CPU threads for decode, at least ``1``. ``None`` lets
-            llama.cpp decide.
+        decode_threads: CPU threads for decode, at least ``1``. ``None`` uses
+            one per physical core of the processors the process may run on.
         prefill_threads: CPU threads for prefill, at least ``1``. ``None``
-            means as many as ``decode_threads``.
+            means as many as ``decode_threads`` where that is set, else every
+            thread the process may run on.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
         flash_attention: ``True`` or ``False`` forces flash attention on or
@@ -151,7 +152,7 @@ class Config:
         for name in ("decode_threads", "prefill_threads"):
             if getattr(self, name) is not None and getattr(self, name) < 1:
                 raise InvalidSettingError(
-                    name, f"{name} must be None or >= 1 (use None to let the engine decide)")
+                    name, f"{name} must be None or >= 1 (None sets it from the processors)")
         ensure_reply_cap(self.max_reply_tokens)
         if self.min_reply_tokens < 0:
             raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")

@@ -11,6 +11,7 @@ design_history.md, "How a call's format is recovered".
 import ctypes
 import inspect
 import logging
+import os
 import re
 import threading
 import dataclasses
@@ -31,7 +32,7 @@ from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import split_at_tags, tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.cache_context import GenerationAccumulator
-from llama_chat.context import KVContext
+from llama_chat.context import KVContext, _processor_counts
 from llama_chat.generation import generate
 from llama_chat.config import Config, Sampling
 
@@ -575,6 +576,52 @@ def test_a_gguf_penalty_window_of_minus_one_is_read_as_the_whole_context():
     assert context.recommended_sampling() == {"penalty_window_tokens": 2048}
     assert with_model_sampling(Config(), context.recommended_sampling(),
                                read_addon_file(None)).penalty_window_tokens == 2048
+
+
+def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, int]]) -> None:
+    """Let this process run on the processors ``cores_of`` lists, each on its (package, core)."""
+    for cpu, (package, core) in cores_of.items():
+        topology = tmp_path / "cpu" / f"cpu{cpu}" / "topology"
+        topology.mkdir(parents=True)
+        (topology / "physical_package_id").write_text(f"{package}\n")
+        (topology / "core_id").write_text(f"{core}\n")
+    monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "cpu")
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(cores_of), raising=False)
+
+
+_TWO_THREADS_PER_CORE = {cpu: (0, cpu % 8) for cpu in range(16)}
+
+
+@pytest.mark.parametrize("cores_of, cores", [
+    (_TWO_THREADS_PER_CORE, 8),
+    ({0: (0, 0), 8: (0, 0), 1: (0, 1)}, 2),
+    ({cpu: (cpu // 4, cpu % 4) for cpu in range(8)}, 8),
+    ({cpu: (0, cpu) for cpu in range(4)}, 4),
+])
+def test_the_physical_cores_and_threads_are_counted_among_those_this_process_may_use(
+        tmp_path, monkeypatch, cores_of, cores):
+    _processor_topology(tmp_path, monkeypatch, cores_of)
+    assert _processor_counts() == (cores, len(cores_of))
+
+
+def test_where_the_system_does_not_say_each_usable_thread_counts_as_a_core(
+        tmp_path, monkeypatch):
+    _processor_topology(tmp_path, monkeypatch, {cpu: (0, cpu // 2) for cpu in range(6)})
+    monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "absent")
+    assert _processor_counts() == (6, 6)
+
+
+@pytest.mark.parametrize("settings, decode_threads, prefill_threads", [
+    ({}, 8, 16),
+    ({"decode_threads": 4}, 4, 4),
+    ({"prefill_threads": 12}, 8, 12),
+    ({"decode_threads": 3, "prefill_threads": 5}, 3, 5),
+])
+def test_unset_thread_counts_decode_on_the_physical_cores_and_prefill_on_every_thread(
+        tmp_path, monkeypatch, settings, decode_threads, prefill_threads):
+    _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE)
+    asked = _context_settings(tmp_path, monkeypatch, **settings)
+    assert (asked["n_threads"], asked["n_threads_batch"]) == (decode_threads, prefill_threads)
 
 
 def test_a_gguf_sampling_value_that_is_no_number_is_refused_naming_its_key():

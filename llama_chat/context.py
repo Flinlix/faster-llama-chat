@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from ._backend import Backend
 from .cache_context import TOOL_USE_TEMPLATE
@@ -26,6 +27,8 @@ _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general
 _WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
 # The penalty window a GGUF states to mean the whole context, as llama.cpp reads it.
 _WHOLE_CONTEXT_WINDOW = -1
+# Where the system describes each processor's package and core, on Linux.
+_CPU_TOPOLOGY = Path("/sys/devices/system/cpu")
 
 
 class KVContext:
@@ -62,11 +65,13 @@ class KVContext:
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
             kv_type = self._backend.kv_cache_type_id(config.kv_cache_type)
+            cores, threads = _processor_counts()
             self._engine_context = self._backend.new_context(
-                self._model, config.context_size, config.decode_threads, config.max_batch_tokens,
+                self._model, config.context_size, n_threads=config.decode_threads or cores,
+                n_batch=config.max_batch_tokens,
                 flash_attn=_flash_attention(config), type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
-                n_threads_batch=config.prefill_threads)
+                n_threads_batch=config.prefill_threads or config.decode_threads or threads)
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
@@ -330,6 +335,25 @@ class KVContext:
         except BaseException:
             backend.free_sampler(chain)
             raise
+
+
+def _processor_counts() -> tuple[int, int]:
+    """The physical cores and the threads this process may run on.
+
+    Each thread counts as a core of its own where the system does not say
+    which core it runs on.
+    """
+    cpus = (sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
+            else range(os.cpu_count() or 1))
+    cores = set()
+    for cpu in cpus:
+        topology = _CPU_TOPOLOGY / f"cpu{cpu}" / "topology"
+        try:
+            cores.add(tuple((topology / name).read_text().strip()
+                            for name in ("physical_package_id", "core_id")))
+        except OSError:
+            return len(cpus), len(cpus)
+    return len(cores), len(cpus)
 
 
 def _flash_attention(config: Config) -> bool | None:
