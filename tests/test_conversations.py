@@ -1268,6 +1268,17 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     assert run.seen_tokens[-1] == _expected_tokens(run, asked, tools)
 
 
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_an_empty_description_of_a_tool_or_a_parameter_is_written_as_the_template_writes_it(stem):
+    run = _Run(stem)
+    unexplained = ToolSpec(name="lookup", description="", parameters={
+        "type": "object", "properties": {"q": {"type": "string", "description": ""}}})
+    run.begin(tools=[WEATHER, unexplained])
+    run.chat.reply("Weather?").finish()
+    assert run.seen_tokens[-1] == _expected_tokens(run, _sent(run.chat)[:-1], [WEATHER, unexplained])
+
+
+# ----- a call that opens with plain text ---------------------------------------------
 _TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opening_text")]
 
 

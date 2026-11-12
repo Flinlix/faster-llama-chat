@@ -118,7 +118,7 @@ def _marked(messages: list[dict], declarations: list[dict] | None
     def mark_descriptions(value):
         if isinstance(value, dict):
             return {key: mark(item, -1, "description")
-                    if key == "description" and isinstance(item, str)
+                    if key == "description" and isinstance(item, str) and item
                     else mark_descriptions(item) for key, item in value.items()}
         if isinstance(value, list):
             return [mark_descriptions(item) for item in value]
