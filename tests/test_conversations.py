@@ -280,6 +280,31 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
         assert len(over) <= math.ceil(len(questions) / 3)
 
 
+@pytest.mark.parametrize("stem", _EVERY)
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+def test_a_limit_on_exchanges_decodes_a_cache_that_cannot_shift_again_only_every_few_turns(stem, can_shift):
+    run = _Run(stem, can_shift=can_shift)
+    run.chat.close()
+    run.chat = ChatWrapper(Config(context_size=8192, min_reply_tokens=8, max_history_exchanges=4),
+                           context=run.context)
+    run.begin()
+    probe = _Run(stem)
+    probe.begin()
+    exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
+    questions = QUESTIONS + [f"{q} Again." for q in QUESTIONS]
+    run.answers = ANSWERS + ANSWERS
+    run.context.replies = _as_generated(run.template, run.answers, False)
+    evicted = 0
+    for question in questions:
+        evicted += run.chat.reply(question).finish().n_evicted_messages
+        assert len(run.chat.conversation()["messages"]) <= 2 * 4
+    assert evicted
+    _assert_each_reply_followed_what_was_sent(run, questions)
+    over = [k for k in range(1, len(run.decoded))
+            if run.decoded[k] - run.decoded[k - 1] > 2 * exchange + 80]
+    assert len(over) <= (0 if can_shift else math.ceil(len(questions) / 3))
+
+
 @pytest.mark.parametrize("stem, tools", [(stem, None) for stem in _EVERY]
                          + [(stem, [WEATHER]) for stem in _TOOL_TEMPLATES])
 def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest_question(stem, tools):

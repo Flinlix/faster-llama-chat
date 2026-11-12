@@ -42,10 +42,11 @@ UNKNOWN_FUNCTION = "unknown"
 # Returned where a window cannot stand for the whole render.
 _WHOLE = object()
 # Where the cache cannot shift, the fraction of the room under the eviction
-# threshold, after a short question, that an eviction brings the conversation
-# down to. In (0, 1]: low enough that a cache decoded again after an eviction
-# takes several turns to fill again, high enough to keep history. See
-# design_history.md, "Settings, add-on files and logging", 266.3.
+# threshold, after a short question, and of ``max_history_exchanges``, that an
+# eviction brings the conversation down to. In (0, 1]: low enough that a cache
+# decoded again after an eviction takes several turns to fill again, high
+# enough to keep history. See design_history.md, "Settings, add-on files and
+# logging", 266.3.
 EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 
 
@@ -958,8 +959,8 @@ class RenderedCache:
         limit = self._config.evict_above_tokens
         if not (kept_until() + after > limit or self._too_many()):
             return True
-        bound = self._drop_bound(limit)
-        while kept_until() + after > bound or self._too_many():
+        bound, most = self._drop_bound(limit), self._exchanges_after_drop()
+        while kept_until() + after > bound or self._too_many(most):
             if len(exchange_starts(self._state.messages)) <= 2:
                 break
             # The cache up to the tag after the second oldest exchange's reply, before the drop,
@@ -1048,21 +1049,22 @@ class RenderedCache:
         """Drop the oldest exchanges once the conversation renders longer than ``limit`` or holds too many; whether any went.
 
         Where the cache cannot shift, they go until the history is well below
-        its room under ``limit``, so that the cache is decoded again only every
-        few turns.
+        its room under ``limit`` and its count well below
+        ``max_history_exchanges``, so that the cache is decoded again only
+        every few turns.
 
         Args:
             tokens_only: Leave ``max_history_exchanges`` out, which may keep
                 nothing on purpose.
         """
-        def over(bound):
+        def over(bound, most):
             return (self._rendering.length(self._state.messages, generation_prompt) > bound
-                    or not tokens_only and self._too_many())
+                    or not tokens_only and self._too_many(most))
 
-        if not over(limit):
+        if not over(limit, self._config.max_history_exchanges):
             return False
-        bound, dropped = self._drop_bound(limit), False
-        while over(bound) and self._drop_oldest_exchange(newest_too):
+        bound, most, dropped = self._drop_bound(limit), self._exchanges_after_drop(), False
+        while over(bound, most) and self._drop_oldest_exchange(newest_too):
             dropped = True
         return dropped
 
@@ -1078,9 +1080,19 @@ class RenderedCache:
         system = min(self._with_a_short_question(), limit)
         return system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
 
-    def _too_many(self) -> bool:
-        """Whether the history holds more exchanges than ``max_history_exchanges``."""
+    def _exchanges_after_drop(self) -> int | None:
+        """How many exchanges an eviction leaves once there are more than ``max_history_exchanges``.
+
+        Where the cache cannot shift, that fraction of them, at least one.
+        """
         limit = self._config.max_history_exchanges
+        if limit is None or self._context.can_shift:
+            return limit
+        return min(limit, max(1, int(limit * EVICT_TO_FRACTION_WITHOUT_SHIFT)))
+
+    def _too_many(self, most: int | None = None) -> bool:
+        """Whether the history holds more exchanges than ``most``, by default ``max_history_exchanges``."""
+        limit = self._config.max_history_exchanges if most is None else most
         return limit is not None and exchange_count(self._state.messages) > limit
 
     def _drop_oldest_exchange(self, newest_too: bool = False) -> bool:
