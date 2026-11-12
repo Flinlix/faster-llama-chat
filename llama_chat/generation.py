@@ -12,7 +12,7 @@ from collections.abc import Callable, Generator, Iterator
 
 from .cache_context import CacheContext, GenerationAccumulator
 from .config import Sampling
-from .reply_text import earliest
+from .reply_text import earliest, partial_match_at
 from .template import CallBoundary
 
 
@@ -196,9 +196,9 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             else:
                 upto = len(visible)
                 if boundary.turn_end_text:
-                    upto = _partial_mark_at(visible.text, boundary.turn_end_text, visible.emitted)
+                    upto = partial_match_at(visible.text, boundary.turn_end_text, visible.emitted)
                 if open_text is not None:
-                    opens_at = _partial_mark_at(visible.text, open_text, visible.emitted)
+                    opens_at = partial_match_at(visible.text, open_text, visible.emitted)
                     if not call_opens_as_text or _after_tag(
                             context, visible.text, starts, generated.token_ids, opens_at):
                         if opening_owns_space:
@@ -238,14 +238,6 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         if delta:
             generated.text += delta
             yield delta
-
-
-def _partial_mark_at(text: str, mark: str, search_from: int) -> int:
-    """Where the longest end of ``text`` from ``search_from`` on that begins ``mark`` starts, ``len(text)`` where none does."""
-    for at in range(max(search_from, len(text) - len(mark) + 1), len(text)):
-        if mark.startswith(text[at:]):
-            return at
-    return len(text)
 
 
 def _after_tag(context: CacheContext, text: str, starts: list[int], tokens: list[int],

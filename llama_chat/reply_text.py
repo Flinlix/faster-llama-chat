@@ -267,6 +267,14 @@ def earliest(text: str, needles: list[str], search_from: int = 0) -> int | None:
     return found
 
 
+def partial_match_at(text: str, needle: str, search_from: int = 0) -> int:
+    """Where the longest end of ``text`` from ``search_from`` on that begins ``needle`` starts, ``len(text)`` where none does."""
+    for at in range(max(search_from, len(text) - len(needle) + 1), len(text)):
+        if needle.startswith(text[at:]):
+            return at
+    return len(text)
+
+
 class _AnswerStops:
     """Collects an answer as it streams, ending it at the earliest stop string.
 
@@ -276,7 +284,6 @@ class _AnswerStops:
 
     def __init__(self, stops: list[str]) -> None:
         self._stops = [s for s in stops if s]
-        self._hold = max((len(s) for s in self._stops), default=1) - 1
         self._held = ""
         self.text = ""
         self.stopped = False
@@ -291,7 +298,7 @@ class _AnswerStops:
         if hit is not None:
             self.stopped = True
             return self._pass(self._held[:hit], "")
-        cut = max(0, len(self._held) - self._hold)
+        cut = min(partial_match_at(self._held, stop) for stop in self._stops)
         return self._pass(self._held[:cut], self._held[cut:])
 
     def flush(self, last: str = "") -> str:

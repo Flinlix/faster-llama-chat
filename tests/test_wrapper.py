@@ -364,6 +364,17 @@ def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
     assert stream.reply.stop_reason == "stop_string"   # not "interrupted"
 
 
+def test_only_text_that_could_begin_a_stop_string_is_held_back():
+    fake = FakeContext(PLAIN, gen_tokens=10, gen_text="heSlSTOPx")
+    w = ChatWrapper(Config(context_size=400), context=fake)
+    w.begin("s")
+    starts = []
+    fake.before_reply = lambda text: starts.append(len(fake.cache))
+    # Each delta, and how many tokens had been generated when it came.
+    shown = [(delta, len(fake.cache) - starts[0]) for delta in w.reply("hi", stop=["STOP", "lo"])]
+    assert shown == [("h", 1), ("e", 2), ("S", 4), ("l", 5)]
+
+
 def test_the_stop_texts_are_the_ones_given_when_the_reply_was_asked_for():
     fake = FakeContext(PLAIN, gen_tokens=10, gen_text="helloSTOPx")
     w = ChatWrapper(Config(context_size=400), context=fake)
