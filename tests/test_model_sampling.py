@@ -193,6 +193,32 @@ def test_a_refused_value_the_model_recommends_is_no_matter_where_another_source_
     assert with_model_sampling(Config(), {"top_p": 2.0}, _addon({"top_p": 0.8})).top_p == 0.8
 
 
+def test_the_penalty_window_comes_from_the_config_else_the_add_on_file_else_the_gguf():
+    assert with_model_sampling(Config(penalty_window_tokens=8), {"penalty_window_tokens": 128},
+                               _addon({"penalty_window_tokens": 32})).penalty_window_tokens == 8
+    assert with_model_sampling(Config(), {"penalty_window_tokens": 128},
+                               _addon({"penalty_window_tokens": 32})).penalty_window_tokens == 32
+    assert with_model_sampling(Config(), {"penalty_window_tokens": 128},
+                               _addon({})).penalty_window_tokens == 128
+
+
+def test_a_penalty_window_no_source_states_is_the_engines_default_length():
+    assert DEFAULT_SAMPLING["penalty_window_tokens"] == 64
+    assert with_model_sampling(Config(), {}, _addon({})).penalty_window_tokens == 64
+    assert with_model_sampling(Config(), {"repetition_penalty": 1.1},
+                               _addon({})).penalty_window_tokens == 64
+    assert Config().penalty_window_tokens is None
+
+
+def test_an_add_on_file_may_set_the_penalty_window(tmp_path):
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps({"sampling": {"penalty_window_tokens": 256}}))
+    assert with_model_sampling(Config(), {}, read_addon_file(path)).penalty_window_tokens == 256
+    path.write_text(json.dumps({"sampling": {"penalty_window_tokens": -1}}))
+    with pytest.raises(ValueError, match="penalty_window_tokens"):
+        read_addon_file(path)
+
+
 def test_no_two_shipped_files_name_one_template():
     named = [t for path in SHIPPED_ADDONS.glob("*.json")
              for t in json.loads(path.read_text())["templates"]]

@@ -559,9 +559,12 @@ def _gguf_stating(stated: dict):
 
 def test_the_sampling_a_gguf_states_is_read_by_the_names_a_request_gives_it():
     context = _gguf_stating({"general.sampling.temp": "0.600000", "general.sampling.top_k": "20",
-                             "general.sampling.penalty_repeat": "1.05"})
+                             "general.sampling.penalty_repeat": "1.05",
+                             "general.sampling.penalty_last_n": "128"})
     assert context.recommended_sampling() == {"temperature": 0.6, "top_k": 20,
-                                              "repetition_penalty": 1.05}
+                                              "repetition_penalty": 1.05,
+                                              "penalty_window_tokens": 128}
+    assert type(context.recommended_sampling()["penalty_window_tokens"]) is int
     assert _gguf_stating({}).recommended_sampling() == {}
 
 

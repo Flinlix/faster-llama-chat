@@ -2486,3 +2486,19 @@ bodies extraction must find are stated for the templates that had them
 before; the other templates are checked through whole renders in
 `tests/test_conversations.py`, and values computed by the code under test
 would add no check of their own.
+
+## 2026-11-12: The user's answers to the round's open questions
+
+**300.9A: the penalty window is the model's too.** A GGUF may state how far
+back the repetition penalty looks, as `general.sampling.penalty_last_n`, and
+only the other sampling values were read. `penalty_window_tokens` is now the
+eighth model sampling field: left unset in `Config`, it takes the add-on
+file's value, else the GGUF's, else 64, llama.cpp's own default, whether or
+not another field is stated, since a shorter window is no more "off" than a
+longer one. An add-on file may set it as it sets the other seven, so it went
+into the one list of model sampling fields, which every check of an add-on
+file, of a GGUF's recommendation and of the merge reads. A GGUF value is read
+as a whole number, as `top_k` is. llama.cpp reads a window of -1 as the whole
+context; `Config` refuses a negative window, so a GGUF that states -1 stops
+the load naming the GGUF, as any value the settings refuse does, unless
+`Config` or the add-on file sets the window.

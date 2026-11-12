@@ -20,7 +20,10 @@ SEQ = 0  # single active conversation -> single sequence id
 # The GGUF keys that state the sampling a model recommends, by Sampling's names.
 _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
                        "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
-                       "repetition_penalty": "general.sampling.penalty_repeat"}
+                       "repetition_penalty": "general.sampling.penalty_repeat",
+                       "penalty_window_tokens": "general.sampling.penalty_last_n"}
+# The fields among them that Config takes as whole numbers.
+_WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
 
 
 class KVContext:
@@ -153,7 +156,8 @@ class KVContext:
             except ValueError:
                 raise ValueError(f"the model's GGUF states {key} as {text!r}, which is "
                                  "no number") from None
-            stated[name] = int(number) if name == "top_k" and number.is_integer() else number
+            stated[name] = (int(number) if name in _WHOLE_NUMBER_FIELDS and number.is_integer()
+                            else number)
         return stated
 
     def chat_template_text(self, template_name: str | None = None) -> str | None:

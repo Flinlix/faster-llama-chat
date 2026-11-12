@@ -31,11 +31,11 @@ class InvalidSettingError(ValueError):
 class Config:
     """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`, every value checked where it is made.
 
-    The seven model sampling fields, ``temperature`` to
-    ``frequency_penalty``, left ``None`` take the model's own when it loads,
-    value by value: its add-on file's, else what its GGUF states, else
-    switched off; where neither states any, llama.cpp's defaults. See the
-    README, "Configuration".
+    The eight model sampling fields, ``temperature`` to
+    ``penalty_window_tokens``, left ``None`` take the model's own when it
+    loads, value by value: its add-on file's, else what its GGUF states, else
+    switched off, the penalty window at llama.cpp's default length; where
+    neither states any, llama.cpp's defaults. See the README, "Configuration".
 
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.
@@ -105,7 +105,7 @@ class Config:
     repetition_penalty: float | None = None
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
-    penalty_window_tokens: int = 64
+    penalty_window_tokens: int | None = None
     seed: int | None = None
 
     # Context management
@@ -141,9 +141,9 @@ class Config:
                 "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
             raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
-        if self.penalty_window_tokens < 0:
+        if self.penalty_window_tokens is not None and self.penalty_window_tokens < 0:
             raise InvalidSettingError("penalty_window_tokens",
-                                      "penalty_window_tokens must be >= 0")
+                                      "penalty_window_tokens must be None or >= 0")
         if self.gpu_layers < -1:
             raise InvalidSettingError("gpu_layers",
                                       "gpu_layers must be >= 0, or -1 for all of them")

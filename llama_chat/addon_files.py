@@ -20,15 +20,18 @@ _log = logging.getLogger(__name__)
 
 SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty",
-                   "presence_penalty", "frequency_penalty")
+                   "presence_penalty", "frequency_penalty", "penalty_window_tokens")
 CALL_FIELDS = ("opening", "name_close", "closing")
 _FILE_KEYS = {"templates", "source", "sampling", "call", "reasoning_on"}
 # llama.cpp's own defaults, for a model that recommends nothing.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
-                    "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0}
-# What a field no source states stands at, where another field is stated: switched off.
+                    "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
+                    "penalty_window_tokens": 64}
+# What a field no source states stands at, where another field is stated: switched
+# off, and the penalty window at the engine's default length.
 UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
-                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0}
+                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
+                     "penalty_window_tokens": 64}
 
 
 def template_fingerprint(template: str) -> str:

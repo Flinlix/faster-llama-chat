@@ -392,14 +392,15 @@ or was given a cache context of your own.
 | `repetition_penalty` | the model's | over `penalty_window_tokens`; `1.0` disables |
 | `presence_penalty` | the model's | flat penalty on a token already in the window; `0` disables |
 | `frequency_penalty` | the model's | penalty scaled by how often a token occurs in the window; `0` disables |
-| `penalty_window_tokens` | `64` | how far back the penalties look, within one generation; at least `0` |
+| `penalty_window_tokens` | the model's | how far back the penalties look, within one generation; at least `0` |
 | `seed` | `None` | in `[0, 2**32 - 2]`, which every generation starts from; `None` draws a fresh one |
 
-The seven marked "the model's" take, unless set, the model's own
+The eight marked "the model's" take, unless set, the model's own
 recommendation, value by value: its [add-on file](#add-on-files)'s first,
 then what its GGUF states for a value the file leaves out, then switched off
 (`temperature` 1, `top_k` 0, `top_p` 1, `min_p` 0, `repetition_penalty` 1,
-`presence_penalty` and `frequency_penalty` 0). A model for which neither
+`presence_penalty` and `frequency_penalty` 0), with `penalty_window_tokens`
+at llama.cpp's default of 64. A model for which neither
 states any value runs at llama.cpp's defaults. A value the GGUF states that
 `Config` would refuse stops the load with a `ValueError` naming the GGUF as
 its source, unless `Config` or the add-on file replaces it.
@@ -473,8 +474,8 @@ with an error naming the file.
  "reasoning_on": {"reasoning_effort": "high"}}
 ```
 
-`sampling` sets any of the seven model sampling fields, `presence_penalty` and
-`frequency_penalty` among them, and its values win over the GGUF's (see
+`sampling` sets any of the eight model sampling fields, `presence_penalty`,
+`frequency_penalty` and `penalty_window_tokens` among them, and its values win over the GGUF's (see
 [Configuration](#configuration)). Since a shipped file is matched by the
 template, it also applies to a fine-tuned model that keeps the same template,
 and its values win over those that fine-tune's GGUF states; a file next to the
