@@ -18,8 +18,9 @@ class CacheSync:
     :attr:`tokens` before the next generation or rest, once however many
     changes came first: from the newest saved state that still holds a
     beginning of them, else by decoding them again whole. Besides the states it
-    rested in, such a cache keeps one where :meth:`pin` says, for as long as the
-    tokens before it stay. A decode or an edit that fails leaves the cache
+    rested in, such a cache keeps one where :meth:`pin` says, and the one it
+    rested in at the last cut :meth:`hold` rests at, for as long as the tokens
+    before each stay. A decode or an edit that fails leaves the cache
     unknown, and it is decoded again whole the same way. See design_history.md,
     "How eviction works".
     """
@@ -36,6 +37,8 @@ class CacheSync:
         self._rest_states: list[tuple[int, object]] = []
         self._pin: int | None = None    # where a state is kept, besides those
         self._pinned: tuple[int, object] | None = None
+        # The state rested in where the cache was last cut for a rest, besides those.
+        self._at_cut: tuple[int, object] | None = None
 
     @property
     def tokens(self) -> list[int]:
@@ -58,7 +61,7 @@ class CacheSync:
         self._tokens, self._valid, self._end = [], 0, 0
         self.version += 1
         self._rest_states, self._logits = [], False
-        self._pin, self._pinned = None, None
+        self._pin, self._pinned, self._at_cut = None, None, None
 
     def pin(self, pos: int | None) -> None:
         """Keep a state saved where the first ``pos`` tokens end, for as long as they stay, where the cache needs saved states; ``None`` keeps none."""
@@ -153,6 +156,7 @@ class CacheSync:
                 decoded, so that a cache that cannot cut can go back there.
         """
         same = common_prefix_length(self._tokens, target)
+        changes = same < len(self._tokens)     # more than an append
         if find_dropped_stretch and same < len(self._tokens):
             found = _dropped_stretch_end(self._tokens, target, same)
             if found is not None:
@@ -161,6 +165,8 @@ class CacheSync:
         self.cut_to(same)
         if rest_at_cut:
             self.rest()
+            if changes and self._rest_states and self._rest_states[-1][0] == same:
+                self._at_cut = self._rest_states[-1]
         self.decode(target[same:], want_logits=want_logits)
 
     def replace(self, tokens: list[int]) -> None:
@@ -266,19 +272,19 @@ class CacheSync:
 
     def _reset_to_nothing(self) -> None:
         self._context.reset()
-        self._valid, self._end, self._rest_states, self._pinned = 0, 0, [], None
+        self._valid, self._end, self._rest_states, self._pinned, self._at_cut = 0, 0, [], None, None
 
     def _restore_to(self, pos: int) -> bool:
         """Go back to the newest state saved at or before ``pos``; whether one could be."""
         self._forget_states_after(pos)
-        saved = self._rest_states + ([self._pinned] if self._pinned else [])
+        saved = self._rest_states + [s for s in (self._pinned, self._at_cut) if s]
         if not saved:
             return False
         rested, state = max(saved, key=lambda s: s[0])
         try:
             self._context.restore_state(state, rested)
         except RuntimeError:
-            self._rest_states, self._pinned = [], None
+            self._rest_states, self._pinned, self._at_cut = [], None, None
             return False
         self._valid = self._end = rested
         return True
@@ -288,6 +294,8 @@ class CacheSync:
         self._rest_states = [s for s in self._rest_states if s[0] <= pos]
         if self._pinned is not None and self._pinned[0] > pos:
             self._pinned = None
+        if self._at_cut is not None and self._at_cut[0] > pos:
+            self._at_cut = None
 
 
 def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int | None:

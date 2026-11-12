@@ -464,26 +464,8 @@ def test_a_result_longer_than_the_room_left_drops_only_part_of_the_history_of_a_
     assert "Question 11" in run.seen[-1]        # the reply to the result reads the newest history
 
 
-def _declares_after_the_history(stem):
-    """Whether the template writes the declarations after the history, before the newest question."""
-    run = _Run(stem)
-    run.begin(tools=[WEATHER])
-    written = run.render([{"role": "user", "content": "First?"},
-                          {"role": "assistant", "content": "First answer."},
-                          {"role": "user", "content": "Second?"}], [WEATHER])
-    return written.find(WEATHER.description) > written.find("First answer.")
-
-
-# On a cache that can neither shift nor cut, a template that moves its declarations
-# to each newest question decodes every tool turn of the conversation again each turn.
-_MOVED_DECLARATIONS_REDECODE = pytest.mark.xfail(
-    strict=True, reason="a tool turn's saved states push out the one before the declarations")
-
-
 @pytest.mark.parametrize("stem, can_cut", [
-    pytest.param(stem, can_cut, id=f"{stem}-{'cuts' if can_cut else 'neither'}",
-                 marks=[] if can_cut or not _declares_after_the_history(stem)
-                 else [_MOVED_DECLARATIONS_REDECODE])
+    pytest.param(stem, can_cut, id=f"{stem}-{'cuts' if can_cut else 'neither'}")
     for stem in _TOOL_TEMPLATES for can_cut in (True, False)])
 def test_results_that_need_room_decode_a_cache_that_cannot_shift_again_only_every_few_turns(
         stem, can_cut):

@@ -3643,7 +3643,8 @@ against 214 each on a cache that shifts; plain exchanges cost 236 each). A
 tool turn rests the cache after the call and after each result, and the two
 newest saved states then no longer include the one saved before the
 declarations, so the reply's settling goes back to the state pinned after the
-system turn. The test marks those two cases as expected to fail.
+system turn. The test marked those two cases as expected to fail; fixed
+afterwards (337.11A), see "The state saved before moved declarations is kept".
 
 ### A history that ends on an owed call is decoded only as far as the results leave it
 
@@ -3730,3 +3731,22 @@ this round's fixes: a cap of 27 tokens, the call's own 27). The tool's side
 effects and the prefill went to a result the model never reads. Now such a
 call is not run: the turn closes as one the reply cap cuts does, and the
 reply ends with `token_limit`.
+
+### The state saved before moved declarations is kept
+
+337.11A, and the review's G2: the break of the rolling memory recorded under
+"Found while testing, not changed". A cache that can neither shift nor cut
+keeps the two newest states it rested in and one pinned after the system
+turn. Where the template moves its declarations to the newest question, the
+library rests the cache where the declarations begin, before they are decoded
+again; a tool turn's own rests (after the call, after each result) then
+pushed that state out, so the next question went back to the pinned state and
+decoded the whole history again. Now `CacheSync.hold` keeps the state it
+rested in at such a cut as a third saved state, for as long as the tokens
+before it stay; a hold that only appends does not replace it. Measured on the
+stand-in, ministral-2410 with the weather tool, a cache that can neither shift
+nor cut: 1,387 tokens on the first turn, then 389 on each of the next five,
+where every turn decoded the whole conversation before (1,535, 1,683, 1,831,
+1,979). It costs one more saved copy of the model's state in RAM, only for
+such a cache; caches that cut or shift save no states at all. The two cases
+are no longer marked as expected to fail.
