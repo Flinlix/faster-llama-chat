@@ -657,6 +657,7 @@ class RenderedCache:
         """
         calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
         del self._state.messages[calling + 1:]
+        self._state.results_cut = []
         self._forget_calls()
         if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
             # Nothing the template writes is left of the reply: taken back with its request.
@@ -697,20 +698,25 @@ class RenderedCache:
                                  "result cannot be written")
             room = self._max_prompt_tokens
             n_before = len(as_history(self._state.messages))
-            self._state.messages.append(message)
+            # Each result still owed after this one is held cut to nothing, so room is left for it.
+            owed_after = [result_message(later.name, later_id, _cut(text, 0))
+                          for later, later_id in waiting[1:]]
+            self._state.messages += [message, *owed_after]
             dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True)
-            if not self._fits(text, room):
-                if not text or not self._fits(_cut(text, 0), room):
+            at = len(self._state.messages) - len(owed_after) - 1
+            if not self._fits(at, text, room):
+                if not text or not self._fits(at, _cut(text, 0), room):
                     raise ContextOverflowError(
                         "not even the result cut to nothing leaves room for the reply in what "
                         "is left of the context")
                 low, high = 0, len(text)
                 while low < high:
                     middle = (low + high + 1) // 2
-                    low, high = (middle, high) if self._fits(_cut(text, middle), room) \
+                    low, high = (middle, high) if self._fits(at, _cut(text, middle), room) \
                         else (low, middle - 1)
-                self._state.messages[-1] = {**message, "content": _cut(text, low)}
+                self._state.messages[at] = {**message, "content": _cut(text, low)}
                 self._state.results_cut.append(owed)
+            del self._state.messages[at + 1:]
             if not self.pending_calls:
                 self._sync(self._fitting_prompt(), dropped=dropped)
             elif dropped:
@@ -721,9 +727,9 @@ class RenderedCache:
                 self._memory.rest()
             return n_before - len(as_history(self._state.messages))
 
-    def _fits(self, content: str, room: int) -> bool:
-        """Whether the conversation, its newest message, a result, holding ``content``, fits in ``room`` with the generation prompt."""
-        self._state.messages[-1] = {**self._state.messages[-1], "content": content}
+    def _fits(self, at: int, content: str, room: int) -> bool:
+        """Whether the conversation, its message at ``at``, a result, holding ``content``, fits in ``room`` with the generation prompt."""
+        self._state.messages[at] = {**self._state.messages[at], "content": content}
         return self._rendering.length(self._state.messages, generation_prompt=True) <= room
 
     # ----- changing what it holds -----------------------------------------------------

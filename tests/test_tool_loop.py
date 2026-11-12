@@ -494,6 +494,36 @@ def test_a_result_cut_under_a_registry_is_listed_on_its_reply():
     assert reply.tool_results_cut == reply.tool_calls
 
 
+def _two_calls_owed(context_size):
+    wrapper, fake = tool_wrapper(context_size=context_size)
+    wrapper.begin("persona")
+    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    calls = [e for e in wrapper.reply("los", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert [call.name for call in calls] == ["clock", "other"]
+    return wrapper, fake, calls
+
+
+def test_a_result_cut_leaves_room_for_the_results_still_owed_after_it():
+    wrapper, fake, (first, second) = _two_calls_owed(context_size=400)
+    wrapper.inject_tool_result(first, "x" * 5000)
+    wrapper.inject_tool_result(second, "y" * 10)
+    assert wrapper.turn_open and not wrapper.pending_calls
+    written = fake.text_of(fake.cache)
+    assert "y" * 10 in written and " of 5000 characters kept)" in written
+    fake.call_script = []
+    assert wrapper.reply().finish().tool_results_cut == [first]
+
+
+def test_a_turn_closed_for_want_of_room_lists_no_result_it_dropped_as_cut():
+    wrapper, fake, (first, second) = _two_calls_owed(context_size=400)
+    wrapper.inject_tool_result(first, "x" * 5000)
+    wrapper.inject_tool_result(second, "y" * 10 ** 7)       # its cut note longer than any room left
+    assert not wrapper.turn_open
+    assert "tool" not in [m["role"] for m in wrapper.conversation()["messages"]]
+    fake.call_script = []
+    assert wrapper.reply("und?").finish().tool_results_cut == []
+
+
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_a_result_too_long_for_the_room_left_evicts_the_oldest_exchanges_first(can_shift):
     wrapper, fake = tool_wrapper(context_size=600, can_shift=can_shift)
