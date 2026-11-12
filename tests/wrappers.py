@@ -1,6 +1,8 @@
 """Wrappers on the model-free cache that several test files build, and their consistency check."""
 
 import dataclasses
+import json
+import re
 
 from llama_chat.config import Config
 from llama_chat.tokenizing import split_at_tags
@@ -36,16 +38,26 @@ def system_turn(fake) -> str:
 
 
 def held_renders(context, messages, tools=None, reasoning=False,
-                 for_tools: bool | None = None) -> list[str]:
+                 for_tools: bool | None = None, typed: bool = False) -> list[str]:
     """What a cache holding ``messages`` may read as: their render with the generation prompt or without, or decoded ahead of the next question up to where it goes.
 
     Rendered as the context states its template renders, with nothing the
     library read off the template, each reply's thought in each form a
-    template may read it in.
+    template may read it in; with ``typed``, each spelled as :func:`typed_text`
+    spells the tokens the cache must hold for it.
     """
     from llama_chat.render_checks import STAND_IN as _STAND_IN
-    render = lambda m, prompt: context.stated_render(       # noqa: E731
-        m, tools, generation_prompt=prompt, reasoning=reasoning, for_tools=for_tools)
+
+    def render(messages, prompt):
+        if not typed:
+            return context.stated_render(messages, tools, generation_prompt=prompt,
+                                         reasoning=reasoning, for_tools=for_tools)
+        pieces = rendered_pieces(context, messages, tools, generation_prompt=prompt,
+                                 reasoning=reasoning, for_tools=for_tools)
+        return None if pieces is None else "".join(
+            typed_text(context, context.tokenize(text, parse_special=not own))
+            for text, own in pieces)
+
     found = []
     for written in in_each_thought_form(messages):
         found += [render(written, False), render(written, True)]
@@ -53,12 +65,102 @@ def held_renders(context, messages, tools=None, reasoning=False,
         if ahead is not None and _STAND_IN in ahead:
             before = ahead[:ahead.index(_STAND_IN)]
             cut = len(before)
-            for piece, is_tag in reversed(split_at_tags(context, before) or []):
+            if typed:
+                cut = before.rfind(_TAG_MARK) + 1
+            for piece, is_tag in ([] if typed else reversed(split_at_tags(context, before) or [])):
                 if is_tag:
                     break
                 cut -= len(piece)
             found.append(before[:cut])
     return [text for text in found if text is not None]
+
+
+# What sets a tag apart in :func:`typed_text`: a character no render here holds.
+_TAG_MARK = "\x00"
+
+
+def typed_text(context, tokens: list[int]) -> str:
+    """What ``tokens`` spell, each of the model's tags between two :data:`_TAG_MARK`, so that a tag reads otherwise than its characters."""
+    return "".join(_TAG_MARK + context.token_text(token) + _TAG_MARK
+                   if context.is_special(token) else context.token_text(token)
+                   for token in tokens)
+
+
+def rendered_pieces(context, messages, declarations=None, *, generation_prompt: bool,
+                    reasoning: bool = False,
+                    for_tools: bool | None = None) -> list[tuple[str, bool]] | None:
+    """The render of ``messages`` in pieces, each marked whether it is a text of the caller's own, worked out here on its own; ``None`` where the template refuses them.
+
+    The caller's own texts are a message's content and thought, a call's name
+    and its string arguments, and each description of a declaration.
+    """
+    texts = {}
+
+    def mark(text):
+        marker = f"ZQ{len(texts)}QZ"
+        texts[marker] = text
+        return marker
+
+    def marked(value, key=None):
+        if isinstance(value, str):
+            return mark(value) if value and key in _OWN_KEYS else value
+        if isinstance(value, dict):
+            return {k: (marked(v, k) if k != "arguments" else _all_marked(v, mark))
+                    for k, v in value.items()}
+        if isinstance(value, list):
+            return [marked(item, key) for item in value]
+        return value
+
+    def render(messages, declared):
+        return context.stated_render(messages, declared, generation_prompt=generation_prompt,
+                                     reasoning=reasoning, for_tools=for_tools)
+
+    real = render(messages, declarations)
+    rendered = render(marked(messages), marked(declarations))
+    if real is None or rendered is None:
+        return None
+    # Template text and own texts alternate; own texts with no template text between them are one.
+    parts = [part for part in re.split(r"(ZQ\d+QZ)", rendered) if part]
+    pieces, at = [], 0
+    for k, part in enumerate(parts):
+        if not part.startswith("ZQ"):
+            assert real.startswith(part, at)
+            pieces.append((part, False))
+            at += len(part)
+        elif k + 1 == len(parts) or not parts[k + 1].startswith("ZQ"):
+            following = parts[k + 1] if k + 1 < len(parts) else ""
+            alone = k == 0 or not parts[k - 1].startswith("ZQ")
+            # The text as given or in a form a template writes it in, where what follows matches.
+            written = next((form for form in _written_forms(texts[part]) if alone and following
+                            and real.startswith(form, at)
+                            and real.startswith(following, at + len(form))), None)
+            end = (at + len(written) if written is not None
+                   else real.index(following, at) if following else len(real))
+            pieces.append((real[at:end], True))
+            at = end
+    assert at == len(real), "the render does not match its marked render"
+    return [(text, own) for text, own in pieces if text]
+
+
+def _written_forms(text: str) -> list[str]:
+    """How a template may write ``text``: as it is, trimmed, or inside a JSON string."""
+    return [text, text.strip(), text.rstrip(), text.lstrip(), json.dumps(text)[1:-1],
+            json.dumps(text, ensure_ascii=False)[1:-1]]
+
+
+# The keys whose text is the caller's own, wherever they stand in a message or a declaration.
+_OWN_KEYS = ("content", "reasoning_content", "thinking", "text", "name", "description")
+
+
+def _all_marked(value, mark):
+    """A call's arguments, each string in them marked."""
+    if isinstance(value, str):
+        return mark(value) if value else value
+    if isinstance(value, dict):
+        return {key: _all_marked(item, mark) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_all_marked(item, mark) for item in value]
+    return value
 
 
 def assert_cache_reads_as_rendered(wrapper, fake):
@@ -80,15 +182,15 @@ def assert_cache_reads_as_rendered(wrapper, fake):
         for i in range(first, last + 1):
             if messages[i].get("tool_calls"):
                 messages[i] = {**messages[i], "content": ""}
-    renders = held_renders(fake, messages,
-                           internals.declarations(wrapper), reasoning=internals.reasons(wrapper),
-                           for_tools=internals.uses_tool_template(wrapper))
+    renders = held_renders(fake, messages, internals.declarations(wrapper),
+                           reasoning=internals.reasons(wrapper),
+                           for_tools=internals.uses_tool_template(wrapper), typed=True)
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
-    kept = [(text_of(tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
+    kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
              closing if not text and not on_call else "")
             for tokens, text, on_call in internals.kept_turns(wrapper)]
-    assert any(_reads_as(text_of(fake.cache), render, kept) for render in renders), \
+    assert any(_reads_as(typed_text(fake, fake.cache), render, kept) for render in renders), \
         "the cache does not read as the template renders the conversation"
     for placed in internals.kept_turn_places(wrapper):
         assert placed is not None, "a turn kept as generated was lost"
@@ -107,14 +209,18 @@ def _reply_closing(fake, reasoning: bool) -> str:
 def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]) -> bool:
     """Whether ``held`` is ``render`` with each kept turn in place of the template's version of it, everything around them exactly as rendered.
 
-    ``kept`` holds each turn's text, the text of its first and of its last
-    token, the text of its last message, and, for a turn that ends on a reply
-    without text, the template's closing after a reply. The template's version
-    of a turn begins with the same token, and ends with the same token, with
-    that message's text, where that closing begins, or, for a turn whose call
-    the template does not write, is where the kept turn begins; so it takes in
-    none of the template's text beside it.
+    ``held``, ``render`` and each turn's text are spelled as :func:`typed_text`
+    spells tokens, so that everything around the kept turns compares token for
+    token. ``kept`` holds each turn's text, the text of its first and of its
+    last token, the text of its last message, and, for a turn that ends on a
+    reply without text, the template's closing after a reply. The template's
+    version of a turn begins with the same token, and ends with the same
+    token, with that message's text, where that closing begins, or, for a turn
+    whose call the template does not write, is where the kept turn begins; so
+    it takes in none of the template's text beside it. A turn's bounds are
+    found by its characters, since a model may write a tag of its turn as text.
     """
+    plain = lambda text: text.replace(_TAG_MARK, "")       # noqa: E731
     pieces, at = [], 0
     for turn, *_ in kept:
         found = held.find(turn, at)
@@ -130,14 +236,16 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]
     at = len(pieces[0])
     for n, ((turn, opening, closing, text, reply_closing), piece) in enumerate(
             zip(kept, pieces[1:])):
-        if not render.startswith(opening, at):
+        if not plain(render[at:]).startswith(opening):
             return False
         last = n == len(kept) - 1
         ends = [len(render) - len(piece)] if last else _occurrences(render, piece, at)
-        ends = [end for end in ends if end >= at + len(opening) and render.startswith(piece, end)
-                and (render[at:end].endswith(closing) or turn.startswith(render[at:end])
-                     or bool(text) and render[at:end].rstrip().endswith(text)
-                     or bool(reply_closing) and render.startswith(reply_closing, end))]
+        ends = [end for end in ends if len(plain(render[at:end])) >= len(opening)
+                and render.startswith(piece, end)
+                and (plain(render[at:end]).endswith(closing)
+                     or plain(turn).startswith(plain(render[at:end]))
+                     or bool(text) and plain(render[at:end]).rstrip().endswith(text)
+                     or bool(reply_closing) and plain(render[end:]).startswith(reply_closing))]
         if not ends:
             return False
         at = ends[0] + len(piece)

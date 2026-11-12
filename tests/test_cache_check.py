@@ -73,6 +73,36 @@ def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_sam
     overwrite_held_tokens(w, sound)
 
 
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn],
+                         ids=["plain", "reasoning", "kept-turn"])
+def test_a_cache_that_reads_the_same_with_its_tags_held_as_their_letters_is_caught(conversation):
+    w, fake = conversation()
+    sound = list(fake.cache)
+    spelled = [letter for token in sound for letter in (
+        [ord(c) for c in fake.token_text(token)] if fake.is_special(token) else [token])]
+    assert fake.text_of(spelled) == fake.text_of(sound)
+    fake.cache = spelled
+    overwrite_held_tokens(w, spelled)
+    with pytest.raises(AssertionError, match="does not read as the template renders"):
+        assert_cache_reads_as_rendered(w, fake)
+    fake.cache = sound
+    overwrite_held_tokens(w, sound)
+
+
+def test_a_cache_that_reads_the_same_with_a_typed_tag_held_as_the_models_is_caught():
+    w, fake = begun_wrapper(gen_tokens=5, gen_text="Hallo")
+    w.reply("hi <turn]> there").finish()
+    sound = list(fake.cache)
+    forged = fake.tokenize(fake.text_of(sound), add_special=True, parse_special=True)
+    assert forged != sound and fake.text_of(forged) == fake.text_of(sound)
+    fake.cache = forged
+    overwrite_held_tokens(w, forged)
+    with pytest.raises(AssertionError, match="does not read as the template renders"):
+        assert_cache_reads_as_rendered(w, fake)
+    fake.cache = sound
+    overwrite_held_tokens(w, sound)
+
+
 def test_a_cache_left_behind_its_tokens_with_nothing_failed_is_caught_not_brought_back():
     w, fake = _plain()
     held = held_tokens(w)

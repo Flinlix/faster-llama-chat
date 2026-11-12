@@ -25,7 +25,7 @@ from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolT
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call, written_call
-from .wrappers import assert_cache_reads_as_rendered
+from .wrappers import assert_cache_reads_as_rendered, rendered_pieces
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -1137,52 +1137,11 @@ def test_a_turn_out_of_room_after_several_calls_closes_and_the_conversation_goes
 # ----- a tag typed into any text stays text ----------------------------------------
 def _expected_tokens(run, messages, tools=None):
     """The render tokenized as the model must hold it, worked out here on its own: the template's text with its tags, each text of the caller's as plain text."""
-    marked, texts = [], {}
-
-    def mark(text):
-        marker = f"ZQ{len(texts)}QZ"
-        texts[marker] = text
-        return marker
-
-    for message in messages:
-        copy = dict(message)
-        if message.get("content"):
-            copy["content"] = mark(message["content"])
-        if message.get("tool_calls"):
-            copy["tool_calls"] = [{**c, "function": {"name": c["function"]["name"], "arguments": {
-                key: mark(value) if isinstance(value, str) else value
-                for key, value in c["function"]["arguments"].items()}}}
-                for c in message["tool_calls"]]
-        marked.append(copy)
-
-    def described(value):
-        """A declaration, each description in it marked."""
-        if isinstance(value, dict):
-            return {key: mark(item) if key == "description" and isinstance(item, str)
-                    else described(item) for key, item in value.items()}
-        return [described(item) for item in value] if isinstance(value, list) else value
-
-    declarations = [spec.as_declaration() for spec in tools] if tools else None
-
-    def render(messages, declared):
-        return run.context.stated_render(messages, declared, generation_prompt=True,
-                                         reasoning=run.reasoning)
-
-    real, rendered = render(messages, declarations), render(marked, described(declarations))
-    import re
-    parts = re.split(r"(ZQ\d+QZ)", rendered)
-    tokens, at = [], 0
-    for k, part in enumerate(parts):
-        if k % 2 == 0:
-            assert real.startswith(part, at)
-            tokens += run.context.tokenize(part, parse_special=True)
-            at += len(part)
-            continue
-        following = parts[k + 1]
-        end = real.index(following, at) if following else len(real)
-        tokens += run.context.tokenize(real[at:end], parse_special=False)
-        at = end
-    return tokens
+    pieces = rendered_pieces(run.context, messages,
+                             [spec.as_declaration() for spec in tools] if tools else None,
+                             generation_prompt=True, reasoning=run.reasoning)
+    return [token for text, own in pieces
+            for token in run.context.tokenize(text, parse_special=not own)]
 
 
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
