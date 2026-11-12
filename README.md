@@ -406,9 +406,10 @@ then what its GGUF states for a value the file leaves out, then switched off
 `presence_penalty` and `frequency_penalty` 0), with `penalty_window_tokens`
 at llama.cpp's default of 64. A model for which neither
 states any value, or only `penalty_window_tokens`, runs at llama.cpp's
-defaults. A value the GGUF states that
-`Config` would refuse stops the load with a `ValueError` naming the GGUF as
-its source, unless `Config` or the add-on file replaces it.
+defaults. A penalty window the GGUF states as `-1`, which llama.cpp reads as
+the whole context, is taken as `context_size`. Any other value the GGUF states
+that `Config` would refuse stops the load with a `ValueError` naming the GGUF
+as its source, unless `Config` or the add-on file replaces it.
 `Sampling(...)` passed to one `reply` overrides any field of this table but
 `model_path` for that request. `Sampling` refuses, where it is built, any
 value `Config` refuses.

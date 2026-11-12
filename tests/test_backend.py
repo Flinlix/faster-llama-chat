@@ -25,6 +25,7 @@ from llama_chat.template import CallBoundary
 
 import llama_chat
 
+from llama_chat.addon_files import read_addon_file, with_model_sampling
 from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import split_at_tags, tokenize_pieces
@@ -549,10 +550,11 @@ def test_flash_attention_is_the_engines_choice_unless_set_or_a_quantized_cache_n
     assert _context_settings(tmp_path, monkeypatch, **settings)["flash_attn"] is asked
 
 
-def _gguf_stating(stated: dict):
-    """A KVContext whose model's GGUF holds ``stated``, by key."""
+def _gguf_stating(stated: dict, context_size: int = 4096):
+    """A KVContext of ``context_size`` tokens whose model's GGUF holds ``stated``, by key."""
     context = object.__new__(KVContext)
     context._model = "model"
+    context._config = Config(context_size=context_size)
     context._backend = SimpleNamespace(metadata_value=lambda model, key: stated.get(key))
     return context
 
@@ -566,6 +568,13 @@ def test_the_sampling_a_gguf_states_is_read_by_the_names_a_request_gives_it():
                                               "penalty_window_tokens": 128}
     assert type(context.recommended_sampling()["penalty_window_tokens"]) is int
     assert _gguf_stating({}).recommended_sampling() == {}
+
+
+def test_a_gguf_penalty_window_of_minus_one_is_read_as_the_whole_context():
+    context = _gguf_stating({"general.sampling.penalty_last_n": "-1"}, context_size=2048)
+    assert context.recommended_sampling() == {"penalty_window_tokens": 2048}
+    assert with_model_sampling(Config(), context.recommended_sampling(),
+                               read_addon_file(None)).penalty_window_tokens == 2048
 
 
 def test_a_gguf_sampling_value_that_is_no_number_is_refused_naming_its_key():

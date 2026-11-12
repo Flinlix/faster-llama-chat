@@ -2611,3 +2611,14 @@ temperature 1 with `top_k`, `top_p` and `min_p` off, though it recommended no
 sampler at all. The window says how far back the penalties look, not how a
 token is drawn, and 300.9A already gives it the same fallback in both cases,
 so the choice between the two fallbacks now reads every field but the window.
+
+**S5: a GGUF's penalty window of -1 is the whole context.** llama.cpp reads
+`penalty_last_n = -1` as the whole context, and `Config` refuses a negative
+window, so under 300.9A such a GGUF stopped the load unless `Config` or the
+add-on file set the window. The value is a valid statement of the model's, not
+a malformed one, so the loaded model's context now reads it as its own
+`context_size` before it is handed on, and `Config` keeps refusing a negative
+window from the caller and from an add-on file, where `-1` has no meaning of
+its own. Only `-1` is read so, since llama.cpp gives no other negative value a
+meaning. A context of one's own still gives its window as a length that
+`Config` accepts.

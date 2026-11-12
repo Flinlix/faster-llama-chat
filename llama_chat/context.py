@@ -24,6 +24,8 @@ _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general
                        "penalty_window_tokens": "general.sampling.penalty_last_n"}
 # The fields among them that Config takes as whole numbers.
 _WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
+# The penalty window a GGUF states to mean the whole context, as llama.cpp reads it.
+_WHOLE_CONTEXT_WINDOW = -1
 
 
 class KVContext:
@@ -143,6 +145,9 @@ class KVContext:
     def recommended_sampling(self) -> dict[str, float]:
         """The sampling the model's GGUF states, by :class:`Sampling`'s names.
 
+        A penalty window stated as ``-1`` is the whole context, given as
+        :attr:`context_size`.
+
         Raises:
             ValueError: If the GGUF states one of them as text that is no number.
         """
@@ -156,6 +161,8 @@ class KVContext:
             except ValueError:
                 raise ValueError(f"the model's GGUF states {key} as {text!r}, which is "
                                  "no number") from None
+            if name == "penalty_window_tokens" and number == _WHOLE_CONTEXT_WINDOW:
+                number = float(self.context_size)
             stated[name] = (int(number) if name in _WHOLE_NUMBER_FIELDS and number.is_integer()
                             else number)
         return stated
