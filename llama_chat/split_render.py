@@ -2,7 +2,8 @@
 
 The conversation is rendered twice: once as it is, and once with a marker in
 place of every text of the caller's own (a content, a thought, a call's name
-and its string arguments). The markers say where each text goes; the render as
+and its string arguments, and each description of a declaration). The markers
+say where each text goes; the render as
 it is must then be the marked one with each marker replaced by its text as the
 template writes it, which may wrap text of its own around it where it is placed
 in only one way. Otherwise the template wrote more of a text than the text
@@ -55,12 +56,13 @@ class SplitRender:
         return [(text, own) for text, own in pieces if text]
 
 
-def split_render(render: Callable[[list[dict]], str | None], messages: list[dict],
-                 written: Callable[[str], str]) -> SplitRender | None:
-    """``messages`` rendered and split; ``None`` where the template refuses them.
+def split_render(render: Callable[[list[dict], list[dict] | None], str | None],
+                 messages: list[dict], written: Callable[[str], str],
+                 declarations: list[dict] | None = None) -> SplitRender | None:
+    """``messages`` rendered with ``declarations`` and split; ``None`` where the template refuses them.
 
     Args:
-        render: The template's render of a list of messages.
+        render: The template's render of a list of messages and of declarations.
         written: A content's text with the template's rewrites applied, tried
             on the text itself and on each of its stripped forms.
 
@@ -69,11 +71,11 @@ def split_render(render: Callable[[list[dict]], str | None], messages: list[dict
             replaced by its text.
     """
     for attempt in range(2):
-        rendered = render(messages)
+        rendered = render(messages, declarations)
         if rendered is None:
             return None
-        marked_messages, values = _marked(messages)
-        marked = render(marked_messages)
+        marked_messages, marked_declarations, values = _marked(messages, declarations)
+        marked = render(marked_messages, marked_declarations)
         split = (_placed(rendered, marked, values, len(messages), written)
                  if marked is not None else None)
         if split is not None:
@@ -89,13 +91,14 @@ class _Value:
     """One text of the caller's own, and where it belongs."""
 
     text: str
-    message: int
-    kind: str                       # "content", "thought", "name" or "argument"
+    message: int                    # -1 for a declaration's
+    kind: str                       # "content", "thought", "name", "argument" or "description"
     call: int = -1                  # which of the message's calls a name or an argument is of
 
 
-def _marked(messages: list[dict]) -> tuple[list[dict], dict[str, _Value]]:
-    """The messages with a marker in place of each text of the caller's own, and what each marker stands for."""
+def _marked(messages: list[dict], declarations: list[dict] | None
+            ) -> tuple[list[dict], list[dict] | None, dict[str, _Value]]:
+    """The messages and the declarations with a marker in place of each text of the caller's own, and what each marker stands for."""
     values: dict[str, _Value] = {}
 
     def mark(text: str, index: int, kind: str, call: int = -1) -> str:
@@ -110,6 +113,15 @@ def _marked(messages: list[dict]) -> tuple[list[dict], dict[str, _Value]]:
             return {key: mark_arguments(item, index, call) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
             return [mark_arguments(item, index, call) for item in value]
+        return value
+
+    def mark_descriptions(value):
+        if isinstance(value, dict):
+            return {key: mark(item, -1, "description")
+                    if key == "description" and isinstance(item, str)
+                    else mark_descriptions(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [mark_descriptions(item) for item in value]
         return value
 
     marked = []
@@ -128,7 +140,7 @@ def _marked(messages: list[dict]) -> tuple[list[dict], dict[str, _Value]]:
                     "arguments": mark_arguments(call["function"]["arguments"], index, n)}}
                 for n, call in enumerate(message["tool_calls"])]
         marked.append(copy)
-    return marked, values
+    return marked, mark_descriptions(declarations), values
 
 
 def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: int,

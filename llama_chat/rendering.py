@@ -78,16 +78,22 @@ class ConversationRendering:
         """``messages`` as the template writes them, ``None`` where it refuses that shape."""
         return self._render_given(self._as_given(messages), generation_prompt)
 
-    def _render_given(self, messages, generation_prompt: bool) -> str | None:
-        """``messages``, as the template is given them, rendered; ``None`` where it refuses that shape."""
+    def _render_given(self, messages, generation_prompt: bool,
+                      declarations: list[dict] | None = None) -> str | None:
+        """``messages``, as the template is given them, rendered with ``declarations``, by default the conversation's; ``None`` where it refuses that shape."""
         inputs = self._inputs()
-        tools = [spec.as_declaration() for spec in inputs.tools] or None
-        key = ("render", json.dumps([messages, generation_prompt], sort_keys=True, default=str))
+        tools = self._declarations() if declarations is None else declarations
+        key = ("render", json.dumps([messages, declarations, generation_prompt], sort_keys=True,
+                                    default=str))
         if key not in self._memo:
             self._memo[key] = self._template.render(
                 messages, tools, generation_prompt=generation_prompt,
                 reasoning=inputs.reasoning)
         return self._memo[key]
+
+    def _declarations(self) -> list[dict] | None:
+        """What the conversation declares, as a template is handed it; ``None`` for nothing."""
+        return [spec.as_declaration() for spec in self._inputs().tools] or None
 
     def _as_given(self, messages: list[dict]) -> list[dict]:
         """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
@@ -111,8 +117,12 @@ class ConversationRendering:
         given = self._as_given(messages)
         key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
         if key not in self._memo:
-            self._memo[key] = split_render(lambda m: self._render_given(m, generation_prompt),
-                                           given, self._template.fragments.content)
+            declarations = self._declarations()
+            # The render as it is is the one :meth:`render` makes, and shares its memo.
+            self._memo[key] = split_render(
+                lambda m, declared: self._render_given(
+                    m, generation_prompt, None if declared is declarations else declared),
+                given, self._template.fragments.content, declarations)
         return self._memo[key]
 
     def opening_render(self, system: list[dict]) -> str | None:

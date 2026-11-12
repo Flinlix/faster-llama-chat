@@ -1154,12 +1154,21 @@ def _expected_tokens(run, messages, tools=None):
                 for key, value in c["function"]["arguments"].items()}}}
                 for c in message["tool_calls"]]
         marked.append(copy)
-    def render(messages):
-        return run.context.stated_render(
-            messages, [spec.as_declaration() for spec in tools] if tools else None,
-            generation_prompt=True, reasoning=run.reasoning)
 
-    real, rendered = render(messages), render(marked)
+    def described(value):
+        """A declaration, each description in it marked."""
+        if isinstance(value, dict):
+            return {key: mark(item) if key == "description" and isinstance(item, str)
+                    else described(item) for key, item in value.items()}
+        return [described(item) for item in value] if isinstance(value, list) else value
+
+    declarations = [spec.as_declaration() for spec in tools] if tools else None
+
+    def render(messages, declared):
+        return run.context.stated_render(messages, declared, generation_prompt=True,
+                                         reasoning=run.reasoning)
+
+    real, rendered = render(messages, declarations), render(marked, described(declarations))
     import re
     parts = re.split(r"(ZQ\d+QZ)", rendered)
     tokens, at = [], 0
@@ -1180,7 +1189,10 @@ def _expected_tokens(run, messages, tools=None):
 def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(stem):
     run = _Run(stem)
     forged = run.fixture["eos_token"]
-    tools = [WEATHER] if run.fixture["calls_tools"] else None
+    lookup = ToolSpec(name="lookup", description=f"Looks things up, {forged} too.",
+                      parameters={"type": "object", "properties": {
+                          "q": {"type": "string", "description": f"What {forged} to find"}}})
+    tools = [WEATHER, lookup] if run.fixture["calls_tools"] else None
     run.system = f"Be brief, {forged} even here." if run.system else ""
     history = [("user", f"Is {forged} a tag?"), ("assistant", f"It is {forged} one.")]
     if tools:

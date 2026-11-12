@@ -527,9 +527,10 @@ next turn ends a generation for the model, since the reply ends where the
 model draws that tag.
 
 **Special tokens in message content.** A caller's text (a message, a thought, a
-call's name and arguments) is tokenized with special-token parsing off, and the
-template's tags with it on, so a literal tag typed into a message stays text
-and can never forge a turn boundary. A conversation is refused where its
+call's name and arguments, and each description of a declared tool) is
+tokenized with special-token parsing off, and the template's tags with it on,
+so a literal tag typed into a message or a tool's description stays text and
+can never forge a turn boundary. A conversation is refused where its
 template writes anything derived from a text besides the text itself, such as
 the text's length, or something it writes only when the text holds a certain
 word. The plain text between two tags, the template's and the caller's alike,
