@@ -1819,6 +1819,21 @@ def test_a_reply_given_no_policy_takes_the_policy_of_the_turn_open_when_it_runs(
     assert handed and wrapper.pending_calls == handed and wrapper.turn_open
 
 
+def test_a_turn_a_history_left_open_keeps_the_policy_of_the_first_reply_that_gives_one():
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", [("user", "los"), ToolTurn((ToolCall("clock", {}),))],
+                  tools=[ToolSpec(name="clock", description="Die Zeit.",
+                                       parameters={"type": "object", "properties": {}})])
+    wrapper.inject_tool_result(wrapper.pending_calls[0], "12:00")
+    fake.call_script = ["fn:clock{}"]
+    first, = [event for event in wrapper.reply(tool_call_policy="yield")
+              if isinstance(event, ToolCall)]
+    wrapper.inject_tool_result(first, "12:01")
+    fake.call_script = ["fn:clock{}"]
+    handed = [event for event in wrapper.reply() if isinstance(event, ToolCall)]
+    assert handed and wrapper.pending_calls == handed       # handed over, not refused
+
+
 def test_a_failed_reply_that_gives_max_calls_leaves_the_turn_what_was_left_of_its_own():
     registry, ran = _counting_clock()
     wrapper, fake = tool_wrapper()

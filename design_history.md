@@ -2644,3 +2644,13 @@ anything it produces is recorded, so a reply that fails before that changes
 neither. Putting the old values back on failure was the other way; it was not
 taken, since every path that fails would have to restore them, while one
 point where the generation starts covers all of them.
+
+**S7: a turn the history opened keeps the first policy a reply gives it.** A
+turn's policy was noted only by the reply that opened it, and a turn that
+`begin` left open was opened by no reply, so it never had one. Going on with
+it under `"yield"` and then calling `reply()` after the results therefore
+went on under `"refuse"`, against the README's promise that `reply()` keeps
+the turn's policy, and the model's next call was refused instead of handed
+over. The first reply that goes on with such a turn and is given a policy now
+notes it as the turn's, as if it had opened the turn; a reply given none
+leaves the turn without one, so the next still goes on under `"refuse"`.

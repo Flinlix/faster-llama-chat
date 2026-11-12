@@ -366,10 +366,11 @@ class ChatWrapper:
                    policy: ToolCallPolicy | ToolRegistry, budget: _CallBudget) -> None:
         """Note what a reply whose generation has started leaves its turn; the lock must be held.
 
-        A reply that opens a turn starts it with ``policy``. The turn keeps
-        ``budget``, the calls it may still run.
+        A reply that opens a turn starts it with ``policy``; one going on with
+        a turn the history opened gives it ``given``, where it gives one. The
+        turn keeps ``budget``, the calls it may still run.
         """
-        if not self._conversation.turn_open:
+        if not self._conversation.turn_open or (self._turn_policy is None and given is not None):
             self._turn_policy = policy
         self._turn_budget = budget
 
