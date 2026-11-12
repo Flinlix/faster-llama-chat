@@ -493,10 +493,10 @@ class RenderedCache:
         return target
 
     # ----- generating -------------------------------------------------------------------
-    def generate(self, max_tokens: int, generated: GenerationAccumulator, **options):
-        """Stream one generation of at most ``max_tokens`` from the cache's end; what it decodes is held as the cache's.
+    def generate(self, max_generated_tokens: int, generated: GenerationAccumulator, **options):
+        """Stream one generation of at most ``max_generated_tokens`` from the cache's end; what it decodes is held as the cache's.
 
-        It stops short of ``max_tokens`` where the context leaves less room
+        It stops short of ``max_generated_tokens`` where the context leaves less room
         beside the closing after the reply.
 
         Raises:
@@ -512,7 +512,7 @@ class RenderedCache:
                             self.turn_open, before_question)
         room = (self._config.context_size - len(self._memory.tokens)
                 - self.template.n_closing_tokens)
-        return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
+        return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False) -> int:

@@ -526,7 +526,7 @@ does.
 A model that ships no chat template is refused when it loads: the template is
 what every conversation is written with. For one whose template writes no
 tool call it can be read from, its [add-on file](#add-on-files) says how the
-model writes one. A reply's ending must begin with one of the model's own tags,
+model writes one. The closing after a reply must begin with one of the model's own tags,
 or construction raises: a model could never stop on plain text. A template
 that writes nothing after a reply is used only where the tag that opens the
 next turn ends a generation for the model, since the reply ends where the

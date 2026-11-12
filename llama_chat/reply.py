@@ -45,7 +45,7 @@ class Reply:
         n_evicted_messages: Messages evicted to bring the cache back inside both
             eviction limits.
         stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
-            a stop string was met, the token cap was reached, ``cancel`` was
+            a stop string was met, the reply cap was reached, ``cancel`` was
             set, a call was made, or a call was made that could not be read.
         tool_calls: The calls the model made, in the order it made them.
             Reported whatever became of them, so a call that was refused rather

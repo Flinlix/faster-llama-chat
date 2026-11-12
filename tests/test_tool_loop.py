@@ -1370,7 +1370,7 @@ def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
     assert reply.stop_reason == "unreadable_tool_call"
     assert not wrapper.turn_open
     turn = newest_turn(fake)
-    assert "</call><turn]>\n" in turn             # the terminator still landed
+    assert "</call><turn]>\n" in turn             # the closing still landed
     assert fake.cache == held_tokens(wrapper)
     assert wrapper.reply("weiter").finish().stop_reason == "end_of_turn"
 

@@ -78,7 +78,7 @@ def generate(
             text. A call is recognized where it opens, none of it is
             yielded, and generation ends where it closes with
             ``stop_reason == "tool_call"``, or where the turn ends inside it,
-            closed as the template closes one; one the token cap cuts short is
+            closed as the template closes one; one the reply cap cuts short is
             dropped, and the reply ends with ``"token_limit"``.
 
     Yields:

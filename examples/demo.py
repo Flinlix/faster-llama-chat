@@ -98,7 +98,7 @@ def main() -> None:
         print(f"  reply: {reply.text.strip()[:200]}")
         print(
             f"  prefilled {ctx.prefilled - before} new tokens "
-            f"(prompt={reply.n_prefilled_tokens}, "
+            f"(prefilled={reply.n_prefilled_tokens}, "
             f"generated={reply.n_generated_tokens}, "
             f"evicted={reply.n_evicted_messages}, stop={reply.stop_reason})"
         )

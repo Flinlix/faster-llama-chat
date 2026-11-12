@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llama_chat"
 version = "2.0.0"
-description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict-and-shift the oldest messages."
+description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict the oldest exchanges."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 classifiers = [

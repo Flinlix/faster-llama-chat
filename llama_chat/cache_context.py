@@ -41,7 +41,7 @@ class GenerationAccumulator:
         cached_beyond: Tokens decoded into the cache after ``token_ids`` that
             belong to no reply, such as the first tokens of a closing written
             whole later; the caller cuts them away again.
-        cut_inside_call: Whether the token cap or a cancel ended it inside a
+        cut_inside_call: Whether the reply cap or a cancel ended it inside a
             call, which is then dropped.
     """
 

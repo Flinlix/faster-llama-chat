@@ -131,11 +131,11 @@ def ensure_role(role) -> None:
         raise ValueError("a tool result is written by inject_tool_result(), and given to "
                          "begin() as a ToolResult inside a ToolTurn")
     if role not in MESSAGE_ROLES:
-        raise ValueError(f"a message's role is 'user' or 'assistant', not {role!r}")
+        raise ValueError(f"a message's role is {' or '.join(map(repr, MESSAGE_ROLES))}, not {role!r}")
 
 
 def call_id(n: int) -> str:
-    """The id of the ``n``-th call this library writes, nine letters and digits."""
+    """The id of the ``n``-th call this library writes: ``call`` and ``n``, at least five digits long."""
     return f"call{n:05d}"
 
 
@@ -168,11 +168,11 @@ THOUGHT_FORMS = (THOUGHT_KEY, "thinking", "content_block")
 
 
 def with_thought_as(message: dict, form: str) -> dict:
-    """``message``, whose thought is held under ``reasoning_content``, with that thought in ``form``, one of :data:`THOUGHT_FORMS`."""
-    thought = message.get("reasoning_content")
-    if not thought or form == THOUGHT_FORMS[0]:
+    """``message``, whose thought is held under :data:`THOUGHT_KEY`, with that thought in ``form``, one of :data:`THOUGHT_FORMS`."""
+    thought = message.get(THOUGHT_KEY)
+    if not thought or form == THOUGHT_KEY:
         return message
-    rest = {key: value for key, value in message.items() if key != THOUGHT_FORMS[0]}
+    rest = {key: value for key, value in message.items() if key != THOUGHT_KEY}
     if form == THOUGHT_FORMS[1]:
         return {**rest, THOUGHT_FORMS[1]: thought}
     return {**rest, "content": [{"type": "thinking", "thinking": thought},

@@ -89,8 +89,8 @@ class ResolvedTemplate:
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
-        self._declares_in_newest_turn = self._resolve_declares_in_newest_turn()
-        if not self._declares_in_newest_turn:
+        self._declares_before_newest_turn = self._resolve_declares_before_newest_turn()
+        if not self._declares_before_newest_turn:
             self._variables = self._resolve_declaration_variables()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
@@ -272,7 +272,7 @@ class ResolvedTemplate:
     @property
     def declares_before_newest_turn(self) -> bool:
         """Whether the template writes tool declarations right before the newest user turn, so that they move with each question."""
-        return self._declares_in_newest_turn
+        return self._declares_before_newest_turn
 
     def ensure_tools_usable(self) -> None:
         """Refuse to declare tools this model could never use.
@@ -323,23 +323,23 @@ class ResolvedTemplate:
         return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
 
     def _validate_template(self) -> None:
-        """Ensure the turn-terminator opens with one of this model's own tags.
+        """Ensure the closing after a reply opens with one of this model's own tags.
 
-        The model ends a reply by generating that tag; a terminator that opens
-        with plain text never lets it stop, so it would run to the token cap
-        every generation. Where the terminator is empty, the reply ends where
+        The model ends a reply by generating that tag; a closing that opens
+        with plain text never lets it stop, so it would run to the reply cap
+        every generation. Where the closing is empty, the reply ends where
         the model draws the tag that opens the next turn, which must therefore
         end a generation.
         """
-        terminator = self._fragments.assistant_suffix.strip()
-        if not terminator:
+        closing = self._fragments.assistant_suffix.strip()
+        if not closing:
             self._ensure_next_turn_ends_a_reply()
             return
-        pieces = split_at_tags(self._context, terminator)
+        pieces = split_at_tags(self._context, closing)
         if not (pieces and pieces[0][1]):
             raise ValueError(
-                "chat template is not valid for this model: its turn-terminator "
-                f"{terminator!r} does not open with one of the model's own tags, so "
+                "chat template is not valid for this model: its closing after a reply "
+                f"{closing!r} does not open with one of the model's own tags, so "
                 "generation would never stop. The model's embedded chat template "
                 "is malformed, so the model cannot be used."
             )
@@ -367,12 +367,12 @@ class ResolvedTemplate:
             "cannot be used")
 
     def _resolve_turn_end_token(self) -> int | None:
-        """The first token of the turn-terminator, where it is one of the model's tags."""
-        terminator = self._fragments.assistant_suffix.strip()
-        if not terminator:
+        """The first token of the closing after a reply, where it is one of the model's tags."""
+        closing = self._fragments.assistant_suffix.strip()
+        if not closing:
             return None
-        first = first_special_token(self._context, terminator)
-        tokens = self._context.tokenize(terminator, add_special=False)
+        first = first_special_token(self._context, closing)
+        tokens = self._context.tokenize(closing, add_special=False)
         return first if tokens and tokens[0] == first else None
 
     def _check_what_generation_reads(self) -> None:
@@ -586,7 +586,7 @@ class ResolvedTemplate:
         """
         if not self._calls_marked:
             return False
-        return self._declares_in_newest_turn or self._declares_in_system_turn()
+        return self._declares_before_newest_turn or self._declares_in_system_turn()
 
     def _resolve_declaration_variables(self) -> dict:
         """A template variable that puts tool declarations into the system turn, where needed.
@@ -612,7 +612,7 @@ class ResolvedTemplate:
         self._variables = {}
         return {}
 
-    def _resolve_declares_in_newest_turn(self) -> bool:
+    def _resolve_declares_before_newest_turn(self) -> bool:
         """Whether the template declares tools right before the newest user turn alone.
 
         Probed with a stand-in tool's declaration, which must read the same in a

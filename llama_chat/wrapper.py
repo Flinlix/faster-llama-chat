@@ -764,14 +764,14 @@ class ChatWrapper:
         goes on, every generation of it within one reply cap. The lock must be
         held.
         """
-        cap = self._reply_cap(max_reply_tokens)
+        reply_cap = self._reply_cap(max_reply_tokens)
         open_turn_text = self._open_turn_text()
         generations: list[Reply] = []
         while True:
             used = sum(g.n_generated_tokens for g in generations)
             generation = yield from self._read_generation(
                 self._generate(text, recognizes_calls=True, may_call_again=True,
-                               max_reply_tokens=max(0, cap - used), **kwargs),
+                               max_reply_tokens=max(0, reply_cap - used), **kwargs),
                 after=open_turn_text + "".join(g.text for g in generations))
             generations.append(generation)
             if _answerable(generation.tool_calls) or not self._conversation.turn_open:
@@ -887,7 +887,7 @@ class ChatWrapper:
             n_evicted_messages = conversation.ask(text)
         elif not conversation.turn_open:
             conversation.prompt()
-        cap = self._reply_cap(max_reply_tokens)
+        max_generated_tokens = self._reply_cap(max_reply_tokens)
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
@@ -896,7 +896,7 @@ class ChatWrapper:
                                self._template.answer_opening(conversation.reasoning),
                                conversation.prompt_text, list(stop))
         pieces = conversation.generate(
-            cap, generated, cancel=cancel,
+            max_generated_tokens, generated, cancel=cancel,
             sampling=sampling,
             ends_turn=self._turn_end_test(reply_text, generated),
             boundary=self._template.call_boundary(recognizes_calls, withhold))

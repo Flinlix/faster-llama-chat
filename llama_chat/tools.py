@@ -486,13 +486,13 @@ def _scalar_reader(kind: type) -> _Reader:
             return json.dumps(value)
         fits = (isinstance(value, (int, float)) if kind is float else isinstance(value, kind))
         if not fits or isinstance(value, bool) and kind is not bool:
-            raise TypeError(f"{where} must be {_KIND_NAMES[kind]}, not {value!r}")
+            raise TypeError(f"{where} must be {_ARGUMENT_KIND_NAMES[kind]}, not {value!r}")
         return value
     return read
 
 
-_KIND_NAMES = {str: "text", int: "an integer", float: "a number", bool: "true or false",
-               list: "a list", dict: "an object"}
+_ARGUMENT_KIND_NAMES = {str: "text", int: "an integer", float: "a number",
+                        bool: "true or false", list: "a list", dict: "an object"}
 
 
 def _json_type(value) -> str:
