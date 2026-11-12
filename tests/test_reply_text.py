@@ -1,5 +1,7 @@
 """Filtering a reply's text: stop strings, thoughts and channel headers."""
 
+import pytest
+
 from llama_chat.reply_text import ReplyText
 from llama_chat.template import Reasoning
 
@@ -40,10 +42,10 @@ def test_a_channel_header_cut_short_is_not_answer():
     assert reply.feed("<|route|>final") == "" and reply.finish("token_limit") == ""
 
 
-def test_whitespace_after_a_channel_header_is_not_answer():
-    reply = ReplyText(None, "</reason>", "", [])
-    assert reply.feed("</reason>") + reply.feed("\n\n") + reply.feed("Antwort.") \
-        == "Antwort."
+@pytest.mark.parametrize("opening", ["</reason>", "</xx:reason>"])
+def test_whitespace_after_a_channel_header_is_not_answer(opening):
+    reply = ReplyText(None, opening, "", [])
+    assert reply.feed(opening) + reply.feed("\n\n") + reply.feed("Antwort.") == "Antwort."
 
 
 def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():

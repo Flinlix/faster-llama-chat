@@ -2720,3 +2720,9 @@ read as left out, and its value silently fell back to that default. A test now
 checks that each file states every key a file must and no key outside the
 ones the tests and the stand-in context read. The tag keys the name check
 reads lost `bos_token`, which no file states and nothing reads.
+
+**T5: a reply's opening is tested with a tag that holds a colon again.** When
+the tests stopped writing real templates' tags, the test that whitespace after
+a channel's header is not answer lost its only tag with a colon, a shape some
+templates' tags have and `TAG` reads. It now runs with an invented tag of
+that shape beside the plain one.
