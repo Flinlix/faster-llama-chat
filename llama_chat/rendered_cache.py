@@ -544,6 +544,7 @@ class RenderedCache:
                                              bool(asked)))
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
+        unplaced = self._drop_unplaceable()
         self._publish()
         if not self._memory.is_known:
             return 0                # the generation failed: the next action decodes the cache again
@@ -556,6 +557,9 @@ class RenderedCache:
             if not written:
                 self._forget_calls()
         if self.turn_open:
+            if unplaced:
+                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                           logits=False)
             return 0
         if not answer and not called and not self._writes(self._state.messages):
             starts = exchange_starts(self._state.messages)
@@ -597,17 +601,38 @@ class RenderedCache:
         self._state.kept = [KeptTurn(k.tokens, newest if k.first is old else k.first, newest, False)
                             if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
+        self._drop_unplaceable()
         self._publish()
+
+    def _drop_unplaceable(self) -> bool:
+        """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was."""
+        messages, kept = self._state.messages, self._state.kept
+        if not kept:
+            return False
+        for generation_prompt in (False, True):
+            split = self._rendering.split(messages, generation_prompt)
+            if split is not None:
+                kept = [k for k in kept if self._rendering.place(k, messages, split) is not None]
+        dropped = len(kept) < len(self._state.kept)
+        self._state.kept = kept
+        self._state.kept_at = {k: at for k, at in self._state.kept_at.items() if k in kept}
+        return dropped
 
     def close_unanswered(self) -> int:
         """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history items were dropped.
 
         The newest reply is kept without those calls, its tokens as generated,
-        and the results already written for them are taken out again.
+        and the results already written for them are taken out again; where the
+        template writes nothing of what is left of it, it is taken back with its
+        request, as an empty reply is.
         """
         calling = max(i for i, m in enumerate(self._state.messages) if m.get("tool_calls"))
         del self._state.messages[calling + 1:]
         self._forget_calls()
+        if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
+            # Nothing the template writes is left of the reply: taken back with its request.
+            starts = exchange_starts(self._state.messages)
+            return self._remove_from(starts[-1] if starts else len(self._system_part()))
         return self._settle()
 
     def add_result(self, call: ToolCall, result) -> None:

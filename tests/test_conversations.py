@@ -20,7 +20,7 @@ from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.messages import as_messages
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
@@ -921,6 +921,41 @@ def test_a_text_argument_reaches_the_caller_as_the_model_spelled_it(stem):
         assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": city})]
         run.chat.inject_tool_result(calls[0], "sunny")
     run.chat.reply().finish()
+
+
+def _calling_again(stem, context_size=4096, min_reply_tokens=8):
+    """A run on ``stem`` begun with a turn open after a result, whose model calls the weather tool twice and then answers."""
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn an der Sieg, Nordrhein-Westfalen"})
+    run = _Run(stem)
+    run.chat.close()
+    run.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=1.0,
+                                  min_reply_tokens=min_reply_tokens), context=run.context)
+    run.context.replies = [ScriptedCall(body), ScriptedCall(body)] + _as_generated(
+        probe.template, ["Sunny.", ANSWERS[0]], False)
+    run.begin([("user", "Weather in Bonn?"),
+               ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}), ToolResult(WEATHER.name, "x")))],
+              tools=[WEATHER])
+    return run
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_turn_out_of_room_after_several_calls_closes_and_the_conversation_goes_on(stem):
+    probe = _calling_again(stem)
+    for _ in range(2):
+        call, = [e for e in probe.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
+        held = probe.chat.total_tokens
+        probe.chat.inject_tool_result(call, "x")
+    # Room for the second call, and too little after it for even an empty result and a reply.
+    closing = probe.template.n_closing_tokens
+    run = _calling_again(stem, context_size=held + closing, min_reply_tokens=closing + 20)
+    registry = ToolRegistry()
+    registry.tool(lambda city: "x", name=WEATHER.name, description=WEATHER.description,
+                  parameters=WEATHER.parameters)
+    reply = run.chat.reply(tool_call_policy=registry).finish()
+    assert reply.stop_reason == "token_limit" and len(reply.tool_calls) == 2
+    assert_cache_reads_as_rendered(run.chat, run.context)
+    run.chat.reply(QUESTIONS[0]).finish()
 
 
 # ----- a tag typed into any text stays text ----------------------------------------

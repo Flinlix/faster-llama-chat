@@ -77,8 +77,10 @@ def assert_cache_reads_as_rendered(wrapper, fake):
                            internals.declarations(wrapper), reasoning=internals.reasons(wrapper),
                            for_tools=internals.uses_tool_template(wrapper))
     text_of = fake.text_of
-    kept = [(text_of(tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text)
-            for tokens, text in internals.kept_turns(wrapper)]
+    closing = _reply_closing(fake, internals.reasons(wrapper))
+    kept = [(text_of(tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
+             closing if not text and not on_call else "")
+            for tokens, text, on_call in internals.kept_turns(wrapper)]
     assert any(_reads_as(text_of(fake.cache), render, kept) for render in renders), \
         "the cache does not read as the template renders the conversation"
     for placed in internals.kept_turn_places(wrapper):
@@ -87,15 +89,24 @@ def assert_cache_reads_as_rendered(wrapper, fake):
             "a turn kept as generated stands in for none of the template's text"
 
 
-def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str]]) -> bool:
+def _reply_closing(fake, reasoning: bool) -> str:
+    """What the template writes after a reply's text to close its turn, from its first character that is no space."""
+    marker = "QZQ7"
+    reply = fake.stated_render(_QUESTION + [{"role": "assistant", "content": marker}],
+                               reasoning=reasoning)
+    return reply.split(marker, 1)[1].lstrip()
+
+
+def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]) -> bool:
     """Whether ``held`` is ``render`` with each kept turn in place of the template's version of it, everything around them exactly as rendered.
 
     ``kept`` holds each turn's text, the text of its first and of its last
-    token, and the text of its last message. The template's version of a turn
-    begins with the same token, and ends with the same token, with that
-    message's text, or, for a turn whose call the template does not write, is
-    where the kept turn begins; so it takes in none of the template's text
-    beside it.
+    token, the text of its last message, and, for a turn that ends on a reply
+    without text, the template's closing after a reply. The template's version
+    of a turn begins with the same token, and ends with the same token, with
+    that message's text, where that closing begins, or, for a turn whose call
+    the template does not write, is where the kept turn begins; so it takes in
+    none of the template's text beside it.
     """
     pieces, at = [], 0
     for turn, *_ in kept:
@@ -110,14 +121,16 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str]]) -> 
     if not render.startswith(pieces[0]):
         return False
     at = len(pieces[0])
-    for n, ((turn, opening, closing, text), piece) in enumerate(zip(kept, pieces[1:])):
+    for n, ((turn, opening, closing, text, reply_closing), piece) in enumerate(
+            zip(kept, pieces[1:])):
         if not render.startswith(opening, at):
             return False
         last = n == len(kept) - 1
         ends = [len(render) - len(piece)] if last else _occurrences(render, piece, at)
         ends = [end for end in ends if end >= at + len(opening) and render.startswith(piece, end)
                 and (render[at:end].endswith(closing) or turn.startswith(render[at:end])
-                     or bool(text) and render[at:end].rstrip().endswith(text))]
+                     or bool(text) and render[at:end].rstrip().endswith(text)
+                     or bool(reply_closing) and render.startswith(reply_closing, end))]
         if not ends:
             return False
         at = ends[0] + len(piece)

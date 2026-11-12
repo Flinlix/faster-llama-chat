@@ -73,9 +73,9 @@ def reasons(wrapper) -> bool:
     return wrapper._conversation.reasoning
 
 
-def kept_turns(wrapper) -> list[tuple[list[int], str]]:
-    """Each turn kept as generated: its tokens, and the text of the message it ends with."""
-    return [(list(kept.tokens), (kept.last.get("content") or "").strip())
+def kept_turns(wrapper) -> list[tuple[list[int], str, bool]]:
+    """Each turn kept as generated: its tokens, the text of the message it ends with, and whether it ends on a call."""
+    return [(list(kept.tokens), (kept.last.get("content") or "").strip(), kept.on_call)
             for kept in wrapper._conversation._state.kept]
 
 

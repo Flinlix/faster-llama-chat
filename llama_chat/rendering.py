@@ -218,14 +218,17 @@ class ConversationRendering:
             end = split.contents[last][1]
         else:
             # A reply without text: it ends where the template's closing after it begins,
-            # the last before the next text of the caller's own, as the question has one too.
+            # the last before the next text of the caller's own after the message before it.
             closing = self._template.fragments.assistant_suffix.strip()
-            following = next((s for s, _ in split.own if start is not None and s > start),
+            before = split.contents[last - 1]
+            after = None if start is None else max(
+                start, split.call_ends[last - 1] or start, before[1] if before else start)
+            following = next((s for s, _ in split.own if after is not None and s >= after),
                              len(split.text))
-            found = (split.text.rfind(closing, start, following)
-                     if closing and start is not None else -1)
+            found = (split.text.rfind(closing, after, following)
+                     if closing and after is not None else -1)
             end = found if found >= 0 else None
-        if start is None or end is None or end < start:
+        if start is None or end is None or end <= start:
             return None
         return start, end, self._inputs().kept.index(kept)
 
