@@ -183,13 +183,17 @@ def as_history(messages: list[dict]) -> list:
     """The messages back as ``begin`` takes them: each as a dictionary, a reply's thought under ``reasoning_content``, a tool turn's thoughts as its steps.
 
     A tool turn that was closed ends on the text of the reply that closed it,
-    empty where that reply wrote none; one still open ends on a call or a result.
+    empty where that reply wrote none; one still open, or left open before a
+    later question, ends on a call or a result.
     """
     history, steps = [], []
     for message in messages:
         role = message["role"]
         if role == "system":
             continue
+        if role == "user" and steps:
+            history.append(ToolTurn(tuple(steps)))
+            steps = []
         thought = [Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []
         said = thought + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):

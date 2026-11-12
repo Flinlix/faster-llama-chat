@@ -310,7 +310,10 @@ it, in `conversation()` too, an empty `str` where the model wrote nothing after
 its results, so that `begin(**chat.conversation())` begins it closed. A reply
 given as an item of its own after a `ToolTurn` that ends on a result closes
 that turn: `begin` counts it as the item it was given as, and
-`conversation()` hands it back as the turn's last step.
+`conversation()` hands it back as the turn's last step. A `ToolTurn` followed
+by a question while it still owes a result, or a reply after its results, is
+written as given, nothing added to it, and `conversation()` hands it back in
+its place, before that question.
 
 **Every call has an id**, `ToolCall.id`, that no other call of the
 conversation has. A call handed over in the stream, in `Reply.tool_calls`, in

@@ -39,6 +39,10 @@ def test_every_history_comes_back_as_it_went_in():
                               ToolResult("b", "2"), "ok"))],
         [_QUESTION, ToolTurn((ToolCall("a", {}),))],                  # still owed a result
         [_QUESTION, ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
+        # Left without a result, or without a reply after it, before a later question.
+        [_QUESTION, ToolTurn((ToolCall("a", {}),)), _QUESTION, {"role": "assistant", "content": "a"}],
+        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolResult("a", "1"))), _QUESTION,
+         ToolTurn((ToolCall("b", {}), ToolResult("b", "2"), "ok"))],
     ]
     for history in histories:
         back = as_history(as_messages(history))

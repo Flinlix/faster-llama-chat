@@ -293,6 +293,22 @@ def test_a_tool_turn_closed_by_an_empty_answer_begins_again_closed():
     again.reply("danke").finish()           # a question follows the closed turn
 
 
+def test_a_call_left_without_a_result_before_a_later_question_stays_in_its_place():
+    registry = weather_registry()
+    history = [("user", "wetter?"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),)),
+               ("user", "egal, danke")]
+    live, _ = tool_wrapper(context_size=2048)
+    live.begin("persona", history, tools=registry.specs())
+    assert not live.turn_open
+    live.reply().finish()
+    saved = live.conversation()
+    assert saved["messages"][1] == ToolTurn((ToolCall("weather", {"city": "Bonn"}, "call00000"),))
+    assert [type(item) for item in saved["messages"]] == [dict, ToolTurn, dict, dict]
+    again, _ = tool_wrapper(context_size=2048)
+    again.begin(**saved)
+    assert again.conversation() == saved
+
+
 def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
     """Within one wrapper no two calls share an id, whether made by the model or given to begin without one."""
     from tests.invented_templates import TOOLS
