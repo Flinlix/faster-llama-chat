@@ -90,10 +90,11 @@ def main() -> None:
     print(f"\nafter inject: total prefilled so far {ctx.prefilled}")
     show(w)
 
-    for q in ["What's my name?", "What am I building?", "Suggest one optimization."]:
+    # The first reply answers the injected message, so no two user turns follow each other.
+    for q in [None, "What's my name?", "What am I building?", "Suggest one optimization."]:
         before = ctx.prefilled
         reply = w.reply(q).finish()
-        print(f"\n> {q}")
+        print(f"\n> {q or '(the injected message)'}")
         print(f"  reply: {reply.text.strip()[:200]}")
         print(
             f"  prefilled {ctx.prefilled - before} new tokens "

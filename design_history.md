@@ -2579,3 +2579,12 @@ was understood. It takes part in equality as the other fields do: nothing
 compares an unreadable call with a call built by hand, since none is handed
 over or answered. The conversation's history still keeps an unreadable call
 without its text, under the name a result is written with.
+
+**307.1A: the demo runs on a template that refuses two user turns in a
+row.** The demo injected a user message and then asked a question, which a
+template that writes no two user turns in a row refuses, so it stopped at its
+first reply on such a model. The library refuses it rightly, so the example
+changed: its first reply now answers the injected message, and the questions
+follow that reply. Run on the CPU with Gemma 3 1B, which refused before, and
+with Llama 3.2 3B: both finish, and each reply decodes only its own new
+tokens.
