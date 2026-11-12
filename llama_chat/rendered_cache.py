@@ -66,6 +66,7 @@ class _Ahead:
 
     rest: list[tuple[str, bool]]          # from that run on, the stand-in as the caller's own
     after_question: str                   # the template's text after the question
+    reply_opening: list[tuple[str, bool]]  # the render from where the reply's kept turn begins
     made_for: _MadeFor
 
 
@@ -393,7 +394,7 @@ class RenderedCache:
         self._memory.decode(tokens, want_logits=True)
         self._state.spliced_at = (len(self._memory.tokens) - len(tokens), tokens,
                                   self._made_for_now())
-        self._note_prompt(ahead.after_question, self._memory.tokens)
+        self._note_prompt(ahead.after_question, ahead.reply_opening, self._memory.tokens)
         return True
 
     def add(self, role: str, text: str) -> int:
@@ -992,15 +993,19 @@ class RenderedCache:
         target = self._rendering.target(self._state.messages, generation_prompt=True)
         split = self._rendering.split(self._state.messages, generation_prompt=True)
         last = max((end for _, end in split.own), default=0)
-        self._note_prompt(split.text[last:], target.tokens)
+        self._note_prompt(split.text[last:], self._reply_opening(split), target.tokens)
         return target
 
-    def _note_prompt(self, prompt_text: str, target) -> None:
-        """Note the template text a reply follows, and where it begins in ``target`` from its first tag on."""
+    def _reply_opening(self, split: SplitRender) -> list[tuple[str, bool]]:
+        """The render ``split`` from where a reply after its newest message begins as a kept turn."""
+        start = self._rendering.turn_start(split, len(split.contents) - 1)
+        return split.pieces(start) if start is not None else []
+
+    def _note_prompt(self, prompt_text: str, reply_opening: list[tuple[str, bool]],
+                     target) -> None:
+        """Note the template text a reply follows, and where in ``target`` the reply's kept turn begins: at ``reply_opening``, the render's end."""
         self._state.prompt_text = prompt_text
-        first = self._rendering.tag_from(prompt_text, 0)
-        tokens = (self._rendering.tokenize([(prompt_text[first:], False)])
-                  if first is not None else [])
+        tokens = self._rendering.tokenize(reply_opening)
         ends = tokens and list(target[-len(tokens):]) == tokens
         self._state.prompt_start = len(target) - (len(tokens) if ends else 0)
 
@@ -1075,6 +1080,7 @@ class RenderedCache:
         """Note ``split``, decoded up to ``run``, as the render made ahead for the conversation and the cache as they are now."""
         self._state.ahead = _Ahead(rest=split.pieces(run),
                                    after_question=split.text[split.contents[-1][1]:],
+                                   reply_opening=self._reply_opening(split),
                                    made_for=self._made_for_now())
 
     def _made_for_now(self) -> _MadeFor:

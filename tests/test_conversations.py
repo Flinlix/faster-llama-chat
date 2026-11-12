@@ -25,6 +25,7 @@ from llama_chat.tools import ToolCall, ToolResult, ToolSpec, ToolTurn
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call, written_call
+from .wrappers import assert_cache_reads_as_rendered
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -819,6 +820,20 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
         assert run.seen[-1] in run.renders_in_each_thought_form(
             sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER, clock]), result
         assert isinstance(run.chat.conversation()["messages"][1], ToolTurn)
+
+
+@pytest.mark.parametrize("said, result", [("", ""), ("", "sunny"), ("Let me check. ", ""),
+                                          ("Let me check. ", "sunny")],
+                         ids=["empty-result", "result", "text-and-empty-result", "text-and-result"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_turn_begun_again_after_its_result_goes_on_as_the_template_writes_it(stem, said, result):
+    run = _Run(stem, replies=["Sunny in Bonn.", ANSWERS[0]])
+    turn = ToolTurn(((said,) if said else ()) + (ToolCall(WEATHER.name, {"city": "Bonn"}),
+                                                 ToolResult(WEATHER.name, result)))
+    run.begin([("user", "Weather in Bonn?"), turn], tools=[WEATHER])
+    assert run.chat.reply().finish().text == "Sunny in Bonn."
+    assert_cache_reads_as_rendered(run.chat, run.context)
+    run.chat.reply(QUESTIONS[0]).finish()
 
 
 def _call_body(run, arguments):

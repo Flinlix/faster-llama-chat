@@ -206,9 +206,9 @@ class ConversationRendering:
         """Where the template writes ``kept``'s turn in ``split``: from the first tag after the question's text to the end of its call or reply; ``None`` where it cannot be placed."""
         first = next((i for i, m in enumerate(messages) if m is kept.first), None)
         last = next((i for i, m in enumerate(messages) if m is kept.last), None)
-        if not first or last is None or split.contents[first - 1] is None:
+        if not first or last is None:
             return None
-        start = self.tag_after_content(split, first - 1)
+        start = self.turn_start(split, first - 1)
         if kept.on_call:
             called = split.call_ends[last]
             closing = self._template.call_close_text
@@ -228,6 +228,10 @@ class ConversationRendering:
         if start is None or end is None or end < start:
             return None
         return start, end, self._inputs().kept.index(kept)
+
+    def turn_start(self, split: SplitRender, before: int) -> int | None:
+        """Where a turn kept as generated begins in ``split`` after message ``before``: at the first tag after its content."""
+        return self.tag_after_content(split, before)
 
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
