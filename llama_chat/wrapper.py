@@ -636,6 +636,7 @@ class ChatWrapper:
         if registry is not None and len(registry) > 0:
             self._template.ensure_tools_usable()
         any_call_asked = self._conversation.turn_open      # a turn going on has called
+        open_turn_text = self._open_turn_text()
 
         def may_call_after_unreadable() -> bool:
             """Whether a call is read again after an unreadable one, which spends one."""
@@ -648,7 +649,7 @@ class ChatWrapper:
         try:
             while True:
                 generation = yield from self._read_generation(
-                    deltas, after="".join(g.text for g in generations))
+                    deltas, after=open_turn_text + "".join(g.text for g in generations))
                 generations.append(generation)
                 if not _answerable(generation.tool_calls):
                     if self._conversation.turn_open:
