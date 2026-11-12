@@ -8,6 +8,7 @@ import ast
 import functools
 import itertools
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ import llama_chat
 from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.model_template import names_read
 from llama_chat.template import CallBody
-from llama_chat.template_extract import extract_fragments, reasoning_switch
+from llama_chat.template_extract import extract_content_rewrites, extract_fragments, reasoning_switch
 
 from .chat_templates import STEMS, expected, fixture
 from .fake_context import FakeContext
@@ -456,6 +457,31 @@ def test_a_variable_named_as_a_render_argument_reaches_the_template():
         [], generation_prompt=True, reasoning=False,
         variables={"reasoning": "deep", "generation_prompt": "given"})
     assert rendered == "deep/given"
+
+
+# ----- what a template writes in a message's content -----------------------
+def _escaping_render(messages, **options):
+    """A user turn whose content has ``<`` escaped and the tag ``<drop>`` left out."""
+    return "<u>" + messages[-1]["content"].replace("<drop>", "").replace("<", "&lt;") + "</u>"
+
+
+def test_each_text_a_template_changes_in_content_is_read_as_the_template_writes_it():
+    assert extract_content_rewrites(_escaping_render, ["<drop>", "<keep>", "<", ">", "plain"]) \
+        == (("<drop>", ""), ("<keep>", "&lt;keep>"), ("<", "&lt;"))
+
+
+def test_a_render_that_loses_a_texts_place_reads_no_rewrites():
+    def truncating(messages, **options):
+        return messages[-1]["content"][:-1]
+    assert extract_content_rewrites(truncating, ["<a>", "<b>"]) == ()
+
+
+def test_the_rewrites_of_many_texts_are_read_in_one_pass_over_the_render():
+    texts = [f"<tag{n}>" for n in range(20_000)]
+    started = time.perf_counter()
+    rewrites = extract_content_rewrites(_escaping_render, texts)
+    assert time.perf_counter() - started < 0.5
+    assert len(rewrites) == len(texts)
 
 
 # ----- probe sentinels -----------------------------------------------------

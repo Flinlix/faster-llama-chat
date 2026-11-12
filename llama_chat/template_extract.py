@@ -447,11 +447,16 @@ def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ..
     marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]
     content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
     rendered = as_probes_read(render)([{"role": "user", "content": content}], reasoning=False)
-    if rendered is None or not all(mark in rendered for mark in marks):
+    start = -1 if rendered is None else rendered.find(marks[0])
+    if start < 0:
         return ()
+    end = start + len(marks[0])
     rewrites = []
-    for n, text in enumerate(texts):
-        written = rendered.split(marks[n], 1)[1].split(marks[n + 1], 1)[0]
-        if written != text:
-            rewrites.append((text, written))
+    for text, mark in zip(texts, marks[1:]):
+        start = rendered.find(mark, end)
+        if start < 0:
+            return ()
+        if rendered[end:start] != text:
+            rewrites.append((text, rendered[end:start]))
+        end = start + len(mark)
     return tuple(rewrites)
