@@ -5,11 +5,15 @@ A model file is a test template or what its file says of it, in
 exemptions are listed below.
 """
 
+import functools
 import json
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
+
+from llama_chat.addon_files import template_fingerprint
 
 from .chat_templates import STEMS, expected, fixture
 from .fake_context import TAG
@@ -61,24 +65,46 @@ def _known_files() -> list[dict]:
     return [fixture(stem) for stem in STEMS] + [json.loads(path.read_text()) for path in _ADDONS]
 
 
-def _families() -> set[str]:
-    """The leading letters of each known file's name, up to its first digit or other sign."""
-    return {re.match("[a-z]+", name.lower()).group()
-            for name in [*STEMS, *(path.stem for path in _ADDONS)]}
+def _family_of(name: str) -> str:
+    """The family a model file's name gives: its leading letters, up to its first digit or other sign."""
+    return re.match("[a-z]+", name.lower()).group()
 
 
-def _vendors() -> set[str]:
-    """Every publisher a known file's ``source`` names before a slash, and each publisher and chat format a test template's file names."""
-    sources = [known.get("source", "") for known in _known_files()]
+def _publishers_in(source: str) -> set[str]:
+    """Every publisher a ``source`` names, as the name before each slash."""
+    return {found.lower() for found in re.findall(r"([\w.-]+)/", source)}
+
+
+class _Names(NamedTuple):
+    """What the name check looks for, read from the model files."""
+
+    families: set[str]
+    vendors: set[str]
+    models: set[str]            # each model file's own name, which a compound word may hold
+    everyday: set[str]          # families and vendors whose name is also an everyday word
+
+
+@functools.cache
+def _names() -> _Names:
+    stems = [*STEMS, *(path.stem for path in _ADDONS)]
     named = {expected(fixture(stem), key) for stem in STEMS for key in ("publisher", "chat_format")}
-    return ({found.lower() for source in sources for found in re.findall(r"([\w.-]+)/", source)}
-            | (named - {None}))
+    vendors = {found for known in _known_files() for found in _publishers_in(known.get("source", ""))}
+    return _Names(families={_family_of(stem) for stem in stems},
+                  vendors=vendors | (named - {None}),
+                  models={stem.lower() for stem in stems},
+                  everyday={word for stem in STEMS
+                            for word in expected(fixture(stem), "everyday_words")})
 
 
-def _words_first() -> set[str]:
-    """Publishers whose name is also an everyday word, which as a part of a name means the word."""
-    return {expected(fixture(stem), "publisher") for stem in STEMS
-            if expected(fixture(stem), "publisher_is_a_word")}
+def _own_names(stem: str) -> set[str]:
+    """The names the check reads from the test template ``stem``'s file and from the add-on file that names its template."""
+    known = fixture(stem)
+    fingerprint = template_fingerprint(known["chat_template"])
+    addons = [json.loads(path.read_text()) | {"stem": path.stem} for path in _ADDONS]
+    addons = [addon for addon in addons if fingerprint in addon["templates"]]
+    named = {expected(known, key) for key in ("publisher", "chat_format")} - {None}
+    return (named | {_family_of(name) for name in [stem, *(addon["stem"] for addon in addons)]}
+            | {found for file in [known, *addons] for found in _publishers_in(file.get("source", ""))})
 
 
 def _spelled(word: str) -> str:
@@ -93,23 +119,31 @@ def _parts(word: str) -> list[str]:
     return [word.lower()] + pieces + spaced.split()
 
 
-def _holds_compound(word: str, vendors: set[str]) -> bool:
-    """Whether ``word`` holds, between its separators, a vendor whose name is itself split by one."""
-    spelled = _spelled(word)
-    return any(re.search(rf"(?<![a-z0-9]){re.escape(vendor)}(?![a-z0-9])", spelled)
-               for vendor in vendors if re.search(r"[.\-]", vendor))
+def _holds(word: str, name: str) -> bool:
+    """Whether ``word`` holds ``name`` between its separators, as a word or a run of words."""
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", _spelled(word)))
 
 
-def _names_a_model(word: str, families: set[str], vendors: set[str], words_first: set[str]) -> bool:
+def _names_a_model(word: str, names: _Names) -> bool:
+    """Whether ``word`` names a model, family or vendor.
+
+    A name that is also an everyday word names one only as the whole word,
+    or followed by a version; as a part of a longer name it means the word.
+    """
     if word.lower() in _OWN_NAMES:
         return False
     whole, *parts = _parts(word)
-    if whole in vendors or _holds_compound(word, vendors):
+    if whole in names.families | names.vendors | names.models:
         return True
-    for part in [whole, *parts]:
-        if part in families or (part in vendors and part not in words_first):
-            return True
-        if any(re.fullmatch(re.escape(family) + r"(\d[\d.]*|-.+)", part) for family in families):
+    if any(_holds(word, name) for name in names.vendors | names.models if re.search(r"[.\-]", name)):
+        return True
+    if any(part in (names.families | names.vendors) - names.everyday for part in parts):
+        return True
+    for family in names.families:
+        if family in names.everyday:
+            if re.search(rf"(?<![a-z0-9]){re.escape(family)}[-._]?[a-z]?\d", _spelled(word)):
+                return True
+        elif any(re.fullmatch(re.escape(family) + r"(\d[\d.]*|-.+)", part) for part in [whole, *parts]):
             return True
     return False
 
@@ -120,26 +154,33 @@ def _is_the_engines(word: str) -> bool:
 
 @pytest.mark.parametrize("path", _checked_files(), ids=lambda path: str(path.relative_to(_ROOT)))
 def test_a_file_names_no_model_family_or_vendor(path):
-    names = (_families(), _vendors(), _words_first())
     words = set(re.findall(r"[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*", _OWN_NAME.sub(" ", _checked_text(path))))
     if path in _ENGINE_FILES:
         words = {word for word in words if not _is_the_engines(word)}
-    assert not sorted(word for word in words if _names_a_model(word, *names))
+    assert not sorted(word for word in words if _names_a_model(word, _names()))
 
 
 def _recognized_forms() -> list[str]:
-    """Each family and vendor as names spell it: alone, versioned, inside an identifier, a compound word or a file name, and in camel case."""
-    words_first = _words_first()
-    forms = [form for family in sorted(_families()) for form in (
-        family, f"{family}3", f"{family}2.5", f"{family}-3", f"is_{family}", f"{family}_tags",
-        f"{family}3coder", f"{family.capitalize()}Tags", f"my-{family}-model", f"x-{family}",
-        f"a.{family}", f"{family}.gguf", f"{family.capitalize()}-Instruct-3-8B")]
-    return forms + [form for vendor in sorted(_vendors()) for form in (
-        (vendor,) if vendor in words_first else (vendor, f"{vendor}_format", f"x-{vendor}-3"))]
+    """Each family, vendor and model as names spell it: alone, versioned, inside an identifier, a compound word or a file name, and in camel case."""
+    names = _names()
+    forms = []
+    for family in sorted(names.families):
+        forms += [family, f"{family}3", f"{family}2.5", f"{family}-3", f"{family}3coder",
+                  f"{family.capitalize()}-X2.5", f"my-{family}-3"]
+        if family not in names.everyday:
+            forms += [f"is_{family}", f"{family}_tags", f"{family.capitalize()}Tags",
+                      f"my-{family}-model", f"x-{family}", f"a.{family}", f"{family}.gguf",
+                      f"{family.capitalize()}-Instruct-3-8B"]
+    for vendor in sorted(names.vendors):
+        forms += [vendor] if vendor in names.everyday else [vendor, f"{vendor}_format",
+                                                            f"x-{vendor}-3"]
+    for model in sorted(names.models):
+        forms += [model, f"My-{model}-Instruct"] if re.search(r"[.\-]", model) else [model]
+    return forms
 
 
 def test_every_publisher_a_source_names_before_a_slash_is_a_vendor():
-    vendors = _vendors()
+    vendors = _names().vendors
     named = {piece.split("/")[0].lower() for known in _known_files()
              for piece in re.split(r"[\s,:;\"()]+", known.get("source", "")) if "/" in piece}
     assert named - {""} <= vendors
@@ -147,14 +188,20 @@ def test_every_publisher_a_source_names_before_a_slash_is_a_vendor():
 
 
 def test_a_model_family_or_vendor_name_is_recognized_in_every_form():
-    names = (_families(), _vendors(), _words_first())
-    assert not [form for form in _recognized_forms() if not _names_a_model(form, *names)]
+    assert not [form for form in _recognized_forms() if not _names_a_model(form, _names())]
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_an_everyday_word_a_file_lists_is_one_of_its_own_names(stem):
+    assert set(expected(fixture(stem), "everyday_words")) <= _own_names(stem)
 
 
 @pytest.mark.parametrize("word", [*_OWN_NAMES, "sampling", "max_batch_tokens", "ThoughtFilter",
-                                  *(f"{word}_value" for word in sorted(_words_first()))])
+                                  *(form for word in sorted(_names().everyday) for form in (
+                                      f"{word}_value", f"{word}-like", f"{word.capitalize()}Plug",
+                                      f"the.{word}"))])
 def test_the_library_its_engine_and_an_everyday_word_are_not_taken_for_a_model(word):
-    assert not _names_a_model(word, _families(), _vendors(), _words_first())
+    assert not _names_a_model(word, _names())
 
 
 # The keys of a test template's file whose value is one of the template's tags.

@@ -2692,3 +2692,24 @@ file states has a shape `TAG` reads, and those tags count among the tags no
 other file may write. The test of a thought marked by tags of that form used
 a real template's tag and widened `TAG` for itself; it now uses an invented
 tag of the same shape, which the wider `TAG` reads without a fixture.
+
+**S10: a family, publisher or chat format whose name is an everyday word
+means the word inside a longer name.** Only a publisher could be marked as an
+everyday word, so the check refused a compound such as a spark plug or a
+flint stone, written as one identifier, because the family of the same name
+was found among its parts. A test template's file now lists, under
+`everyday_words`, which of its own names are also everyday words, in place of
+`publisher_is_a_word`, and a test checks that each word listed is a family,
+publisher or chat format the check reads from that file or from the add-on
+file that names its template, so the list cannot exempt anything else. Marked
+so: spark, granite, dolphin, muse, flint, north, ling, phi and inkling among
+the families, harmony among the chat formats, and meta among the publishers.
+Laguna and Hermes were not marked, being names rather than English words.
+The review read the failing whole word `meta` as the exemption applied out of
+order; it was the rule, and it now holds for every everyday word alike: the
+whole word is still refused, since a word standing alone, as "Granite" or
+"Meta" in a sentence, is how prose names a model or its maker, and so is the
+word followed by a version, as `granite-4` or `spark-x2`, while as a part of
+a longer name it passes. Since the parts of a model's own compound name, such
+as one made of two everyday words, would now pass, every model file's own
+name is read as a name too, found whole or between separators inside a word.

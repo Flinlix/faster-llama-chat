@@ -33,7 +33,7 @@ _UNSTATED = {
     "call_body": None,                  # how a call is spelled between its tags, by field
     "call_closing_tag": None,           # the tag that closes a call
     "publisher": None,                  # the publisher's name, where the source does not spell it
-    "publisher_is_a_word": False,       # the publisher's name is also an everyday word
+    "everyday_words": [],               # those of its names that are also everyday words
     "chat_format": None,                # the name the template's chat format goes by
     "ends_generation": [],              # the tags beside its end-of-sequence tag that end a generation in the engine
 }
