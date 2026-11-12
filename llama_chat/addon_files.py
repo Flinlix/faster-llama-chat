@@ -91,8 +91,8 @@ def read_addon_file(path: Path | None) -> dict:
     Raises:
         ValueError: Naming the file, if it is not JSON, holds a key no add-on
             file has, templates that are not a list of fingerprints, a source
-            that is not text, a sampling value :class:`Config` refuses, its
-            type included, a call field that is not text, or a reasoning_on
+            that is not text, a sampling value that is null or one
+            :class:`Config` refuses, its type included, a call field that is not text, or a reasoning_on
             that is no object of template variables.
     """
     if path is None:
@@ -113,6 +113,10 @@ def read_addon_file(path: Path | None) -> dict:
     sampling, call = found.get("sampling", {}), found.get("call", {})
     if not isinstance(sampling, dict) or not set(sampling) <= set(SAMPLING_FIELDS):
         raise ValueError(f"{path}: sampling may set only {list(SAMPLING_FIELDS)}")
+    unset = [name for name in SAMPLING_FIELDS if name in sampling and sampling[name] is None]
+    if unset:
+        raise ValueError(f"{path}: sampling gives {unset[0]} as null; give it a value, or "
+                         "leave it out to take the model's own")
     try:
         Config(**sampling)
     except (TypeError, ValueError) as error:

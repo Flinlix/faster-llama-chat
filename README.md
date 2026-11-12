@@ -473,8 +473,8 @@ template by its SHA-256. A file next to the GGUF that names no template, or
 another one, or is no JSON object, is not used, and a warning on the logger
 `llama_chat` says why. It fills in only what the template cannot tell; what
 the template states, the template decides. The file used is checked when the
-model loads, each value's type included, and anything else in it is refused
-with an error naming the file.
+model loads, each value's type included and a null value refused, and
+anything else in it is refused with an error naming the file.
 
 ```json
 {"templates": ["<sha256 of the chat template>"],

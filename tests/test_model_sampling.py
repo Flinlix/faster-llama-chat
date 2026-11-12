@@ -164,6 +164,8 @@ def test_an_add_on_file_may_set_a_presence_or_a_frequency_penalty(tmp_path, pena
     ({"sampling": {"temperature": "hot"}}, "temperature"),
     ({"sampling": {"top_k": 2.5}}, "top_k"),
     ({"sampling": {"min_p": True}}, "min_p"),
+    ({"sampling": {"temperature": None}}, "temperature"),
+    ({"sampling": {"top_k": 40, "penalty_window_tokens": None}}, "penalty_window_tokens"),
     ({"templates": "7f0e5290"}, "templates"),
     ({"templates": ["not a fingerprint"]}, "templates"),
     ({"source": ["a", "list"]}, "source"),
