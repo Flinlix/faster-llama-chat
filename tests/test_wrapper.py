@@ -637,7 +637,8 @@ def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
     assert w.conversation() == before and fake.cache == held
     # With a later question, the replies before it are evicted instead.
     w.begin("s", [("assistant", "x" * 200)] * 3 + [("user", "q"), ("assistant", "r")])
-    assert w.conversation()["messages"] == [("user", "q"), ("assistant", "r")]
+    assert w.conversation()["messages"] == [{"role": "user", "content": "q"},
+                                            {"role": "assistant", "content": "r"}]
 
 
 @pytest.mark.parametrize("history", [[], [("user", "q")]], ids=["no-question", "after-a-question"])
@@ -1023,7 +1024,8 @@ def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_inc
     stream = w.reply("hi")
     next(stream)
     stream.close()                               # closed early: recorded
-    assert w.conversation()["messages"] == [("user", "hi"), ("assistant", "r")]
+    assert w.conversation()["messages"] == [{"role": "user", "content": "hi"},
+                                            {"role": "assistant", "content": "r"}]
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
 
 

@@ -54,10 +54,8 @@ def show(w: ChatWrapper) -> None:
     for item in history:
         if isinstance(item, ToolTurn):
             role, text = "assistant", item.text
-        elif isinstance(item, dict):
-            role, text = item["role"], item["content"]
         else:
-            role, text = item
+            role, text = item["role"], item["content"]
         print(f"    {role:<10} ({len(text)} chars)")
 
 
@@ -121,12 +119,11 @@ def main() -> None:
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
         saved = sw.conversation()
         system, history = saved["system_prompt"], saved["messages"]
-        roles = [item[0] if isinstance(item, tuple) else "assistant" for item in history]
         assert system or not sw.can_take_system_prompt, "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
-            f"messages={len(roles):>2} evicted={reply.n_evicted_messages}"
+            f"messages={len(history):>2} evicted={reply.n_evicted_messages}"
         )
     show(sw)
     sw.close()

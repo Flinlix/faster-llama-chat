@@ -27,20 +27,30 @@ def test_an_exchange_is_what_an_eviction_drops_at_once():
         assert exchange_count(messages) == drops, roles
 
 
+_QUESTION = {"role": "user", "content": "q"}
+
+
 def test_every_history_comes_back_as_it_went_in():
     histories = [
-        [("user", "q"), ("assistant", "a")],
-        [("user", "q"), ToolTurn(("Let me look.", ToolCall("a", {"x": 1}), ToolResult("a", "1"), "ok"))],
-        [("user", "q"), ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
-                                  ToolResult("b", "2"), "ok"))],
-        [("user", "q"), ToolTurn((ToolCall("a", {}),))],                  # still owed a result
-        [("user", "q"), ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
+        [_QUESTION, {"role": "assistant", "content": "a"}],
+        [_QUESTION, {"role": "assistant", "content": "a", "reasoning_content": "t"}],
+        [_QUESTION, ToolTurn(("Let me look.", ToolCall("a", {"x": 1}), ToolResult("a", "1"), "ok"))],
+        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
+                              ToolResult("b", "2"), "ok"))],
+        [_QUESTION, ToolTurn((ToolCall("a", {}),))],                  # still owed a result
+        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
     ]
     for history in histories:
         back = as_history(as_messages(history))
         # Each call comes back with the id it was given, and goes in again under it.
         assert [_without_ids(item) for item in back] == history
         assert as_history(as_messages(back)) == back
+
+
+def test_a_message_given_as_a_pair_comes_back_as_its_dictionary():
+    pairs = [("user", "q"), ("assistant", "a")]
+    assert as_history(as_messages(pairs)) == [_QUESTION, {"role": "assistant", "content": "a"}]
+    assert all(isinstance(item, dict) for item in as_history(as_messages(pairs)))
 
 
 def _without_ids(item):

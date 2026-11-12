@@ -210,9 +210,7 @@ def rows(wrapper) -> list[dict]:
     for item in saved["messages"]:
         if isinstance(item, ToolTurn):
             role, text = "assistant", item.text
-        elif isinstance(item, dict):
-            role, text = item["role"], item["content"]
         else:
-            role, text = item
+            role, text = item["role"], item["content"]
         found.append({"role": role, "text": text})
     return found

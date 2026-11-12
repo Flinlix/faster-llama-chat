@@ -2542,3 +2542,14 @@ a list, possibly empty, for one written with the template for tools, since an
 empty list given to `begin` now selects the template for tools and the round
 trip must keep the template. A `begin(tools=[])` on a model that cannot call
 tools is accepted as before; the declarations that follow are refused there.
+
+**302.6B: `conversation()` hands every message back as a dictionary.** It
+gave a message as a `(role, text)` pair and a reply that kept a thought as a
+dictionary, so a caller reading the history back handled two shapes for one
+kind of item, and a reply changed shape when its thought was kept. At the
+user's choice, to simplify, every message now comes back as
+`{"role": ..., "content": ...}`, with `"reasoning_content"` where a reply
+keeps its thought; a tool turn stays a `ToolTurn`. `begin` still takes both
+pairs and dictionaries (268.1A), so a history written by hand stays short,
+and `begin(**chat.conversation())` begins as before, since `begin` reads a
+dictionary as it read the pair.

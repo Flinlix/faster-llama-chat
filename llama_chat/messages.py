@@ -180,7 +180,7 @@ def with_thought_as(message: dict, form: str) -> dict:
 
 
 def as_history(messages: list[dict]) -> list:
-    """The messages back as ``begin`` takes them: a reply that holds a thought as a dictionary, a tool turn's thoughts as its steps.
+    """The messages back as ``begin`` takes them: each as a dictionary, a reply's thought under ``reasoning_content``, a tool turn's thoughts as its steps.
 
     A tool turn that was closed ends on the text of the reply that closed it,
     empty where that reply wrote none; one still open ends on a call or a result.
@@ -201,11 +201,9 @@ def as_history(messages: list[dict]) -> list:
         elif role == "assistant" and steps:
             history.append(ToolTurn(tuple(steps + thought + [message["content"]])))
             steps = []
-        elif message.get(THOUGHT_KEY):
-            history.append({"role": role, "content": message["content"],
-                            THOUGHT_KEY: message[THOUGHT_KEY]})
         else:
-            history.append((role, message["content"]))
+            history.append({"role": role, "content": message["content"],
+                            **({THOUGHT_KEY: message[THOUGHT_KEY]} if thought else {})})
     if steps:                           # a turn still open
         history.append(ToolTurn(tuple(steps)))
     return history

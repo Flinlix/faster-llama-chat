@@ -333,15 +333,15 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
 def test_a_long_history_is_kept_from_its_newest_end_within_half_the_context_unrendered_beyond(stem):
     run = _Run(stem, context_size=8192)
     history = [item for n in range(600)
-               for item in (("user", f"Question {n}, short."), ("assistant", f"Reply {n}, short."))]
+               for item in ({"role": "user", "content": f"Question {n}, short."},
+                            {"role": "assistant", "content": f"Reply {n}, short."})]
     before = len(run.context.rendered)
     kept = run.begin(history)
     assert 0 < kept < len(history)
     assert run.chat.conversation()["messages"] == history[-kept:]
     # No render is given much more than twice what is kept, never the whole history.
     assert max(run.context.rendered[before:]) <= 2 * kept + 4
-    tokens = lambda items: len(run.context.tokenize(run.render(   # noqa: E731
-        [{"role": role, "content": text} for role, text in items])))
+    tokens = lambda items: len(run.context.tokenize(run.render(list(items))))   # noqa: E731
     exchange = _exchange_length(run, "Question 1, short.", "Reply 1, short.")
     assert tokens(history[-kept:]) <= 4096 + exchange
     assert tokens(history[-kept - 4:]) > 4096
@@ -376,7 +376,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
-        assert any(role == "user" for role, _ in run.chat.conversation()["messages"])
+        assert any(item["role"] == "user" for item in run.chat.conversation()["messages"])
     assert evicted
 
 
@@ -428,7 +428,7 @@ def test_exchanges_that_repeat_word_for_word_are_kept_as_many_as_fit(stem):
         counts = []
         for question in questions:
             run.chat.reply(question).finish()
-            counts.append(sum(item[0] == "user" for item in run.chat.conversation()["messages"]))
+            counts.append(sum(item["role"] == "user" for item in run.chat.conversation()["messages"]))
         kept[same] = min(counts[8:])
     assert kept[True] >= kept[False]
 
@@ -464,7 +464,7 @@ def test_a_reply_that_fails_part_way_is_kept_or_taken_back_and_the_next_follows_
     run.context.sampled_tokens = sampled
     run.chat.reply(QUESTIONS[3]).finish()
     # Recorded where some of it was answer, taken back whole where none was.
-    asked = ("user", QUESTIONS[2]) in run.chat.conversation()["messages"]
+    asked = {"role": "user", "content": QUESTIONS[2]} in run.chat.conversation()["messages"]
     assert (QUESTIONS[2] in run.context.text_of(run.context.cache)) == asked
 
 
@@ -576,7 +576,7 @@ def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_wen
     run.chat.reply("And now?").finish()
     sent = sum(_exchanges(QUESTIONS[:3], ANSWERS[:3]), [])
     assert run.seen[0] == run.render(sent + [{"role": "user", "content": "And now?"}])
-    assert run.chat.conversation()["messages"][:6] == history
+    assert run.chat.conversation()["messages"][:6] == sent
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -939,7 +939,7 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
-    assert run.chat.conversation()["messages"][-1] == ("assistant", "Write")
+    assert run.chat.conversation()["messages"][-1] == {"role": "assistant", "content": "Write"}
 
 
 @pytest.mark.parametrize("stem", _TEXT_OPENED)

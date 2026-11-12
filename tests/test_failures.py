@@ -158,7 +158,7 @@ def _state(w):
 def _steps(history):
     """A history as one list: each message, and each step of a tool turn, its text as the assistant's."""
     return [step for item in history for step in (
-        [("assistant", s) if isinstance(s, str) else s for s in item.steps]
+        [{"role": "assistant", "content": s} if isinstance(s, str) else s for s in item.steps]
         if isinstance(item, ToolTurn) else [item])]
 
 
@@ -167,12 +167,13 @@ def _assert_kept_only_what_it_produced(before, after, shown, calls):
     held, kept = _steps(before[0]["messages"]), _steps(after[0]["messages"])
     assert after[0]["system_prompt"] == before[0]["system_prompt"] and kept[:len(held)] == held
     added = kept[len(held):]
-    texts = [step[1] for step in added if isinstance(step, tuple) and step[0] == "assistant"]
+    texts = [step["content"] for step in added
+             if isinstance(step, dict) and step["role"] == "assistant"]
     assert "".join(texts) == "".join(shown)
     made = [dataclasses.replace(step, id="") for step in added if isinstance(step, ToolCall)]
     assert made == calls[:len(made)]
     last = added[-1] if added else None
-    assert not isinstance(last, tuple) or (last[0] == "assistant" and last[1]), \
+    assert not isinstance(last, dict) or (last["role"] == "assistant" and last["content"]), \
         "the failed reply left a question or an empty reply behind"
 
 
@@ -184,7 +185,7 @@ def _go_on(w, fake):
     if w.turn_open:
         w.reply(tool_call_policy="yield").finish()
     history = w.conversation()["messages"]
-    waiting = bool(history) and isinstance(history[-1], tuple) and history[-1][0] == "user"
+    waiting = bool(history) and isinstance(history[-1], dict) and history[-1]["role"] == "user"
     w.reply(None if waiting else "weiter").finish()
 
 
@@ -247,7 +248,8 @@ def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversa
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):
         w.begin("x" * 9000)
-    assert w.conversation()["messages"] == [("user", "One?"), ("assistant", "Eins.")]
+    assert w.conversation()["messages"] == [{"role": "user", "content": "One?"},
+                                            {"role": "assistant", "content": "Eins."}]
     assert w.reply("Two?").finish().text == "Zwei."
 
 
@@ -440,7 +442,8 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
         w.reply("Wetter?", tool_call_policy="yield").finish()
     fake.sampled_tokens = sampled
     assert not w.turn_open and w.pending_calls == []
-    assert w.conversation()["messages"][-2:] == [("user", "Wetter?"), ("assistant", "")]
+    assert w.conversation()["messages"][-2:] == [{"role": "user", "content": "Wetter?"},
+                                                 {"role": "assistant", "content": ""}]
     w.reply("weiter").finish()
 
 

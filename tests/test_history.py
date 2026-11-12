@@ -25,7 +25,7 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     live.reply("danke").finish()
     history = live.conversation()["messages"]
     assert [type(item).__name__ for item in history] == [
-        "tuple", "tuple", "tuple", "ToolTurn", "tuple", "tuple"]
+        "dict", "dict", "dict", "ToolTurn", "dict", "dict"]
     turn = history[3]
     assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
 
@@ -154,7 +154,7 @@ def _calls_in(history) -> list[ToolCall]:
 
 
 def _past_exchange(n: int) -> list:
-    return [("user", f"frage {n}"),
+    return [{"role": "user", "content": f"frage {n}"},
             ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", f"{n}:00"), f"Es ist {n}."))]
 
 
@@ -228,7 +228,8 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     w, _ = tool_wrapper()
     w.begin("eins", [("user", "a"), ("assistant", "b")])
     assert w.conversation() == {"system_prompt": "eins",
-                                "messages": [("user", "a"), ("assistant", "b")],
+                                "messages": [{"role": "user", "content": "a"},
+                                             {"role": "assistant", "content": "b"}],
                                 "tools": None, "reasoning": False}
     again, _ = tool_wrapper()
     again.begin(**w.conversation())

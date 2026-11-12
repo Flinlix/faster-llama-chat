@@ -497,9 +497,9 @@ class ChatWrapper:
         ``system_prompt``, ``messages``, ``tools`` and ``reasoning``, so that
         ``begin(**chat.conversation())`` begins again as it was, a call still
         owed a result owed again. ``messages`` is every message after the
-        system prompt, oldest first: a ``(role, text)`` pair, a reply whose
-        thought the template keeps as ``{"role", "content",
-        "reasoning_content"}``, and a :class:`~llama_chat.tools.ToolTurn` for
+        system prompt, oldest first: each message a ``{"role", "content"}``
+        dictionary, with ``"reasoning_content"`` where the template keeps a
+        reply's thought, and a :class:`~llama_chat.tools.ToolTurn` for
         an assistant turn that called tools, with its thoughts, calls and
         results. ``tools`` is every declaration, those of
         :meth:`declare_tools` included, and ``None`` where the conversation
