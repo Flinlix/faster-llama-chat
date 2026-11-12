@@ -106,14 +106,18 @@ class CacheContext(ModelReader, Protocol):
         """How many tokens the cache holds at most."""
 
     @property
-    def can_shift(self) -> bool: ...
+    def can_shift(self) -> bool:
+        """Whether :meth:`apply_eviction` may be called, and :meth:`remove_from` with it."""
 
     @property
-    def can_cut_tail(self) -> bool: ...
+    def can_cut_tail(self) -> bool:
+        """Whether :meth:`remove_from` may be called on a cache that cannot shift."""
 
-    def reset(self) -> None: ...
+    def reset(self) -> None:
+        """Empty the cache."""
 
-    def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None: ...
+    def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
+        """Decode ``token_ids`` from ``start_pos``, keeping the last one's logits for a draw where ``want_logits``."""
 
     def sampled_tokens(self, sampling: Sampling,
                        withheld_tokens: tuple[int, ...]) -> Generator[int, None, None]:
@@ -133,14 +137,17 @@ class CacheContext(ModelReader, Protocol):
     def apply_eviction(self, start: int, end: int) -> None:
         """Remove the tokens from ``start`` to just before ``end``, those after them moving down."""
 
-    def remove_from(self, pos: int) -> None: ...
+    def remove_from(self, pos: int) -> None:
+        """Remove every cached token from ``pos`` to the end."""
 
     def save_state(self):
         """``None`` where the cache cannot save one."""
 
-    def restore_state(self, state, pos: int) -> None: ...
+    def restore_state(self, state, pos: int) -> None:
+        """Put the cache back to ``state``, which :meth:`save_state` gave while it held ``pos`` tokens."""
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Free what the context holds; nothing is called on it afterwards."""
 
 
 def _members(protocol) -> tuple[str, ...]:

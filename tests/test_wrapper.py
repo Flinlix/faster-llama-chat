@@ -697,6 +697,16 @@ def test_the_package_exports_the_one_protocol_a_wrapper_takes():
     assert "ModelReader" not in llama_chat.__all__ and not hasattr(llama_chat, "ModelReader")
 
 
+def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on():
+    """An implementer reads the protocol, not the stand-in."""
+    from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
+    member = lambda name: getattr(CacheContext, name)
+    undocumented = [name for name in CACHE_CONTEXT
+                    if not ((member(name).fget if isinstance(member(name), property)
+                             else member(name)).__doc__ or "").strip()]
+    assert undocumented == []
+
+
 def test_begin_rejects_system_prompt_over_threshold():
     fake = FakeContext(PLAIN)
     # threshold = 100 tokens; a 100-char system prompt with its tags can never fit.
