@@ -2927,9 +2927,9 @@ on 16 threads against 136.6, 102.7, 132.3 on 8.
   1.7 to 11.1 s for Llama-3.2-3B with prefill on every thread, against 1.0 s
   and 1.7 to 1.8 s on 8 threads and 1.0 s and 1.8 s on 4; the checks alone
   took up to 6.9 s instead of 0.03 to 0.1 s.
-- Open: whether prefill should take the physical cores too where it is not
-  set, which loses nothing measurable on an idle machine and avoids the fall
-  on a busy one. This is the user's decision, as 317.4A chose every thread.
+- Decided by the user afterwards (337.4A): prefill takes the physical cores
+  too where it is not set. See "Prefill on the physical cores" under
+  "2026-11-12: The user's decisions after the second review".
 
 ### What a template writes in content is read in one pass
 
@@ -3670,3 +3670,19 @@ shows that it fails on such a cache one token off. Measured with the same 148
 cases and with one result of two already in the history, on every test
 template that calls tools in each reasoning mode: no cut, no restore, and
 every token decoded after `begin` is one the cache keeps.
+
+## 2026-11-12: The user's decisions after the second review
+
+### Prefill on the physical cores
+
+337.4A. A `prefill_threads` left `None` is now as many as `decode_threads`,
+and so one per physical core where that is not set either; it no longer takes
+every thread the process may run on. The measurement under "Unset thread
+counts follow the processors" decided it: on an idle machine every thread
+prefilled about as fast as the physical cores (335.6 against 327.1 tok/s for
+gemma-3-1b), and on a busy one it fell to 50 to 70 tok/s in 9 of 10 runs,
+under half of the old 4 threads, while the physical cores stayed at 1.2 to
+1.9 times the old speed; a load on every thread took up to 8.6 s instead of
+1.0 s. On a processor with one thread per core the two are the same. The
+count of usable threads is no longer needed, so `_physical_cores` returns the
+cores alone.

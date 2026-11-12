@@ -85,9 +85,8 @@ class Config:
             one per physical core of the processors the process may run on,
             at most as many as its CPU quota allows.
         prefill_threads: CPU threads for prefill, at least ``1``. ``None``
-            means as many as ``decode_threads`` where that is set, else every
-            thread the process may run on, at most as many as its CPU quota
-            allows.
+            means as many as ``decode_threads``, and so one per physical core
+            where that is not set either.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
         flash_attention: ``True`` or ``False`` forces flash attention on or

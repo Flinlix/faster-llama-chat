@@ -32,7 +32,7 @@ from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import split_at_tags, tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.cache_context import GenerationAccumulator
-from llama_chat.context import KVContext, _processor_counts
+from llama_chat.context import KVContext, _physical_cores
 from llama_chat.generation import generate
 from llama_chat.config import Config, Sampling
 
@@ -603,10 +603,10 @@ _TWO_THREADS_PER_CORE = {cpu: (0, cpu % 8) for cpu in range(16)}
     ({cpu: (cpu // 4, cpu % 4) for cpu in range(8)}, 8),
     ({cpu: (0, cpu) for cpu in range(4)}, 4),
 ])
-def test_the_physical_cores_and_threads_are_counted_among_those_this_process_may_use(
+def test_the_physical_cores_are_counted_among_those_this_process_may_use(
         tmp_path, monkeypatch, cores_of, cores):
     _processor_topology(tmp_path, monkeypatch, cores_of)
-    assert _processor_counts() == (cores, len(cores_of))
+    assert _physical_cores() == cores
 
 
 @pytest.mark.parametrize("threads, cores", [(1, 1), (4, 4), (6, 3), (16, 8)])
@@ -614,32 +614,32 @@ def test_where_the_system_does_not_say_which_core_a_thread_runs_on_the_threads_p
         tmp_path, monkeypatch, threads, cores):
     _processor_topology(tmp_path, monkeypatch, {cpu: (0, cpu) for cpu in range(threads)})
     monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "absent")
-    assert _processor_counts() == (cores, threads)
+    assert _physical_cores() == cores
 
 
-@pytest.mark.parametrize("quota_files, counts", [
-    ({"cpu.max": "max 100000\n"}, (8, 16)),
-    ({"cpu.max": "400000 100000\n"}, (4, 4)),
-    ({"cpu.max": "1000000 100000\n"}, (8, 10)),
-    ({"cpu.max": "50000 100000\n"}, (1, 1)),
-    ({"cpu/cpu.cfs_quota_us": "250000\n", "cpu/cpu.cfs_period_us": "100000\n"}, (2, 2)),
-    ({"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, (8, 16)),
+@pytest.mark.parametrize("quota_files, cores", [
+    ({"cpu.max": "max 100000\n"}, 8),
+    ({"cpu.max": "400000 100000\n"}, 4),
+    ({"cpu.max": "1000000 100000\n"}, 8),
+    ({"cpu.max": "50000 100000\n"}, 1),
+    ({"cpu/cpu.cfs_quota_us": "250000\n", "cpu/cpu.cfs_period_us": "100000\n"}, 2),
+    ({"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, 8),
 ], ids=["v2-unlimited", "v2-four", "v2-ten", "v2-half", "v1-two-and-a-half", "v1-unlimited"])
-def test_a_cpu_quota_bounds_the_cores_and_the_threads(tmp_path, monkeypatch, quota_files, counts):
+def test_a_cpu_quota_bounds_the_cores(tmp_path, monkeypatch, quota_files, cores):
     _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE)
     for name, text in quota_files.items():
         (tmp_path / "cgroup" / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "cgroup" / name).write_text(text)
-    assert _processor_counts() == counts
+    assert _physical_cores() == cores
 
 
 @pytest.mark.parametrize("settings, decode_threads, prefill_threads", [
-    ({}, 8, 16),
+    ({}, 8, 8),
     ({"decode_threads": 4}, 4, 4),
     ({"prefill_threads": 12}, 8, 12),
     ({"decode_threads": 3, "prefill_threads": 5}, 3, 5),
 ])
-def test_unset_thread_counts_decode_on_the_physical_cores_and_prefill_on_every_thread(
+def test_unset_thread_counts_decode_and_prefill_on_the_physical_cores(
         tmp_path, monkeypatch, settings, decode_threads, prefill_threads):
     _processor_topology(tmp_path, monkeypatch, _TWO_THREADS_PER_CORE)
     asked = _context_settings(tmp_path, monkeypatch, **settings)

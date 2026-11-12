@@ -67,13 +67,13 @@ class KVContext:
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
             kv_type = self._backend.kv_cache_type_id(config.kv_cache_type)
-            cores, threads = _processor_counts()
+            cores = _physical_cores()
             self._engine_context = self._backend.new_context(
                 self._model, config.context_size, n_threads=config.decode_threads or cores,
                 n_batch=config.max_batch_tokens,
                 flash_attn=_flash_attention(config), type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
-                n_threads_batch=config.prefill_threads or config.decode_threads or threads)
+                n_threads_batch=config.prefill_threads or config.decode_threads or cores)
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
             self._settle_cache_edits()
@@ -335,8 +335,8 @@ class KVContext:
             raise
 
 
-def _processor_counts() -> tuple[int, int]:
-    """The physical cores and the threads this process may run on, neither above its CPU quota.
+def _physical_cores() -> int:
+    """The physical cores this process may run on, at most as many as its CPU quota allows.
 
     Where the system does not say which core a thread runs on, the threads
     past four are taken to run two to a core.
@@ -358,9 +358,8 @@ def _processor_counts() -> tuple[int, int]:
         except OSError:
             quota = "max"
     if quota in ("max", "-1"):
-        return cores, threads
-    allowed = max(1, int(quota) // int(period))
-    return min(cores, allowed), min(threads, allowed)
+        return cores
+    return min(cores, max(1, int(quota) // int(period)))
 
 
 def _flash_attention(config: Config) -> bool | None:
