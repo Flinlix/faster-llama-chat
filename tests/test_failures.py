@@ -239,11 +239,15 @@ def test_a_refused_restart_keeps_the_previous_conversation_usable():
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
 
 
-@pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "date_format")])
-def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(stem, clock):
+@pytest.mark.parametrize("stem, system", [
+    pytest.param(stem, system, id=f"{stem}-system-prompt" if system else stem)
+    for stem in STEMS if expected(fixture(stem), "date_format")
+    for system in ("", "Be brief.")[:1 + expected(fixture(stem), "can_take_system_prompt")]])
+def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversation(
+        stem, system, clock):
     context = FakeContext(fixture(stem), ["Eins.", "Zwei."])
     w = ChatWrapper(Config(context_size=8192, min_reply_tokens=8), context=context)
-    w.begin("")
+    w.begin(system)
     w.reply("One?").finish()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):

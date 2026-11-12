@@ -2726,3 +2726,15 @@ the tests stopped writing real templates' tags, the test that whitespace after
 a channel's header is not answer lost its only tag with a colon, a shape some
 templates' tags have and `TAG` reads. It now runs with an invented tag of
 that shape beside the plain one.
+
+**T1: the date tests run with a system prompt too.** Since the tests named no
+model, the date tests began without a system prompt, the case in which every
+template that reads the clock writes the date. A template that writes the
+date inside the system turn beside the caller's prompt, at midnight, was no
+longer run. A test template's file now states
+`writes_date_beside_system_prompt` where its template writes the date with a
+system prompt as well, which `tests/test_real_templates.py` checks against
+the template's render, and the date tests run each such template a second
+time with a system prompt. The refused restart on a template that writes the
+date runs with and without one on every dated template that takes one, since
+it asserts no date.

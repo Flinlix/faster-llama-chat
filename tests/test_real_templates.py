@@ -283,7 +283,13 @@ def test_a_template_that_reads_the_clock_writes_the_date_as_its_file_says(stem, 
     known = fixture(stem)
     date_format = expected(known, "date_format")
     assert (date_format is not None) == ("strftime_now" in known["chat_template"])
+    beside_system_prompt = expected(known, "writes_date_beside_system_prompt")
+    assert date_format is not None or not beside_system_prompt
     if date_format is not None:
-        rendered = FakeContext(known).stated_render([{"role": "user", "content": "x"}],
-                                                    generation_prompt=True)
+        context = FakeContext(known)
+        rendered = context.stated_render([{"role": "user", "content": "x"}], generation_prompt=True)
         assert clock[0].strftime(date_format) in rendered
+        with_system_prompt = context.stated_render(
+            [{"role": "system", "content": "s"}, {"role": "user", "content": "x"}],
+            generation_prompt=True)
+        assert (clock[0].strftime(date_format) in with_system_prompt) == beside_system_prompt

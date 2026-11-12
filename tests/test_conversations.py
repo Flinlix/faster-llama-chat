@@ -629,12 +629,17 @@ def test_a_shortened_reply_is_kept_as_the_template_writes_it(stem):
 
 # ----- the clock a template reads -----------------------------------------------------
 _DATED = [stem for stem in sorted(_FIXTURES) if expected(_FIXTURES[stem], "date_format")]
+# Each template that writes the date, without a system prompt and, where it writes the date
+# beside one too, with one.
+_DATED_RUNS = [pytest.param(stem, "", id=stem) for stem in _DATED] + [
+    pytest.param(stem, "Be brief.", id=f"{stem}-system-prompt") for stem in _DATED
+    if expected(_FIXTURES[stem], "writes_date_beside_system_prompt")]
 
 
-def _dated_run(stem):
-    """A conversation on ``stem`` without a system prompt, beside which every such template writes the date."""
+def _dated_run(stem, system):
+    """A conversation on ``stem`` begun with the system prompt ``system``."""
     run = _Run(stem)
-    run.system = ""
+    run.system = system
     return run
 
 
@@ -643,9 +648,9 @@ def _date(run, clock):
     return clock[0].strftime(expected(run.fixture, "date_format"))
 
 
-@pytest.mark.parametrize("stem", _DATED)
-def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(stem, clock):
-    run = _dated_run(stem)
+@pytest.mark.parametrize("stem, system", _DATED_RUNS)
+def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(stem, system, clock):
+    run = _dated_run(stem, system)
     run.begin()
     assert _date(run, clock) in run.context.text_of(run.context.cache)
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
@@ -655,9 +660,10 @@ def test_a_conversation_begun_on_a_later_day_opens_with_that_days_date(stem, clo
         [{"role": "user", "content": QUESTIONS[0]}])
 
 
-@pytest.mark.parametrize("stem", _DATED)
-def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_again_once(stem, clock):
-    run = _dated_run(stem)
+@pytest.mark.parametrize("stem, system", _DATED_RUNS)
+def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_again_once(
+        stem, system, clock):
+    run = _dated_run(stem, system)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
@@ -672,9 +678,10 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
     assert len([cut for cut in cuts if cut[1] < len(run.seen[0]) // 2]) == 1
 
 
-@pytest.mark.parametrize("stem", [stem for stem in _DATED if _FIXTURES[stem]["calls_tools"]])
+@pytest.mark.parametrize("stem, system", [run for run in _DATED_RUNS
+                                          if _FIXTURES[run.values[0]]["calls_tools"]])
 def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
-        stem, clock, monkeypatch):
+        stem, system, clock, monkeypatch):
     from llama_chat import rendered_cache
     checked = []
     for name in ("ensure_history_stays_written", "windows_are_exact"):
@@ -682,7 +689,7 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
         monkeypatch.setattr(rendered_cache, name,
                             lambda *args, check=check, name=name: (checked.append(name),
                                                                    check(*args))[1])
-    run = _dated_run(stem)
+    run = _dated_run(stem, system)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     both = ["ensure_history_stays_written", "windows_are_exact"]
