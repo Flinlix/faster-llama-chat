@@ -2654,3 +2654,9 @@ the turn's policy, and the model's next call was refused instead of handed
 over. The first reply that goes on with such a turn and is given a policy now
 notes it as the turn's, as if it had opened the turn; a reply given none
 leaves the turn without one, so the next still goes on under `"refuse"`.
+
+**S12: the test whether a call is read after an unreadable one reads as a
+statement.** The local function that tells a reply's generations whether a
+call written after an unreadable one is still read was named
+`after_unreadable`, which names a moment, not what is true. It is now
+`may_call_after_unreadable`, after the `may_call_again` it is handed to.

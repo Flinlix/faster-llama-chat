@@ -634,11 +634,12 @@ class ChatWrapper:
             self._template.ensure_tools_usable()
         any_call_asked = self._conversation.turn_open      # a turn going on has called
 
-        def after_unreadable() -> bool:
+        def may_call_after_unreadable() -> bool:
             """Whether a call is read again after an unreadable one, which spends one."""
             return registry is not None and budget.calls_left > 1
 
-        deltas = self._generate(text, recognizes_calls=True, may_call_again=after_unreadable(),
+        deltas = self._generate(text, recognizes_calls=True,
+                                may_call_again=may_call_after_unreadable(),
                                 on_started=on_started, **kwargs)
         generations: list[Reply] = []
         try:
@@ -660,7 +661,7 @@ class ChatWrapper:
                         deltas = self._generate(
                             None,
                             recognizes_calls=registry is not None and budget.calls_left > 0,
-                            may_call_again=after_unreadable(), **kwargs)
+                            may_call_again=may_call_after_unreadable(), **kwargs)
                         continue
                     # The ceiling binds only once a call has been asked for:
                     # without one the last generation kept its call tokens.
@@ -681,7 +682,7 @@ class ChatWrapper:
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
                 deltas = self._generate(None, recognizes_calls=may_call_again,
-                                        may_call_again=after_unreadable(), **kwargs)
+                                        may_call_again=may_call_after_unreadable(), **kwargs)
         finally:
             deltas.close()
 
