@@ -9,6 +9,7 @@ design_history.md, "The render is the conversation's encoding".
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import threading
 from collections.abc import Callable, Generator, Iterable
@@ -24,7 +25,10 @@ from .rendered_cache import RenderedCache
 from .reply import TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
-from .tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique
+from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique,
+                    unwritable_failure)
+
+_log = logging.getLogger(__name__)
 
 
 class ChatWrapper:
@@ -401,17 +405,24 @@ class ChatWrapper:
                 built without an id that names the same function with the
                 same arguments. It must be the oldest unanswered one.
             result: What it returned. Anything but a string is sent as JSON.
+                One JSON cannot write, ``NaN`` and infinity included, is
+                answered with the ``unwritable_result`` failure a registered
+                tool's would be, and a warning is logged.
 
         Raises:
-            ValueError: If no call is waiting, this is not the one owed, or the
-                result is neither text nor anything JSON can write. The call
-                stays owed.
+            ValueError: If no call is waiting, or this is not the one owed. The
+                call stays owed.
             ContextOverflowError: If not even an empty result leaves room for
                 the reply in what is left of the context.
         """
+        failure = unwritable_failure(result)
         with self._held():
             self._ensure_open()
-            self._conversation.add_result(call, result)
+            self._conversation.add_result(call, result if failure is None else _explain_failure(
+                failure, may_call_again=self._turn_policy == "yield"))
+        if failure is not None:
+            _log.warning("the result handed over for %s cannot be written, so the model is told "
+                         "the call failed (unwritable_result): %s", call.name, failure["message"])
 
     # ----- shortening the newest reply -----------------------------------------
     def truncate_last_reply(self, keep_text: str) -> None:

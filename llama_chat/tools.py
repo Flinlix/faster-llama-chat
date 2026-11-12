@@ -93,14 +93,24 @@ def result_text(result) -> str:
     """One tool's return value as the text the model is handed.
 
     Raises:
-        ValueError: If it is neither text nor anything JSON can write.
+        ValueError: If it is neither text nor anything JSON can write, ``NaN``
+            and infinity included.
     """
     if isinstance(result, str):
         return result
     try:
-        return json.dumps(result)
+        return json.dumps(result, allow_nan=False)
     except (TypeError, ValueError) as e:
         raise ValueError(f"a tool result must be text or what JSON can write: {e}") from e
+
+
+def unwritable_failure(result) -> dict | None:
+    """The failure that answers a call in place of ``result`` where :func:`result_text` refuses it; ``None`` where it does not."""
+    try:
+        result_text(result)
+    except ValueError as e:
+        return {"error": "unwritable_result", "message": str(e)}
+    return None
 
 
 @dataclass(frozen=True)
@@ -282,11 +292,8 @@ class ToolRegistry:
             returned = entry.function(**arguments)
         except Exception as e:
             return {"error": "tool_raised", "message": f"{type(e).__name__}: {e}"}
-        try:
-            result_text(returned)
-        except ValueError as e:
-            return {"error": "unwritable_result", "message": str(e)}
-        return returned
+        failure = unwritable_failure(returned)
+        return returned if failure is None else failure
 
     def __iter__(self) -> Iterator[ToolSpec]:
         """The declarations :meth:`specs` gives, so a registry can be declared as it is."""

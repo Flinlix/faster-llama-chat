@@ -295,27 +295,35 @@ def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stay
     pytest.fail("no question length left the result without room")
 
 
-def test_a_result_that_cannot_be_written_as_text_is_refused_and_the_call_stays_owed():
+_UNWRITABLE = [{"when": real_datetime.date(2026, 11, 8)}, {"t": float("nan")},
+               [float("inf")]]
+
+
+@pytest.mark.parametrize("result", _UNWRITABLE, ids=["date", "nan", "infinity"])
+def test_a_result_handed_over_that_cannot_be_written_reaches_the_model_as_a_failure(
+        result, caplog):
     w, fake = tool_wrapper()
     w.begin("persona")
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    with pytest.raises(ValueError, match="what JSON can write"):
-        w.inject_tool_result(call, {"when": real_datetime.date(2026, 11, 8)})
-    w.inject_tool_result(call, "12:00")
+    with caplog.at_level("WARNING", logger="llama_chat"):
+        w.inject_tool_result(call, result)
+    assert "unwritable_result" in held_text(fake) and "NaN" not in held_text(fake)
+    assert w.pending_calls == [] and "unwritable_result" in caplog.text
     w.reply().finish()
 
 
-def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error():
+@pytest.mark.parametrize("returned", _UNWRITABLE, ids=["date", "nan", "infinity"])
+def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error(returned):
     registry = ToolRegistry()
-    registry.tool(lambda: real_datetime.date(2026, 11, 8), description="Das Datum.", name="clock",
+    registry.tool(lambda: returned, description="Das Datum.", name="clock",
                   parameters={"type": "object", "properties": {}})
     w, fake = tool_wrapper()
     w.begin("persona", tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
     reply = w.reply("welcher Tag?", tool_call_policy=registry).finish()
     assert reply.stop_reason == "end_of_turn" and not w.turn_open
-    assert "unwritable_result" in held_text(fake)
+    assert "unwritable_result" in held_text(fake) and "NaN" not in held_text(fake)
 
 
 def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():

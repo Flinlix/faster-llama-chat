@@ -278,10 +278,11 @@ arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
 that the call failed, why, and `try again` where a call the model writes next
 is read, else `do not call again`, as under `"refuse"` or once `max_calls` is
 spent. A result that a registered tool returns as a dict carrying
-`error` counts as a failure too, and so does one that JSON cannot write. A
-result handed to `inject_tool_result` is written as given, a dict carrying
-`error` included, with nothing added to it; one that JSON cannot write is
-refused there, and the call stays owed.
+`error` counts as a failure too, and so does one that JSON cannot write, `NaN`
+and infinity included. A result handed to `inject_tool_result` is written as
+given, a dict carrying `error` included, with nothing added to it; one that
+JSON cannot write is answered with the same `unwritable_result` failure, and a
+warning on the logger `llama_chat` says so.
 A call whose arguments are no object, such as a list or `null`, or nest
 deeper than 100 levels of lists and objects, is unreadable, and its tool does
 not run.
