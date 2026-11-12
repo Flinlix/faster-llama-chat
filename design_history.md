@@ -2622,3 +2622,25 @@ window from the caller and from an add-on file, where `-1` has no meaning of
 its own. Only `-1` is read so, since llama.cpp gives no other negative value a
 meaning. A context of one's own still gives its window as a length that
 `Config` accepts.
+
+**S6: a reply given no policy takes the policy of the turn open when it
+runs.** R7 moved the noting of a turn's policy under the lock, but a reply
+given no policy still chose its own when it was called. One asked for before
+another reply opened a turn under `"yield"`, and run after that turn opened,
+went on with it under `"refuse"`, the default for a new turn, and the call it
+met was answered with an error instead of handed over. `reply` now keeps the
+policy as given, `None` included, and the reply chooses it under the lock as
+it starts. The choice made when `reply` is called stays, as an advisory check
+of `max_calls`, which is checked again under the lock against the policy then
+chosen.
+
+**S8: a reply that fails before it generates leaves its turn's budget.** A
+reply going on with a turn and given a `max_calls` of its own replaced the
+turn's budget before it ran, so where it then failed, for instance because a
+result was owed by the time it ran, the turn went on with the new ceiling,
+against principle 5. The policy and the budget a reply leaves its turn are now
+noted only once its request is written and its generation has started, before
+anything it produces is recorded, so a reply that fails before that changes
+neither. Putting the old values back on failure was the other way; it was not
+taken, since every path that fails would have to restore them, while one
+point where the generation starts covers all of them.

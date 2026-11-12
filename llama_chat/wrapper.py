@@ -247,9 +247,9 @@ class ChatWrapper:
                 goes on with a turn a call left open once every result is in.
             tool_call_policy: What becomes of a tool call the model makes.
                 ``None``, the default, keeps the policy of the turn this goes
-                on with, where the reply that started it was given one, a
-                registry with what is left of its ``max_calls``, and is
-                ``"refuse"`` otherwise.
+                on with when it runs, where the reply that started it was
+                given one, a registry with what is left of its ``max_calls``,
+                and is ``"refuse"`` otherwise.
 
                 * ``"withhold"``: the model cannot write a call at all; the
                   token that opens one is never drawn, so the reply is text. A
@@ -300,7 +300,8 @@ class ChatWrapper:
                 or if ``max_calls`` is given without a registry or is not a
                 whole number of at least 0. At the first
                 iteration, if a registry holding tools is given to a model
-                that could never call one.
+                that could never call one, or if ``max_calls`` is given and
+                the turn the reply goes on with by then runs no call.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed; at the first
@@ -315,50 +316,62 @@ class ChatWrapper:
         ensure_reply_cap(max_reply_tokens)
         options = dict(max_reply_tokens=max_reply_tokens, stop=tuple(stop or ()), cancel=cancel,
                        sampling=sampling)
-        goes_on = text is None and self._conversation.published_turn_open()
-        if tool_call_policy is None:
-            # Compared with None: an empty registry is false.
-            kept = self._turn_policy if goes_on else None
-            tool_call_policy = "refuse" if kept is None else kept
-        runs = isinstance(tool_call_policy, ToolRegistry)
-        if not runs and tool_call_policy not in TOOL_CALL_POLICIES:
+        if tool_call_policy is not None and not isinstance(tool_call_policy, ToolRegistry) \
+                and tool_call_policy not in TOOL_CALL_POLICIES:
             raise ValueError(f"tool_call_policy must be "
                              f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a "
                              f"ToolRegistry, not {tool_call_policy!r}")
-        if max_calls is not None and not runs:
-            raise ValueError(f"max_calls limits calls that are run, and "
-                             f"tool_call_policy={tool_call_policy!r} runs none")
         if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)
                                       or max_calls < 0):
             raise ValueError(f"max_calls must be None or a whole number of at least 0, "
                              f"not {max_calls!r}")
+        # Read from what the newest change published, so it never waits for the lock; the
+        # policy is chosen again under the lock, from the turn open when the reply runs.
+        _ensure_max_calls_runs(self._policy_for(
+            tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
-        # Read from what the newest change published, so it never waits for the lock.
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        if tool_call_policy == "yield":
-            return ReplyStream(self._until_call(text, tool_call_policy, recognizes_calls=True,
-                                                **options))
-        if tool_call_policy == "withhold":
-            return ReplyStream(self._until_call(text, tool_call_policy, recognizes_calls=False,
-                                                withhold=True, **options))
-        return ReplyStream(self._generate_until_answered(
-            text, policy=tool_call_policy, max_calls=max_calls, **options))
+        return ReplyStream(self._replying(text, tool_call_policy, max_calls, **options))
 
-    def _until_call(self, text: str | None, policy: ToolCallPolicy,
-                    **options) -> Generator[str | ToolCall, None, Reply]:
-        """One generation, from ``text`` or on from the open turn, then the calls it stopped at.
-
-        Going on with an open turn, it is parted from the turn's text so far as
-        a reply that runs its calls parts its generations.
-        """
+    def _replying(self, text: str | None, given: ToolCallPolicy | ToolRegistry | None,
+                  max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
+        """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's."""
         with self._held():
-            self._turn_budget_for(policy, None)
+            goes_on = text is None and self._conversation.turn_open
+            policy = self._policy_for(given, goes_on)
+            _ensure_max_calls_runs(policy, max_calls)
+            budget = self._turn_budget if goes_on and max_calls is None else _CallBudget(max_calls)
+            options["on_started"] = lambda: self._keep_turn(given, policy, budget)
+            if policy not in ("yield", "withhold"):
+                return (yield from self._generate_until_answered(
+                    text, policy=policy, budget=budget, **options))
             generation = yield from self._read_generation(
-                self._generate(text, may_call_again=policy == "yield", **options),
+                self._generate(text, recognizes_calls=policy == "yield",
+                               may_call_again=policy == "yield",
+                               withhold=policy == "withhold", **options),
                 after=self._open_turn_text())
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from _answerable(generation.tool_calls)
         return generation
+
+    def _policy_for(self, given: ToolCallPolicy | ToolRegistry | None,
+                    goes_on: bool) -> ToolCallPolicy | ToolRegistry:
+        """The policy a reply runs with: ``given``, else the turn's where it goes on with one, else ``"refuse"``."""
+        # Compared with None: an empty registry is false.
+        if given is not None:
+            return given
+        return self._turn_policy if goes_on and self._turn_policy is not None else "refuse"
+
+    def _keep_turn(self, given: ToolCallPolicy | ToolRegistry | None,
+                   policy: ToolCallPolicy | ToolRegistry, budget: _CallBudget) -> None:
+        """Note what a reply whose generation has started leaves its turn; the lock must be held.
+
+        A reply that opens a turn starts it with ``policy``. The turn keeps
+        ``budget``, the calls it may still run.
+        """
+        if not self._conversation.turn_open:
+            self._turn_policy = policy
+        self._turn_budget = budget
 
     def inject_tool_result(self, call: ToolCall, result) -> None:
         """Hand the model what the tool it called returned.
@@ -589,25 +602,22 @@ class ChatWrapper:
 
     # ----- internals -----------------------------------------------------------
     def _generate_until_answered(
-        self, text: str, *, policy: ToolRegistry | ToolCallPolicy,
-        max_calls: int | None = None,
-        **kwargs) -> Generator[str | ToolCall, None, Reply]:
+        self, text: str, *, policy: ToolRegistry | ToolCallPolicy, budget: _CallBudget,
+        on_started: Callable[[], None], **kwargs) -> Generator[str | ToolCall, None, Reply]:
         """Generate, settle whatever the model calls, and go on until it answers.
 
-        Each call that runs is handed over in the stream before it runs.
+        Each call that runs is handed over in the stream before it runs. The
+        lock must be held, and is for the whole exchange, tools running
+        included, so no other action comes between its rounds; a tool that
+        calls back into the wrapper is refused.
 
         Args:
             policy: The registry to run calls against, or ``"refuse"``, which
                 answers every call with an error result.
-            max_calls: How many tools one turn may use, ``None`` for no
-                ceiling, or, going on with a turn, for what is left of the
-                turn's. Nothing is run under ``"refuse"``, so it does not bind
-                there.
+            budget: The calls the turn may still run. Nothing is run under
+                ``"refuse"``, so it does not bind there.
+            on_started: As :meth:`_generate`, for the first generation.
             text, **kwargs: As :meth:`reply`.
-
-        The lock is held for the whole exchange, tools running included, so
-        no other action comes between its rounds; a tool that calls back into
-        the wrapper is refused.
 
         Raises:
             ValueError: If ``registry`` holds tools this model could never
@@ -615,66 +625,64 @@ class ChatWrapper:
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
-        with self._held():
-            # A registry is the same promise a declaration is, so it is checked the
-            # same way: an exchange that cannot run a tool is refused before it
-            # starts, not after the model has asked for one.
-            registry = policy if isinstance(policy, ToolRegistry) else None
-            if registry is not None and len(registry) > 0:
-                self._template.ensure_tools_usable()
-            any_call_asked = self._conversation.turn_open      # a turn going on has called
-            budget = self._turn_budget_for(policy, max_calls)
+        # A registry is the same promise a declaration is, so it is checked the
+        # same way: an exchange that cannot run a tool is refused before it
+        # starts, not after the model has asked for one.
+        registry = policy if isinstance(policy, ToolRegistry) else None
+        if registry is not None and len(registry) > 0:
+            self._template.ensure_tools_usable()
+        any_call_asked = self._conversation.turn_open      # a turn going on has called
 
-            def after_unreadable() -> bool:
-                """Whether a call is read again after an unreadable one, which spends one."""
-                return registry is not None and budget.calls_left > 1
+        def after_unreadable() -> bool:
+            """Whether a call is read again after an unreadable one, which spends one."""
+            return registry is not None and budget.calls_left > 1
 
-            deltas = self._generate(text, recognizes_calls=True,
-                                    may_call_again=after_unreadable(), **kwargs)
-            generations: list[Reply] = []
-            try:
-                while True:
-                    generation = yield from self._read_generation(
-                        deltas, after="".join(g.text for g in generations))
-                    generations.append(generation)
-                    if not _answerable(generation.tool_calls):
-                        if self._conversation.turn_open:
-                            # An unreadable call: its result is already written, and
-                            # the turn wants the reply that follows it. Nothing is
-                            # owed, since nothing could be read, so the resume is
-                            # free to run. It spends budget like any other failed
-                            # call, so a model that cannot write a readable one
-                            # retries at most `max_calls` times.
-                            any_call_asked = True
-                            if registry is not None and budget.calls_left > 0:
-                                budget.calls_left -= 1
-                            deltas = self._generate(
-                                None,
-                                recognizes_calls=registry is not None and budget.calls_left > 0,
-                                may_call_again=after_unreadable(), **kwargs)
-                            continue
-                        # The ceiling binds only once a call has been asked for:
-                        # without one the last generation kept its call tokens.
-                        return _sum_generations(generations,
-                                                any_call_asked and budget.calls_left == 0)
-                    any_call_asked = True
-                    settled = yield from self._settle_calls(
-                        _answerable(generation.tool_calls), registry, budget)
-                    may_call_again = registry is not None and budget.calls_left > 0
-                    try:
-                        self._write_results(settled, may_call_again)
-                    except ContextOverflowError:
-                        # No room is left to answer: the turn closes on what the model
-                        # wrote, as one the reply cap cuts does.
-                        dropped = self._conversation.close_unanswered()
-                        generations[-1] = replace(
-                            generations[-1], stop_reason="token_limit",
-                            n_evicted_messages=generations[-1].n_evicted_messages + dropped)
-                        return _sum_generations(generations, budget.calls_left == 0)
-                    deltas = self._generate(None, recognizes_calls=may_call_again,
-                                            may_call_again=after_unreadable(), **kwargs)
-            finally:
-                deltas.close()
+        deltas = self._generate(text, recognizes_calls=True, may_call_again=after_unreadable(),
+                                on_started=on_started, **kwargs)
+        generations: list[Reply] = []
+        try:
+            while True:
+                generation = yield from self._read_generation(
+                    deltas, after="".join(g.text for g in generations))
+                generations.append(generation)
+                if not _answerable(generation.tool_calls):
+                    if self._conversation.turn_open:
+                        # An unreadable call: its result is already written, and
+                        # the turn wants the reply that follows it. Nothing is
+                        # owed, since nothing could be read, so the resume is
+                        # free to run. It spends budget like any other failed
+                        # call, so a model that cannot write a readable one
+                        # retries at most `max_calls` times.
+                        any_call_asked = True
+                        if registry is not None and budget.calls_left > 0:
+                            budget.calls_left -= 1
+                        deltas = self._generate(
+                            None,
+                            recognizes_calls=registry is not None and budget.calls_left > 0,
+                            may_call_again=after_unreadable(), **kwargs)
+                        continue
+                    # The ceiling binds only once a call has been asked for:
+                    # without one the last generation kept its call tokens.
+                    return _sum_generations(generations,
+                                            any_call_asked and budget.calls_left == 0)
+                any_call_asked = True
+                settled = yield from self._settle_calls(
+                    _answerable(generation.tool_calls), registry, budget)
+                may_call_again = registry is not None and budget.calls_left > 0
+                try:
+                    self._write_results(settled, may_call_again)
+                except ContextOverflowError:
+                    # No room is left to answer: the turn closes on what the model
+                    # wrote, as one the reply cap cuts does.
+                    dropped = self._conversation.close_unanswered()
+                    generations[-1] = replace(
+                        generations[-1], stop_reason="token_limit",
+                        n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                    return _sum_generations(generations, budget.calls_left == 0)
+                deltas = self._generate(None, recognizes_calls=may_call_again,
+                                        may_call_again=after_unreadable(), **kwargs)
+        finally:
+            deltas.close()
 
     def _read_generation(self, deltas: Generator[str, None, Reply], after: str):
         """Yield one generation's text, and return the :class:`Reply` describing it.
@@ -706,19 +714,6 @@ class ChatWrapper:
             if message["role"] == "assistant":
                 written.append(message["content"])
         return "".join(reversed(written))
-
-    def _turn_budget_for(self, policy: ToolCallPolicy | ToolRegistry,
-                         max_calls: int | None) -> _CallBudget:
-        """The calls a reply may still run: a reply that opens a turn starts it with ``policy`` and ``max_calls``; the lock must be held.
-
-        A reply going on with a turn keeps the turn's policy, and what is left
-        of its calls unless it gives ``max_calls`` of its own.
-        """
-        if not self._conversation.turn_open:
-            self._turn_policy, self._turn_budget = policy, _CallBudget(max_calls)
-        elif max_calls is not None:
-            self._turn_budget = _CallBudget(max_calls)
-        return self._turn_budget
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
                       budget: _CallBudget):
@@ -767,7 +762,8 @@ class ChatWrapper:
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: Sampling | None,
-                  withhold: bool = False) -> Generator[str, None, Reply]:
+                  withhold: bool = False,
+                  on_started: Callable[[], None] = lambda: None) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end and record what it left, as a Reply.
 
         Without ``text``, it goes on with the open turn, adding no message of
@@ -784,6 +780,8 @@ class ChatWrapper:
                 generation writes that cannot be read, which the answer to
                 that call tells the model.
             withhold: Also keep a call's opening token from ever being drawn.
+            on_started: Called once the request is written and the generation
+                starts, before anything it produces is recorded.
         """
         self._ensure_open()
         conversation = self._conversation
@@ -806,6 +804,7 @@ class ChatWrapper:
             sampling=generation_sampling(self._config, sampling),
             ends_turn=self._turn_end_test(reply_text),
             boundary=self._template.call_boundary(recognizes_calls, withhold))
+        on_started()
         try:
             for piece in pieces:
                 shown = reply_text.feed(piece)
@@ -925,6 +924,17 @@ def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -
     if generated.cut_inside_call:
         return [ToolCall("", {}, status="unfinished")]
     return pending
+
+
+def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int | None) -> None:
+    """Refuse a ceiling on calls under a policy that runs none.
+
+    Raises:
+        ValueError: If ``max_calls`` is given and ``policy`` is no registry.
+    """
+    if max_calls is not None and not isinstance(policy, ToolRegistry):
+        raise ValueError(f"max_calls limits calls that are run, and "
+                         f"tool_call_policy={policy!r} runs none")
 
 
 def _answerable(calls: list[ToolCall]) -> list[ToolCall]:

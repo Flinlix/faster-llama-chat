@@ -1805,6 +1805,41 @@ def test_a_turn_going_on_with_its_registry_keeps_what_is_left_of_its_max_calls()
     assert "the limit is 1" in held_text(fake)
 
 
+def test_a_reply_given_no_policy_takes_the_policy_of_the_turn_open_when_it_runs():
+    """Asked for before another reply opens a turn, it goes on with that turn under the turn's policy."""
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    wrapper.inject("wie spät?")
+    waiting = wrapper.reply()
+    fake.call_script = ["fn:clock{}"]
+    call, = [event for event in wrapper.reply(tool_call_policy="yield") if isinstance(event, ToolCall)]
+    wrapper.inject_tool_result(call, "12:00")
+    fake.call_script = ["fn:clock{}"]
+    handed = [event for event in waiting if isinstance(event, ToolCall)]
+    assert handed and wrapper.pending_calls == handed and wrapper.turn_open
+
+
+def test_a_failed_reply_that_gives_max_calls_leaves_the_turn_what_was_left_of_its_own():
+    registry, ran = _counting_clock()
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    with wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1) as stream:
+        call = next(event for event in stream if isinstance(event, ToolCall))
+    wrapper.inject_tool_result(call, "12:00")   # the one call the turn may use
+    failing = wrapper.reply(max_calls=5)
+    fake.call_script = ["fn:clock{}"]
+    yielded, = [event for event in wrapper.reply(tool_call_policy="yield")
+                if isinstance(event, ToolCall)]
+    with pytest.raises(ValueError):
+        failing.finish()                        # a result is owed when it runs
+    wrapper.inject_tool_result(yielded, "12:01")
+    fake.call_script = ["fn:clock{}"]
+    reply = wrapper.reply().finish()
+    assert ran == [] and reply.tool_limit_reached and not wrapper.turn_open
+    assert "the limit is 1" in held_text(fake)
+
+
 def test_a_stream_closed_at_a_later_call_of_a_round_writes_the_results_of_those_that_ran():
     registry, ran = _counting_clock()
     wrapper, fake = tool_wrapper(context_size=1024)

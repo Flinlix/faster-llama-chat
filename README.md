@@ -188,8 +188,8 @@ print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).fi
 tools were declared, since a model may write a call tag unasked. It is one of
 `TOOL_CALL_POLICIES` (the type `ToolCallPolicy`) or a `ToolRegistry`. Left
 out, it is the policy the open turn was started with, where the reply goes on
-with one, and `"refuse"` otherwise; a reply that goes on after results thus
-keeps its turn's policy unless it is given another:
+with one when it runs, and `"refuse"` otherwise; a reply that goes on after
+results thus keeps its turn's policy unless it is given another:
 
 | `tool_call_policy=` | what happens | what the stream yields |
 |------|------|------|
