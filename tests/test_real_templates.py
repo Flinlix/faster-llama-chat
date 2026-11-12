@@ -8,6 +8,7 @@ are in ``test_conversations.py``.
 """
 
 import json
+import re
 
 import pytest
 
@@ -48,6 +49,13 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     assert template.can_reason == known["can_reason"]
     assert _describes_a_call(template) == known["calls_tools"]
     assert template.answer_opening() == expected(known, "answer_opening")
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if "[/" in fixture(stem)["chat_template"]])
+def test_a_bracketed_tag_a_template_closes_with_is_one_token_as_its_opening_is(stem):
+    context = FakeContext(fixture(stem))
+    closing = set(re.findall(r"\[/[A-Z_]+\]", fixture(stem)["chat_template"]))
+    assert closing and all(len(context.tokenize(tag)) == 1 for tag in closing)
 
 
 # The templates that write nothing after a reply: each loads only because the
