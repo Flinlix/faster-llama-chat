@@ -198,7 +198,7 @@ results thus keeps its turn's policy unless it is given another:
 |------|------|------|
 | `"withhold"` | the model cannot write a call: the token that opens one is never drawn. A model that wanted to call may write something else entirely instead, so this suits a request that wants no tool. Where the template's call opens with plain text rather than one of the model's tags, no token can be withheld: a call the model writes is not recognized and stays in the reply's text | text |
 | `"refuse"` (the default for a new turn) | nothing runs, not even a tool that was declared. The model is told no tool can be run and answers in words, the token that opens a call no longer drawn, as under `"withhold"` | text |
-| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again. A call the library cannot read is answered with a failure and the reply goes on by itself; the model may write another call as long as there is room | text, then each `ToolCall` |
+| `"yield"` | each call is handed to you after the text, and the turn stays open: answer each with `inject_tool_result(call, result)` in order, then call `reply()` again. A call the library cannot read is answered with a failure and the reply goes on by itself; the model may write another call as long as there is room, and after three unreadable calls in a row it is told not to call again and answers in words | text, then each `ToolCall` |
 | a `ToolRegistry` | each call runs against it until the model answers. In the last round `max_calls` allows, the token that opens a call is never drawn, as under `"withhold"`, so the turn always closes. `max_calls` is refused with any other `tool_call_policy=`, and where it is not a whole number of at least 0. A stream closed at a call handed over leaves that call and the rest of its round unrun and owed, as under `"yield"`, and the results of the calls before it that ran written. `max_calls` counts every call handed over, and a reply that goes on with the turn without a `max_calls` of its own keeps what is left of it | text, and each `ToolCall` that runs, just before it runs |
 
 ```python
@@ -281,8 +281,9 @@ a `ValueError` that says to begin again with the tools.
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
 arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
 that the call failed, why, and `try again` where a call the model writes next
-is read, else `do not call again`, as under `"refuse"` or once `max_calls` is
-spent. A result that a registered tool returns as a dict carrying
+is read, else `do not call again`, as under `"refuse"`, once `max_calls` is
+spent, or after the third call in a row that could not be read, under every
+policy. A result that a registered tool returns as a dict carrying
 `error` counts as a failure too, and so does one that JSON cannot write, `NaN`
 and infinity included. A result handed to `inject_tool_result` is written as
 given, a dict carrying `error` included, with nothing added to it; one that

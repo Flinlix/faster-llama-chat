@@ -12,6 +12,7 @@ from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from llama_chat import ChatWrapper, ContextOverflowError
+from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import FakeContext, ScriptedCall, written_call
 from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN,
@@ -967,6 +968,25 @@ def test_the_reply_cap_bounds_every_generation_of_a_reply_together(policy, cap_f
 
     assert len(reply.tool_calls) == 1 and not fake.call_script     # a call, then text
     assert reply.n_generated_tokens == 40 and reply.stop_reason == "token_limit"
+
+
+@pytest.mark.parametrize("policy", ["yield", "registry"])
+def test_a_reply_reads_at_most_three_unreadable_calls_in_a_row_then_the_model_answers(policy):
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(context_size=4096)
+    wrapper.begin("persona")
+    fake.call_script = ["fn:nonsense with no name"] * 20
+
+    reply = wrapper.reply("wie spät?", tool_call_policy=registry if policy == "registry" else policy
+                          ).finish()
+
+    assert len(fake.call_script) == 20 - MAX_UNREADABLE_CALLS_IN_A_ROW
+    assert [c.status for c in reply.tool_calls] == ["unreadable"] * MAX_UNREADABLE_CALLS_IN_A_ROW
+    told = held_text(fake)
+    assert told.count("try again") == MAX_UNREADABLE_CALLS_IN_A_ROW - 1
+    assert told.count("do not call again") == 1
+    assert reply.stop_reason == "end_of_turn" and not wrapper.turn_open
 
 
 def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():

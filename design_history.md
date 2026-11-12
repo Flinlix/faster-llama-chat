@@ -3686,3 +3686,16 @@ under half of the old 4 threads, while the physical cores stayed at 1.2 to
 1.0 s. On a processor with one thread per core the two are the same. The
 count of usable threads is no longer needed, so `_physical_cores` returns the
 cores alone.
+
+### At most three unreadable calls in a row
+
+337.5A. Retries after a call the library cannot read were bounded only by the
+reply cap, and with a registry by `max_calls` where it is set. Without either,
+a model that never wrote a readable call tried until the context was full: 59
+tries and 1,534 tokens at a context of 8,192 on the stand-in, after which the
+question was taken back. Now one reply reads at most
+`MAX_UNREADABLE_CALLS_IN_A_ROW` (3) such calls in a row under every policy:
+the third is answered with `do not call again`, and the generation after it
+cannot open a call, so the model answers in words. A readable call in between
+starts the count again. The constant is the wrapper's alone; nothing else
+reads it.

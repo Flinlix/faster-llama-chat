@@ -697,9 +697,12 @@ class ChatWrapper:
         reply_cap = self._reply_cap(max_reply_tokens)
         generations: list[Reply] = []
 
+        unreadable_in_a_row = 0
+
         def may_call_after_unreadable() -> bool:
             """Whether a call is read again after an unreadable one, which spends one."""
-            return registry is not None and budget.calls_left > 1
+            return (registry is not None and budget.calls_left > 1
+                    and unreadable_in_a_row + 1 < MAX_UNREADABLE_CALLS_IN_A_ROW)
 
         def tokens_left() -> int:
             """What the reply cap leaves the next generation."""
@@ -720,12 +723,15 @@ class ChatWrapper:
                         # owed, since nothing could be read, so the resume is
                         # free to run. It spends budget like any other failed
                         # call, so a model that cannot write a readable one
-                        # retries at most `max_calls` times.
+                        # retries at most `max_calls` times, and never more than
+                        # MAX_UNREADABLE_CALLS_IN_A_ROW times in a row.
                         any_call_asked = True
+                        unreadable_in_a_row += 1
                         if registry is not None and budget.calls_left > 0:
                             budget.calls_left -= 1
                         deltas = self._generate_round(
-                            registry is not None and budget.calls_left > 0,
+                            registry is not None and budget.calls_left > 0
+                            and unreadable_in_a_row < MAX_UNREADABLE_CALLS_IN_A_ROW,
                             may_call_after_unreadable(), max_reply_tokens=tokens_left(), **kwargs)
                         continue
                     # The ceiling binds only once a call has been asked for:
@@ -733,6 +739,7 @@ class ChatWrapper:
                     return _sum_generations(generations,
                                             any_call_asked and budget.calls_left == 0)
                 any_call_asked = True
+                unreadable_in_a_row = 0
                 settled = yield from self._settle_calls(
                     _answerable(generation.tool_calls), registry, budget)
                 may_call_again = registry is not None and budget.calls_left > 0
@@ -766,16 +773,21 @@ class ChatWrapper:
         """Generate until the model makes a call that can be handed over, or answers.
 
         A call that cannot be read is answered with a failure and the reply
-        goes on, every generation of it within one reply cap. The lock must be
-        held.
+        goes on, every generation of it within one reply cap; once
+        ``MAX_UNREADABLE_CALLS_IN_A_ROW`` such calls came in a row, it goes on
+        reading no call. The lock must be held.
         """
         reply_cap = self._reply_cap(max_reply_tokens)
         open_turn_text = self._open_turn_text()
         generations: list[Reply] = []
         while True:
             used = sum(g.n_generated_tokens for g in generations)
+            unreadable_in_a_row = len(generations)
+            recognizes_calls = unreadable_in_a_row < MAX_UNREADABLE_CALLS_IN_A_ROW
             generation = yield from self._read_generation(
-                self._generate(text, recognizes_calls=True, may_call_again=True,
+                self._generate(text, recognizes_calls=recognizes_calls,
+                               may_call_again=unreadable_in_a_row + 1 < MAX_UNREADABLE_CALLS_IN_A_ROW,
+                               withhold=not recognizes_calls,
                                max_reply_tokens=max(0, reply_cap - used), **kwargs),
                 after=open_turn_text + "".join(g.text for g in generations))
             generations.append(generation)
@@ -1099,6 +1111,8 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
     )
 
 
+# How many calls that could not be read one reply answers before it reads no more calls.
+MAX_UNREADABLE_CALLS_IN_A_ROW = 3
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 
