@@ -64,12 +64,15 @@ class ToolCall:
             ``"unfinished"`` for one the reply cap or a cancel cut short:
             such a call is only reported, with no name, arguments or id, and
             nothing answers it.
+        text: What the model wrote for a call that could not be read,
+            between the call's opening and its closing; empty for any other.
     """
 
     name: str
     arguments: dict
     id: str = ""
     status: ToolCallStatus = "complete"
+    text: str = ""
 
 
 def ensure_names_unique(specs: list[ToolSpec]) -> None:

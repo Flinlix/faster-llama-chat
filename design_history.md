@@ -2567,3 +2567,15 @@ model to try again where its next call cannot be read asks for what it
 cannot do ("The mechanism, moved here from the README"). Saying `try again` in every case was
 the other reading. The wrapper words the answer, as it words every other
 failure, and hands it to the conversation, which writes it.
+
+**303.6A: an unreadable call carries what the model wrote.** A call reported
+as `"unreadable"` on `Reply.tool_calls` had no name, arguments or id, and
+nothing else, so a caller could not see what the model had tried to write.
+`ToolCall` now has a `text` field, empty for every other call, which holds
+for an unreadable one what the model generated between the call's opening and
+its closing, as the parser was given it. A field of its own was chosen over
+putting the text into `arguments` or `name`, which would read as a call that
+was understood. It takes part in equality as the other fields do: nothing
+compares an unreadable call with a call built by hand, since none is handed
+over or answered. The conversation's history still keeps an unreadable call
+without its text, under the name a result is written with.

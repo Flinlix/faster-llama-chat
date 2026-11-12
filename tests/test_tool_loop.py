@@ -641,8 +641,8 @@ def test_an_unreadable_call_says_why():
             break
 
     assert reply.stop_reason == "unreadable_tool_call"
-    # Reported, though nothing of it is handed over to be answered.
-    assert reply.tool_calls == [ToolCall("", {}, status="unreadable")]
+    # Reported with what the model wrote, though nothing of it is handed over to be answered.
+    assert reply.tool_calls == [ToolCall("", {}, status="unreadable", text="fn:<fun=clock>")]
 
 
 def test_a_refusal_while_an_unreadable_call_is_answered_is_raised_not_taken_for_no_room(
@@ -673,7 +673,8 @@ def test_an_unreadable_call_is_reported_where_the_reply_answers_it_itself(policy
     fake.call_script = ["fn:nonsense with no name"]
     reply = wrapper.reply("los", tool_call_policy=(
         weather_registry() if policy == "registry" else policy)).finish()
-    assert reply.tool_calls == [ToolCall("", {}, status="unreadable")]
+    assert reply.tool_calls == [ToolCall("", {}, status="unreadable",
+                                         text="fn:nonsense with no name")]
     assert reply.text == "reply"
 
 
@@ -822,8 +823,8 @@ def test_an_unreadable_call_may_be_written_again():
     reply = wrapper.reply("wie spät?", tool_call_policy=registry).finish()
 
     assert ran == [1]                                # the second one ran
-    assert [(c.name, c.status) for c in reply.tool_calls] == [
-        ("", "unreadable"), ("clock", "complete")]
+    assert [(c.name, c.status, c.text) for c in reply.tool_calls] == [
+        ("", "unreadable", "fn:nonsense with no name"), ("clock", "complete", "")]
     assert not wrapper.turn_open
 
 

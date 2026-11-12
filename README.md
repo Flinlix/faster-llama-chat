@@ -219,7 +219,9 @@ as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it: one that was read with its
 `ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
 and one the reply cap or a cancel cut short as `"unfinished"`, the last two
-without a name, arguments or id, and never handed over in the stream. Where calls run, the `Reply` sums
+without a name, arguments or id, and never handed over in the stream. An
+unreadable call carries in `ToolCall.text` what the model wrote between the
+call's opening and its closing. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
 out.
