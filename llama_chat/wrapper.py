@@ -98,8 +98,9 @@ class ChatWrapper:
         # would corrupt it. It is held for a whole generation, not a decode.
         self._lock = threading.Lock()
         self._holder: int | None = None         # the thread that holds it, while one does
-        # The policy the newest turn was started with, and the calls it may still run,
-        # which a reply going on with it keeps.
+        # The policy the newest turn was started with, or for a turn the history opened the
+        # first one a reply gave it, and the calls it may still run, which a reply going on
+        # with it keeps.
         self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
         self._turn_budget = _CallBudget(None)
 
