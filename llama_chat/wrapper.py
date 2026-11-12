@@ -439,8 +439,8 @@ class ChatWrapper:
                 tool's would be, and a warning is logged.
 
         Raises:
-            ValueError: If no call is waiting, or this is not the one owed. The
-                call stays owed.
+            ValueError: If no call is waiting, this is not the one owed, or
+                this model's template writes no result. The call stays owed.
         """
         failure = unwritable_failure(result)
         with self._held():

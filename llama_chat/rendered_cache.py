@@ -124,8 +124,9 @@ class RenderedCache:
 
     Every method expects the caller to hold the conversation's lock, except
     :meth:`conversation`, :meth:`published_pending_calls`,
-    :meth:`published_total_tokens`, :meth:`published_turn_open` and
-    :meth:`ensure_can_reply`, which read a copy published after each change.
+    :meth:`published_total_tokens`, :meth:`published_turn_open`,
+    :meth:`published_template` and :meth:`ensure_can_reply`, which read a
+    copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
     raises, the conversation and the cache as they were before it.
