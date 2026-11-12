@@ -1008,6 +1008,17 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
     assert [m["text"] for m in rows(w)] == ["Zweite Frage", "Antwort"]
 
 
+def test_a_reply_the_template_refuses_to_write_takes_its_question_back():
+    fake = FakeContext(REFUSES_A_TEXT, replies=["refused", "fine"])
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "eins"), ("assistant", "zwei")])
+    before = w.conversation()
+    assert w.reply("hi").finish().text == "refused"
+    assert w.conversation() == before
+    assert w.reply("next?").finish().text == "fine"
+    assert [m["text"] for m in rows(w)][-2:] == ["next?", "fine"]
+
+
 def test_an_injected_user_turn_after_a_user_turn_is_joined_or_refused():
     w, fake = begun_wrapper(JOINS_USER_TURNS)
     w.inject("eins")

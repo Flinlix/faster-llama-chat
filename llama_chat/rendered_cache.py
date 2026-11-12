@@ -345,6 +345,11 @@ class RenderedCache:
                 or self._rendering.render(messages + [{"role": "user", "content": STAND_IN}],
                                           True) is not None)
 
+    def _newest_exchange(self) -> list[dict]:
+        """The system message and the newest exchange alone, which the template's refusals turn on."""
+        starts = exchange_starts(self._state.messages)
+        return self._system_part() + (self._state.messages[starts[-1]:] if starts else [])
+
     def _ends_on_result(self) -> bool:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
@@ -507,8 +512,9 @@ class RenderedCache:
         open while a call is owed a result. A call that could not be read is
         answered with an error result, so the turn goes on to say so, or, where
         that result has no room, the turn closes as a reply. Any other reply
-        closes the turn: one that produced nothing the template writes is taken
-        back with its request, the newest question and everything after it;
+        closes the turn: one the template refuses to write, or that produced
+        nothing it writes, is taken back with its request, the newest question
+        and everything after it;
         one with no answer, after a question, is taken out again where the
         template writes two questions in a row; and the cache is then brought
         to the template's render and decoded ahead for the next question.
@@ -575,7 +581,8 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False)
             return 0
-        if not answer and not called and not self._writes(self._state.messages):
+        if not called and not self._writes(self._state.messages if not answer
+                                           else self._newest_exchange()):
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
@@ -788,9 +795,7 @@ class RenderedCache:
         """
         # Refusals turn on the newest messages, such as two user turns in a row, so
         # they are read from the newest exchange, not from a render of the whole conversation.
-        starts = exchange_starts(self._state.messages)
-        newest = self._system_part() + (self._state.messages[starts[-1]:] if starts else [])
-        if self._rendering.render(newest + [{"role": role, "content": text}],
+        if self._rendering.render(self._newest_exchange() + [{"role": role, "content": text}],
                                   generation_prompt) is None:
             raise ValueError(self._refusal(role))
 
