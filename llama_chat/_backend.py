@@ -321,9 +321,11 @@ class Backend:
         """The end-of-sequence token id, negative where the model has none."""
         return self._token_eos(vocab)
 
-    def n_tokens(self, vocab) -> int:
-        """How many tokens the vocabulary holds."""
-        return int(self._vocab_n_tokens(vocab))
+    def special_tokens(self, vocab) -> tuple[int, ...]:
+        """Every token :meth:`is_special` marks, in one pass over the vocabulary."""
+        get_attr, tag_attrs = self._get_attr, self._TAG_ATTRS
+        return tuple(token for token in range(self._vocab_n_tokens(vocab))
+                     if get_attr(vocab, token) & tag_attrs)
 
     def is_special(self, vocab, token: int) -> bool:
         """Whether the tokenizer resolves ``token`` as a tag rather than as text."""

@@ -473,15 +473,19 @@ def test_a_text_splits_into_the_models_tags_and_the_plain_text_between():
 
 def test_the_models_tags_are_the_tokens_the_engine_marks_read_once():
     walked = []
+    attrs = [llama_cpp.LLAMA_TOKEN_ATTR_NORMAL, llama_cpp.LLAMA_TOKEN_ATTR_CONTROL,
+             llama_cpp.LLAMA_TOKEN_ATTR_BYTE, llama_cpp.LLAMA_TOKEN_ATTR_USER_DEFINED,
+             llama_cpp.LLAMA_TOKEN_ATTR_NORMAL]
+    backend = Backend.__new__(Backend)
+    backend._vocab_n_tokens = lambda vocab: len(attrs)
+    backend._get_attr = lambda vocab, token: walked.append(token) or attrs[token]
     context = object.__new__(KVContext)
-    context._vocab, context._special_tokens = None, None
-    context._backend = SimpleNamespace(
-        n_tokens=lambda vocab: 5,
-        is_special=lambda vocab, token: walked.append(token) or token in (1, 3))
+    context._vocab, context._special_tokens, context._backend = None, None, backend
     assert context.special_tokens() == (1, 3)
     assert context.special_tokens() == (1, 3)
     assert walked == [0, 1, 2, 3, 4]
-    assert context.is_special(3) and not context.is_special(2)
+    assert [context.is_special(token) for token in range(len(attrs))] \
+        == [token in (1, 3) for token in range(len(attrs))]
 
 
 @pytest.mark.parametrize("max_batch_tokens, context_size", [(8, 32), (2048, 4096)])

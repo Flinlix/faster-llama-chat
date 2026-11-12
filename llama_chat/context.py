@@ -121,8 +121,7 @@ class KVContext:
     def special_tokens(self) -> tuple[int, ...]:
         """Every token that is one of the model's own tags, read once."""
         if self._special_tokens is None:
-            self._special_tokens = tuple(token for token in range(self._backend.n_tokens(self._vocab))
-                                         if self._backend.is_special(self._vocab, token))
+            self._special_tokens = self._backend.special_tokens(self._vocab)
         return self._special_tokens
 
     def token_text(self, token: int) -> str:
