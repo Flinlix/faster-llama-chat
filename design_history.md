@@ -3699,3 +3699,11 @@ the third is answered with `do not call again`, and the generation after it
 cannot open a call, so the model answers in words. A readable call in between
 starts the count again. The constant is the wrapper's alone; nothing else
 reads it.
+
+### A single stop text is one stop text
+
+337.9A. `reply(stop="END")` used to be split into its letters, so the answer
+stopped at the first "E", "N" or "D"; the review fixes then refused a `str`.
+Now a single `str` is taken as one stop text, as most chat interfaces take it,
+and a list still gives several. Anything else is refused before the question
+is written, as before.

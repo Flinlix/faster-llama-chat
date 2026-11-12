@@ -232,7 +232,7 @@ class ChatWrapper:
               tool_call_policy: ToolCallPolicy | ToolRegistry | None = None,
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
-              stop: list[str] | None = None,
+              stop: str | list[str] | None = None,
               cancel: threading.Event | None = None,
               sampling: Sampling | None = None) -> ReplyStream:
         """Generate the reply, streaming it as it is generated.
@@ -293,8 +293,8 @@ class ChatWrapper:
                 every generation of it together, a thought included, in place
                 of the config's.
             stop: Texts that end the answer, matched against the answer
-                only. Read when this is called, so a later change to the list
-                changes nothing.
+                only; a single ``str`` is one such text. Read when this is
+                called, so a later change to the list changes nothing.
             cancel: Setting it, from any thread, stops generation within one
                 token and ends the turn with ``stop_reason == "interrupted"``.
             sampling: This request's own sampling settings, in place of the
@@ -316,7 +316,7 @@ class ChatWrapper:
                 that could never call one, or if ``max_calls`` is given and
                 the turn the reply goes on with by then runs no call.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
-                ``stop`` is a ``str`` or holds anything but ``str``, ``cancel``
+                ``stop`` is neither a ``str`` nor a list of ``str``, ``cancel``
                 has no ``is_set``, or ``sampling`` is neither ``None`` nor a
                 :class:`~llama_chat.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
@@ -1052,17 +1052,15 @@ def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -
 
 
 def _stop_texts(stop) -> tuple[str, ...]:
-    """A request's stop texts, read once.
+    """A request's stop texts, read once; a single ``str`` is one stop text.
 
     Raises:
-        TypeError: If ``stop`` is a ``str`` itself, or not a list of ``str``.
+        TypeError: If ``stop`` is neither a ``str`` nor a list of ``str``.
     """
-    if isinstance(stop, str):
-        raise TypeError(f"stop must be a list of str, such as [{stop!r}], not a str")
-    texts = tuple(stop) if isinstance(stop, Iterable) else stop
+    texts = (stop,) if isinstance(stop, str) else tuple(stop) if isinstance(stop, Iterable) else stop
     if texts is not None and (not isinstance(texts, tuple)
                               or not all(isinstance(text, str) for text in texts)):
-        raise TypeError(f"stop must be a list of str, not {stop!r}")
+        raise TypeError(f"stop must be a str or a list of str, not {stop!r}")
     return texts or ()
 
 
