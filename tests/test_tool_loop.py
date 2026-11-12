@@ -1002,6 +1002,27 @@ def test_a_reply_reads_at_most_three_unreadable_calls_in_a_row_then_the_model_an
     assert reply.stop_reason == "end_of_turn" and not wrapper.turn_open
 
 
+def test_a_call_that_spends_the_reply_cap_is_not_run_and_its_turn_closes():
+    probe, probe_fake = tool_wrapper(context_size=2048)
+    probe.begin("persona")
+    probe_fake.call_script = ["fn:clock{}"]
+    call_tokens = probe.reply("wie spät?", tool_call_policy="yield").finish().n_generated_tokens
+    ran = []
+    registry = ToolRegistry()
+    registry.tool(lambda: ran.append(1) or "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(context_size=2048)
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+
+    stream = wrapper.reply("wie spät?", tool_call_policy=registry, max_reply_tokens=call_tokens)
+    handed = [e for e in stream if isinstance(e, ToolCall)]
+    reply = stream.finish()
+
+    assert ran == [] and handed == []
+    assert reply.stop_reason == "token_limit" and not wrapper.turn_open
+    wrapper.reply("und?").finish()
+
+
 def test_a_readable_call_starts_the_count_of_unreadable_calls_in_a_row_again():
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")

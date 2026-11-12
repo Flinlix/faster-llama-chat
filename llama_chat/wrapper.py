@@ -742,6 +742,14 @@ class ChatWrapper:
                                             any_call_asked and budget.calls_left == 0)
                 any_call_asked = True
                 unreadable_in_a_row = 0
+                if tokens_left() == 0:
+                    # The call spent the reply cap, so nothing would read its result: it is
+                    # not run, and the turn closes as one the cap cuts does.
+                    dropped = self._conversation.close_unanswered()
+                    generations[-1] = replace(
+                        generations[-1], stop_reason="token_limit",
+                        n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                    return _sum_generations(generations, budget.calls_left == 0)
                 settled = yield from self._settle_calls(
                     _answerable(generation.tool_calls), registry, budget)
                 may_call_again = registry is not None and budget.calls_left > 0

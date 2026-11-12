@@ -3720,3 +3720,13 @@ group from each of them up to the root is read, cgroup v2's `cpu.max` and
 v1's `cpu.cfs_quota_us` with `cpu.cfs_period_us`, and the tightest quota
 bounds the cores. Where `/proc/self/cgroup` cannot be read, the top group
 alone is read, as before.
+
+### A call that spends the reply cap is not run
+
+With a registry, a call whose own tokens used up the rest of
+`max_reply_tokens` was still run and its result decoded, after which a
+generation of 0 tokens closed the turn with empty text (found by the review of
+this round's fixes: a cap of 27 tokens, the call's own 27). The tool's side
+effects and the prefill went to a result the model never reads. Now such a
+call is not run: the turn closes as one the reply cap cuts does, and the
+reply ends with `token_limit`.
