@@ -681,6 +681,69 @@ def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable(stem):
 
 
 
+def _assert_begins_again_the_same(chat, other=None):
+    """``begin(**chat.conversation())`` gives the same conversation, or its newest part where a begin keeps less, each item unchanged and in its place; begun on ``other`` where given, which ``chat`` then goes on unchanged by."""
+    saved = chat.conversation()
+    kept = (other or chat).begin(**saved)
+    again = (other or chat).conversation()
+    assert {key: again[key] for key in ("system_prompt", "tools", "reasoning")} \
+        == {key: saved[key] for key in ("system_prompt", "tools", "reasoning")}
+    assert again["messages"] == saved["messages"][len(saved["messages"]) - kept:]
+    assert kept or not saved["messages"]
+    assert (other or chat).conversation() == again
+
+
+@pytest.mark.parametrize("stem, reasoning", _each_mode(_EVERY))
+def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem, reasoning):
+    """With live calls, a call left without a result, evictions, restarts and a later declaration."""
+    calls = _fixture(stem)["calls_tools"]
+    probe = _Run(stem, reasoning=reasoning)
+    probe.begin(tools=[WEATHER] if calls else None)
+    exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
+    # Room for some six exchanges, so that the later questions evict the earlier ones.
+    run = _Run(stem, context_size=int((len(probe.context.cache) + 6 * exchange + 300) / 0.75),
+               reasoning=reasoning)
+    run.context.replies = _as_generated(run.template, ANSWERS * 3, reasoning)
+    run.begin(tools=[WEATHER] if calls else None)
+    _assert_begins_again_the_same(run.chat)
+    run.chat.reply(QUESTIONS[0]).finish()
+    _assert_begins_again_the_same(run.chat)
+    if calls and not reasoning:
+        _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+        run.context.replies[:0] = [ScriptedCall(body)] + _as_generated(
+            run.template, ["Sunny in Bonn."], False)
+        call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        _assert_begins_again_the_same(run.chat)             # the call still owed its result
+        run.chat.inject_tool_result(call, "sunny")
+        _assert_begins_again_the_same(run.chat)             # the turn open after its result
+        run.chat.reply(tool_call_policy="yield").finish()
+        _assert_begins_again_the_same(run.chat)
+    if calls:
+        clock = ToolSpec(name="get_time", description="The time",
+                         parameters={"type": "object", "properties": {}})
+        run.chat.declare_tools([clock])
+        _assert_begins_again_the_same(run.chat)
+        saved = run.chat.conversation()
+        unanswered = ToolTurn((ToolCall(WEATHER.name, {"city": "Rom"}),))
+        try:
+            run.chat.begin(saved["system_prompt"], saved["messages"]
+                           + [("user", "Weather in Rome?"), unanswered, ("user", "Never mind.")],
+                           tools=saved["tools"], reasoning=reasoning)
+        except ValueError as refused:       # a template that writes no call without its result
+            assert "refuses" in str(refused) and run.chat.conversation() == saved
+        else:
+            _assert_begins_again_the_same(run.chat)
+            run.chat.reply().finish()
+            _assert_begins_again_the_same(run.chat)
+    other = _Run(stem, context_size=run.chat.config.context_size, reasoning=reasoning).chat
+    evicted = 0
+    for question in QUESTIONS[1:] + [f"{q} Again." for q in QUESTIONS]:
+        evicted += run.chat.reply(question).finish().n_evicted_messages
+        _assert_begins_again_the_same(run.chat, other)
+    assert evicted
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_shortened_reply_is_kept_as_the_template_writes_it(stem):
     run = _Run(stem)
