@@ -442,7 +442,9 @@ tests, the tidying, two restructurings and a public way to forbid calls.
   needing no tool was answered normally. `"refuse"` let Gemma 4 call and told
   it no tool can be run, and it made up a weather report. So withholding suits a
   request that wants no tool, and the last round under `max_calls` leaves a
-  call unrecognized rather than withheld.
+  call unrecognized rather than withheld. Revised by "Review fixes of the
+  streaming, the thought filter and the tool loop" (316.9): that round, and
+  every round under `"refuse"`, also withholds the call's opening token.
 - **What a template does to a message's text is learned at load:** one render
   with every tag and every character an escaping filter changes, each between
   markers, shows what the template drops, escapes or replaces. The new
@@ -1347,7 +1349,9 @@ the shift of what follows, and the engine shifts everything after the stretch
 when given no end; a stand-in knows its own length. A type for two integers
 was one more public name for a context's author to learn.
 
-**The engine context warms itself.** `CacheContext.warmup` and the wrapper's
+**The engine context warms itself.** Revised by "Load time and thread
+defaults" (316.1): the engine context decodes a batch of two tokens and then
+one, not its full batch. `CacheContext.warmup` and the wrapper's
 flag that called it once at the first `begin` are removed. The engine context
 decodes its full batch and its single token at the end of loading, so loading
 takes one warm-up longer and the first `begin` that much less. Warming is a
@@ -2244,7 +2248,10 @@ whatever followed it, as the thought filter drops the start of a thought's
 tag on a cut reply. A reply that ends of its own accord after the tag keeps
 it, as before.
 
-**270.13: an action on the thread whose reply is being read.** A reply holds
+**270.13: an action on the thread whose reply is being read.** Revised by
+"Review fixes of the streaming, the thought filter and the tool loop"
+(316.28): the thread that takes each step of a stream is noted as the holder,
+so a stream resumed on another thread is inside the check. A reply holds
 the wrapper's lock while it is read, so an action on the same thread, such as
 a tool that the reply runs calling back into the wrapper, or an `inject` made
 between two deltas of the stream, waited for the lock it already held and
@@ -2783,3 +2790,620 @@ environments. The card of Nemotron 3.5 Transcribe states temperature 0 without
 reasoning for transcription, translation and language identification, and the
 values the file holds for audio understanding and text reasoning, where "top-k
 disabled" is the `top_k` of 0 that the file sets.
+
+## 2026-11-12: Load time and thread defaults
+
+### The warm-up decodes two tokens and then one
+
+316.1 (P1). Supersedes, in "The engine context warms itself" (2026-11-10), the
+sentence that the context decodes its full batch at the end of loading. The
+context now decodes a batch of two tokens and then a single token, as
+llama.cpp's own tools do, and clears the cache again.
+
+The full batch of `max_batch_tokens` was meant to move the engine's first
+preparation of a large batch from the first `begin` into the load. Measured:
+
+- Graphics card, the user's production settings (Gemma 4 26B A4B Q4_K_M, all
+  layers on the card, batch 512, flash attention, q8_0 cache), median of 3
+  cold runs:
+
+  | Warm-up | Load | of which warm-up | First `begin` | First word |
+  |---|---|---|---|---|
+  | Full batch | 3.88 s | 0.68 s | 0.017 s | 0.036 s |
+  | 2 tokens, then 1 | 3.21 s | 0.03 s | 0.59 s | 0.036 s |
+  | None | 3.18 s | | 0.59 s | 0.045 s |
+
+  The first word after a 1,346 token question took 0.244 s in all three, and
+  one decode step 7.9 ms in all three. On the card the full batch only moves a
+  one-time 0.6 s from the first `begin` into the load; the total is the same.
+- Processor (i9-9900K, 8 cores, 16 threads, `CUDA_VISIBLE_DEVICES=""`, 6
+  threads, context 4096, default batch 2048, 3 runs each, range):
+
+  | Model | Warm-up | Load | of which warm-up | First `begin` | First word |
+  |---|---|---|---|---|---|
+  | gemma-3-1b Q4_K_M | Full batch | 9.30-9.49 s | 8.28-8.46 s | 0.063-0.066 s | 0.074-0.079 s |
+  | gemma-3-1b Q4_K_M | 2 tokens, then 1 | 1.03-1.05 s | 0.055-0.059 s | 0.063-0.067 s | 0.072-0.078 s |
+  | gemma-3-1b Q4_K_M | None | 0.98-1.00 s | | 0.062-0.067 s | 0.074-0.079 s |
+  | Llama-3.2-3B Q4_K_M | Full batch | 21.98-22.67 s | 20.36-20.53 s | 0.361-0.364 s | 0.341-0.347 s |
+  | Llama-3.2-3B Q4_K_M | 2 tokens, then 1 | 1.73-1.80 s | 0.141-0.146 s | 0.361-0.364 s | 0.341-0.347 s |
+  | Llama-3.2-3B Q4_K_M | None | 1.61-1.68 s | | 0.362-0.366 s | 0.341-0.352 s |
+
+  At batch 512 the review measured the full batch at 2.0 s (gemma-3-1b) and
+  4.6 s (Llama-3.2-3B). On the processor the full batch buys nothing: the
+  first `begin` and the first word are the same with it, with the small
+  warm-up and without any. On a Raspberry Pi 5 it would cost an estimated
+  45 s per load.
+
+So the full batch cost 8 to 20 s of every processor load at the defaults and
+saved nothing in total on the card. The small warm-up costs 0.03 to 0.15 s
+and keeps the engine's first decode out of the first word. Rejected: no
+warm-up at all, which is as fast on the processor but left the card's first
+word 9 ms slower; and a warm-up sized by a setting, which no caller asked for.
+
+### The engine keeps its own micro-batch
+
+316.24 (P7). `max_batch_tokens` sets only the batch, the most tokens handed to
+the engine in one decode call. The micro-batch, the most tokens the engine
+computes at once and the size its compute buffer is reserved for, was set to
+the same value and is now left at llama.cpp's default.
+
+Measured on the processor (i9-9900K, `CUDA_VISIBLE_DEVICES=""`, 8 threads,
+context 4096, batch 2048, a 1,031 to 1,055 token history, 3 interleaved pairs
+while other processes kept the load average at 5 to 8):
+
+| Model | Micro-batch | Compute buffer | Prefill | Decode |
+|---|---|---|---|---|
+| gemma-3-1b Q4_K_M | 2048 | 2,125 MiB | 301.9, 327.4, 217.5 tok/s | 45.4, 45.0, 43.4 tok/s |
+| gemma-3-1b Q4_K_M | default (512) | 531 MiB | 328.0, 322.0, 213.3 tok/s | 45.8, 45.8, 40.5 tok/s |
+| Llama-3.2-3B Q4_K_M | 2048 | 1,162 MiB | 139.5, 136.1, 103.1 tok/s | 18.3, 18.2, 16.3 tok/s |
+| Llama-3.2-3B Q4_K_M | default (512) | 291 MiB | 138.9, 114.1, 104.0 tok/s | 18.3, 17.3, 15.4 tok/s |
+
+Each pair ran back to back, so the pairs compare and the rows do not: the
+speed is the same within the noise of the shared machine, and the review had
+measured the same on a quieter one (140.2 to 140.6 against 141.7 tok/s on
+Llama-3.2-3B). The buffer is a quarter of the size, 0.9 to 1.6 GB less RAM at
+the default batch. On the graphics card, runs at batch 2048 did not start
+beside the user's other GPU processes (cause not measured), which is
+consistent with the larger buffer; a larger micro-batch may speed prefill on a
+card, which is not measured. Rejected: a setting of its own for the
+micro-batch, which no caller asked for.
+
+### Unset thread counts follow the processors
+
+316.8 (P3), the user's decision 317.4A. A `decode_threads` left `None` used to
+let llama.cpp decide, which is 4 threads whatever the machine, and a
+`prefill_threads` left `None` took as many. Now a `decode_threads` left `None`
+is one thread per physical core of the processors the process may run on, and
+a `prefill_threads` left `None` is as many as `decode_threads` where that is
+set, else every thread the process may run on. Each one set still wins. The
+counts are read once at load: the processors from the process's affinity
+where the system reports one, else all of them; the physical cores from each
+processor's package and core as Linux describes them under
+`/sys/devices/system/cpu`, and where that cannot be read, each thread counts
+as a core. The standard library alone reads them, so no dependency is added.
+A `prefill_threads` left `None` beside a `decode_threads` that is set keeps
+following it, as before: a caller who limits the threads limits both.
+
+The note under "Memory and quality settings", that filling the pool
+oversubscribes llama.cpp's spin-waiting workers, matches what the measurement
+below shows for prefill on every thread while the machine is busy.
+
+Measured on the processor (i9-9900K, 8 cores, 16 threads,
+`CUDA_VISIBLE_DEVICES=""`, context 4096, batch 512, a 1,031 to 1,055 token
+history, then 64 generated tokens, greedy), interleaved runs while other
+processes of the session put a load average of 1 at the start and 9 to 14 at
+the end on the machine:
+
+| Model | Threads (decode, prefill) | Prefill, tok/s, per run | Decode, tok/s, per run |
+|---|---|---|---|
+| gemma-3-1b Q4_K_M | 4, 4 (the old default) | 173.8, 172.4, 173.4 | 37.8, 37.0, 38.6 |
+| gemma-3-1b Q4_K_M | 8, 16 (the new default) | 335.6, 56.0, 51.8 | 45.1, 44.0, 43.5 |
+| gemma-3-1b Q4_K_M | 8, 8 | 327.1, 209.3, 213.8 | 45.5, 41.5, 43.4 |
+| Llama-3.2-3B Q4_K_M | 4, 4 (the old default) | 73.9, 72.9, 73.4 | 14.0, 13.8, 13.8 |
+| Llama-3.2-3B Q4_K_M | 8, 16 (the new default) | 134.8, 49.8, 51.1 | 17.0, 16.8, 16.0 |
+| Llama-3.2-3B Q4_K_M | 8, 8 | 105.0, 104.0, 133.1 | 16.4, 16.9, 16.7 |
+
+A further run of 16 against 8 prefill threads, decode on 8, 3 interleaved
+pairs at a load average of 9 to 15: gemma-3-1b 54.5, 329.2, 50.6 tok/s on 16
+threads against 213.6, 208.6, 215.7 on 8; Llama-3.2-3B 51.2, 51.7, 70.4 tok/s
+on 16 threads against 136.6, 102.7, 132.3 on 8.
+
+- Decode on the physical cores is 1.15 to 1.2 times as fast as on 4 threads,
+  under every load.
+- Prefill on every thread is 1.8 to 1.9 times as fast as on 4 threads while
+  the machine is otherwise idle, and about as fast as on the physical cores
+  then (the review measured 140.2 to 140.6 tok/s on 8 threads for
+  Llama-3.2-3B). While other processes keep the processor busy, it falls to
+  50 to 70 tok/s in 9 of 10 such runs, 0.3 times the speed of 4 threads
+  for gemma-3-1b and 0.7 to 1.0 times for Llama-3.2-3B
+  (cause not measured; it is consistent with the oversubscription above). On
+  the physical cores it stays at 1.2 to 1.9 times the speed of 4 threads
+  under every load.
+- The fall reaches the load too: the first decodes of more than one token,
+  the cache-edit checks at load, run on the prefill threads. At a load
+  average of 7 to 9, 3 runs each, a load took 1.0 to 8.6 s for gemma-3-1b and
+  1.7 to 11.1 s for Llama-3.2-3B with prefill on every thread, against 1.0 s
+  and 1.7 to 1.8 s on 8 threads and 1.0 s and 1.8 s on 4; the checks alone
+  took up to 6.9 s instead of 0.03 to 0.1 s.
+- Open: whether prefill should take the physical cores too where it is not
+  set, which loses nothing measurable on an idle machine and avoids the fall
+  on a busy one. This is the user's decision, as 317.4A chose every thread.
+
+### What a template writes in content is read in one pass
+
+316.23 (P4). `extract_content_rewrites` renders every tag text between
+numbered marks in one user message. It then tested each mark's presence and
+split the whole render twice per text, so its work grew with the number of
+tags times the render's length. It now finds the marks in order, each search
+starting where the last mark ended, and reads each text between two of them.
+A render that loses a mark, or puts them out of order, still reads as no
+rewrites. On gemma-3-1b, Llama-3.2-3B and MiniCPM5-2B the result is
+the same as before (none of them rewrites a tag); the tests pin a template
+that escapes a character and one that drops a tag.
+
+Measured on the processor (i9-9900K, `CUDA_VISIBLE_DEVICES=""`, 8 threads,
+batch 512, 3 runs each):
+
+| Model | Tag texts | Reading the rewrites, before | after | Load, before | after |
+|---|---|---|---|---|---|
+| gemma-3-1b Q4_K_M | 6,419 | 0.395-0.406 s | 0.0034-0.0035 s | 0.99-1.01 s | 0.60-0.61 s |
+| Llama-3.2-3B Q4_K_M | 261 | 0.0008-0.0009 s | 0.0002 s | 1.71-1.76 s | 1.73-1.74 s |
+
+With 20,000 texts on a render that only wraps the message, the old reading
+took 4.2 s and the new one well under the test's bound of 0.5 s.
+
+### The vocabulary is scanned for its tags in one call to the backend
+
+316.23 (P8). The context read the model's tags by asking the backend, token by
+token, whether each is one, so every token cost two Python calls around the
+one call into llama.cpp. The backend now answers for the whole vocabulary in
+one pass, with the engine call bound once; `is_special` and the scan read the
+same attributes. llama.cpp offers no call that reads the attributes of many
+tokens at once, so the call per token stays and bounds the gain.
+
+Measured on the processor (i9-9900K, `CUDA_VISIBLE_DEVICES=""`, 3 runs each,
+at load): gemma-3-1b (262,144 tokens, 6,414 tags) 0.096 to 0.100 s before and
+0.080 to 0.081 s after; Llama-3.2-3B (128,256 tokens, 256 tags) 0.048 to
+0.060 s before and 0.038 to 0.039 s after.
+
+## 2026-11-12: Review fixes of the streaming, the thought filter and the tool loop
+
+**316.2 (P2): a reply holds back only text that could begin a call or its end.**
+The generation held back the last `held_chars - 1` characters of every reply,
+`held_chars` being the longest of the call's opening, its closing and the text
+that ends a reply, on every template that defines one of these texts: 6 of the
+52 test templates, from 9 characters (llama-3.2) to 62 (kimi-k3). It now holds
+back only the longest end of the text that is the start of the opening or of
+the reply's ending, and releases it with the token that shows it is neither.
+Where the opening is plain text, it is held only where a call may open, at the
+reply's start or right after a tag, since one anywhere else is a mention and
+already passed as text. Where the opening begins with whitespace, the
+whitespace before it is held with it, as it is the opening's. The closing no
+longer counts, as it is searched for only inside a call, where nothing is
+shown. Measured on Llama-3.2-3B Q4_K_M on the processor (i9-9900K, 6 threads,
+context 4096, batch 512, greedy, `"refuse"`), six short questions, two runs
+each with `holdback2.py`: before, 2 to 10 tokens were sampled before the first
+delta, a median of 0.18 s (0.052 to 0.522 s), and "2 + 2 = 4" and "Blue" came
+only at the end; after, the first delta came after the first sampled token on
+every question, 0.051 to 0.053 s, which is the one decode before a token's text
+is yielded (P6, not changed here).
+
+**316.22 (P5): stop strings hold back only text that could begin one.** The
+answer held back its last `max(len(stop)) - 1` characters whenever stop strings
+were given. It now holds back only the longest end of the answer that is the
+start of a stop string, the same test the generation applies to a call's
+opening since 316.2, and both read it from one function in `reply_text.py`.
+Measured on gemma-3-1b-it Q4_K_M on the processor (same setup as 316.2) with
+`stop=["<|im_end|>", "User:"]`, six questions, two runs each: before, 2 to 10
+tokens were sampled before the first delta, a median of 0.11 s (0.044 to
+0.224 s); after, the first delta came after the first sampled token on every
+question, 0.022 to 0.025 s.
+
+**316.3 (I1): whether the turn's end closes a thought is read from every
+token generated.** Where a thought's closing begins with the tag that also
+ends the turn (2 of the test templates), the test whether that tag ends the
+reply read the thought filter, which is fed only the text the generation has
+already shown. While the generation still held back the thought's opening,
+the filter did not know a thought had begun, so the tag ended the reply: on
+gpt-oss, a thought under about 35 characters lost the whole answer, and a
+call written after it. 316.2 shortened the hold so far that the existing
+templates no longer meet the case, but the test still depended on what the
+stream had shown. It now feeds a thought filter of its own with every token
+generated before the one it tests, so no hold before the answer's filter can
+change where a reply ends. The test stand-in had generated every character
+of a scripted reply as plain text, never a tag as its token, which is why the
+suites missed the fault; `FakeContext(writes_tags=True)` now generates a
+scripted reply's tags as their tokens, as a model writes them, and the
+reasoning tests run a short thought, and a call after one, in that mode on
+every template that reasons.
+
+**316.9 (I4): a round that recognizes no call cannot open one with a tag.**
+Under `"refuse"`, and in the last round a registry's `max_calls` allows, the
+reply after the results was generated with calls unrecognized, so a call the
+model wrote again stayed in the answer as raw text, `<call>fn:clock{}</call>`
+on the invented template, was streamed to the caller and stored as the reply's
+text, against principle 7. The real context renders tag tokens as text, so
+this reached real callers too. Such a round now also withholds the token that
+opens a call, as `"withhold"` does, which the failure the model is told
+already assumed ("do not call again"). Where a call opens with plain text no
+token can be withheld, and a call written there still stays text; ending the
+reply at such an opening was proposed by the review and not built here.
+
+**316.29, first half (C9): a reply that goes on with a turn under `"refuse"`
+or a registry is parted from the turn's text too.** 270.10 decided that every
+reply going on with an open turn starts with a blank line where it would
+otherwise join the text before the call without whitespace. Only the
+`"yield"` and `"withhold"` path read the turn's text for that; the path that
+settles calls itself began from an empty text, so "Moment." followed by a call
+under `"yield"`, a result, and `reply(tool_call_policy="refuse")` gave
+"Done." where `"yield"` gave "\n\nDone.". Both paths now begin from what the
+model wrote in the open turn.
+
+**316.26 (I10), decided in 324.3A: under `"yield"` a call that cannot be read
+is written again in the same reply.** A reply under `"yield"` whose call could
+not be read ended there with `"unreadable_tool_call"`: the failure was written
+for the model, nothing was handed over and nothing was owed, yet the turn
+stayed open, so `reply("next")` was refused and the caller had to know to call
+`reply()` once more (against principle 6, a turn waits only for results). The
+user chose that the library go on by itself, as it does under a registry. The
+reply now generates again after such a call, reading calls as before, until
+the model makes a call that can be handed over or answers. Under a registry
+`max_calls` bounds the retries; under `"yield"` there is no call budget, so
+the generations of the reply share one `max_reply_tokens` instead, each
+generation getting what the earlier ones left, and the last one, cut by the
+cap, closes the turn with `"token_limit"`. The other options were to close the
+turn as `"refuse"` does, which takes from the model the chance to correct its
+call, or to hand the unreadable call over as an event, which leaves every
+caller a case to handle; the user chose neither. A server that called
+`reply()` again on `"unreadable_tool_call"` no longer meets that reason under
+`"yield"`.
+
+**316.16 (C4): a value written without a type mark is read by its declared
+type.** Call formats that write values bare (qwen-3-coder, minicpm-5, glm-4.7
+and 20 more of the test templates) left the parser to guess each value's type
+from its spelling, so a text argument changed before the tool ran or the
+caller saw it: `01234` became 1234 and then the text "1234", `1e5` became
+"100000.0", `nan` became "NaN", and `True` and `None` were refused as
+`wrong_arguments`. The parser now keeps such a value's spelling until the call
+is read whole, and then reads it against the declared parameter schema of the
+tool it names: where the schema asks for text and not for the literal the
+value spells, it stays text as written; otherwise, and where the tool is not
+declared, it is the literal, as before. A schema's `enum` that holds the
+spelling as text keeps it as text. The rule is applied once, at the end of
+`parse_calls`, so a `ToolCall` handed over under `"yield"` carries the same
+values a registered tool receives. Converting in the registry's readers
+instead was not taken, since a call handed over runs through no reader. A
+nested value the format writes as JSON or as a Python literal marks its own
+strings and is read as written. The registry still takes a number where text
+is asked as the text it was written as, for a JSON call that writes `42` for a
+text parameter.
+
+**316.17 (C5, C6): a request's options are checked before its question is
+written.** `sampling`, `stop` and `cancel` were first used after `reply` had
+written the question, so one of the wrong kind, such as
+`sampling={"temperature": 0.1}` or `stop=[1]`, raised there and left the
+question without a reply: the next question made two user turns in a row, or
+was refused where the template refuses that, against principle 5. `reply` now
+checks all three when it is called, as it already checked `text` and
+`max_reply_tokens`, and builds the sampling the generation draws with there,
+so the combination with the config is settled before anything is written as
+well. A bare `str` for `stop` is refused: it was read as a list of its
+letters, so `stop="END"` ended a reply at its first "E", "N" or "D". Reading
+it as one stop text instead was not taken, since the signature asks for a
+list and one way to give it is kept (design history, "One way to do each
+thing in the public interface").
+
+**316.18 (C7, K2): an add-on file's null sampling value is refused at load.**
+`"sampling": {"temperature": null}` passed the load check, since
+`Config(temperature=None)` is the unset value and valid. The wrapper's config
+then kept `None` as the model's temperature, which the sampler compares with
+a number at the first reply, and the null counted as a stated value, so the
+fields the file left out fell to the values that switch them off instead of
+llama.cpp's defaults. A null in an add-on file states nothing, and principle 2
+asks that it fail at load, so `read_addon_file` now refuses it, naming the
+file and the field; a field the file means to leave to the model is left out.
+
+**316.20 (K1), decided in 322.3A: a result JSON cannot write reaches the model
+as a failure, wherever it comes from.** `result_text` wrote results with
+`json.dumps`, which writes `NaN` and `Infinity`, so a tool returning
+`{"t": float("nan")}` handed the model text that is not JSON, while
+`_is_json` in the same file used `allow_nan=False`: two rules for one
+question. A result JSON cannot write was answered with `unwritable_result`
+where a registered tool returned it, but refused with a `ValueError` where the
+caller handed it to `inject_tool_result`. The user chose one behaviour for
+both: `result_text` now refuses `NaN` and infinity too, the registry and
+`inject_tool_result` both answer such a result with the `unwritable_result`
+failure, and `inject_tool_result` no longer raises for it but logs a warning
+on the `llama_chat` logger, so a caller still learns of it. The failure
+handed over by the caller is explained as the registry's is, telling the
+model to try again where the turn goes on under `"yield"`, and not to call
+again otherwise. The conversion happens in the wrapper, before the result
+reaches the conversation, so the conversation keeps refusing an unwritable
+result of its own callers.
+
+**316.31 (C12), decided by the user: a `ToolCall` hashes by its name and
+id.** `ToolCall` is a frozen dataclass holding its arguments as a dict, so the
+hash the dataclass generated from every field raised "unhashable type:
+'dict'", and a caller could not put calls in a set or use them as keys. It now
+hashes by `(name, id)`, which two equal calls always share, and equality stays
+the comparison of every field, so two calls of one name and id with other
+arguments are unequal and only share a hash bucket. Setting `__hash__` to
+`None`, which says plainly that a call cannot be hashed, was the other option;
+the user chose hashing.
+
+**316.28 (I12, I13): the thread that reads a reply is noted at every step,
+and the capabilities are read from the finished copy.** The wrapper noted the
+thread holding it once, when a reply's stream was first read. A stream started
+on one thread, still alive, and read on by another left the first noted, so a
+tool the reply ran on the second thread and that called back into the wrapper
+waited for the lock its own reply held, for ever, instead of being refused.
+The stream now notes the thread that takes each step as the holder while the
+reply holds the lock, and that thread's actions are refused. The holder is now
+the thread object rather than its number: a thread that has ended can pass
+its number to one started later, which was then refused as the reader though
+it never read the reply, where it should wait. `can_reason`,
+`can_turn_off_reasoning` and `can_take_system_prompt` read the template of the
+conversation's live state without the lock, so during a `begin(tools=...)`
+that later failed they answered for the template for tools, which the
+conversation never came to be written with (principle 8, readers see a
+finished copy). They now read the template the newest publication names,
+through a `published_template` the conversation gives, as `turn_open` and
+`pending_calls` already read theirs.
+
+## 2026-11-12: Review fixes to the cache and the conversation
+
+**316.30 (C11): the test stand-in reads a closing bracket tag as one tag.**
+The stand-in's tokenizer read `[INST]` as one tag but `[/INST]`,
+`[/TOOL_RESULTS]`, `[/AVAILABLE_TOOLS]` and `[/SYSTEM_PROMPT]` as letters,
+though the vocabularies of the models that write them hold each as one
+control token. Every template of that family was therefore tested with a
+tokenization no model has: a turn that went on after its result could not be
+placed, since no tag followed the result's text before the generation prompt.
+The tag pattern now reads `\[/?[A-Z_]+\]`. Nothing in the suite failed once it
+did; the paths it opened are covered by the tests of the fixes below. This
+fix was made first, before the one for 316.6, whose test on these templates
+needs it.
+
+**316.6 (C1): one rule for where a kept turn begins.** A reply that went on
+after a result kept its tokens from the end of the last text of the caller's
+own in the render with the generation prompt, while the render placed the kept
+turn from the first tag after the newest message's content. The two differ
+where the result is empty, since an empty text marks no place of its own, and
+where the template writes the calling message's text after its results. A
+turn begun again from `conversation()` after an empty result then held the
+call's closing and the result twice in the cache, on 39 of the 41 test
+templates that call tools; on the template that writes the text after the
+results, the result's closing was lost. Both places now ask the same
+function, `turn_start`, which is the first tag after the content of the
+message before the turn. `tests/test_conversations.py` begins a turn again
+after its result, empty or not, with text before the call and without, on
+every template that calls tools, and checks the cache after the reply and
+after the next question.
+
+**316.7 (C2): a turn closed for lack of room after several calls no longer
+blocks the conversation.** Where no room was left to answer the newest calls,
+the turn closed on a reply without text, kept as generated from its first
+call on. The end of such a reply was searched for only up to the first text of
+the caller's own after the turn's start, which lies inside the turn when it
+holds earlier calls and results, so the turn could not be placed and every
+later action was refused until a new `begin`. The closing is now searched for
+from the end of the message before the reply, its call or its content. Where
+a kept turn still cannot be placed, or would stand for none of the template's
+text, it is held as the template writes it instead, so that no action is
+blocked by it; the cache is then brought to the template's render. Where the
+template writes nothing of a reply left without text, as some templates
+refuse an empty reply, the turn is taken back with its question, as an empty
+reply already is, since a conversation the template refuses cannot be held.
+The end-of-test check accepts a kept turn that ends on a reply without text
+where the template's version of it ends at the closing after a reply.
+`tests/test_conversations.py` fills the context after two calls of a turn
+begun after a result, on every template that calls tools, and checks that
+the turn closes with `"token_limit"` and the next question is answered;
+before the fix it failed on 18 of the 41 templates.
+
+**316.15 (C3): a calling message's text is written once.** A turn kept as
+generated holds the text the model wrote before its call, and the template was
+also given that text as the calling message's content. A template that writes
+a calling message's text after its results, as the one the user runs in
+production does, then wrote it a second time after the result, outside the
+kept tokens, and closed the turn after it, so the reply after the result
+followed a closed turn with no header of its own. The invented template that
+writes call blocks before content did the same. The template is now given each
+calling message inside a kept turn without its text, which the turn's tokens
+already hold; the history `conversation()` returns keeps the text, so a
+restart writes it where the template writes it. The end-of-test check renders
+those messages the same way. `tests/test_conversations.py` has the model write
+text before its call on every template whose call opens with a tag, and checks
+that the text is held once before the reply after the result and before the
+next question, and that the cache before that reply ends as it does where the
+model wrote no text before its call.
+
+**316.29, second half (C10): a stop string after a result leaves nothing hidden
+in the model's memory.** A reply that went on with a turn after its result
+extended the turn's kept tokens to everything it generated, so where a stop
+string ended the answer, the cache still held the stop string and what
+followed it, text the caller never saw; a plain reply is written by the
+template up to the answer. Such a reply now leaves the turn kept up to its
+call, as a reply without text already does, and the template writes the
+result and the answer after it, so the cache holds the answer as the caller
+read it. Cutting the kept tokens back to where the stop string began was the
+other way; it was not taken, since a token may hold both the end of the answer
+and the start of the stop string, and the template's own render of the answer
+needs no such cut. `record_reply` is told by the wrapper whether a stop string
+ended the answer. `tests/test_conversations.py` ends a reply after a result
+with a stop string on every template that calls tools and checks that neither
+the cache nor the next question's prompt holds the hidden text.
+
+**316.4 (I2): a limit on exchanges drops well below it on a cache that cannot
+shift.** Where only `max_history_exchanges` bound, an eviction dropped one
+exchange, the fewest that brought the count back to the limit, so on a cache
+that cannot shift every reply from the fifth on decoded the whole
+conversation again: 591 tokens for a 565-token cache, where a cache that
+shifts decoded 75. Such an eviction now leaves `EVICT_TO_FRACTION_WITHOUT_SHIFT`
+of the limit, at least one exchange, as the token threshold already did, so
+that with a limit of 4 the cache is decoded again every third reply: 337
+tokens then, 75 on the two replies between (measured with the review's probe
+on the invented plain template, a cache that can neither shift nor cut). A
+limit of 1 still drops one exchange per reply, which no bound can avoid.
+`tests/test_conversations.py` runs sixteen replies under a limit of four on
+every template, on a cache that shifts and on one that cannot, and counts the
+replies that decode more than an exchange or two.
+
+**316.5 (I3): a question that repeats a message is rendered with the whole
+conversation before it is decoded.** A question was put in the stand-in's
+place where the template writes it there after one probe exchange. One test
+template writes its declarations before every user message that equals the
+newest one, so a question asked twice made the template write the earlier
+one otherwise. That shows only in a render of the whole conversation, which
+the splice skips: the reply streamed from a cache that was not the render,
+and only settling it then refused, after the answer had been read; with a
+call, the call could never be answered. A question whose text equals that of
+a message already in the conversation is now never spliced, so the whole
+conversation is rendered and split before the question is decoded, and a
+conversation the template cannot write is refused before anything streams.
+Rendering the whole conversation before every spliced question was the
+literal reading of the fix; it was not taken, since the probes at load
+already cover what a template does with a question's text alone, equality
+with an earlier message is what this template reads, and a whole render per
+question would undo the rendering windows ("Rendering windows"), which
+`test_a_question_waits_only_for_its_own_tokens` holds to. A template that
+reads a question's text against earlier ones in some other way, such as by
+length, would still pass unseen. `tests/test_conversations.py` asks the same
+question twice on every template, with tools where the template calls them,
+and checks that the second reply follows the render or is refused before it
+starts, the conversation unchanged.
+
+**316.11 (I6): a begin that ends on a question rests before the generation
+prompt.** A `begin` whose history ends on a user message or a result decoded
+the generation prompt with the rest and only then rested, so a cache that can
+neither shift nor cut held saved states only at its end and at its opening.
+Where the next action wrote what follows the newest message otherwise, a
+second question, or a past reply the template writes otherwise than it was
+generated, the cache went back to the opening: 645 of 670 tokens decoded again
+on the first reply after such a `begin` (measured with the review's probe on
+the qwen-3 test template). The cache now rests where the template text the
+reply follows begins, then decodes that text, and the same probe decodes 36
+tokens. Where the template writes no such text, the cache rests once, after
+decoding with the logits the reply needs: resting with no logits there made
+the reply decode its last token again, which dropped the state just saved.
+The text after the newest message's own text was chosen over the first tag of
+the reply's opening, since a template may open a reply with no tag.
+`tests/test_conversations.py` begins with twelve exchanges and a question on a
+cache that can neither shift nor cut, on every template, then answers it and
+asks another, or asks another at once, and checks that no third of the cache
+is decoded again.
+
+**316.12 (I7): a reply the template refuses to write is taken back with its
+question.** A reply whose text the template refuses was recorded, and only
+settling the cache then raised, after the text had streamed; the cache was
+left unsettled and every later question and injection was refused, since the
+template refused the conversation they would have joined. Such a reply is now
+taken back with its question, as a reply that produced nothing the template
+writes already was, and the conversation goes on from where it was before the
+question. Whether the template writes the reply is read from a render of the
+system message and the newest exchange, which the template's refusals turn on,
+so that no reply renders the whole conversation for it. `tests/test_wrapper.py`
+has the model reply with a text the invented refusing template refuses, and
+checks that the conversation is as before and the next question is answered.
+
+**316.19 (C8), as decided in 321.5B: a call without a result in the middle of
+a history stays where it was given.** `begin` writes a `ToolTurn` that a later
+question follows while it still owes a result as given, with nothing added to
+it, as the user decided. `conversation()` read the history back by collecting a
+tool turn's steps until the next reply, across the question in between, so the
+unanswered call came back after the newest question, joined to the reply that
+followed it, and a restart from that gave a different conversation. A user
+message now ends the tool turn before it, so that the turn comes back in its
+place, ending on its call or its result. `tests/test_messages.py` reads such
+histories back, with a call owed a result and with a result no reply
+followed, and `tests/test_history.py` begins again from `conversation()` after
+a reply and gets the same conversation.
+
+**Invariant 3, as decided in 329.3A: the test that beginning again gives the
+same conversation.** `tests/test_conversations.py` now begins again from
+`conversation()` at every step of a conversation on every test template, in
+each reasoning mode: after the first `begin`, after a reply, with a live call
+owed its result, with the turn open after its result, after the reply that
+closed it, after a later declaration, after a `begin` whose history holds a
+call left without a result before a later question, after the reply to that
+question, and after each of fifteen more questions, which evict the oldest
+exchanges. Each time the system prompt, the declarations and the reasoning
+setting come back the same, the messages are those saved or the newest part
+of them that a `begin` keeps, each unchanged and in its place, and
+`conversation()` then returns the same again. The steps up to the evictions
+begin again on the same wrapper, so that what follows them runs on a
+conversation begun again; the evictions begin again on a second wrapper, as a
+`begin` keeps only half the context and would otherwise keep any eviction from
+happening. A template that writes no call without its result refuses the
+history with the unanswered call, and the test checks that the refusal leaves
+the conversation as it was. Once the fixes for 316.6 and 316.19 were in, the
+test found nothing more; without the fix for 316.19 it fails on 39 of the 90
+cases.
+
+**316.14 and 316.27 (I9, I11), as decided in 320.5A: a result too long for
+the room left evicts, then is cut with a note, then closes the turn.** A
+result too long for what was left of the context was cut silently: the model
+read cut-off text as if it were whole (417 of 2410 characters in the review's
+probe), and `inject_tool_result` and the reply said nothing. Where not even an
+empty result fitted, `inject_tool_result` raised and left the call owed, so
+under `"yield"` every later action was refused until a new `begin`. Now, in
+this order: the oldest exchanges are evicted first, exactly as for a new
+question (`_drop_while_over` with the room for the reply as its limit and
+`max_history_exchanges` left out), the turn the result answers kept whole, and
+on a cache that cannot shift down to well below the room, as every eviction
+there goes; a result still too long is cut to the longest start that fits
+with `RESULT_CUT_NOTE` after it, which tells the model how many of how many
+characters it got, and its call is listed in the new `Reply.tool_results_cut`
+of the reply that follows (named after `tool_calls` and `tool_limit_reached`;
+a list of calls rather than a count, so that the caller knows which result
+was cut); and where not even a result cut to nothing fits, the turn closes as
+`close_unanswered` closes it under a registry, under `"yield"` too.
+`inject_tool_result` returns how many history items were evicted for the
+result, as `inject` does, and under a registry they count in the reply's
+`n_evicted_messages`. Under `"yield"`, a turn closed this way is not reported
+by raising: closing it is the action's outcome, and raising after changing the
+conversation would break principle 5, so `inject_tool_result` returns and
+`turn_open` is false; a raise that leaves the call owed was the old behaviour
+this replaces. The failure test of every action now lets a failed reply lose
+the oldest exchanges that a result of it evicted, as a question's eviction is
+not put back either. Tests in `tests/test_tool_loop.py` check the eviction on
+a cache that shifts and one that cannot, the cut and its note under `"yield"`
+and under a registry, and the closed turn under `"yield"`;
+`tests/test_failures.py` checks that the conversation goes on after it.
+
+**316.10 (I5): a tag typed into a tool's description stays text.** The marker
+render marked only the texts of messages, so a declaration went into the
+cache tokenized with the template's tags read, and a tag typed into a tool's
+description was decoded as the model's own token on 41 of the 52 test
+templates (the review's probe, with the end-of-sequence tag). Tool
+descriptions often come from third parties. The marker render now also marks
+every `description` of a declaration, at any depth of its parameters, so that
+a description is the caller's own text and is tokenized as text, as a message
+is. Only descriptions are marked: a template reads a declaration's names,
+types and enum values to decide what it writes, as one writes a parameter
+differently by its type, and a marker in their place would change the render
+around them; they are names a caller chooses, not prose taken from elsewhere.
+The render as it is shares its memo with every other render, so a split
+renders no more than before. `tests/test_conversations.py` types the tag into
+a tool's description and a parameter's description on every template that
+calls tools, beside the texts it already covered, and checks every token of
+the cache against a tokenization worked out in the test.
+
+**316.13 (I8): the end-of-test check compares tokens.** The check every test
+on the stand-in cache ends with compared what the cache spells with the
+template's render, so a cache that held every template tag as its letters,
+or a tag typed into a message as the model's own token, read the same and
+passed. It now spells both sides so that a tag reads otherwise than its
+letters: the cache from its tokens, each of the model's tags set apart, and
+the render from a marker render worked out in the test, the template's text
+tokenized with its tags read and each text of the caller's as plain text (a
+content, a thought, a call's name and string arguments, a declaration's
+descriptions). Everything around a kept turn is compared so; the bounds of a
+kept turn are still found by its characters, since the stand-in writes some
+of a call's tags as text, as a model may. The marker render was
+`_expected_tokens` of `tests/test_conversations.py`, which now uses the same
+function. `tests/test_cache_check.py` shows the check failing on a cache that
+reads the same with its tags held as letters, in a plain conversation, one
+that reasons and one with a kept turn, and on one with a typed tag held as the
+model's. The check renders each candidate twice now, which made the suite
+take about 134 seconds instead of 120 on the development machine.
