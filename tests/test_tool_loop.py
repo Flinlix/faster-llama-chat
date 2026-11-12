@@ -126,6 +126,21 @@ def test_a_call_refused_without_tools_still_lets_the_reply_go_on():
     assert wrapper.reply("und sonst?").finish().stop_reason == "end_of_turn"
 
 
+@pytest.mark.parametrize("policy", ["refuse", "registry"])
+def test_a_reply_that_may_call_no_more_cannot_open_a_call_with_its_tag(policy):
+    """A call the reply would not recognize is never drawn, so its tags never reach the answer."""
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona")
+    fake.call_script = ["fn:clock{}", "fn:clock{}"]
+    options = {"tool_call_policy": registry, "max_calls": 1} if policy == "registry" else {}
+    shown = "".join(e for e in wrapper.reply("wie spät?", **options) if isinstance(e, str))
+    assert shown == "reply"
+    assert fake.call_script == ["fn:clock{}"]       # the second call was never drawn
+    assert rows(wrapper)[-1]["text"] == "reply"
+
+
 def test_the_refusal_reaches_the_model_as_a_result_block():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
@@ -837,7 +852,7 @@ def test_retrying_an_unreadable_call_is_bounded_by_the_ceiling():
 
     wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=3).finish()
 
-    assert len(fake.call_script) == 16               # three tries, then one left as text
+    assert len(fake.call_script) == 17               # three tries, then none drawn
     assert not wrapper.turn_open
 
 
@@ -849,7 +864,7 @@ def test_a_refusing_reply_does_not_retry_an_unreadable_call():
 
     wrapper.reply("wie spät?").finish()
 
-    assert len(fake.call_script) == 3                # one try, then one left as text
+    assert len(fake.call_script) == 4                # one try, then none drawn
     assert not wrapper.turn_open
 
 
@@ -868,7 +883,7 @@ def test_a_ceiling_of_zero_binds_an_unreadable_call_too():
     reply = wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=0).finish()
 
     assert reply.tool_limit_reached
-    assert len(fake.call_script) == 3                # no retry: the next is left as text
+    assert len(fake.call_script) == 4                # no retry: none drawn after it
     assert not wrapper.turn_open
 
 

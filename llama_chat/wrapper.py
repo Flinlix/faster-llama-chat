@@ -258,9 +258,11 @@ class ChatWrapper:
                   entirely; see design_history.md, "Second structure review".
                 * ``"refuse"``: nothing is run, not even a tool that was
                   declared. The call is kept out of the text, the model is
-                  told no tool can be run, and the reply goes on, a blank line
-                  parting the text before the call from the text after it
-                  where they would join without whitespace.
+                  told no tool can be run, and the reply goes on without
+                  drawing the token that opens a call, as under
+                  ``"withhold"``, a blank line parting the text before the
+                  call from the text after it where they would join without
+                  whitespace.
                 * ``"yield"``: each call is handed over as a
                   :class:`~llama_chat.tools.ToolCall` after the text, and the
                   turn stays open. Answer each with :meth:`inject_tool_result`,
@@ -270,9 +272,9 @@ class ChatWrapper:
                 * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
-                  stream just before it runs. In the last permitted round a
-                  call the model writes is not recognized and stays text, so
-                  the turn always closes.
+                  stream just before it runs. In the last permitted round the
+                  token that opens a call is never drawn, as under
+                  ``"withhold"``, so the turn always closes.
             max_calls: Where a registry is given, how many calls one turn may
                 use, each call handed over counted. ``None`` sets no ceiling, or,
                 going on with a turn, keeps what is left of the turn's; a call
@@ -659,10 +661,9 @@ class ChatWrapper:
                         any_call_asked = True
                         if registry is not None and budget.calls_left > 0:
                             budget.calls_left -= 1
-                        deltas = self._generate(
-                            None,
-                            recognizes_calls=registry is not None and budget.calls_left > 0,
-                            may_call_again=may_call_after_unreadable(), **kwargs)
+                        deltas = self._generate_round(
+                            registry is not None and budget.calls_left > 0,
+                            may_call_after_unreadable(), **kwargs)
                         continue
                     # The ceiling binds only once a call has been asked for:
                     # without one the last generation kept its call tokens.
@@ -682,10 +683,16 @@ class ChatWrapper:
                         generations[-1], stop_reason="token_limit",
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
-                deltas = self._generate(None, recognizes_calls=may_call_again,
-                                        may_call_again=may_call_after_unreadable(), **kwargs)
+                deltas = self._generate_round(may_call_again, may_call_after_unreadable(), **kwargs)
         finally:
             deltas.close()
+
+    def _generate_round(self, recognizes_calls: bool, may_call_again: bool,
+                        **kwargs) -> Generator[str, None, Reply]:
+        """Go on with the open turn after a round of results; one that recognizes no call cannot open one with a tag."""
+        return self._generate(None, recognizes_calls=recognizes_calls,
+                              may_call_again=may_call_again, withhold=not recognizes_calls,
+                              **kwargs)
 
     def _read_generation(self, deltas: Generator[str, None, Reply], after: str):
         """Yield one generation's text, and return the :class:`Reply` describing it.
