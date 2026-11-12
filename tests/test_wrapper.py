@@ -610,7 +610,7 @@ def test_a_dropped_stretch_is_found_among_token_ids_up_to_the_bound_the_readme_n
 
 
 def test_eviction_rebuild_mode_when_cache_cannot_shift():
-    # Cache cannot shift: eviction drops oldest from bookkeeping and re-prefills.
+    # A cache that cannot shift goes back to a saved state or is decoded again.
     fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
     w.begin("s")
@@ -618,11 +618,11 @@ def test_eviction_rebuild_mode_when_cache_cannot_shift():
     for i in range(8):
         w.reply(f"message number {i} with some length").finish()
         roles = [s["role"] for s in rows(w)]
-        assert roles[0] == "system"             # system survives
-        assert w.total_tokens <= w.config.context_size   # never overflows
+        assert roles[0] == "system"
+        assert w.total_tokens <= w.config.context_size
         assert_consistent(w, fake)             # the cache as recorded after it is brought back
-    assert fake.edit_count("shift") == 0             # shift path never used
-    assert fake.resets + fake.edit_count("restore") > resets_after_begin   # brought back instead
+    assert fake.edit_count("shift") == 0
+    assert fake.resets + fake.edit_count("restore") > resets_after_begin
 
 
 def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():

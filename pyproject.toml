@@ -14,8 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# The dataclasses use PEP 604 `X | None` annotations evaluated at runtime by
-# @dataclass (needs 3.10+); 3.11 is the oldest version the package is tested on.
+# 3.11 is the oldest version the package is tested on.
 requires-python = ">=3.11"
 dependencies = [
     # Build llama-cpp-python from source per machine (see install.sh):

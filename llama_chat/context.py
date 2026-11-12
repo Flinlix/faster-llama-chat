@@ -17,7 +17,7 @@ from .cache_context import TOOL_USE_TEMPLATE
 from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling
 from .model_template import ModelTemplate
 
-SEQ = 0  # single active conversation -> single sequence id
+SEQ = 0  # the one sequence id, there being one conversation
 # The GGUF keys that state the sampling a model recommends, by Sampling's names.
 _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
                        "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
@@ -192,7 +192,7 @@ class KVContext:
             tok = 0
         for tokens in ([tok] * 2, [tok]):
             self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
-            self.reset()  # kv_clear -> cache empty again for the real prefill
+            self.reset()  # empty again before the conversation's first prefill
 
     def apply_eviction(self, start: int, end: int) -> None:
         """Remove the evicted tokens, then shift survivors to close the gap.

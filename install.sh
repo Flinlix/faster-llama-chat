@@ -6,9 +6,6 @@
 #   ./install.sh --cuda    force the Nvidia GPU build
 #   add --dev to any of the above to also install test dependencies
 #
-# The current llama_chat package imports the `llama_cpp` module (the pip package,
-# which bundles its own llama.cpp). It does NOT use a separate llama.cpp clone.
-#
 # Why build from source: the prebuilt wheel targets a baseline instruction set and
 # ships no CUDA. GGML_NATIVE=ON compiles with -march=native so the CPU's own
 # kernels are used; GGML_CUDA=on compiles the CUDA backend so layers can offload.
