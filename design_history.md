@@ -2588,3 +2588,15 @@ changed: its first reply now answers the injected message, and the questions
 follow that reply. Run on the CPU with Gemma 3 1B, which refused before, and
 with Llama 3.2 3B: both finish, and each reply decodes only its own new
 tokens.
+
+**307.2A: the stand-in keeps its token ids where a context may have them.** A
+context of one's own must hand out ids from -65,536 to 1,048,575 (270.24),
+but the stand-in, asked to generate tokens that spell no character's own
+(`tokens_spell_text=False`), numbered them from just past the last code
+point, outside that range. The search for a dropped stretch could then have
+failed on the stand-in where it never fails on a context that keeps the rule.
+Those ids now count up from -65,536, the lowest id allowed, towards the tags,
+which count down from -3; the stand-in asserts that the two never meet. A
+test collects every id the stand-in hands out in a conversation, those it
+draws, those the cache holds and its tags, and checks each against the range
+the search can spell, which it reads from the library rather than restating.

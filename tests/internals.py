@@ -5,8 +5,15 @@ change that keeps the behaviour changes this module alone.
 """
 
 import dataclasses
+import sys
 
+from llama_chat.cache_sync import _TOKEN_OFFSET
 from llama_chat.resolved_template import ResolvedTemplate
+
+
+def token_id_range() -> range:
+    """The token ids a cache context may hand out: those the search for a dropped stretch can spell."""
+    return range(-_TOKEN_OFFSET, sys.maxunicode - _TOKEN_OFFSET + 1)
 
 
 # ----- the tokens the wrapper holds the cache to be ----------------------------------

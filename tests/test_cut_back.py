@@ -1,7 +1,5 @@
 """Cutting the newest reply back, and the saved states a cache that cannot shift returns to."""
 
-import sys
-
 import pytest
 
 from llama_chat.config import Config
@@ -10,6 +8,7 @@ from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
+from tests.internals import token_id_range
 from tests.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
                             reasoning_wrapper, rendered_reply, rows)
@@ -36,8 +35,27 @@ def test_a_reply_generated_in_other_pieces_than_its_text_tokenizes_into_is_kept_
     w, fake = begun_wrapper(gen_tokens=4, gen_text="ok!!", tokens_spell_text=False)
     reply = w.reply("hi").finish()
     assert rendered_reply(fake, "ok!!") in held_text(fake)
-    assert max(fake.cache) <= sys.maxunicode          # none of the generated ids is kept
+    assert not any(fake.is_generated_only(token) for token in fake.cache)   # none is kept
     assert reply.text == "ok!!"
+
+
+@pytest.mark.parametrize("spelled", [True, False], ids=["spelling-text", "other-pieces"])
+def test_every_token_id_the_stand_in_hands_out_lies_where_a_context_may_have_one(spelled):
+    w, fake = begun_wrapper(gen_tokens=40, gen_text="Ein langer Satz, der viele Token braucht.",
+                            tokens_spell_text=spelled)
+    sampled, drawn = fake.sampled_tokens, []
+
+    def recorded(*args, **kwargs):
+        for token in sampled(*args, **kwargs):
+            drawn.append(token)
+            yield token
+
+    fake.sampled_tokens = recorded
+    for question in ("eins", "zwei", "drei"):
+        w.reply(question).finish()
+    handed_out = set(drawn) | set(fake.cache) | set(fake.special_tokens())
+    assert handed_out <= set(token_id_range())
+    assert spelled or any(fake.is_generated_only(token) for token in drawn)
 
 
 def test_a_model_that_ships_no_chat_template_is_refused_at_load():

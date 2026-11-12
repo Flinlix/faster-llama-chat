@@ -72,9 +72,9 @@ TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[[
 BOS = -1
 END_OF_GENERATION = -2
 _FIRST_TAG = -3
-# Where the ids of generated tokens that spell no character's own start: past
-# every character's code point.
-_FIRST_GENERATED = sys.maxunicode + 1
+# Where the ids of generated tokens that spell no character's own start: the
+# lowest id a context may hand out, counting up towards the tags.
+_FIRST_GENERATED = -0x10000
 
 
 class ScriptedCall:
@@ -381,8 +381,13 @@ class FakeContext:
             token = ord(ch)
         else:
             token, self._next_generated = self._next_generated, self._next_generated + 1
+            assert token < _FIRST_TAG - len(self._tag_ids), "generated ids ran into the tags"
         self._generated_chars[token] = ch
         return token
+
+    def is_generated_only(self, token: int) -> bool:
+        """Whether ``token`` is an id only a generation hands out, which no tokenization gives."""
+        return _FIRST_GENERATED <= token < _FIRST_TAG - len(self._tag_ids)
 
     # ----- what was asked of it ------------------------------------------------------
     def total_prefilled(self) -> int:
