@@ -942,7 +942,8 @@ class ChatWrapper:
         # Given to a template that writes a past reply's thought; another is written without it.
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         return self._conversation.record_reply(
-            answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again))
+            answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again),
+            stopped=reply_text.met_stop_string)
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.

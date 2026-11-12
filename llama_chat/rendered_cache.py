@@ -489,7 +489,7 @@ class RenderedCache:
         return self._memory.generate(max(0, min(max_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
-                     called: bool, unreadable_result: dict) -> int:
+                     called: bool, unreadable_result: dict, stopped: bool = False) -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -512,6 +512,8 @@ class RenderedCache:
             calls: What it called, each owed a result.
             called: Whether it stopped on a call, read or not.
             unreadable_result: What a call that could not be read is answered with.
+            stopped: Whether a stop string ended the answer, so that what was
+                generated from it on is no reply's.
 
         Returns:
             How many history items were dropped.
@@ -532,9 +534,10 @@ class RenderedCache:
             message["reasoning_content"] = thought
         if asked:
             self._state.n_calls += len(asked)
-        # A reply with neither text nor call has nothing to place its end by: a turn
-        # kept so far stays kept up to its call, and the rest is the template's.
-        if (called or resumed) and (answer or asked):
+        # A reply with neither text nor call has nothing to place its end by, and one a stop
+        # string ended holds what was generated after it: a turn kept so far stays kept up to
+        # its call, and the rest is the template's.
+        if (called or resumed) and (answer or asked) and not stopped:
             first, open_turn = message, self._open_kept() if resumed else None
             if open_turn is not None:
                 # The whole turn is kept, its results and their prompt included.

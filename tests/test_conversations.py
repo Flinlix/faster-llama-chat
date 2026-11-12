@@ -954,6 +954,24 @@ def test_text_a_model_writes_before_its_call_is_held_once_and_its_turn_goes_on_o
     assert run.seen[1].endswith(plain.seen[1][len(plain.seen[1].rsplit("sunny", 1)[0]):])
 
 
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_reply_a_stop_string_ends_after_a_result_leaves_nothing_after_it_in_the_cache(stem):
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+    run = _Run(stem)
+    run.context.replies = [ScriptedCall(body)] + _as_generated(
+        probe.template, ["Sunny. HIDDEN tail", ANSWERS[0]], False)
+    run.begin(tools=[WEATHER])
+    call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    run.chat.inject_tool_result(call, "sunny")
+    reply = run.chat.reply(stop=["HIDDEN"]).finish()
+    assert reply.stop_reason == "stop_string" and "HIDDEN" not in reply.text
+    assert "HIDDEN" not in run.context.text_of(run.context.cache)
+    run.chat.reply(QUESTIONS[0]).finish()
+    assert "HIDDEN" not in run.seen[-1]
+
+
 def _calling_again(stem, context_size=4096, min_reply_tokens=8):
     """A run on ``stem`` begun with a turn open after a result, whose model calls the weather tool twice and then answers."""
     probe = _Run(stem)
