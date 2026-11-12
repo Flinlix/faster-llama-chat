@@ -706,7 +706,8 @@ class RenderedCache:
             owed_after = [result_message(later.name, later_id, _cut(text, 0))
                           for later, later_id in waiting[1:]]
             self._state.messages += [message, *owed_after]
-            dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True)
+            dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True,
+                                            beside_open_turn=True)
             at = len(self._state.messages) - len(owed_after) - 1
             if not self._fits(at, text, room):
                 if not text or not self._fits(at, _cut(text, 0), room):
@@ -1097,7 +1098,7 @@ class RenderedCache:
         return self._config.context_size - self._config.min_reply_tokens
 
     def _drop_while_over(self, limit: int, generation_prompt: bool, newest_too: bool = False,
-                         tokens_only: bool = False) -> bool:
+                         tokens_only: bool = False, beside_open_turn: bool = False) -> bool:
         """Drop the oldest exchanges once the conversation renders longer than ``limit`` or holds too many; whether any went.
 
         Where the cache cannot shift, they go until the history is well below
@@ -1108,6 +1109,9 @@ class RenderedCache:
         Args:
             tokens_only: Leave ``max_history_exchanges`` out, which may keep
                 nothing on purpose.
+            beside_open_turn: Where the open turn alone leaves the history no
+                room well below ``limit``, measure that room beside the turn,
+                so that a long result in it drops only the history it needs.
         """
         def over(bound, most):
             return (self._rendering.length(self._state.messages, generation_prompt) > bound
@@ -1115,22 +1119,34 @@ class RenderedCache:
 
         if not over(limit, self._config.max_history_exchanges):
             return False
-        bound, most, dropped = self._drop_bound(limit), self._exchanges_after_drop(), False
+        bound, most = self._drop_bound(limit, beside_open_turn), self._exchanges_after_drop()
+        dropped = False
         while over(bound, most) and self._drop_oldest_exchange(newest_too):
             dropped = True
         return dropped
 
-    def _drop_bound(self, limit: int) -> int:
+    def _drop_bound(self, limit: int, beside_open_turn: bool = False) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.
 
         Where the cache cannot shift, what a short question alone takes and
         that fraction of the room after it, so that history is kept however
         long the system turn and wherever the template writes declarations.
+        With ``beside_open_turn``, where the open turn alone goes past that,
+        what the open turn takes with the system turn and that fraction of
+        the room after them.
         """
         if self._context.can_shift:
             return limit
         system = min(self._with_a_short_question(), limit)
-        return system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
+        bound = system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
+        if beside_open_turn:
+            starts = exchange_starts(self._state.messages)
+            open_turn = self._state.messages[starts[-1] if starts else len(self._system_part()):]
+            alone = min(self._rendering.length(self._system_part() + open_turn,
+                                               generation_prompt=True), limit)
+            if alone > bound:
+                return alone + int((limit - alone) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
+        return bound
 
     def _exchanges_after_drop(self) -> int | None:
         """How many exchanges an eviction leaves once there are more than ``max_history_exchanges``.

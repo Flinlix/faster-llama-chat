@@ -427,6 +427,83 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     assert evicted
 
 
+_PADDED_HISTORY = [item for n in range(12) for item in (
+    ("user", f"Question {n} " + "w" * 30), ("assistant", f"Answer {n} " + "v" * 30))]
+
+
+def _weather_run(stem, can_shift, turns):
+    """A run on ``_PADDED_HISTORY`` whose model calls the weather tool, then answers, ``turns`` times."""
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+    run = _Run(stem, context_size=6000, can_shift=can_shift)
+    run.context.replies = [reply for _ in range(turns) for reply in
+                           [ScriptedCall(body)] + _as_generated(probe.template, ["Sunny."], False)]
+    run.begin(_PADDED_HISTORY, tools=[WEATHER])
+    return run
+
+
+def _called(run, question):
+    call, = [e for e in run.chat.reply(question, tool_call_policy="yield") if isinstance(e, ToolCall)]
+    return call
+
+
+def _longer_than_the_room_left(run):
+    return "y" * (run.chat.config.context_size - run.chat.config.min_reply_tokens
+                  - run.chat.total_tokens + 100)
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_result_longer_than_the_room_left_drops_only_part_of_the_history_of_a_cache_that_cannot_shift(
+        stem):
+    run = _weather_run(stem, can_shift=False, turns=1)
+    held = len(run.chat.conversation()["messages"])
+    evicted = run.chat.inject_tool_result(_called(run, "Weather in Bonn?"),
+                                          _longer_than_the_room_left(run))
+    assert 0 < evicted < held
+    run.chat.reply(tool_call_policy="yield").finish()
+    assert "Question 11" in run.seen[-1]        # the reply to the result reads the newest history
+
+
+def _declares_after_the_history(stem):
+    """Whether the template writes the declarations after the history, before the newest question."""
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    written = run.render([{"role": "user", "content": "First?"},
+                          {"role": "assistant", "content": "First answer."},
+                          {"role": "user", "content": "Second?"}], [WEATHER])
+    return written.find(WEATHER.description) > written.find("First answer.")
+
+
+# On a cache that can neither shift nor cut, a template that moves its declarations
+# to each newest question decodes every tool turn of the conversation again each turn.
+_MOVED_DECLARATIONS_REDECODE = pytest.mark.xfail(
+    strict=True, reason="a tool turn's saved states push out the one before the declarations")
+
+
+@pytest.mark.parametrize("stem, can_cut", [
+    pytest.param(stem, can_cut, id=f"{stem}-{'cuts' if can_cut else 'neither'}",
+                 marks=[] if can_cut or not _declares_after_the_history(stem)
+                 else [_MOVED_DECLARATIONS_REDECODE])
+    for stem in _TOOL_TEMPLATES for can_cut in (True, False)])
+def test_results_that_need_room_decode_a_cache_that_cannot_shift_again_only_every_few_turns(
+        stem, can_cut):
+    turns, costs = 8, {}
+    for can_shift in (True, False):
+        run = _weather_run(stem, can_shift, turns)
+        run.context.can_cut_tail = can_cut
+        costs[can_shift] = []
+        for k in range(turns):
+            before = run.context.total_prefilled()
+            call = _called(run, f"Weather {k} in Bonn?")
+            result = _longer_than_the_room_left(run) if k % 4 == 3 else "sunny"
+            run.chat.inject_tool_result(call, result)
+            run.chat.reply(tool_call_policy="yield").finish()
+            costs[can_shift].append(run.context.total_prefilled() - before - len(result))
+    exchange = _exchange_length(_Run(stem), QUESTIONS[0], ANSWERS[0])
+    over = [k for k in range(turns) if costs[False][k] > costs[True][k] + 2 * exchange + 80]
+    assert len(over) <= math.ceil(turns / 3), costs
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)
