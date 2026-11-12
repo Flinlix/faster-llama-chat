@@ -2713,3 +2713,10 @@ word followed by a version, as `granite-4` or `spark-x2`, while as a part of
 a longer name it passes. Since the parts of a model's own compound name, such
 as one made of two everyday words, would now pass, every model file's own
 name is read as a name too, found whole or between separators inside a word.
+
+**T2: a test template's file holds only the keys the tests know.** A key a
+file leaves out holds the value most templates have, so a misspelled key was
+read as left out, and its value silently fell back to that default. A test now
+checks that each file states every key a file must and no key outside the
+ones the tests and the stand-in context read. The tag keys the name check
+reads lost `bos_token`, which no file states and nothing reads.

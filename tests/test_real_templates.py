@@ -18,7 +18,7 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolRegistry
 
-from .chat_templates import STEMS, WEATHER, expected, fixture
+from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
 from .fake_context import FakeContext, call_marks, shipped_addon_call, written_call
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
@@ -32,6 +32,12 @@ def _load(stem):
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
     return context, ResolvedTemplate(context, shipped_addon_call(fixture(stem)["chat_template"]))
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_a_test_templates_file_states_every_key_it_must_and_no_unknown_one(stem):
+    keys = set(fixture(stem))
+    assert not sorted(REQUIRED_KEYS - keys) and not sorted(keys - KNOWN_KEYS)
 
 
 @pytest.mark.parametrize("stem", STEMS)

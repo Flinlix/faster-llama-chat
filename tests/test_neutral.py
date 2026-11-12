@@ -205,7 +205,7 @@ def test_the_library_its_engine_and_an_everyday_word_are_not_taken_for_a_model(w
 
 
 # The keys of a test template's file whose value is one of the template's tags.
-_TAG_KEYS = ("eos_token", "bos_token", "turn_end_token", "call_closing_tag")
+_TAG_KEYS = ("eos_token", "turn_end_token", "call_closing_tag")
 
 
 def _stated_tags(known: dict) -> set[str]:
