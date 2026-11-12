@@ -11,6 +11,16 @@ from llama_chat.tools import ToolCall, ToolRegistry
 from tests.wrappers import system_turn, tool_wrapper
 
 
+# ----- a call --------------------------------------------------------------
+def test_a_call_may_be_kept_in_a_set_or_as_a_key_and_equals_only_a_call_with_every_field_equal():
+    call = ToolCall("weather", {"city": "Bonn"}, id="call00000")
+    same = ToolCall("weather", {"city": "Bonn"}, id="call00000")
+    other_arguments = ToolCall("weather", {"city": "Köln"}, id="call00000")
+    assert {call, same} == {call} and {call: 1}[same] == 1
+    assert hash(call) == hash(same)
+    assert call != other_arguments and len({call, other_arguments}) == 2
+
+
 # ----- the forms of the decorator ------------------------------------------
 def test_a_bare_decorator_describes_the_tool_by_its_docstring():
     registry = ToolRegistry()

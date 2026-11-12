@@ -52,6 +52,9 @@ class ToolSpec:
 class ToolCall:
     """One call a model asked for.
 
+    It may be kept in a set or used as a dict key, and equals another call
+    only where every field does.
+
     Attributes:
         name: The function named. Nothing here checks that it exists.
         arguments: What it was called with, by keyword.
@@ -73,6 +76,10 @@ class ToolCall:
     id: str = ""
     status: ToolCallStatus = "complete"
     text: str = ""
+
+    def __hash__(self) -> int:
+        """By name and id, which two equal calls share."""
+        return hash((self.name, self.id))
 
 
 def ensure_names_unique(specs: list[ToolSpec]) -> None:
