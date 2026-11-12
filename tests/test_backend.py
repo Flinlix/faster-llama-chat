@@ -681,6 +681,17 @@ def test_set_kv_cache_on_gpu_bool_build(enable):
     assert cparams.offload_kqv is enable
 
 
+@pytest.mark.parametrize("max_batch_tokens", [8, 512, 2048])
+def test_the_batch_is_the_callers_and_the_micro_batch_stays_the_engines(max_batch_tokens):
+    created = []
+    backend = Backend.__new__(Backend)
+    backend._llama_cpp = llama_cpp
+    backend._new_ctx = lambda model, cparams: created.append(cparams) or "ctx"
+    backend.new_context("model", 4096, None, max_batch_tokens)
+    assert created[0].n_batch == max_batch_tokens
+    assert created[0].n_ubatch == llama_cpp.llama_context_default_params().n_ubatch
+
+
 # ----- the sampler chain per generation ------------------------------------
 def test_every_generation_draws_from_a_chain_of_its_own_freed_when_it_ends():
     """No chain outlives its generation, so penalties and a seed start afresh in each."""

@@ -211,7 +211,6 @@ class Backend:
         cparams = self._llama_cpp.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
-        cparams.n_ubatch = n_batch
         if n_threads:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads
