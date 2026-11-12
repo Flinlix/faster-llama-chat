@@ -13,9 +13,12 @@ template takes are driven too.
 import datetime as real_datetime
 import json
 import math
+import os
+import sys
 
 import pytest
 
+import llama_chat
 from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.messages import as_messages
 from llama_chat.reply_text import begins_in_thought
@@ -476,6 +479,58 @@ def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
     # The first two replies follow no window yet; every later one is settled in one.
     assert whole <= 2
+
+
+def _library_steps_per_token(run, stream, length):
+    """How many bytecode steps the library takes for each of the ``length`` tokens ``stream`` generates on ``run``."""
+    steps, at_each_token = 0, []
+
+    def count(frame, event, arg):
+        nonlocal steps
+        steps += event == "opcode"
+        return count
+
+    def enter(frame, event, arg):
+        if frame.f_code.co_filename.startswith(_LIBRARY):
+            frame.f_trace_opcodes = True
+            return count
+        return None
+
+    decode_generated = run.context.decode_generated
+
+    def decode_counted(tokens, pos):
+        at_each_token.append(steps)
+        sys.settrace(enter if len(at_each_token) < length else None)
+        decode_generated(tokens, pos)
+
+    run.context.decode_generated = decode_counted
+    try:
+        for _ in stream:
+            pass
+    finally:
+        sys.settrace(None)
+    return [later - earlier for earlier, later in zip(at_each_token, at_each_token[1:])]
+
+
+_LIBRARY = os.path.dirname(llama_chat.__file__)
+
+
+@pytest.mark.parametrize("stem, reasoning, policy", [
+    pytest.param(*mode.values, policy, id=f"{mode.id}-{policy}")
+    for mode in _each_mode(sorted(_FIXTURES))
+    for policy in (("refuse", "registry", "yield") if mode.values[0] in _TOOL_TEMPLATES else ("refuse",))])
+def test_a_long_reply_costs_no_more_per_token_at_its_end_than_at_its_start(stem, reasoning, policy):
+    length = 400
+    run = _Run(stem, context_size=length + 4000, reasoning=reasoning)
+    run.context.replies = []
+    run.context.gen_tokens = length
+    run.context.gen_text = ("word, " * length)[:length]
+    run.begin(tools=[WEATHER] if _FIXTURES[stem]["calls_tools"] else None)
+    steps = _library_steps_per_token(run, run.chat.reply(
+        "Hi", tool_call_policy=ToolRegistry() if policy == "registry" else policy), length)
+    assert len(steps) == length - 1
+    start, end = steps[length // 8:length // 4], steps[-length // 8:]
+    assert sum(end) / len(end) <= 1.1 * sum(start) / len(start)
 
 
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
@@ -1213,7 +1268,6 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     assert run.seen_tokens[-1] == _expected_tokens(run, asked, tools)
 
 
-# ----- a call that opens with plain text ---------------------------------------------
 _TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opening_text")]
 
 

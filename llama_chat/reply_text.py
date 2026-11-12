@@ -281,9 +281,9 @@ def earliest(text: str, needles: list[str], search_from: int = 0) -> int | None:
     return found
 
 
-def partial_match_at(text: str, needle: str, search_from: int = 0) -> int:
-    """Where the longest end of ``text`` from ``search_from`` on that begins ``needle`` starts, ``len(text)`` where none does."""
-    for at in range(max(search_from, len(text) - len(needle) + 1), len(text)):
+def partial_match_at(text: str, needle: str) -> int:
+    """Where the longest end of ``text`` that begins ``needle`` starts, ``len(text)`` where none does."""
+    for at in range(max(0, len(text) - len(needle) + 1), len(text)):
         if needle.startswith(text[at:]):
             return at
     return len(text)
@@ -299,13 +299,18 @@ class _AnswerStops:
     def __init__(self, stops: list[str]) -> None:
         self._stops = [s for s in stops if s]
         self._held = ""
-        self.text = ""
+        self._passed: list[str] = []
         self.stopped = False
+
+    @property
+    def text(self) -> str:
+        """The answer passed on so far."""
+        return "".join(self._passed)
 
     def feed(self, piece: str) -> str:
         """The part of ``piece`` that is certainly answer, possibly empty."""
         if not self._stops:
-            self.text += piece
+            self._passed.append(piece)
             return piece
         self._held += piece
         hit = earliest(self._held, self._stops)
@@ -326,5 +331,5 @@ class _AnswerStops:
 
     def _pass(self, shown: str, held: str) -> str:
         self._held = held
-        self.text += shown
+        self._passed.append(shown)
         return shown

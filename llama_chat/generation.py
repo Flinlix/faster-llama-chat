@@ -6,6 +6,7 @@ context answers, so it runs the same over any of them.
 
 from __future__ import annotations
 
+import bisect
 import codecs
 import threading
 from collections.abc import Callable, Generator, Iterator
@@ -17,32 +18,65 @@ from .template import CallBoundary
 
 
 class _TextBuffer:
-    """Decoded text with a cursor tracking how much has been emitted."""
+    """Decoded text with a cursor tracking how much has been emitted.
+
+    Positions count from the text's start, but only the text not yet emitted
+    is kept, so no step costs more as the text grows.
+    """
 
     def __init__(self) -> None:
-        self._buf = ""
+        self._kept = ""             # the text from ``_emitted`` on
         self._emitted = 0
+        self._content_end = 0       # where the whole text ends, trailing whitespace left out
+        self._emitted_content_end = 0   # the same for the emitted text
 
     def append(self, text: str) -> None:
-        self._buf += text
+        stripped = text.rstrip()
+        if stripped:
+            self._content_end = len(self) + len(stripped)
+        self._kept += text
 
     def emit(self, upto: int) -> str | None:
-        if upto > self._emitted:
-            delta = self._buf[self._emitted:upto]
-            self._emitted = upto
-            return delta
-        return None
+        if upto <= self._emitted:
+            return None
+        delta, self._kept = self._kept[:upto - self._emitted], self._kept[upto - self._emitted:]
+        stripped = delta.rstrip()
+        if stripped:
+            self._emitted_content_end = self._emitted + len(stripped)
+        self._emitted = upto
+        return delta
+
+    def find(self, needles: list[str], search_from: int) -> int | None:
+        """Where the earliest of ``needles`` begins at or after ``search_from``, or ``None``."""
+        found = earliest(self._kept, needles, max(0, search_from - self._emitted))
+        return None if found is None else self._emitted + found
+
+    def startswith(self, prefix: str, at: int) -> bool:
+        return self._kept.startswith(prefix, at - self._emitted)
+
+    def since(self, at: int) -> str:
+        """The text from ``at`` on, which must not be emitted yet."""
+        assert at >= self._emitted, "the text before the cursor is no longer kept"
+        return self._kept[at - self._emitted:]
+
+    def partial_match(self, needle: str) -> int:
+        """Where the longest end of the text not yet emitted that begins ``needle`` starts, ``len(self)`` where none does."""
+        return self._emitted + partial_match_at(self._kept, needle)
+
+    def content_end(self, at: int) -> int:
+        """Where the text before ``at`` ends, trailing whitespace left out; ``at`` must not be emitted yet."""
+        if at == len(self):
+            return self._content_end
+        assert at >= self._emitted, "the text before the cursor is no longer kept"
+        stripped = self._kept[:at - self._emitted].rstrip()
+        return self._emitted + len(stripped) if stripped else self._emitted_content_end
 
     @property
     def emitted(self) -> int:
         return self._emitted
 
-    @property
-    def text(self) -> str:
-        return self._buf
-
     def __len__(self) -> int:
-        return len(self._buf)
+        return self._emitted + len(self._kept)
 
 
 def generate(
@@ -103,6 +137,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     visible = _TextBuffer()
     call_open, call_close = boundary.tool_tokens or (None, None)
     call = None            # pieces of the call being generated, once one is
+    call_tail = ""         # the end of the call's text a closing may begin in
     # A call's texts are matched without the whitespace around them, as a thought's tags are.
     open_text, close_text = ((text.strip() for text in boundary.call_texts)
                              if boundary.call_texts else (None, None))
@@ -123,7 +158,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             ends_turn is not None and ends_turn(tok))
         # A call may close with the token that otherwise ends a turn.
         closes_call = call is not None and (tok == call_close or (
-            close_text is not None and close_text in "".join(call)
+            close_text is not None and close_text in call_tail
             + context.token_bytes(tok).decode("utf-8", errors="replace")))
         if ends and not closes_call and call is not None:
             # Ended inside a call: the call ends here, closed as the template closes one.
@@ -152,10 +187,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                 generated.tool_call = "".join(call)
                 break
             call.append(piece)
-            if close_text is not None and close_text in "".join(call):
-                generated.stop_reason = "tool_call"
-                generated.tool_call = "".join(call).split(close_text, 1)[0].strip()
-                break
+            if close_text is not None:
+                call_tail += piece
+                if close_text in call_tail:
+                    generated.stop_reason = "tool_call"
+                    generated.tool_call = "".join(call).split(close_text, 1)[0].strip()
+                    break
+                call_tail = call_tail[max(0, len(call_tail) - len(close_text) + 1):]
             continue
         if tok == call_open:
             # The held-back tail is ordinary reply text; release it.
@@ -167,20 +205,20 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             if call_opens_as_text and context.is_special(tok) \
                     and piece.strip() not in boundary.thought_tags:
                 held_tag = (starts[-1], len(visible))
-            mark_at = earliest(visible.text, marks,
-                               search_from=max(visible.emitted, marks_from))
+            mark_at = visible.find(marks, marks_from)
             while (mark_at is not None and call_opens_as_text
-                   and visible.text.startswith(open_text, mark_at)
-                   and not _after_tag(context, visible.text, starts, generated.token_ids,
-                                      mark_at)):
+                   and visible.startswith(open_text, mark_at)
+                   and not _after_tag(context, starts, generated.token_ids,
+                                      visible.content_end(mark_at))):
                 marks_from = mark_at + 1        # a mention, not a call
-                mark_at = earliest(visible.text, marks, search_from=marks_from)
+                mark_at = visible.find(marks, marks_from)
             if mark_at is not None:
                 upto = mark_at
-                if open_text is not None and visible.text.startswith(open_text, mark_at):
-                    call = [visible.text[mark_at + len(open_text):]]
-                    if boundary.call_texts[0][:1].isspace():
-                        upto = len(visible.text[:mark_at].rstrip())     # the opening's own
+                if open_text is not None and visible.startswith(open_text, mark_at):
+                    call = [visible.since(mark_at + len(open_text))]
+                    call_tail = call[0]
+                    if opening_owns_space:
+                        upto = visible.content_end(mark_at)     # the opening's own
                     if held_tag is not None:
                         upto = held_tag[0]          # the tag the call follows is the call's
                 else:
@@ -188,34 +226,36 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                     ended_at_text = True
                     # Its tokens leave the reply, and the caller cuts them
                     # from the cache: the closing is written whole.
-                    if mark_at in starts:
-                        kept = starts.index(mark_at)
+                    kept = bisect.bisect_left(starts, mark_at)
+                    if kept < len(starts) and starts[kept] == mark_at:
                         generated.cached_beyond = len(generated.token_ids) - kept
                         del generated.token_ids[kept:]
                         pos = start_pos + kept
             else:
                 upto = len(visible)
                 if boundary.turn_end_text:
-                    upto = partial_match_at(visible.text, boundary.turn_end_text, visible.emitted)
+                    upto = visible.partial_match(boundary.turn_end_text)
                 if open_text is not None:
-                    opens_at = partial_match_at(visible.text, open_text, visible.emitted)
-                    if not call_opens_as_text or _after_tag(
-                            context, visible.text, starts, generated.token_ids, opens_at):
-                        if opening_owns_space:
-                            opens_at = len(visible.text[:opens_at].rstrip())
+                    opens_at = visible.partial_match(open_text)
+                    before = visible.content_end(opens_at)
+                    if opening_owns_space:
+                        opens_at = before
+                    if opens_at < len(visible) and (not call_opens_as_text or _after_tag(
+                            context, starts, generated.token_ids, before)):
                         upto = min(upto, opens_at)
             if held_tag is not None and call is None:
-                following = visible.text[held_tag[1]:].lstrip()
-                if following and not open_text.startswith(following[:len(open_text)]):
-                    held_tag = None             # no call follows it: it is the reply's
-                else:
+                if visible.content_end(len(visible)) > held_tag[1]:
+                    following = visible.since(held_tag[1]).lstrip()
+                    if not open_text.startswith(following[:len(open_text)]):
+                        held_tag = None             # no call follows it: it is the reply's
+                if held_tag is not None:
                     upto = min(upto, held_tag[0])
         else:
             visible.append(piece)
             upto = len(visible)
         delta = visible.emit(upto)
         if delta:
-            generated.text += delta
+            generated.text_pieces.append(delta)
             try:
                 yield delta
             except GeneratorExit:
@@ -236,15 +276,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         cut = generated.stop_reason in ("token_limit", "interrupted") and held_tag is not None
         delta = visible.emit(held_tag[0] if cut else len(visible))
         if delta:
-            generated.text += delta
+            generated.text_pieces.append(delta)
             yield delta
 
 
-def _after_tag(context: CacheContext, text: str, starts: list[int], tokens: list[int],
-               at: int) -> bool:
-    """Whether ``at`` is the reply's start or follows a tag, whitespace between."""
-    before = len(text[:at].rstrip())
-    if not before:
+def _after_tag(context: CacheContext, starts: list[int], tokens: list[int],
+               content_end: int) -> bool:
+    """Whether text ending at ``content_end``, whitespace after it left out, is empty or ends in a tag."""
+    if not content_end:
         return True
-    last = max(i for i, start in enumerate(starts) if start < before)
-    return context.is_special(tokens[last])
+    return context.is_special(tokens[bisect.bisect_left(starts, content_end) - 1])

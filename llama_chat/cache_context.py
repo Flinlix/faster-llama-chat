@@ -33,7 +33,8 @@ class GenerationAccumulator:
 
     Attributes:
         token_ids: Every token decoded into the cache.
-        text: Visible reply text so far.
+        text_pieces: Visible reply text so far, as it was yielded; :attr:`text`
+            joins it.
         stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
         tool_call: What the model generated between its call tags, tags
             excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
@@ -46,11 +47,16 @@ class GenerationAccumulator:
     """
 
     token_ids: list[int] = field(default_factory=list)
-    text: str = ""
+    text_pieces: list[str] = field(default_factory=list)
     stop_reason: str = "token_limit"
     tool_call: str = ""
     cached_beyond: int = 0
     cut_inside_call: bool = False
+
+    @property
+    def text(self) -> str:
+        """Visible reply text so far."""
+        return "".join(self.text_pieces)
 
 
 class ModelReader(Protocol):
