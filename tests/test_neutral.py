@@ -68,10 +68,11 @@ def _families() -> set[str]:
 
 
 def _vendors() -> set[str]:
-    """The publisher each known file's ``source`` names before its slash, and each publisher and chat format a test template's file names."""
+    """Every publisher a known file's ``source`` names before a slash, and each publisher and chat format a test template's file names."""
     sources = [known.get("source", "") for known in _known_files()]
     named = {expected(fixture(stem), key) for stem in STEMS for key in ("publisher", "chat_format")}
-    return {source.split("/")[0].lower() for source in sources if "/" in source} | (named - {None})
+    return ({found.lower() for source in sources for found in re.findall(r"([\w.-]+)/", source)}
+            | (named - {None}))
 
 
 def _words_first() -> set[str]:
@@ -122,6 +123,14 @@ def _recognized_forms() -> list[str]:
         f"{family}3coder", f"{family.capitalize()}Tags")]
     return forms + [form for vendor in sorted(_vendors()) for form in (
         (vendor,) if vendor in words_first else (vendor, f"{vendor}_format"))]
+
+
+def test_every_publisher_a_source_names_before_a_slash_is_a_vendor():
+    vendors = _vendors()
+    named = {piece.split("/")[0].lower() for known in _known_files()
+             for piece in re.split(r"[\s,:;\"()]+", known.get("source", "")) if "/" in piece}
+    assert named - {""} <= vendors
+    assert not [vendor for vendor in vendors if re.search(r"\s", vendor)]
 
 
 def test_a_model_family_or_vendor_name_is_recognized_in_every_form():

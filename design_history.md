@@ -2660,3 +2660,13 @@ statement.** The local function that tells a reply's generations whether a
 call written after an unreadable one is still read was named
 `after_unreadable`, which names a moment, not what is true. It is now
 `may_call_after_unreadable`, after the `may_call_again` it is handed to.
+
+**S11: every publisher a source names counts as a vendor.** The name check
+took a source's text before its first slash as the publisher. A source that
+opens with prose, as the add-on file that measured how a call is written does,
+gave a vendor of two words that no single word can match, and a second
+publisher named later, as a source that also names the copy it was read
+from, was not picked up. Every name directly before a slash is now taken. A
+test reads the sources again by splitting them at spaces and punctuation, a
+second construction of the same set, and checks that each name found is a
+vendor and that no vendor holds a space.
