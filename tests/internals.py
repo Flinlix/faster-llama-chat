@@ -79,6 +79,14 @@ def kept_turns(wrapper) -> list[tuple[list[int], str, bool]]:
             for kept in wrapper._conversation._state.kept]
 
 
+def kept_turn_spans(wrapper) -> list[tuple[int, int]]:
+    """Each turn kept as generated, as the indexes of its first and its last message among the rendered messages."""
+    messages = wrapper._conversation.messages
+    index = {id(message): i for i, message in enumerate(messages)}
+    return [(index[id(kept.first)], index[id(kept.last)])
+            for kept in wrapper._conversation._state.kept]
+
+
 def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
     """Where the template writes each kept turn, in each render that splits, with the generation prompt and without."""
     conversation = wrapper._conversation

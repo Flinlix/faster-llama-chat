@@ -73,7 +73,14 @@ def assert_cache_reads_as_rendered(wrapper, fake):
         "the cache no longer holds what the wrapper holds it to be"
     if not internals.is_begun(wrapper):
         return
-    renders = held_renders(fake, internals.rendered_messages(wrapper),
+    messages = internals.rendered_messages(wrapper)
+    # A kept turn's tokens hold the text of each of its calling messages, so the template
+    # is given those without it.
+    for first, last in internals.kept_turn_spans(wrapper):
+        for i in range(first, last + 1):
+            if messages[i].get("tool_calls"):
+                messages[i] = {**messages[i], "content": ""}
+    renders = held_renders(fake, messages,
                            internals.declarations(wrapper), reasoning=internals.reasons(wrapper),
                            for_tools=internals.uses_tool_template(wrapper))
     text_of = fake.text_of

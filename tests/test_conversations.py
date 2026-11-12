@@ -923,6 +923,37 @@ def test_a_text_argument_reaches_the_caller_as_the_model_spelled_it(stem):
     run.chat.reply().finish()
 
 
+# A call that opens with plain text is read only where it opens the reply.
+_TAG_OPENED = [stem for stem in _TOOL_TEMPLATES if not expected(_FIXTURES[stem], "call_opening_text")]
+
+
+@pytest.mark.parametrize("stem", _TAG_OPENED)
+def test_text_a_model_writes_before_its_call_is_held_once_and_its_turn_goes_on_open(stem):
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+    said = "Let me check."
+    run = _Run(stem)
+    run.context.replies = [ScriptedCall(body, before=said + " ")] + _as_generated(
+        probe.template, ["Sunny in Bonn.", ANSWERS[0]], False)
+    run.begin(tools=[WEATHER])
+    call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    run.chat.inject_tool_result(call, "sunny")
+    assert run.chat.reply().finish().text.strip() == "Sunny in Bonn."
+    run.chat.reply(QUESTIONS[0]).finish()
+    assert [seen.count(said) for seen in run.seen] == [0, 1, 1]
+    # The reply after the result follows the open turn, as it follows a result without text before its call.
+    plain = _Run(stem)
+    plain.context.replies = [ScriptedCall(body)] + _as_generated(
+        probe.template, ["Sunny in Bonn."], False)
+    plain.begin(tools=[WEATHER])
+    call, = [e for e in plain.chat.reply("Weather in Bonn?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    plain.chat.inject_tool_result(call, "sunny")
+    plain.chat.reply().finish()
+    assert run.seen[1].endswith(plain.seen[1][len(plain.seen[1].rsplit("sunny", 1)[0]):])
+
+
 def _calling_again(stem, context_size=4096, min_reply_tokens=8):
     """A run on ``stem`` begun with a turn open after a result, whose model calls the weather tool twice and then answers."""
     probe = _Run(stem)

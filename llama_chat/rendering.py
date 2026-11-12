@@ -76,6 +76,10 @@ class ConversationRendering:
     # ----- rendering ----------------------------------------------------------------
     def render(self, messages, generation_prompt: bool) -> str | None:
         """``messages`` as the template writes them, ``None`` where it refuses that shape."""
+        return self._render_given(self._as_given(messages), generation_prompt)
+
+    def _render_given(self, messages, generation_prompt: bool) -> str | None:
+        """``messages``, as the template is given them, rendered; ``None`` where it refuses that shape."""
         inputs = self._inputs()
         tools = [spec.as_declaration() for spec in inputs.tools] or None
         key = ("render", json.dumps([messages, generation_prompt], sort_keys=True, default=str))
@@ -85,16 +89,30 @@ class ConversationRendering:
                 reasoning=inputs.reasoning)
         return self._memo[key]
 
+    def _as_given(self, messages: list[dict]) -> list[dict]:
+        """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
+        inside = set()
+        for kept in self._inputs().kept:
+            first = next((i for i, m in enumerate(messages) if m is kept.first), None)
+            last = next((i for i, m in enumerate(messages) if m is kept.last), None)
+            if first is not None and last is not None:
+                inside.update(range(first, last + 1))
+        if not any(messages[i].get("tool_calls") and messages[i]["content"] for i in inside):
+            return messages
+        return [{**m, "content": ""} if i in inside and m.get("tool_calls") else m
+                for i, m in enumerate(messages)]
+
     def split(self, messages, generation_prompt: bool) -> SplitRender | None:
         """``messages`` rendered and split into the template's text and the caller's.
 
         Raises:
             ValueError: If the template writes a text otherwise than as text in its place.
         """
-        key = ("split", json.dumps([messages, generation_prompt], sort_keys=True, default=str))
+        given = self._as_given(messages)
+        key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
         if key not in self._memo:
-            self._memo[key] = split_render(lambda m: self.render(m, generation_prompt),
-                                           messages, self._template.fragments.content)
+            self._memo[key] = split_render(lambda m: self._render_given(m, generation_prompt),
+                                           given, self._template.fragments.content)
         return self._memo[key]
 
     def opening_render(self, system: list[dict]) -> str | None:
