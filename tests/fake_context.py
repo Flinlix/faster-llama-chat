@@ -274,13 +274,16 @@ class FakeContext:
             messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
             variables=variables)
 
-    def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False):
+    def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False,
+                      for_tools: bool | None = None):
         """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded.
 
-        A conversation that declares tools is written with the fixture's
+        A conversation begun with tools, which ``for_tools`` says and which
+        ``tools`` decides where it is ``None``, is written with the fixture's
         template for tools, where it gives one.
         """
-        model = self._models.get(TOOL_USE_TEMPLATE if tools else None, self._model)
+        for_tools = bool(tools) if for_tools is None else for_tools
+        model = self._models.get(TOOL_USE_TEMPLATE if for_tools else None, self._model)
         return model.render(messages, tools, generation_prompt=generation_prompt,
                             reasoning=None, variables=self._stated["on" if reasoning else "off"])
 

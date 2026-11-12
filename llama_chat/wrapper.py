@@ -133,7 +133,10 @@ class ChatWrapper:
                 where this model's template declares them; nothing else of
                 them is kept. Refused up front
                 where this model could not use them, rather than at the first
-                call.
+                call. Given at all, even empty, it writes the conversation
+                with the model's template for tools, where it ships one, so
+                that :meth:`declare_tools` can add tools later; ``None``
+                writes it with the default template.
             reasoning: Whether the model reasons before each answer, as its
                 template turns that on or off; :attr:`can_turn_off_reasoning`
                 says whether it has an off. It belongs to the conversation, so it
@@ -166,9 +169,9 @@ class ChatWrapper:
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
-            specs = list(tools or [])
-            ensure_names_unique(specs)
-            template = self._templates.for_conversation(bool(specs))
+            specs = None if tools is None else list(tools)
+            ensure_names_unique(specs or [])
+            template = self._templates.for_conversation(specs is not None)
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 template.ensure_tools_usable()
             if reasoning:
@@ -411,8 +414,8 @@ class ChatWrapper:
 
         Written where the template declares tools, never as a message of its
         own; the cache is decoded again from where the declarations change it.
-        The first declaration of a model that ships a template for tools
-        writes the conversation with that template from then on.
+        A model that ships a template for tools takes declarations only into a
+        conversation begun with ``tools``, which is written with that template.
 
         Args:
             tools: What to declare, a list of specs or a registry. Nothing to
@@ -426,7 +429,8 @@ class ChatWrapper:
             ValueError: If ``tools`` names one tool twice, if no conversation
                 has been begun, if a tool call has left a reply open, if this
                 model cannot call tools at all
-                (see :meth:`begin`), or if the template with the declarations
+                (see :meth:`begin`), if the model ships a template for tools
+                and the conversation was begun without ``tools``, or if the template with the declarations
                 writes an older exchange otherwise once another follows.
             ContextOverflowError: If the system turn with the declarations
                 would leave no room under ``evict_above_tokens`` for a short
@@ -498,7 +502,8 @@ class ChatWrapper:
         "reasoning_content"}``, and a :class:`~llama_chat.tools.ToolTurn` for
         an assistant turn that called tools, with its thoughts, calls and
         results. ``tools`` is every declaration, those of
-        :meth:`declare_tools` included. Safe from any thread, including while
+        :meth:`declare_tools` included, and ``None`` where the conversation
+        was begun without tools and declares none. Safe from any thread, including while
         another is mid-generation: all of it is read as the newest finished
         change left it.
         """

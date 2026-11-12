@@ -125,9 +125,9 @@ the reply.
 | adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
 | asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str` and a `max_reply_tokens` of 0 or less; the rest is checked when the stream is first read |
 | answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
-| telling the model about more tools | `declare_tools(tools)` |
+| telling the model about more tools | `declare_tools(tools)`. Where the model ships a [template of its own for tools](#tool-calling), only into a conversation begun with `tools` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
-| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (tool turns and the thoughts the template keeps included), `tools` (those `declare_tools` added included) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
+| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (tool turns and the thoughts the template keeps included), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
 | where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
@@ -262,10 +262,11 @@ calls are to run is handed one.
 template, one for a conversation that declares tools
 (`tokenizer.chat_template.tool_use`). Where it does, both pass the check a
 model meets at load, `can_call_tools` answers for that one, and a conversation
-is written with it from the moment it declares tools: from `begin(tools=...)`
-on, or from a `declare_tools`, which then decodes the conversation again once
-in that template's form. A conversation that declares none is written with
-the default template.
+is written with it when `begin` is given `tools`, a registry or a list, even
+an empty one, so that `declare_tools` can add tools later; with `tools=None`
+it is written with the default template. A `declare_tools` that would move a
+conversation begun without tools to the template for tools is refused, with
+a `ValueError` that says to begin again with the tools.
 
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,

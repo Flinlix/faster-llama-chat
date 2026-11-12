@@ -229,7 +229,7 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     w.begin("eins", [("user", "a"), ("assistant", "b")])
     assert w.conversation() == {"system_prompt": "eins",
                                 "messages": [("user", "a"), ("assistant", "b")],
-                                "tools": [], "reasoning": False}
+                                "tools": None, "reasoning": False}
     again, _ = tool_wrapper()
     again.begin(**w.conversation())
     assert again.conversation() == w.conversation()

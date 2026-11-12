@@ -18,7 +18,7 @@ from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_
                                       RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
-from tests.wrappers import (assert_consistent, held_renders, held_text, newest_turn, system_turn,
+from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_renders, held_text, newest_turn, system_turn,
                             tool_wrapper, weather_registry, without_ids, rows)
 
 
@@ -1683,18 +1683,53 @@ def test_a_model_whose_template_for_tools_calls_them_can_call_tools_though_its_d
     assert not _with_a_template_for_tools(without)[0].can_call_tools
 
 
-def test_a_conversation_is_written_with_the_template_for_tools_once_it_declares_them():
+def test_a_declaration_that_would_change_the_template_is_refused_and_leaves_the_conversation():
     chat, fake = _with_a_template_for_tools()
     chat.begin("persona")
     chat.reply("hallo?").finish()
+    before, held = chat.conversation(), list(fake.cache)
     assert "<[say>" in held_text(fake) and "<[turn>" not in held_text(fake)
-    chat.declare_tools(weather_registry().specs())
+    with pytest.raises(ValueError, match="begin again with the tools"):
+        chat.declare_tools(weather_registry().specs())
+    assert chat.conversation() == before and fake.cache == held
+    assert chat.declare_tools([]) == 0          # nothing to declare changes no template
+    chat.begin(**{**chat.conversation(), "tools": weather_registry()})
     assert "<[say>" not in held_text(fake) and "<decl>weather</decl>" in held_text(fake)
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     reply = chat.reply("wetter?", tool_call_policy=weather_registry()).finish()
     assert reply.text == "Sonnig" and [call.name for call in reply.tool_calls] == ["weather"]
     chat.begin("persona")                       # without tools: the default template again
     assert "<[say>" in held_text(fake) and "<[turn>" not in held_text(fake)
+
+
+@pytest.mark.parametrize("no_tools_yet", [ToolRegistry(), []], ids=["registry", "list"])
+def test_tools_handed_to_begin_select_the_template_for_tools_though_none_is_declared_yet(
+        no_tools_yet):
+    chat, fake = _with_a_template_for_tools()
+    chat.begin("persona", tools=no_tools_yet)
+    chat.reply("hallo?").finish()
+    assert "<[say>" not in held_text(fake) and "<[turn>" in held_text(fake)
+    assert chat.conversation()["tools"] == []
+    resets = fake.resets
+    chat.declare_tools(weather_registry().specs())
+    assert "<decl>weather</decl>" in held_text(fake) and "<[say>" not in held_text(fake)
+    assert fake.resets == resets
+    assert_consistent(chat, fake)
+
+
+def test_the_template_a_conversation_is_written_with_survives_its_round_trip():
+    chat, fake = _with_a_template_for_tools()
+    chat.begin("persona", tools=ToolRegistry())
+    assert chat.conversation()["tools"] == []
+    assert_cache_reads_as_rendered(chat, fake)
+    with_tools = held_text(fake)
+    chat.begin(**chat.conversation())
+    assert held_text(fake) == with_tools
+    chat.begin("persona")
+    assert chat.conversation()["tools"] is None
+    without = held_text(fake)
+    chat.begin(**chat.conversation())
+    assert held_text(fake) == without != with_tools
 
 
 def test_a_conversation_begun_with_tools_is_written_with_the_template_for_tools():

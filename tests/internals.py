@@ -56,6 +56,11 @@ def declarations(wrapper) -> list[dict] | None:
     return [spec.as_declaration() for spec in wrapper._conversation.tools] or None
 
 
+def uses_tool_template(wrapper) -> bool:
+    """Whether the conversation is written with the model's template for tools, as begun with tools."""
+    return wrapper._conversation._state.uses_tool_template
+
+
 def reasons(wrapper) -> bool:
     """Whether the conversation was begun reasoning."""
     return wrapper._conversation.reasoning

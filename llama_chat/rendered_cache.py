@@ -77,6 +77,9 @@ class _ConversationState:
 
     messages: list[dict] = field(default_factory=list)
     tools: list[ToolSpec] = field(default_factory=list)
+    # Whether it is written with the model's template for tools: begun with tools, or
+    # declaring some. True wherever ``tools`` holds any.
+    uses_tool_template: bool = False
     reasoning: bool = False
     kept: list[KeptTurn] = field(default_factory=list)
     # Where each placed kept turn starts in the cache.
@@ -106,7 +109,7 @@ class _Published:
 
     system_prompt: str = ""
     history: tuple = ()
-    tools: tuple = ()
+    tools: tuple | None = None            # None where it is not written with the template for tools
     reasoning: bool = False
     pending_calls: tuple = ()
     begun: bool = False
@@ -152,7 +155,8 @@ class RenderedCache:
         published = self._published
         return {"system_prompt": published.system_prompt,
                 "messages": copy.deepcopy(list(published.history)),
-                "tools": copy.deepcopy(list(published.tools)), "reasoning": published.reasoning}
+                "tools": None if published.tools is None else copy.deepcopy(list(published.tools)),
+                "reasoning": published.reasoning}
 
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
@@ -177,8 +181,8 @@ class RenderedCache:
 
     @property
     def template(self) -> ResolvedTemplate:
-        """The template the conversation is written with: the model's template for tools once it declares any."""
-        return self._templates.for_conversation(bool(self._state.tools))
+        """The template the conversation is written with: the model's template for tools where it was begun with tools."""
+        return self._templates.for_conversation(self._state.uses_tool_template)
 
     @property
     def tools(self) -> list[ToolSpec]:
@@ -225,10 +229,13 @@ class RenderedCache:
         return self._state.prompt_text
 
     # ----- beginning ------------------------------------------------------------------
-    def start(self, system_prompt: str, history, tools: list[ToolSpec], reasoning: bool) -> int:
+    def start(self, system_prompt: str, history, tools: list[ToolSpec] | None,
+              reasoning: bool) -> int:
         """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context; how many items were kept.
 
-        A history that ends on a call keeps it owed a result.
+        A history that ends on a call keeps it owed a result. ``tools`` other
+        than ``None``, even empty, writes the conversation with the model's
+        template for tools.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations leave
@@ -238,7 +245,8 @@ class RenderedCache:
                 writes an older exchange otherwise once another follows.
         """
         with self._action():
-            self._state.tools, self._state.reasoning = list(tools), reasoning
+            self._state.tools, self._state.reasoning = list(tools or []), reasoning
+            self._state.uses_tool_template = tools is not None
             self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history, self._state.n_calls)
@@ -687,17 +695,25 @@ class RenderedCache:
                 is written; one that raises refuses the declarations.
 
         Raises:
-            ValueError: If no conversation was begun or a reply is open, or the
-                template with them writes an older exchange otherwise once
-                another follows.
+            ValueError: If no conversation was begun or a reply is open, if the
+                model writes a conversation with tools in a template of its
+                own and this one was begun without tools, or if the template
+                with them writes an older exchange otherwise once another
+                follows.
             ContextOverflowError: If the system prompt with them leaves no room
                 under ``evict_above_tokens`` for a short question.
         """
         with self._action():
             _ensure_ready(self, "declare tools", "declare into")
+            if not self._state.uses_tool_template and self._templates.has_template_for_tools:
+                raise ValueError(
+                    "this model writes a conversation with tools in a template of its own, "
+                    "and this conversation was begun without tools; begin again with the "
+                    "tools, begin(..., tools=...), to declare them")
             if accept is not None:
                 accept()
             self._state.tools = self._state.tools + list(specs)
+            self._state.uses_tool_template = True
             self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
@@ -1108,7 +1124,8 @@ class RenderedCache:
         system = self._system_part()
         self._published = _Published(
             system_prompt=system[0]["content"] if system else "",
-            history=tuple(as_history(self._state.messages)), tools=tuple(self._state.tools),
+            history=tuple(as_history(self._state.messages)),
+            tools=tuple(self._state.tools) if self._state.uses_tool_template else None,
             reasoning=self._state.reasoning, pending_calls=tuple(self.pending_calls),
             begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role,
             total_tokens=len(self._memory.tokens))

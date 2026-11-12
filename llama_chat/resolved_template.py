@@ -708,6 +708,11 @@ class ResolvedTemplates:
                            if context.chat_template_text(TOOL_USE_TEMPLATE) is not None
                            else self._default)
 
-    def for_conversation(self, declares_tools: bool) -> ResolvedTemplate:
-        """The template a conversation is written with: the one for tools where it declares tools."""
-        return self._for_tools if declares_tools else self._default
+    @property
+    def has_template_for_tools(self) -> bool:
+        """Whether the model ships a template of its own for a conversation with tools."""
+        return self._for_tools is not self._default
+
+    def for_conversation(self, uses_tools: bool) -> ResolvedTemplate:
+        """The template a conversation is written with: the one for tools where it is begun with tools."""
+        return self._for_tools if uses_tools else self._default

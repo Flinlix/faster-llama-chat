@@ -35,7 +35,8 @@ def system_turn(fake) -> str:
     return text[:text.find("<turn]>") + len("<turn]>")]
 
 
-def held_renders(context, messages, tools=None, reasoning=False) -> list[str]:
+def held_renders(context, messages, tools=None, reasoning=False,
+                 for_tools: bool | None = None) -> list[str]:
     """What a cache holding ``messages`` may read as: their render with the generation prompt or without, or decoded ahead of the next question up to where it goes.
 
     Rendered as the context states its template renders, with nothing the
@@ -44,7 +45,7 @@ def held_renders(context, messages, tools=None, reasoning=False) -> list[str]:
     """
     from llama_chat.render_checks import STAND_IN as _STAND_IN
     render = lambda m, prompt: context.stated_render(       # noqa: E731
-        m, tools, generation_prompt=prompt, reasoning=reasoning)
+        m, tools, generation_prompt=prompt, reasoning=reasoning, for_tools=for_tools)
     found = []
     for written in in_each_thought_form(messages):
         found += [render(written, False), render(written, True)]
@@ -73,7 +74,8 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     if not internals.is_begun(wrapper):
         return
     renders = held_renders(fake, internals.rendered_messages(wrapper),
-                           internals.declarations(wrapper), reasoning=internals.reasons(wrapper))
+                           internals.declarations(wrapper), reasoning=internals.reasons(wrapper),
+                           for_tools=internals.uses_tool_template(wrapper))
     text_of = fake.text_of
     kept = [(text_of(tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text)
             for tokens, text in internals.kept_turns(wrapper)]

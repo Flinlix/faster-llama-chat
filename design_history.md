@@ -1887,7 +1887,10 @@ right before an opening that begins with whitespace stays the call's, as it
 was while the whole opening had to match. The closing a call is given where
 the reply ends inside it is still the template's whole closing.
 
-**264.4: A template of its own for tools.** At the user's choice (B). A GGUF
+**264.4: A template of its own for tools.** Revised by "The user's answers to
+the round's open questions" (301.9B): a `declare_tools` that would switch
+templates is refused, and `begin` given any `tools` selects the template for
+tools. At the user's choice (B). A GGUF
 can hold further named chat templates beside `tokenizer.chat_template`, among
 them `tokenizer.chat_template.tool_use` for a conversation that declares
 tools; only the default one was read. The engine context now reads that one
@@ -2520,3 +2523,22 @@ its `ends_generation` lists, which the GLM-4.7, GLM-5.3 and Flint templates
 state as `<|user|>` and `<|observation|>`. For GLM-5.3 and Flint this is not
 measured: their GGUFs are not in the local cache, and the value assumes the
 converter marks the same tags as for GLM-4.7, whose chat format they share.
+
+**301.9B: the template for tools is chosen at `begin`.** Under 264.4 a
+`declare_tools` into a conversation begun without tools moved it to the
+model's template for tools and decoded it again in that form. At the user's
+choice that switch is refused now, with an error that says to begin again
+with the tools. In its place `begin` decides the template once: `tools` given
+at all, a registry or a list, even an empty one, writes the conversation with
+the template for tools, so that tools declared later need no switch, and
+`tools=None` writes it with the default template. Read so because an empty
+registry is still a promise of tools, and a list of specs is the same
+promise in another form. The conversation keeps which template it was begun
+with beside its declarations; a declaration on a model that ships no template
+for tools marks it too, so that whatever declares tools is written with the
+template a `begin` with them would choose. `conversation()` hands `tools`
+back as `None` for a conversation written with the default template, and as
+a list, possibly empty, for one written with the template for tools, since an
+empty list given to `begin` now selects the template for tools and the round
+trip must keep the template. A `begin(tools=[])` on a model that cannot call
+tools is accepted as before; the declarations that follow are refused there.
