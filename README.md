@@ -405,7 +405,8 @@ then what its GGUF states for a value the file leaves out, then switched off
 (`temperature` 1, `top_k` 0, `top_p` 1, `min_p` 0, `repetition_penalty` 1,
 `presence_penalty` and `frequency_penalty` 0), with `penalty_window_tokens`
 at llama.cpp's default of 64. A model for which neither
-states any value runs at llama.cpp's defaults. A value the GGUF states that
+states any value, or only `penalty_window_tokens`, runs at llama.cpp's
+defaults. A value the GGUF states that
 `Config` would refuse stops the load with a `ValueError` naming the GGUF as
 its source, unless `Config` or the add-on file replaces it.
 `Sampling(...)` passed to one `reply` overrides any field of this table but

@@ -2600,3 +2600,14 @@ which count down from -3; the stand-in asserts that the two never meet. A
 test collects every id the stand-in hands out in a conversation, those it
 draws, those the cache holds and its tags, and checks each against the range
 the search can spell, which it reads from the library rather than restating.
+
+## 2026-11-12: Review fixes
+
+**S4: a model that states only its penalty window samples at llama.cpp's
+defaults.** Whether an unstated field is switched off or takes llama.cpp's
+default was decided by whether any field was stated, the window included. A
+GGUF or add-on file that stated only `penalty_window_tokens` therefore ran at
+temperature 1 with `top_k`, `top_p` and `min_p` off, though it recommended no
+sampler at all. The window says how far back the penalties look, not how a
+token is drawn, and 300.9A already gives it the same fallback in both cases,
+so the choice between the two fallbacks now reads every field but the window.

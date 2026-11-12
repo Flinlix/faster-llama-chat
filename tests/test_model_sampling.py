@@ -210,6 +210,15 @@ def test_a_penalty_window_no_source_states_is_the_engines_default_length():
     assert Config().penalty_window_tokens is None
 
 
+@pytest.mark.parametrize("source", ["gguf", "add-on file"])
+def test_a_model_that_states_only_its_penalty_window_samples_at_the_engines_defaults(source):
+    stated = {"penalty_window_tokens": 128}
+    config = (with_model_sampling(Config(), stated, _addon({})) if source == "gguf"
+              else with_model_sampling(Config(), {}, _addon(stated)))
+    assert {name: getattr(config, name) for name in DEFAULT_SAMPLING} == {
+        **DEFAULT_SAMPLING, **stated}
+
+
 def test_an_add_on_file_may_set_the_penalty_window(tmp_path):
     path = tmp_path / "m.json"
     path.write_text(json.dumps({"sampling": {"penalty_window_tokens": 256}}))

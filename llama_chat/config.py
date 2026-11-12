@@ -35,7 +35,7 @@ class Config:
     ``penalty_window_tokens``, left ``None`` take the model's own when it
     loads, value by value: its add-on file's, else what its GGUF states, else
     switched off, the penalty window at llama.cpp's default length; where
-    neither states any, llama.cpp's defaults. See the README, "Configuration".
+    neither states any but the penalty window, llama.cpp's defaults. See the README, "Configuration".
 
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.

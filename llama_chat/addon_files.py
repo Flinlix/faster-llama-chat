@@ -27,8 +27,8 @@ _FILE_KEYS = {"templates", "source", "sampling", "call", "reasoning_on"}
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
                     "penalty_window_tokens": 64}
-# What a field no source states stands at, where another field is stated: switched
-# off, and the penalty window at the engine's default length.
+# What a field no source states stands at, where another field but the penalty window
+# is stated: switched off, and the penalty window at the engine's default length.
 UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
                      "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
                      "penalty_window_tokens": 64}
@@ -133,8 +133,8 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
     """``config`` with each sampling field it leaves unset taken from the model.
 
     Value by value: the add-on file's, else what the model recommends itself,
-    else switched off. A model for which neither states any value runs at
-    llama.cpp's defaults.
+    else switched off. A model for which neither states any value but the
+    penalty window runs at llama.cpp's defaults.
 
     Args:
         config: What the caller set; a field it sets is kept.
@@ -158,7 +158,7 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
         if name in recommended and name not in addon["sampling"]:
             _ensure_recommendation_taken(name, recommended[name])
     stated = {**recommended, **addon["sampling"]}
-    rest = UNSTATED_SAMPLING if stated else DEFAULT_SAMPLING
+    rest = UNSTATED_SAMPLING if set(stated) - {"penalty_window_tokens"} else DEFAULT_SAMPLING
     return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
 
 
