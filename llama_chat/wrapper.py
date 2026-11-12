@@ -414,13 +414,17 @@ class ChatWrapper:
             self._turn_policy = policy
         self._turn_budget = budget
 
-    def inject_tool_result(self, call: ToolCall, result) -> None:
-        """Hand the model what the tool it called returned.
+    def inject_tool_result(self, call: ToolCall, result) -> int:
+        """Hand the model what the tool it called returned; how many older history items were evicted for it.
 
         Written where this model's own template writes a result, inside the
-        turn the call left open, with special-token parsing off. Nothing is
-        evicted while a turn is open, so such a turn grows towards
-        ``context_size``; a result too long for what is left is clipped. See
+        turn the call left open, with special-token parsing off. A result too
+        long for what is left of the context evicts the oldest exchanges
+        first, the open turn kept whole; one still too long is cut, a note at
+        its end telling the model how much was kept, and the next reply lists
+        its call in ``Reply.tool_results_cut``. Where not even a result cut to
+        nothing fits, the turn closes on what the model wrote, as a reply that
+        answers its own calls closes one, and ``turn_open`` is then false. See
         the README, "Tool calling".
 
         Args:
@@ -435,17 +439,20 @@ class ChatWrapper:
         Raises:
             ValueError: If no call is waiting, or this is not the one owed. The
                 call stays owed.
-            ContextOverflowError: If not even an empty result leaves room for
-                the reply in what is left of the context.
         """
         failure = unwritable_failure(result)
         with self._held():
             self._ensure_open()
-            self._conversation.add_result(call, result if failure is None else _explain_failure(
-                failure, may_call_again=self._turn_policy == "yield"))
+            written = result if failure is None else _explain_failure(
+                failure, may_call_again=self._turn_policy == "yield")
+            try:
+                evicted = self._conversation.add_result(call, written)
+            except ContextOverflowError:
+                evicted = self._conversation.close_unanswered()
         if failure is not None:
             _log.warning("the result handed over for %s cannot be written, so the model is told "
                          "the call failed (unwritable_result): %s", call.name, failure["message"])
+        return evicted
 
     # ----- shortening the newest reply -----------------------------------------
     def truncate_last_reply(self, keep_text: str) -> None:
@@ -720,7 +727,10 @@ class ChatWrapper:
                     _answerable(generation.tool_calls), registry, budget)
                 may_call_again = registry is not None and budget.calls_left > 0
                 try:
-                    self._write_results(settled, may_call_again)
+                    dropped = self._write_results(settled, may_call_again)
+                    generations[-1] = replace(
+                        generations[-1],
+                        n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                 except ContextOverflowError:
                     # No room is left to answer: the turn closes on what the model
                     # wrote, as one the reply cap cuts does.
@@ -833,10 +843,10 @@ class ChatWrapper:
             settled.append((call, result))
         return settled
 
-    def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> None:
-        """Write the result of each settled call, in order, a failure saying whether another call is worth making."""
-        for call, result in settled:
-            self._conversation.add_result(call, _explain_failure(result, may_call_again))
+    def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> int:
+        """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history items were evicted for them."""
+        return sum(self._conversation.add_result(call, _explain_failure(result, may_call_again))
+                   for call, result in settled)
 
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
@@ -875,6 +885,7 @@ class ChatWrapper:
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
+        results_cut = conversation.results_cut
         reply_text = ReplyText(self._template.reasoning,
                                self._template.answer_opening(conversation.reasoning),
                                conversation.prompt_text, list(stop))
@@ -908,6 +919,7 @@ class ChatWrapper:
             n_evicted_messages=n_evicted_messages,
             stop_reason=generated.stop_reason,
             tool_calls=_reported_calls(generated, conversation.pending_calls),
+            tool_results_cut=results_cut,
             n_reasoning_tokens=reply_text.thought_pieces,
             thought=reply_text.thought,
         )
@@ -1068,6 +1080,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         stop_reason=generations[-1].stop_reason,
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
+        tool_results_cut=[call for t in generations for call in t.tool_results_cut],
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
         thought="\n\n".join(t.thought for t in generations if t.thought),
     )

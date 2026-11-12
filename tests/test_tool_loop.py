@@ -373,11 +373,11 @@ def test_a_result_answers_the_call_itself_not_its_name(not_the_call):
     assert without_ids(wrapper.pending_calls) == [ToolCall("clock", {})]
 
 
-def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
-    """The tags are never clipped, so a turn with no room for them is refused.
+def test_a_result_that_cannot_fit_even_cut_closes_the_turn_without_any_of_it():
+    """The tags are never cut, so a turn with no room for them closes on what the model wrote.
 
-    Clipping them would leave the cache holding half a block no template ever
-    produces, which is worse than a turn that cannot be continued.
+    Cutting them would leave the cache holding half a block no template ever
+    produces.
     """
     for size in range(40, 400):
         wrapper, fake = tool_wrapper(context_size=size)
@@ -387,16 +387,15 @@ def test_a_result_whose_wrapping_cannot_fit_is_refused_whole():
             list(wrapper.reply("wie spät?", tool_call_policy="yield"))
         except ContextOverflowError:
             continue                    # too small for the call itself
-        before = list(fake.cache)
-        try:
-            wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
-        except ContextOverflowError as refused:
-            assert "result wrapping alone" in str(refused)
-            # Nothing reached the cache, and the call is still owed.
-            assert fake.cache == before
-            assert without_ids(wrapper.pending_calls) == [ToolCall("clock", {})]
-            return
-    pytest.fail("no context size left the call room but its result wrapping none")
+        wrapper.inject_tool_result(ToolCall("clock", {}), "ok")
+        if wrapper.turn_open:
+            continue                    # room for the result
+        assert "<result>" not in held_text(fake) and wrapper.pending_calls == []
+        assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+        fake.call_script = []
+        assert wrapper.reply("wie spät?").finish().stop_reason == "end_of_turn"
+        return
+    pytest.fail("no context size left the call room but its result none")
 
 
 @pytest.mark.parametrize("policy", ["refuse", "registry"])
@@ -463,20 +462,57 @@ def test_tags_without_a_readable_grammar_cannot_call_tools():
     assert not wrapper.turn_open
 
 
-def test_an_oversized_result_is_clipped_and_keeps_its_tags():
+def test_an_oversized_result_is_cut_keeps_its_tags_and_tells_the_model_and_the_caller():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
-    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    call, = [e for e in wrapper.reply("wie spät?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
 
     before = len(fake.cache)
-    wrapper.inject_tool_result(ToolCall("clock", {}), "x" * 10_000)
+    wrapper.inject_tool_result(call, "x" * 10_000)
 
     # The turn still fits, and the block still ends where the template ends one.
     assert len(fake.cache) <= wrapper.config.context_size
     written = fake.text_of(fake.cache[before:])
-    assert written.startswith("<result>clock(")
-    assert written.endswith(")</result>")
+    assert written.startswith("<result>clock(x")
+    kept = written.count("x")
+    assert written.endswith(f"x\n(cut: {kept} of 10000 characters kept))</result>")
+    fake.call_script = []
+    assert wrapper.reply().finish().tool_results_cut == [call]
+    assert wrapper.reply("und sonst?").finish().tool_results_cut == []
+
+
+def test_a_result_cut_under_a_registry_is_listed_on_its_reply():
+    registry = ToolRegistry()
+    registry.tool(lambda: "x" * 10_000, description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper()
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ["fn:clock{}"]
+    reply = wrapper.reply("wie spät?", tool_call_policy=registry).finish()
+    assert without_ids(reply.tool_results_cut) == [ToolCall("clock", {})]
+    assert reply.tool_results_cut == reply.tool_calls
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+def test_a_result_too_long_for_the_room_left_evicts_the_oldest_exchanges_first(can_shift):
+    wrapper, fake = tool_wrapper(context_size=600, can_shift=can_shift)
+    wrapper.begin("persona", [item for n in range(6) for item in
+                              (("user", f"Frage {n}?"), ("assistant", f"Antwort {n}."))])
+    fake.call_script = ["fn:clock{}"]
+    call, = [e for e in wrapper.reply("wie spät?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    room = wrapper.config.context_size - wrapper.config.min_reply_tokens
+    result = "y" * (room - wrapper.total_tokens + 40)
+    evicted = wrapper.inject_tool_result(call, result)
+    # Whole, the turn kept, and on a cache that cannot shift well below the room left.
+    assert evicted > 0 and _result_of(fake) == f"clock({result})"
+    questions = [m["text"] for m in rows(wrapper) if m["role"] == "user"]
+    assert questions[-1] == "wie spät?" and len(questions) < 7
+    if not can_shift:
+        assert len(questions) <= 3
+    fake.call_script = []
+    assert wrapper.reply().finish().tool_results_cut == []
 
 
 # ----- the local loop ------------------------------------------------------

@@ -163,9 +163,13 @@ def _steps(history):
 
 
 def _assert_kept_only_what_it_produced(before, after, shown, calls):
-    """A failed reply loses nothing, and adds nothing, or what it produced: the text it showed, then a call or a result."""
+    """A failed reply loses nothing but the oldest exchanges a result evicted for room, and adds nothing, or what it produced: the text it showed, then a call or a result."""
     held, kept = _steps(before[0]["messages"]), _steps(after[0]["messages"])
-    assert after[0]["system_prompt"] == before[0]["system_prompt"] and kept[:len(held)] == held
+    starts = [i for i, step in enumerate(held) if isinstance(step, dict) and step["role"] == "user"]
+    evicted = next((i for i in [0] + starts + [len(held)] if kept[:len(held) - i] == held[i:]),
+                   None)
+    assert after[0]["system_prompt"] == before[0]["system_prompt"] and evicted is not None
+    held = held[evicted:]
     added = kept[len(held):]
     texts = [step["content"] for step in added
              if isinstance(step, dict) and step["role"] == "assistant"]
@@ -271,7 +275,7 @@ def test_a_failed_restart_keeps_the_call_its_conversation_owes_and_nothing_else(
 
 
 # ----- results ---------------------------------------------------------------------
-def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stays_owed():
+def test_a_result_that_leaves_no_room_for_the_reply_closes_the_turn_and_the_conversation_goes_on():
     fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=40),
                     context=fake)
@@ -283,13 +287,13 @@ def test_a_result_that_leaves_no_room_for_the_reply_is_refused_and_the_call_stay
             calls = [e for e in w.reply("q" * n, tool_call_policy="yield") if isinstance(e, ToolCall)]
         except ContextOverflowError:
             break
-        held = list(fake.cache)
-        try:
-            w.inject_tool_result(calls[0], "12:00")
-        except ContextOverflowError:
-            assert fake.cache == held and w.pending_calls == calls
-            with pytest.raises(ValueError, match="owe a result"):
+        w.inject_tool_result(calls[0], "12:00")
+        if not w.turn_open:
+            assert w.pending_calls == []
+            with pytest.raises(ValueError, match="nothing to answer"):
                 w.reply().finish()           # never resumed without its result
+            fake.call_script = []
+            w.reply("weiter").finish()
             return
         fake.call_script = ["fn:clock{}"]
     pytest.fail("no question length left the result without room")

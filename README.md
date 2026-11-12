@@ -146,7 +146,8 @@ on, so the refusal follows it there.
 `Reply` also carries `text`, `n_prefilled_tokens`, `n_prompt_tokens` (the
 tokens the cache held when the reply's last generation drew its first, which
 is all that generation was conditioned on), `n_generated_tokens`,
-`n_evicted_messages`, `tool_calls`, `tool_limit_reached`,
+`n_evicted_messages`, `tool_calls`, `tool_limit_reached`, `tool_results_cut`
+(the calls whose result was cut to fit, see "Tool calling"),
 `n_reasoning_tokens` and `thought`, the thought's text, empty where the model
 thought nothing. A stream closed early has no `Reply`; what it generated
 is recorded all the same.
@@ -289,14 +290,21 @@ A call whose arguments are no object, such as a list or `null`, or nest
 deeper than 100 levels of lists and objects, is unreadable, and its tool does
 not run.
 
-**Nothing is evicted while a turn is open**, since that would cut into the turn
-being written, so a turn of many calls grows towards `context_size`. A result
-too large for what is left is clipped to leave `min_reply_tokens`. Where the
-result's wrapping alone leaves no room for the reply, `inject_tool_result`
-raises `ContextOverflowError`, the call stays owed and nothing is written, and
-the conversation must begin again; a reply that answers its calls itself,
-under `"refuse"` or a registry, closes the turn instead on what the model
-wrote, as the reply cap closes one, and ends with `"token_limit"`.
+**A turn grows towards `context_size`** as it calls, since an eviction would
+cut into the turn being written. A result too long for what is left, with
+`min_reply_tokens` free, first evicts the oldest exchanges, as a question
+does, the open turn kept whole: its question, its calls and its results; on a
+cache that cannot shift it evicts well below that, as every eviction there
+does. `inject_tool_result` returns how many history items went, and under a
+registry they count in the reply's `n_evicted_messages`. A result still too
+long is cut, its tags kept, and ends with a note the model reads, such as
+`(cut: 3100 of 20000 characters kept)`; the next reply lists its call in
+`Reply.tool_results_cut`. Where not even a result cut to nothing leaves room
+for the reply, the turn closes on what the model wrote, as the reply cap
+closes one: a reply that answers its calls itself, under `"refuse"` or a
+registry, ends with `"token_limit"`, and after `inject_tool_result`
+`turn_open` is false, the calls not yet answered are dropped, and the next
+question is asked as after any reply.
 
 **A history with tool turns** goes into `begin` as `ToolTurn`s, each holding the
 turn's steps in order: the model's text as `str`, its thought as

@@ -53,6 +53,10 @@ class Reply:
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran without the token that opens a call. Always
             ``False`` where no call was asked for.
+        tool_results_cut: The calls whose result was too long for the room
+            left even after the oldest exchanges went, and was cut, a note at
+            its end telling the model how much was kept; those answered
+            before a generation of this request, oldest first.
         n_reasoning_tokens: Of the tokens sampled, about how many were thought:
             the streamed pieces that held any.
         thought: What the model thought before its answer, its tags and the
@@ -69,6 +73,7 @@ class Reply:
     stop_reason: StopReason
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_limit_reached: bool = False
+    tool_results_cut: list[ToolCall] = field(default_factory=list)
     n_reasoning_tokens: int = 0
     thought: str = ""
 

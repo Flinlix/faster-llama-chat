@@ -48,6 +48,8 @@ _WHOLE = object()
 # enough to keep history. See design_history.md, "Settings, add-on files and
 # logging", 266.3.
 EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
+# What a result cut to fit the room left ends with, so that the model reads how much of it it got.
+RESULT_CUT_NOTE = "\n(cut: {kept} of {total} characters kept)"
 
 
 @dataclass(frozen=True, eq=False)
@@ -85,6 +87,7 @@ class _ConversationState:
     # Where each placed kept turn starts in the cache.
     kept_at: dict[KeptTurn, int] = field(default_factory=dict)
     n_calls: int = 0
+    results_cut: list[ToolCall] = field(default_factory=list)   # since the newest generation
     windows: bool = False                 # whether windows of the conversation stand for its render
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
@@ -228,6 +231,11 @@ class RenderedCache:
         return self._memory.decoded
 
     @property
+    def results_cut(self) -> list[ToolCall]:
+        """The calls whose result was cut to fit since the newest generation, oldest first."""
+        return list(self._state.results_cut)
+
+    @property
     def prompt_text(self) -> str:
         """The template text the next generation follows, which says whether it opens in a thought."""
         return self._state.prompt_text
@@ -259,6 +267,7 @@ class RenderedCache:
             self._state.n_calls = max(self._state.n_calls, next_call_number(
                 c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()))
             self._state.kept, self._state.kept_at = [], {}
+            self._state.results_cut = []
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
@@ -497,6 +506,7 @@ class RenderedCache:
         """
         _ensure_can_reply(self, asks_question=False)
         asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
+        self._state.results_cut = []
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.turn_open, before_question)
@@ -656,15 +666,20 @@ class RenderedCache:
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         return self._settle()
 
-    def add_result(self, call: ToolCall, result) -> None:
-        """Record what the oldest owed call returned, clipped where it cannot fit; after the last one, decode the prompt for the reply.
+    def add_result(self, call: ToolCall, result) -> int:
+        """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply; how many history items were dropped for it.
+
+        A result too long for the room left drops the oldest exchanges first,
+        as a question does, the turn it answers kept whole. Where it still
+        cannot fit, it is cut, :data:`RESULT_CUT_NOTE` after it telling the
+        model how much was kept, and its call is noted in :attr:`results_cut`.
 
         Raises:
             ValueError: If no call is waiting, this is not the one owed, the
                 result cannot be written as text, or the template writes no
                 result.
-            ContextOverflowError: If not even an empty result leaves room for
-                the reply.
+            ContextOverflowError: If not even a result cut to nothing leaves
+                room for the reply.
         """
         with self._action():
             if not self._state.begun:
@@ -683,27 +698,35 @@ class RenderedCache:
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             room = self._max_prompt_tokens
-            self._state.messages.append({**message, "content": ""})
-            if len(self._prompted().tokens) > room:
-                raise ContextOverflowError(
-                    "the result wrapping alone leaves no room for the reply in what is left "
-                    "of the context; this turn cannot be continued, start a new conversation "
-                    "with begin()")
-            self._state.messages[-1] = {**message, "content": self._clipped(message, text, room)}
+            n_before = len(as_history(self._state.messages))
+            self._state.messages.append(message)
+            dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True)
+            if not self._fits(text, room):
+                if not text or not self._fits(_cut(text, 0), room):
+                    raise ContextOverflowError(
+                        "not even the result cut to nothing leaves room for the reply in what "
+                        "is left of the context")
+                low, high = 0, len(text)
+                while low < high:
+                    middle = (low + high + 1) // 2
+                    low, high = (middle, high) if self._fits(_cut(text, middle), room) \
+                        else (low, middle - 1)
+                self._state.messages[-1] = {**message, "content": _cut(text, low)}
+                self._state.results_cut.append(owed)
             if not self.pending_calls:
-                self._sync(self._fitting_prompt())
+                self._sync(self._fitting_prompt(), dropped=dropped)
+            elif dropped:
+                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                           logits=False, dropped=True)
+            if dropped:
+                self._memory.repair()           # with the logits the reply needs, then saved
+                self._memory.rest()
+            return n_before - len(as_history(self._state.messages))
 
-    def _clipped(self, message: dict, text: str, room: int) -> str:
-        """The longest start of ``text`` with which the conversation, ``message`` newest, still fits in ``room``."""
-        low, high = 0, len(text)
-        while low < high:
-            middle = (low + high + 1) // 2
-            self._state.messages[-1] = {**message, "content": text[:middle]}
-            if len(self._prompted().tokens) <= room:
-                low = middle
-            else:
-                high = middle - 1
-        return text[:low]
+    def _fits(self, content: str, room: int) -> bool:
+        """Whether the conversation, its newest message, a result, holding ``content``, fits in ``room`` with the generation prompt."""
+        self._state.messages[-1] = {**self._state.messages[-1], "content": content}
+        return self._rendering.length(self._state.messages, generation_prompt=True) <= room
 
     # ----- changing what it holds -----------------------------------------------------
     def truncate_newest(self, keep_text: str) -> None:
@@ -1248,6 +1271,11 @@ def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     answered = len(messages) - calling - 1
     return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
              c["id"]) for c in messages[calling]["tool_calls"][answered:]]
+
+
+def _cut(text: str, kept: int) -> str:
+    """``text`` cut to its first ``kept`` characters, :data:`RESULT_CUT_NOTE` after them."""
+    return text[:kept] + RESULT_CUT_NOTE.format(kept=kept, total=len(text))
 
 
 def _is_plain(text: str, reader) -> bool:
