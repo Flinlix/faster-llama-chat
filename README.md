@@ -159,7 +159,8 @@ a context of your own answers everything called on it, holds the
 state, that the chat template is valid template code (a
 `ValueError` naming the line and the cause where it is not), that the
 generation prompt and the closing after a reply are where the template writes them and the closing begins with one of the
-model's tags, and whether tool calling works (`can_call_tools`). A setting
+model's tags, or, where the template writes nothing after a reply, that the
+tag opening the next turn ends a generation for the model, and whether tool calling works (`can_call_tools`). A setting
 refused is an `InvalidSettingError`, a `ValueError` whose `field` names it.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
@@ -496,7 +497,10 @@ A model that ships no chat template is refused when it loads: the template is
 what every conversation is written with. For one whose template writes no
 tool call it can be read from, its [add-on file](#add-on-files) says how the
 model writes one. A reply's ending must begin with one of the model's own tags,
-or construction raises: a model could never stop on plain text.
+or construction raises: a model could never stop on plain text. A template
+that writes nothing after a reply is used only where the tag that opens the
+next turn ends a generation for the model, since the reply ends where the
+model draws that tag.
 
 **Special tokens in message content.** A caller's text (a message, a thought, a
 call's name and arguments) is tokenized with special-token parsing off, and the

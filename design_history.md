@@ -2502,3 +2502,21 @@ as a whole number, as `top_k` is. llama.cpp reads a window of -1 as the whole
 context; `Config` refuses a negative window, so a GGUF that states -1 stops
 the load naming the GGUF, as any value the settings refuse does, unless
 `Config` or the add-on file sets the window.
+
+**301.7A: a reply closed by nothing ends at the next turn's tag.** A template
+may write nothing after a reply, so that the next turn's tag follows the
+reply's text directly. The load check refused a closing that opens with plain
+text but let an empty one pass, although a model on such a template stops only
+where the engine ends a generation on the tag that opens the next turn. Such a
+template is now refused at load where that tag does not end a generation, or
+where the next turn opens with no tag, naming the tag. Whether a token ends a
+generation is a fact of the model's vocabulary, so `ends_generation` moved from
+the cache's half of the cache context protocol to the model's half, which the
+template is resolved through; a context answers the same members as before.
+Measured on GLM-4.7 Flash with llama.cpp: `<|user|>`, `<|observation|>` and
+`<|endoftext|>` end a generation, `<|assistant|>` does not. The stand-in
+context ends a generation on the fixture's end-of-sequence tag and on the tags
+its `ends_generation` lists, which the GLM-4.7, GLM-5.3 and Flint templates
+state as `<|user|>` and `<|observation|>`. For GLM-5.3 and Flint this is not
+measured: their GGUFs are not in the local cache, and the value assumes the
+converter marks the same tags as for GLM-4.7, whose chat format they share.

@@ -35,6 +35,9 @@ _SYSTEM = "SYSTEMMSG"
 # before the newest user turn shows it after the first turn, not ahead of it.
 _EXCHANGE = ({"role": "assistant", "content": "REPLYMSG"},
              {"role": "user", "content": "LATERMSG"})
+# A question, a past reply to it, and the next question.
+_PAST_REPLY = ({"role": "user", "content": _PROMPT}, {"role": "assistant", "content": _NEXT},
+               *_EXCHANGE[1:])
 
 # The stand-in a probe declares and answers a call for. What a template renders
 # around a declaration or around a result does not depend on which function it
@@ -324,17 +327,44 @@ class ResolvedTemplate:
 
         The model ends a reply by generating that tag; a terminator that opens
         with plain text never lets it stop, so it would run to the token cap
-        every generation.
+        every generation. Where the terminator is empty, the reply ends where
+        the model draws the tag that opens the next turn, which must therefore
+        end a generation.
         """
         terminator = self._fragments.assistant_suffix.strip()
-        pieces = split_at_tags(self._context, terminator) if terminator else None
-        if terminator and not (pieces and pieces[0][1]):
+        if not terminator:
+            self._ensure_next_turn_ends_a_reply()
+            return
+        pieces = split_at_tags(self._context, terminator)
+        if not (pieces and pieces[0][1]):
             raise ValueError(
                 "chat template is not valid for this model: its turn-terminator "
                 f"{terminator!r} does not open with one of the model's own tags, so "
                 "generation would never stop. The model's embedded chat template "
                 "is malformed, so the model cannot be used."
             )
+
+    def _ensure_next_turn_ends_a_reply(self) -> None:
+        """Ensure the turn after a reply opens with a tag that ends a generation.
+
+        Raises:
+            ValueError: If it opens with plain text, or with a tag the model
+                generates without ending.
+        """
+        past = self._render(list(_PAST_REPLY), reasoning=False)
+        after = past.split(_NEXT, 1)[-1].lstrip() if past is not None else ""
+        first = self._context.tokenize(after, add_special=False)[:1] if after else []
+        if first and self._context.is_special(first[0]):
+            if self._context.ends_generation(first[0]):
+                return
+            opens_with = (f"the tag {self._context.token_text(first[0])!r}, which does not "
+                          "end a generation for this model")
+        else:
+            opens_with = "no tag of the model's own"
+        raise ValueError(
+            "this model's template writes nothing after a reply, and the turn after "
+            f"one opens with {opens_with}, so a reply would never stop; the model "
+            "cannot be used")
 
     def _resolve_turn_end_token(self) -> int | None:
         """The first token of the turn-terminator, where it is one of the model's tags."""
@@ -356,11 +386,10 @@ class ResolvedTemplate:
             ValueError: If the template writes either otherwise.
         """
         question = [{"role": "user", "content": _PROMPT}]
-        exchange = question + [{"role": "assistant", "content": _NEXT}, *_EXCHANGE[1:]]
         closing = self._fragments.assistant_suffix.strip()
         for reasoning in (False, True) if self.can_reason else (False,):
             prompted = self._render(question, generation_prompt=True, reasoning=reasoning)
-            past = self._render(exchange, reasoning=reasoning)
+            past = self._render(list(_PAST_REPLY), reasoning=reasoning)
             if prompted is None or past is None or not prompted.endswith(
                     self.generation_prompt(reasoning)) or not past.split(_NEXT, 1)[-1].lstrip() \
                     .startswith(closing):

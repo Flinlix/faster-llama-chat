@@ -44,6 +44,24 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     assert template.answer_opening() == expected(known, "answer_opening")
 
 
+# The templates that write nothing after a reply: each loads only because the
+# tag that opens the next turn ends a generation on its model.
+_ENDING_TAG_STEMS = [stem for stem in STEMS if expected(fixture(stem), "ends_generation")]
+
+
+@pytest.mark.parametrize("stem", _ENDING_TAG_STEMS)
+def test_a_reply_closed_by_nothing_is_refused_at_load_unless_the_next_turns_tag_ends_a_generation(stem):
+    known = fixture(stem)
+    context, template = _load(stem)
+    assert not template.fragments.assistant_suffix.strip()
+    next_turn = template.fragments.user_prefix.strip()
+    assert context.ends_generation(first_special_token(context, next_turn))
+    with pytest.raises(ValueError, match="writes nothing after a reply") as refused:
+        ResolvedTemplate(FakeContext({**known, "ends_generation": []}),
+                         shipped_addon_call(known["chat_template"]))
+    assert repr(context.token_text(first_special_token(context, next_turn))) in str(refused.value)
+
+
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
 def test_reasoning_can_be_turned_off_exactly_where_the_template_writes_its_off_otherwise(stem):
     context, template = _load(stem)

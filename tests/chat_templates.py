@@ -35,6 +35,7 @@ _UNSTATED = {
     "publisher": None,                  # the publisher's name, where the source does not spell it
     "publisher_is_a_word": False,       # the publisher's name is also an everyday word
     "chat_format": None,                # the name the template's chat format goes by
+    "ends_generation": [],              # the tags beside its end-of-sequence tag that end a generation in the engine
 }
 
 

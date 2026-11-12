@@ -18,6 +18,8 @@ from llama_chat.cache_context import TOOL_USE_TEMPLATE
 from llama_chat.model_template import ModelTemplate
 from llama_chat.resolved_template import ResolvedTemplates
 
+from .chat_templates import expected
+
 
 class _Renders:
     """A template's renderer, and its renders remembered, up to a bound, where only their inputs decide them."""
@@ -128,7 +130,8 @@ class FakeContext:
     A generation is the library's own loop drawing, in this order: the next of
     ``call_script`` where a call's opening may be drawn, else the next of
     ``replies``, else ``gen_text`` cut or padded to ``gen_tokens``; then the
-    end of generation. It first hands ``before_reply`` the cache's text, so a
+    end of generation. The fixture's end-of-sequence tag, and each tag its
+    ``ends_generation`` lists, end a generation too, as the engine reads them. It first hands ``before_reply`` the cache's text, so a
     test can compare it with the template's render at that moment.
 
     Every decode lands at the cache's end, and each cache edit asserts the
@@ -164,6 +167,7 @@ class FakeContext:
         found = set(TAG.findall("".join(self._texts.values()))) | self._rendered_tags()
         self._listed = tuple(self._tag_token(tag) for tag in sorted(
             found | {tag.replace("/", "", 1) for tag in found if "/" in tag}))
+        self._ending_tags = {fixture["eos_token"], *expected(fixture, "ends_generation")}
         self._call_mark_tokens = None
         self.cache: list[int] = []
         self.can_shift = can_shift
@@ -348,7 +352,7 @@ class FakeContext:
             yield END_OF_GENERATION
 
     def ends_generation(self, token: int) -> bool:
-        return token == END_OF_GENERATION
+        return token == END_OF_GENERATION or self._tag_texts.get(token) in self._ending_tags
 
     def _call_tokens(self, call: ScriptedCall) -> list[int]:
         """The scripted call as the model writes it: its ``before``, then its opening, its body, its closing."""

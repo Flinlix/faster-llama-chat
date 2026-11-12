@@ -70,6 +70,9 @@ class ModelReader(Protocol):
     def special_tokens(self) -> tuple[int, ...]:
         """Every token that is one of the model's own tags."""
 
+    def ends_generation(self, token: int) -> bool:
+        """Whether drawing ``token`` ends a generation, neither decoded nor shown."""
+
     def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
                                    *, generation_prompt: bool = False,
                                    reasoning: bool | None = None,
@@ -123,9 +126,6 @@ class CacheContext(ModelReader, Protocol):
 
     def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
         """Decode the tokens a generation adds at ``start_pos``, logits kept for the last."""
-
-    def ends_generation(self, token: int) -> bool:
-        """Whether drawing ``token`` ends a generation, neither decoded nor shown."""
 
     def token_bytes(self, token: int) -> bytes:
         """The bytes ``token`` stands for, which may hold part of a character."""
