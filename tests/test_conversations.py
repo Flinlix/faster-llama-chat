@@ -1733,3 +1733,20 @@ def test_a_result_given_as_a_value_comes_back_as_that_value(stem):
     # The newest part a begin keeps, its results still the values given.
     kept = run.chat.conversation()["messages"]
     assert kept and kept == saved["messages"][-len(kept):]
+
+
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
+    run = _Run(stem, reasoning=True)
+    tags = run.template.reasoning
+    if run.template.call_boundary().follows_text:
+        pytest.skip("a call inside a thought is a mention on this template")
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    opens = begins_in_thought(tags, run.template.generation_prompt(True))
+    run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I will check ")]
+    run.begin(tools=[WEATHER])
+    call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    run.chat.inject_tool_result(call, "sunny")
+    run.context.replies = ["it is sunny" + tags.thought_close + "Sunny."]
+    reply = run.chat.reply().finish()
+    assert reply.text.strip() == "Sunny." and run.chat.conversation()["messages"]

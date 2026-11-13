@@ -25,6 +25,8 @@ class ReplyText:
         tag_spans: Where each of the model's own tags stands in the text fed,
             as it streams; ``None`` where that is not known, and every text a
             tag spells counts as the tag.
+        inside: Whether the text begins inside a thought the model opened
+            before, such as one a call it made inside its thought left open.
 
     Once answer text has passed, a thought opens only at the model's own tag,
     not at its letters. A tag the model writes is never shown, except, before
@@ -34,9 +36,10 @@ class ReplyText:
 
     def __init__(self, reasoning: Reasoning | None, answer_opening: str,
                  header: tuple[str, str] | None, prompt_text: str, stops: list[str],
-                 tag_spans: list[tuple[int, int]] | None = None) -> None:
+                 tag_spans: list[tuple[int, int]] | None = None, inside: bool = False) -> None:
         self._reasoning = reasoning
-        self._opens_in_thought = reasoning is not None and begins_in_thought(reasoning, prompt_text)
+        self._opens_in_thought = reasoning is not None and (
+            inside or begins_in_thought(reasoning, prompt_text))
         framing = [text.strip() for text in (answer_opening, *(header or ()),
                                              *((reasoning.thought_open, reasoning.thought_close)
                                                if reasoning else ())) if text.strip()]
@@ -76,6 +79,11 @@ class ReplyText:
     def answer(self) -> str:
         """The answer passed on so far."""
         return self._stops.text
+
+    @property
+    def in_thought(self) -> bool:
+        """Whether the text fed so far ends inside a thought."""
+        return self._thought is not None and self._thought.in_thought
 
     @property
     def opens_in_thought(self) -> bool:

@@ -102,6 +102,8 @@ class _ConversationState:
     tool_turns_stay: bool = False
     # What the system turn and a one-character question take, with the generation prompt.
     with_a_short_question: int = 0
+    # Whether the open turn's newest call was made inside a thought the model had not closed.
+    called_in_thought: bool = False
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
     prompt_start: int = 0                 # where in the cache the generation prompt begins
@@ -252,6 +254,11 @@ class RenderedCache:
     def results_cut(self) -> list[ToolCall]:
         """The calls whose result was cut to fit since the newest generation, oldest first."""
         return list(self._state.results_cut)
+
+    @property
+    def called_in_thought(self) -> bool:
+        """Whether the open turn's newest call was made inside a thought the model had not closed."""
+        return self._state.called_in_thought
 
     @property
     def prompt_text(self) -> str:
@@ -584,7 +591,8 @@ class RenderedCache:
         return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
-                     called: bool, unreadable_result: dict, stopped: bool = False) -> int:
+                     called: bool, unreadable_result: dict, stopped: bool = False,
+                     in_thought: bool = False) -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -617,6 +625,8 @@ class RenderedCache:
             unreadable_result: What a call that could not be read is answered with.
             stopped: Whether a stop string ended the answer, so that what was
                 generated from it on is no reply's.
+            in_thought: Whether the generation ended inside a thought, so that
+                the turn its call leaves open goes on inside it.
 
         Returns:
             How many history items were dropped.
@@ -632,6 +642,7 @@ class RenderedCache:
             saved, held = self._state.copied(), list(self._memory.tokens[:generated_from])
             try:
                 recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
+                self._state.called_in_thought = bool(calls) and in_thought
             except BaseException:
                 self._state = saved
                 if before_question is not None:

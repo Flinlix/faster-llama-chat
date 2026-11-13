@@ -4558,3 +4558,17 @@ newest exchange, the turn the result goes in, as a question's refusal
 already is. Writing a result on a 300-exchange stand-in now renders the
 whole conversation twice instead of four times; the two left measure whether
 the result fits, which needs the whole.
+
+### A thought a call left open goes on hidden after its result (366.8)
+
+366.8 (V3). A reasoning model that called a tool in the middle of its
+thought, and went on thinking after the result before it closed the thought,
+had that thought and the closing tag shown as its answer: the reply after the
+result began from the template's prompt, which opens no thought, so its
+filter read the thought as answer text. On gpt-oss the whole exchange was
+then lost. The recording of a reply that ends on a call now notes whether the
+generation ended inside a thought, and the reply that goes on with that turn
+starts its filter inside the thought, so the thought stays hidden and the
+answer after its closing is the answer. On the two templates that write a
+call after text, a call inside a thought is a mention (F2 of the review of
+366.2A), so the case does not arise there.

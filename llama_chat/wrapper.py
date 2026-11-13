@@ -959,10 +959,12 @@ class ChatWrapper:
         results_cut = conversation.results_cut
         noted = self._turn_policy, self._turn_budget
         try:
+            goes_on = text is None and conversation.turn_open
             reply_text = ReplyText(self._template.reasoning,
                                    self._template.answer_opening(conversation.reasoning),
                                    self._template.reply_header(conversation.reasoning),
-                                   conversation.prompt_text, list(stop), generated.tag_spans)
+                                   conversation.prompt_text, list(stop), generated.tag_spans,
+                                   inside=goes_on and conversation.called_in_thought)
             pieces = conversation.generate(
                 max_generated_tokens, generated, cancel=cancel,
                 sampling=sampling,
@@ -1041,7 +1043,7 @@ class ChatWrapper:
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         return self._conversation.record_reply(
             answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again),
-            stopped=reply_text.met_stop_string)
+            stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
