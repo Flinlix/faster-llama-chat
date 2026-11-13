@@ -147,6 +147,7 @@ class Backend:
         self._free_model = _required_symbol("llama_model_free")
         self._new_ctx = _required_symbol("llama_init_from_model")
         self._get_vocab = _required_symbol("llama_model_get_vocab")
+        self._supports_gpu_offload = _required_symbol("llama_supports_gpu_offload")
 
         self._get_memory = _required_symbol("llama_get_memory")
         self._mem_clear = _required_symbol("llama_memory_clear")
@@ -203,6 +204,10 @@ class Backend:
         if not model:
             raise RuntimeError(f"failed to load model: {path}")
         return model
+
+    def supports_gpu_offload(self) -> bool:
+        """Whether this build can run layers on a GPU at all."""
+        return bool(self._supports_gpu_offload())
 
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool | None = None, type_k: int | None = None,

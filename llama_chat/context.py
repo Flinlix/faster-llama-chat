@@ -186,14 +186,18 @@ class KVContext:
         self._backend.decode(self._engine_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
     def _warm_up(self) -> None:
-        """Decode two tokens and then a single one, then clear the cache again.
+        """Decode a full batch where layers run on a GPU, then two tokens and a single one.
 
-        See design_history.md, "The warm-up decodes two tokens and then one".
+        The cache is cleared after each. See design_history.md, "A full batch
+        warms the GPU at load".
         """
         tok = self._backend.token_eos(self._vocab)
         if tok < 0:  # no EOS; any valid id warms the graph
             tok = 0
-        for tokens in ([tok] * 2, [tok]):
+        batches = [[tok] * 2, [tok]]
+        if self._config.gpu_layers != 0 and self._backend.supports_gpu_offload():
+            batches.insert(0, [tok] * min(self._max_batch_tokens, self._config.context_size))
+        for tokens in batches:
             self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
             self.reset()  # empty again before the conversation's first prefill
 

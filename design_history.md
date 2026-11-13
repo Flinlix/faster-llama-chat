@@ -2799,6 +2799,9 @@ disabled" is the `top_k` of 0 that the file sets.
 
 ### The warm-up decodes two tokens and then one
 
+Revised by "A full batch warms the GPU at load" (2026-11-13): where layers run
+on a GPU, a full batch now comes first.
+
 316.1 (P1). Supersedes, in "The engine context warms itself" (2026-11-10), the
 sentence that the context decodes its full batch at the end of loading. The
 context now decodes a batch of two tokens and then a single token, as
@@ -3427,7 +3430,7 @@ leave it here, and the code keeps what it does and a pointer where one helps.
   them, and refusing it after the model has asked for a tool would leave a
   call nobody can answer.
 - **The warm-up's reasons** are in "The warm-up decodes two tokens and then
-  one"; **the fraction an eviction without a shift drops to** is argued in
+  one" and "A full batch warms the GPU at load"; **the fraction an eviction without a shift drops to** is argued in
   266.3, under "Settings, add-on files and logging".
 - **Reading a call back is a module of its own,** apart from declaring and
   running tools: an engine reached over a wire emits calls it cannot run, and
@@ -4112,3 +4115,36 @@ its closing. No bracket character is left written into the code for it.
 - **Tests (J7).** A unit test shows the end text a template writes after the
   last message read by tags of another shape, which the bracket rule read too
   wide.
+
+## 2026-11-13: The first word after a start (369)
+
+### A full batch warms the GPU at load
+
+369.1A. Revises "The warm-up decodes two tokens and then one". Where the
+model has layers on a GPU (`gpu_layers` is not `0` and the llama.cpp build can
+offload), the warm-up decodes one full batch of `max_batch_tokens` tokens (at
+most `context_size`) before the two tokens and the single one, and clears the
+cache after each. On the processor nothing changes.
+
+The user asked why the first answer of a fresh conversation waits longer,
+once, and whether that time can move into the start. One such one-time cost
+is the engine's first preparation of a large batch: a load that decodes only
+a few tokens leaves it to the first `begin` with a real system prompt. The
+user's server starts the model with an empty `begin`, which is too short to
+trigger it, so the cost lands on the first `begin` with a persona. Measured
+on the card in the server's order of steps (load, empty `begin`, `begin`
+with a persona and six exchanges, a question; three runs each): without the
+full batch that first `begin` takes 0.61 to 0.93 s, with it 0.04 s, the same
+as every later one; the load takes 0.65 s longer; the first word of the
+answer is the same either way. The measurement of 316.1 on the user's production
+settings (Gemma 4 26B A4B Q4_K_M, all layers on the card, batch 512) gives
+the trade: the full batch costs 0.68 s of the load and takes the first
+`begin` from 0.59 s to 0.017 s; the first word and one decode step are the
+same either way. 316.1 rejected the full batch because on the processor it
+cost 8 to 20 s of every load and saved nothing; tied to a GPU, that cost does
+not arise. Not measured: a model with only part of its layers on the GPU,
+where the full batch also runs the remaining layers on the processor.
+Rejected: the same warm-up in the server's start alone, which
+would help one caller and leave every other one with the slower first
+`begin`.
+

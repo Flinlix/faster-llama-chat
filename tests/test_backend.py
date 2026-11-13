@@ -515,6 +515,47 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
     assert performed[-4:] == [("decode", 2, 0), ("clear",), ("decode", 1, 0), ("clear",)]
 
 
+@pytest.mark.parametrize("gpu_layers, offload, max_batch_tokens, context_size, full_batch", [
+    (0, True, 8, 32, None),
+    (10, False, 8, 32, None),
+    (-1, False, 8, 32, None),
+    (10, True, 8, 32, 8),
+    (-1, True, 2048, 4096, 2048),
+    (-1, True, 64, 32, 32),
+])
+def test_a_full_batch_warms_up_first_only_where_layers_run_on_a_gpu(
+        tmp_path, monkeypatch, gpu_layers, offload, max_batch_tokens, context_size, full_batch):
+    performed = []
+    backend = SimpleNamespace(
+        load_model=lambda path, layers, progress: "model",
+        metadata_value=lambda model, key: None,
+        kv_cache_type_id=lambda name: 0,
+        new_context=lambda *args, **kwargs: "ctx",
+        vocab=lambda model: None,
+        token_eos=lambda vocab: 2,
+        can_shift=lambda ctx: True,
+        kv_seq_rm=lambda ctx, seq, p0, p1: True,
+        kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
+        decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", len(tokens), pos)),
+        kv_clear=lambda ctx: performed.append(("clear",)),
+        supports_gpu_offload=lambda: offload,
+    )
+    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    model = tmp_path / "model.gguf"
+    model.touch()
+
+    KVContext(Config(model_path=str(model), context_size=context_size, gpu_layers=gpu_layers,
+                     max_batch_tokens=max_batch_tokens, min_reply_tokens=0))
+
+    warm_up = [("decode", 2, 0), ("clear",), ("decode", 1, 0), ("clear",)]
+    if full_batch is not None:
+        warm_up = [("decode", full_batch, 0), ("clear",)] + warm_up
+    assert performed[-len(warm_up):] == warm_up
+    # Loading probes the cache edits with three tokens; no other decode is that long.
+    assert [p[1] for p in performed if p[0] == "decode" and p[1] > 3] == (
+        [] if full_batch is None else [full_batch])
+
+
 def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
     """What a model loaded under ``settings`` asks of the engine's context, by keyword."""
     asked = {}
@@ -526,7 +567,7 @@ def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
         vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
         can_shift=lambda ctx: True,
         kv_seq_rm=lambda ctx, seq, p0, p1: True, kv_seq_add=lambda *args: None,
-        decode=lambda *args: None, kv_clear=lambda ctx: None)
+        decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: True)
     monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
