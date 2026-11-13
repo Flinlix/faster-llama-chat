@@ -4148,3 +4148,42 @@ Rejected: the same warm-up in the server's start alone, which
 would help one caller and leave every other one with the slower first
 `begin`.
 
+
+## 2026-11-13: Fixes from the whole-project review (366, 376)
+
+The user picked how each finding of the whole-project review of 2026-11-13
+is fixed (366.x), and asked that whatever is known from one model alone goes
+into that model's add-on file. Where a template itself shows what it does,
+the library reads it from the template, as principle 3 says.
+
+### A reply is recorded whole or not at all, as the template writes it
+
+366.1A (V1, T3, V7, V9). A Qwen 3 or Qwen 3.5 template cuts a past reply at
+its thought closing: of "Close it with </think> like this." it writes only
+"like this.". The library stored the whole answer, so the next render could
+not place the answer's text and raised after the reply had streamed. That
+happened while the reply was half recorded, outside any action: the
+published conversation and the one the library held differed, and with a
+turn open the conversation was stuck until the next `begin`. A fault at any
+other point of recording did the same, and a call that could not be read was
+published as owed before it was withdrawn.
+
+Now an answer holding the template's thought opening or closing is kept as
+the part of it the template writes as a past reply: the text between what
+the template writes around a marker in its place, in the form (trimmed or
+not) that renders exactly as the whole answer does. Where that part is empty,
+or the template writes anything but a part of the answer, the reply is taken
+back with its question, as one the template does not write. Only an answer
+holding those tags pays the two renders this takes. The caller's stream and
+`Reply.text` keep what the model wrote; the conversation holds what the
+model will read.
+
+Recording is one step: where adding the reply raises, the request is taken
+back whole where it asked a question, otherwise the conversation is left as
+it was before the reply, and the cache is brought back at once (or, where
+that fails too, by the next action). A fault after the reply is recorded,
+while the cache is settled, keeps the reply, as a failed reply keeps what it
+produced. The conversation is published once, when recording ends, so a
+reader never sees a call that is withdrawn in the same step. Rejected: taking
+every such reply back with its question (366.1B), which loses an answer the
+user saw in full.

@@ -1532,3 +1532,40 @@ def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
                        context=FakeContext(short, []))
     with pytest.raises(ValueError, match="cannot\\s+be told"):
         chat.begin("")
+
+
+@pytest.mark.parametrize("stem, reasoning", _each_mode(
+    [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["marks_thought"]]))
+def test_an_answer_holding_its_templates_thought_closing_is_kept_as_the_template_writes_it(stem, reasoning):
+    tags = _Run(stem, reasoning=reasoning).template.reasoning
+    if tags.thought_open.strip() in tags.thought_close:
+        pytest.skip("the closing holds the opening, which opens a thought in an answer")
+    answers = [f"Close it with {tags.thought_close} like this.", f"{tags.thought_close}", ANSWERS[0]]
+    run = _Run(stem, reasoning=reasoning)
+    tools = [WEATHER] if run.fixture["calls_tools"] else None
+    replies = _as_generated(run.template, answers, reasoning)
+    if tools:
+        _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+        replies = [ScriptedCall(body)] + _as_generated(run.template, ["Sunny."], reasoning) + replies
+    run.context.replies = replies
+    run.begin(tools=tools)
+    if tools:
+        call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+        run.chat.inject_tool_result(call, "sunny")
+        run.chat.reply().finish()
+    questions = [f"Question {k}?" for k in range(len(answers))]
+    for question in questions:
+        run.chat.reply(question).finish()
+    sent = [m for m in _sent(run.chat) if m["role"] != "system"]
+    for question, answer in zip(questions, answers):
+        at = next((i for i, m in enumerate(sent) if m == {"role": "user", "content": question}), None)
+        if at is None or sent[at + 1:at + 2] == [] or sent[at + 1]["role"] != "assistant":
+            continue                        # taken back, or left unanswered where nothing of it is written
+        # Kept as the part of it the template writes as a past reply, which is what the cache holds.
+        kept = sent[at + 1]["content"]
+        assert kept and kept in answer
+        written = run.render(sent[:at + 1] + [{"role": "assistant", "content": kept},
+                                              {"role": "user", "content": "Next?"}])
+        assert written == run.render(sent[:at + 1] + [{"role": "assistant", "content": answer},
+                                                      {"role": "user", "content": "Next?"}])
+    assert {"role": "user", "content": questions[-1]} in sent

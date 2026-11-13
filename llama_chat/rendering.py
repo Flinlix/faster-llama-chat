@@ -20,6 +20,8 @@ from .template import common_prefix_length
 from .tokenizing import MemoTokenizer, split_at_tags, tokenize_pieces
 from .tools import ToolSpec
 
+# Stands in for a reply's text: letters only, so that no template trims or escapes it.
+_ANSWER_MARK = "QQANSWERMARKQQ"
 
 @dataclass(frozen=True, eq=False)
 class KeptTurn:
@@ -169,6 +171,24 @@ class ConversationRendering:
             at = stop
         tokens += self.tokenize(split.pieces(at, end), add_special=not tokens and at == 0)
         return Target(tokens, kept_at)
+
+    def written_answer(self, messages: list[dict], answer: str) -> str | None:
+        """The part of ``answer`` the template writes of it as a past reply after ``messages``; ``None`` where it writes anything else."""
+        after = [{"role": "user", "content": STAND_IN}]
+        reply = {"role": "assistant", "content": answer}
+        as_is = self.render(messages + [reply] + after, True)
+        marked = self.render(messages + [{**reply, "content": _ANSWER_MARK}] + after, True)
+        if as_is is None or marked is None or marked.count(_ANSWER_MARK) != 1:
+            return None
+        head, tail = marked.split(_ANSWER_MARK)
+        if len(head) + len(tail) > len(as_is) or not (as_is.startswith(head) and as_is.endswith(tail)):
+            return None
+        written = as_is[len(head):len(as_is) - len(tail)]
+        # The form that renders as the whole answer does, where the template also trims a text.
+        return next((form for form in dict.fromkeys((written, written.strip(), written.lstrip(),
+                                                     written.rstrip()))
+                     if form in answer and self.render(
+                         messages + [{**reply, "content": form}] + after, True) == as_is), None)
 
     def length(self, messages: list[dict], generation_prompt: bool) -> int:
         """How many tokens the cache holds for ``messages``, each kept turn as it was generated.

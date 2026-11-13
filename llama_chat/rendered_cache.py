@@ -543,9 +543,16 @@ class RenderedCache:
         template writes two questions in a row; and the cache is then brought
         to the template's render and decoded ahead for the next question.
 
+        An answer holding the template's own thought tags is kept as the part
+        of it the template writes, and taken back with its request where that
+        part is empty.
+
         Where the generation failed, what it said is recorded, or, where it
         said nothing, the question its request asked is taken out again; the
-        cache is left to be decoded again by the next action.
+        cache is left to be decoded again by the next action. Where recording
+        the reply itself raises, the request is taken back whole where it
+        asked a question, else the conversation is left as it was before the
+        reply; a fault after the reply is recorded keeps it.
 
         Args:
             thought: The reply's thought, given to the template as its own to
@@ -559,15 +566,48 @@ class RenderedCache:
         Returns:
             How many history items were dropped.
         """
-        start, resumed, before_question = self._generation
-        if not self._memory.is_known and not answer and not called:
-            # It failed before it said anything: the request is taken back whole.
-            if before_question is not None:
-                self._state.messages.pop()
-                self._memory.replace(before_question)
-                self._publish()
-            return 0
+        before_question = self._generation[2]
+        try:
+            if not self._memory.is_known and not answer and not called:
+                # It failed before it said anything: the request is taken back whole.
+                if before_question is not None:
+                    self._state.messages.pop()
+                    self._memory.replace(before_question)
+                return 0
+            saved, held = self._state.copied(), list(self._memory.tokens)
+            try:
+                answer, unplaced, unwritten = self._append_reply(answer, thought, calls, called,
+                                                                 stopped)
+            except BaseException:
+                self._state = saved
+                if before_question is not None:
+                    self._state.messages.pop()
+                    self._memory.replace(before_question)
+                else:
+                    self._memory.replace(held)
+                with contextlib.suppress(Exception):
+                    self._memory.repair()       # where it fails, the next action decodes again
+                raise
+            return self._after_reply(answer, called, called and not calls, unplaced, unwritten,
+                                     unreadable_result)
+        finally:
+            self._publish()
+
+    def _append_reply(self, answer: str, thought: str, calls: list[ToolCall], called: bool,
+                      stopped: bool) -> tuple[str, bool, bool]:
+        """Add the newest generation's reply to the messages, its turn kept where it called tools.
+
+        Returns:
+            The answer as recorded, whether a kept turn could no longer be
+            placed, and whether the template writes nothing of the answer.
+        """
+        start, resumed, _before_question = self._generation
         unreadable = called and not calls
+        unwritten = False
+        if answer and not calls and self._holds_thought_tags(answer):
+            written = self._rendering.written_answer(self._state.messages, answer)
+            unwritten = not (written and written.strip())
+            answer = written or ""
         asked = calls or ([ToolCall(UNKNOWN_FUNCTION, {})] if unreadable else [])
         message = ({"role": "assistant", "content": answer} if not asked
                    else calling_message(answer, asked, self._state.n_calls))
@@ -588,8 +628,12 @@ class RenderedCache:
                                              bool(asked)))
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
-        unplaced = self._drop_unplaceable()
-        self._publish()
+        return answer, self._drop_unplaceable(), unwritten
+
+    def _after_reply(self, answer: str, called: bool, unreadable: bool, unplaced: bool,
+                     unwritten: bool, unreadable_result: dict) -> int:
+        """Answer a call that could not be read, or close the turn and settle the cache; how many history items were dropped."""
+        resumed = self._generation[1]
         if not self._memory.is_known:
             return 0                # the generation failed: the next action decodes the cache again
         if unreadable:
@@ -605,8 +649,8 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False)
             return 0
-        if not called and not self._writes(self._state.messages if not answer
-                                           else self._newest_exchange()):
+        if unwritten or not called and not self._writes(self._state.messages if not answer
+                                                        else self._newest_exchange()):
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
@@ -615,6 +659,12 @@ class RenderedCache:
             # unanswered, as the next question then follows it.
             return self._remove_from(len(self._state.messages) - 1)
         return self._settle()
+
+    def _holds_thought_tags(self, text: str) -> bool:
+        """Whether ``text`` holds the template's thought opening or closing, which a template may cut a past reply at."""
+        tags = self.template.reasoning
+        return tags is not None and any(tag.strip() and tag.strip() in text
+                                        for tag in (tags.thought_open, tags.thought_close))
 
     def _open_kept(self) -> KeptTurn | None:
         """The kept turn the open reply goes on with: the one ending on its newest call, placed in the cache."""

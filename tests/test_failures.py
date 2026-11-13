@@ -428,7 +428,8 @@ def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
 
     monkeypatch.setattr(ConversationRendering, "split", reading)
     w.reply("c").finish()
-    assert set(seen) <= {2, 4}
+    # Before the question, with the question until its reply is recorded, then with both.
+    assert set(seen) <= {2, 3, 4}
 
 
 def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finished_changes(
@@ -454,6 +455,48 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
     del fake.prefill
     assert seen and set(seen) == {before}
     assert (w.total_tokens, w.turn_open) == before
+
+
+@pytest.mark.parametrize("fault", [RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("ending", ["answer", "call"])
+def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending):
+    w, fake = tool_wrapper()
+    w.begin("persona", tools=weather_registry().specs())
+    w.reply("eins").finish()
+    before = _state(w)
+    recorded = rendered_cache.RenderedCache._drop_unplaceable
+    failing = iter([True])
+
+    def recording(self):
+        if next(failing, False):
+            raise fault("recording failed")
+        return recorded(self)
+
+    monkeypatch.setattr(rendered_cache.RenderedCache, "_drop_unplaceable", recording)
+    fake.call_script = ['fn:weather{"city": "Bonn"}'] if ending == "call" else []
+    with pytest.raises(fault, match="recording failed"):
+        w.reply("zwei", tool_call_policy="yield").finish()
+    assert _state(w) == before
+    assert_cache_reads_as_rendered(w, fake)
+    fake.call_script = []
+    w.reply("drei").finish()
+    assert w.conversation()["messages"][-2] == {"role": "user", "content": "drei"}
+
+
+def test_a_call_that_cannot_be_read_is_never_published_as_owed(monkeypatch):
+    w, fake = tool_wrapper()
+    w.begin("persona", tools=weather_registry().specs())
+    owed = []
+    publish = rendered_cache.RenderedCache._publish
+
+    def publishing(self):
+        publish(self)
+        owed.append(self._published.pending_calls)
+
+    monkeypatch.setattr(rendered_cache.RenderedCache, "_publish", publishing)
+    fake.call_script, fake.replies = ["@@garbled((("], ["Sorry."]
+    w.reply("Wetter?", tool_call_policy="yield").finish()
+    assert owed and not any(owed)
 
 
 # ----- what a request asks for ------------------------------------------------------
