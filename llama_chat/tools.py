@@ -154,7 +154,8 @@ class ToolTurn:
             result after the call it answers.
 
     Raises:
-        ValueError: If a result answers no call made before it in the turn.
+        ValueError: If a step is none of these, a call's arguments are not a
+            ``dict``, or a result answers no call made before it in the turn.
     """
 
     steps: tuple
@@ -162,7 +163,13 @@ class ToolTurn:
     def __post_init__(self) -> None:
         owed = 0
         for step in self.steps:
+            if not isinstance(step, (str, Thought, ToolCall, ToolResult)):
+                raise ValueError(f"a ToolTurn's step is a str, a Thought, a ToolCall or a "
+                                 f"ToolResult, not {type(step).__name__}: {step!r}")
             if isinstance(step, ToolCall):
+                if not isinstance(step.arguments, dict):
+                    raise ValueError(f"the call to {step.name!r} in a ToolTurn has arguments "
+                                     f"that are not a dict: {step.arguments!r}")
                 owed += 1
             elif isinstance(step, ToolResult):
                 if not owed:

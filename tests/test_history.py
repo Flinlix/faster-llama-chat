@@ -358,3 +358,13 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
     reply = w.reply("z" * int(context_size * 0.6)).finish()
     # Dropping hundreds of exchanges costs a few renders, not one each.
     assert reply.n_evicted_messages > 100 and len(fake.rendered) - before < 40
+
+
+@pytest.mark.parametrize("steps, named", [
+    (("Let me look.", {"role": "tool", "content": "sneaky"}), "dict"),
+    (("Let me look.", 42), "int"),
+    ((ToolCall("clock", ["not", "a", "dict"]), ToolResult("clock", "12:00")), "arguments"),
+])
+def test_a_tool_turn_with_a_step_it_cannot_hold_is_refused_naming_it(steps, named):
+    with pytest.raises(ValueError, match=named):
+        ToolTurn(steps)

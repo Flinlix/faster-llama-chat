@@ -4373,3 +4373,11 @@ and a NaN a `ValueError` from the lock, neither naming the argument. Infinity
 now waits as `None` does, and a value that is not a number of seconds of at
 least 0 (NaN, a negative number, a string, a bool) is refused naming
 `timeout_s`.
+
+### A tool turn refuses a step it cannot hold (366.26)
+
+366.26 (K7). A `ToolTurn` step of another kind, such as a message dictionary
+or a number, was silently dropped from the history, and a call whose
+arguments were a list reached the template, which refused the whole
+conversation without saying why. `ToolTurn` now refuses both when it is made,
+naming the step.
