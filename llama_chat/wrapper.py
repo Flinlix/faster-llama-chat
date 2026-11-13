@@ -12,6 +12,7 @@ import contextlib
 import logging
 import math
 import threading
+import weakref
 from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field, replace
 
@@ -104,6 +105,8 @@ class ChatWrapper:
         self._lock = threading.Lock()
         # The thread that holds it while one does: for a reply, the one that read it last.
         self._holder: threading.Thread | None = None
+        # The newest reply's steps, which close() ends first on the thread they hold it for.
+        self._newest_reply: Callable[[], Generator | None] = lambda: None
         # The policy the newest turn was started with, or for a turn the history opened the
         # first one a reply gave it, and the calls it may still run, which a reply going on
         # with it keeps.
@@ -351,8 +354,9 @@ class ChatWrapper:
             tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        return ReplyStream(self._noting_each_reader(
-            self._replying(text, tool_call_policy, max_calls, **options)))
+        steps = self._noting_each_reader(self._replying(text, tool_call_policy, max_calls, **options))
+        self._newest_reply = weakref.ref(steps)
+        return ReplyStream(steps)
 
     def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
                             ) -> Generator[str | ToolCall, None, Reply]:
@@ -648,11 +652,17 @@ class ChatWrapper:
     def close(self) -> None:
         """Free the underlying context and model. Idempotent and thread-safe.
 
-        Waits for any in-flight generation. Closes a context passed to the
-        constructor as well. Every action after close raises ``RuntimeError``
-        once its arguments are checked; :meth:`conversation` and the
-        properties that say where it stands still answer.
+        Waits for any in-flight generation; on the thread that reads an
+        unfinished reply, ends that reply first, as closing its stream does,
+        and from a tool that reply runs, is refused as any action is.
+        Closes a context passed to the constructor as well. Every action after
+        close raises ``RuntimeError`` once its arguments are checked;
+        :meth:`conversation` and the properties that say where it stands still
+        answer.
         """
+        reply = self._newest_reply()
+        if self._holder is threading.current_thread() and reply is not None and not reply.gi_running:
+            reply.close()           # from a tool the reply runs, it is refused below instead
         with self._held():
             if self._closed:
                 return

@@ -1233,13 +1233,15 @@ def _within_seconds(action, seconds=10):
     return outcome["returned"]
 
 
-def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging():
+@pytest.mark.parametrize("action", [lambda w: w.inject("Notiz"), lambda w: w.close()],
+                         ids=["inject", "close"])
+def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(action):
     wrapper, fake = tool_wrapper()
     registry = ToolRegistry()
 
     @registry.tool("Notiert etwas.")
     def note() -> str:
-        wrapper.inject("Notiz")
+        action(wrapper)
         return "ok"
 
     wrapper.begin("persona", tools=registry)
@@ -1257,8 +1259,7 @@ def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(
     lambda w: w.declare_tools([ToolSpec("clock", "…", {})]),
     lambda w: w.truncate_last_reply(""),
     lambda w: w.wait_idle(),
-    lambda w: w.close(),
-], ids=["inject", "reply", "begin", "declare_tools", "truncate_last_reply", "wait_idle", "close"])
+], ids=["inject", "reply", "begin", "declare_tools", "truncate_last_reply", "wait_idle"])
 def test_an_action_on_the_thread_reading_a_reply_is_refused_and_names_the_reply(action):
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")

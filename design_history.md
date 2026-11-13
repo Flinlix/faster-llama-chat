@@ -4240,3 +4240,16 @@ the model when the context is collected, and which `close()` runs at once.
 Either way the engine is freed exactly once. A finalizer was chosen over
 `__del__` because it holds no reference to the context and runs at most once,
 also at interpreter exit.
+
+### Closing on the thread that reads a reply ends that reply first
+
+366.3 (T1). In `with ChatWrapper(...) as chat:`, an error raised while the
+caller read a reply left the reply holding the wrapper; `__exit__` then
+called `close()` on that same thread, which was refused with "the reply this
+thread is reading still holds this conversation". The caller's own error was
+hidden behind that one, and the model was never freed. `close()` on the
+thread that holds the wrapper for an unfinished reply now ends that reply
+first, as closing its stream does, recording what it produced, and then
+closes; the caller's error comes through unchanged. From a tool the reply
+runs, where the reply is still executing, `close()` stays refused as every
+other action is, and the tool is answered as one that raised.

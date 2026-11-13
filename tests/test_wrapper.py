@@ -1162,3 +1162,15 @@ def test_a_question_sees_the_same_history_whether_or_not_it_was_prepared_ahead(q
     assert "eins" in seen[0]
     assert _n_exchanges(w) == 1 and rows(w)[1]["text"] == question
     assert_consistent(w, fake)
+
+
+def test_closing_on_the_thread_that_reads_an_unfinished_reply_ends_it_and_keeps_the_callers_error():
+    fake, closed = FakeContext(PLAIN, gen_tokens=5), []
+    fake.close = lambda: closed.append(True)
+    with pytest.raises(ValueError, match="the reader failed") as raised:
+        with ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake) as chat:
+            chat.begin("persona")
+            for _ in chat.reply("hallo"):
+                raise ValueError("the reader failed")
+    assert raised.value.__context__ is None
+    assert closed == [True]
