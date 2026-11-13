@@ -494,7 +494,8 @@ shipped in `llama_chat/addons/`, each used only where it names the model's
 template by its SHA-256. A file next to the GGUF that names no template, or
 another one, or is no JSON object, is not used, and a warning on the logger
 `llama_chat` says why. It fills in only what the template cannot tell; what
-the template states, the template decides. The file used is checked when the
+the template states, the template decides, except a call format the file
+names, which wins. The file used is checked when the
 model loads, each value's type included and a null value refused, and
 anything else in it is refused with an error naming the file.
 
@@ -512,9 +513,10 @@ anything else in it is refused with an error naming the file.
 template, it also applies to a fine-tuned model that keeps the same template,
 and its values win over those that fine-tune's GGUF states; a file next to the
 GGUF, or values set in `Config`, take precedence for such a model. `call` says
-how the model writes a call where its template shows none it can be read from:
-the text a call opens with, the text after the function's name, and the text
-that closes it; it is refused where the template never writes that closing.
+how the model writes a call: the text a call opens with, the text after the
+function's name, and the text that closes it. It is taken over whatever the
+template shows of a call, and refused where the template never writes that
+closing.
 `reasoning_on` names the template variables, with their values, that turn the
 model's reasoning on, in place of what the library reads off the template. The
 library reads only the switches templates share: `enable_thinking`, and a

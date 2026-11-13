@@ -244,14 +244,13 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
 
 
 @pytest.mark.parametrize("stem", _TOOL_STEMS)
-def test_an_add_on_files_call_format_is_ignored_where_the_template_shows_one(stem):
-    _context, template = _load(stem)
-    if template.call_boundary().tool_tokens is None:
-        return                          # no tag of its own marks a call
-    # The template marks its calls with tags of their own; a file that says otherwise loses.
-    boundary = ResolvedTemplate(FakeContext(fixture(stem)),
-                                {"opening": "CALL:", "name_close": " ", "closing": "END"}).call_boundary()
-    assert boundary.tool_tokens is not None and boundary.call_texts is None
+def test_an_add_on_files_call_format_wins_where_the_template_shows_one_and_is_checked_against_it(
+        stem):
+    # The file's call is taken over the template's own, and so refused where the template
+    # never writes its closing.
+    with pytest.raises(ValueError, match="add-on file closes a call"):
+        ResolvedTemplate(FakeContext(fixture(stem)),
+                         {"opening": "CALL:", "name_close": " ", "closing": "QQNEVERQQ"})
 
 
 @pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)

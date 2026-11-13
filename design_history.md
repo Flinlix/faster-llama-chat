@@ -3856,3 +3856,18 @@ missing for: a prompt with reasoning on that already closes the thought
 (hunyuan-3 without its file writes `<think:opensource></think:opensource>`)
 means the model cannot reason, so asking for reasoning is refused with a
 pointer to `reasoning_on` instead of giving an answer that never thought.
+
+### An add-on file's call format wins over the template's
+
+348.3A, review finding A5, and the contract's invariant 2 changed with it: what
+the template states, the template decides, except a call format the add-on
+file names, which wins. `ResolvedTemplate._resolve_calls` takes the file's
+call first, wherever it is given, tag-marked templates included, and checks
+its closing against the template as before. Not done as proposed: removing the
+rule that refuses a plain-text call opening found in the reply's own header
+(`_opens_in_reply_header`). Measured: without it, gpt-oss without its add-on
+file read its call texts from the template and could call tools, although
+such a model may write the header in another order than its template, which
+is guessing; with the rule it stays refused, naming the add-on file as the
+remedy, as principle 2 asks. The rule now runs only where no add-on call is
+given, so it costs a model with one nothing.

@@ -471,7 +471,8 @@ class ResolvedTemplate:
             name, whether the add-on file gave the call's texts, and the token
             that ends a reply, which a reply ended by text has none of.
         """
-        tool_tokens, lead_in = self._resolve_tool_tokens()
+        # An add-on file's call wins over what the template shows of one.
+        tool_tokens, lead_in = (None, "") if self._addon_call else self._resolve_tool_tokens()
         call_texts, from_file = (None, False) if tool_tokens is not None else self._resolve_call_texts()
         opens_as_text = (call_texts is not None
                          and first_special_token(self._context, call_texts[0]) is None)
@@ -482,16 +483,15 @@ class ResolvedTemplate:
         return boundary, lead_in, from_file, None if turn_end_text else turn_end_token
 
     def _resolve_call_texts(self) -> tuple[tuple[str, str] | None, bool]:
-        """The texts around a call, from the template, else from the model's add-on file.
+        """The texts around a call, from the model's add-on file, else from the template.
 
         Returns:
             The texts, and whether they came from the add-on file.
         """
-        found = self._template_call_texts()
-        if found is not None:
-            return found, False
         call = self._addon_call
-        if not call or self._tool_calls is None:
+        if not call:
+            return self._template_call_texts(), False
+        if self._tool_calls is None:
             return None, False
         rendered = self._render([{"role": "user", "content": _PROMPT},
                                  calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0)])
