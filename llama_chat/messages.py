@@ -144,15 +144,29 @@ def call_id(n: int) -> str:
 
 
 def next_call_number(ids) -> int:
-    """One past the highest number among ``ids`` that :func:`call_id` writes, so that every id numbered from it is new."""
-    numbers = [int(found.group(1), 36) for found in map(_CALL_ID.fullmatch, ids) if found]
-    return max(numbers, default=-1) + 1
+    """A number past every one among ``ids`` that :func:`call_id` writes, so that the ids numbered from it are new and nine characters long.
+
+    One past the highest, where that leaves room below 36**5; else the start
+    of the lowest run of :data:`_FREE_RUN` numbers none of ``ids`` holds.
+    """
+    taken = {int(found.group(1), 36) for found in map(_CALL_ID.fullmatch, ids) if found}
+    after = max(taken, default=-1) + 1
+    if after + _FREE_RUN <= _ID_LIMIT:
+        return after
+    start = 0
+    while clash := [n for n in taken if start <= n < start + _FREE_RUN]:
+        start = max(clash) + 1
+    return start
 
 
 # How many base-36 digits a call's number is written with, at the least.
 _ID_DIGITS = 5
 _BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
-_CALL_ID = re.compile(r"call([0-9a-z]{5,})")
+_CALL_ID = re.compile(r"call([0-9a-z]{5})")
+# The numbers whose ids keep five digits, and how many free numbers a conversation
+# is given at once where it starts again from the lowest.
+_ID_LIMIT = 36 ** _ID_DIGITS
+_FREE_RUN = 1000
 
 
 def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:

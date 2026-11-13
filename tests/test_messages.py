@@ -78,4 +78,12 @@ def test_every_call_id_of_a_long_conversation_is_nine_letters_and_digits_and_new
     ids = [call_id(n) for n in numbers]
     assert all(len(found) == 9 and found.isalnum() for found in ids)
     assert len(set(ids)) == len(ids)
-    assert next_call_number(ids) == 36 ** 5
+    start = next_call_number(ids)
+    assert len(call_id(start)) == 9 and call_id(start) not in ids
+
+
+def test_ids_from_a_history_never_push_the_next_one_past_nine_characters():
+    start = next_call_number(["callzzzzz", "call00000", "callbacks"])
+    assert all(len(call_id(n)) == 9 for n in range(start, start + 1000))
+    assert not {call_id(n) for n in range(start, start + 1000)} & {"callzzzzz", "call00000",
+                                                                  "callbacks"}

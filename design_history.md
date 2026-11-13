@@ -4013,3 +4013,14 @@ was refused as "the model ships no chat template", which is untrue where the
 template exists. The load now says that cause only where there is no
 template text, and otherwise that the template writes no turn whose reply can
 be told from the question.
+
+### A history's ids never push the next call id past nine characters
+
+Review finding H5. The next call number was one past the highest number among
+a history's ids that read as the library's own, letters included, so an id
+`callzzzzz` (nine characters, valid for ministral-2410) made the next one
+`call100000`, which that template refuses, and an id such as `callbacks` fed
+the count as well. Only ids of exactly five base-36 digits are counted now.
+Where one past the highest would leave fewer than 1,000 numbers below 36**5,
+the conversation numbers from the lowest run of 1,000 numbers that no id of
+the history holds, so every id stays nine characters long and new.
