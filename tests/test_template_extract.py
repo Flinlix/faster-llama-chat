@@ -22,11 +22,17 @@ from llama_chat.template_extract import extract_content_rewrites, extract_fragme
 
 from .chat_templates import STEMS, expected, fixture
 from .fake_context import FakeContext
+from .invented_templates import TAGS as INVENTED_TAGS
 
 
-def _tool_fragments(render):
-    """The call tags a render yields, through both steps of the recovery."""
-    return extract_tool_fragments(render, extract_fragments(render))
+def _tool_fragments(render, tags=INVENTED_TAGS):
+    """The call tags a render yields, through both steps of the recovery, the model's own tags ``tags``."""
+    return extract_tool_fragments(render, extract_fragments(render, tags), tags)
+
+
+def _tags(stem):
+    """The tags of the test template ``stem``, as its tokenizer gives them."""
+    return tag_texts(FakeContext(fixture(stem)))
 
 
 @functools.cache
@@ -86,7 +92,7 @@ def test_empty_suffix_template_extracts_without_crashing():
 
 @pytest.mark.parametrize("stem", _stems_with("tool_fragments"))
 def test_a_tool_calling_template_yields_its_call_tags(stem):
-    tools = _tool_fragments(_real(stem))
+    tools = _tool_fragments(_real(stem), _tags(stem))
     assert tools is not None
     # The argument's own text is gone from the closing; what is left is the
     # call's closing tag, with what the template writes around it.
@@ -96,7 +102,7 @@ def test_a_tool_calling_template_yields_its_call_tags(stem):
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if not fixture(stem)["calls_tools"]])
 def test_a_template_that_cannot_call_tools_has_no_tool_fragments(stem):
-    assert _tool_fragments(_real(stem)) is None
+    assert _tool_fragments(_real(stem), _tags(stem)) is None
 
 
 def _untagged_call_render(messages, **_options):
@@ -503,3 +509,10 @@ def test_a_user_tag_after_a_past_replys_own_closing_is_found_by_the_models_tags_
     tags = ("{{user}}", "{{bos}}")
     assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", tags) == "{{user}}"
     assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", ()) == ""
+
+
+def test_a_shared_beginning_ends_where_one_of_the_models_tags_ends_whatever_its_shape():
+    from llama_chat.template import shared_tags_length
+    assert shared_tags_length("«turn»model", "«turn»user", ("«turn»",)) == len("«turn»")
+    assert shared_tags_length("«turn»model", "«turn»user", ()) == 0
+    assert shared_tags_length("say model", "say user", ()) == len("say ")

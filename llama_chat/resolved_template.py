@@ -95,7 +95,8 @@ class ResolvedTemplate:
         self._validate_template()
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
-        self._tool_calls = extract_tool_fragments(self._read_as_probes, self._fragments)
+        self._tool_calls = extract_tool_fragments(self._read_as_probes, self._fragments,
+                                                  self._tag_texts)
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
@@ -140,7 +141,8 @@ class ResolvedTemplate:
         """:meth:`_render` as the load checks read it, made once for each set of template variables."""
         key = tuple(sorted(self._variables.items()))
         if self._read_as_probes_for != key:
-            self._probes_render, self._read_as_probes_for = as_probes_read(self._render), key
+            self._probes_render, self._read_as_probes_for = (
+                as_probes_read(self._render, self._tag_texts), key)
         return self._probes_render
 
     def _render(self, messages, tools=None, *, variables=None, **options):
@@ -257,7 +259,7 @@ class ResolvedTemplate:
         prompt, tag = self.generation_prompt(reasoning), self._fragments.assistant_prefix
         if tag.startswith(prompt):
             return tag[len(prompt):]
-        shared = shared_tags_length(tag, prompt)
+        shared = shared_tags_length(tag, prompt, self._tag_texts)
         return tag[shared:] if self._closes_empty_thought(prompt[shared:], tag[shared:]) else ""
 
     def _closes_empty_thought(self, written: str, opening: str) -> bool:
@@ -578,7 +580,7 @@ class ResolvedTemplate:
         if call_texts is None:
             return None
         closing, call_open = self._fragments.assistant_suffix, call_texts[0]
-        shared = shared_tags_length(closing, call_open)
+        shared = shared_tags_length(closing, call_open, self._tag_texts)
         if not shared:
             return None
         tag = first_special_token(self._context, closing[shared:])

@@ -3836,7 +3836,8 @@ written otherwise is read the same way. The general rule that a shared
 beginning stops where a tag ends at `>` or `]` or a word at whitespace
 (`shared_tags_length`) is left as it is: it is the library's rule for every
 template, not one model's, and replacing it would carry the tag list into
-nine places for no measured gain.
+nine places for no measured gain. (Revised by "A tag's end is found by the
+model's own tags": the user chose the tag list, 356.10A.)
 
 ### Only the shared reasoning switches are read from a template
 
@@ -4070,3 +4071,18 @@ the tool's schema afterwards: text where the schema asks for text and not for
 a number, the number otherwise, and without a schema the number. A function
 name written as a number is no call. The registry's own check is unchanged:
 a number that reaches a text parameter by another way is still refused.
+
+### A tag's end is found by the model's own tags
+
+356.10A, completing 345.12. Where two template texts share a beginning, the
+shared part is cut back to where a tag or a word ends, so that it never stops
+inside a tag the two spell differently. A tag's end was read as the
+characters `>` or `]`, which two test template families do not end their
+tags with (`〈|EOS|〉`, and tags ending in `[`); there the rule fell back to the
+last whitespace or bracket, which worked by the texts' chance. Now
+`shared_tags_length` takes the model's own tags from its tokenizer and stops
+where one of them ends, or where a word ends at whitespace, in all six places
+that use it: the conversation's end text, the user tag after a past reply,
+the thought's opening, a call's opening after the reply's tag, the answer's
+opening, and the text a reply ends with where a call opens with the start of
+its closing. No bracket character is left written into the code for it.

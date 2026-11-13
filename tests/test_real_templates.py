@@ -68,7 +68,7 @@ def test_a_load_works_out_what_a_template_writes_after_the_last_message_once_per
     worked_out = []
     end = template_extract._conversation_end
     monkeypatch.setattr(template_extract, "_conversation_end",
-                        lambda render: (worked_out.append(1), end(render))[1])
+                        lambda render, tags: (worked_out.append(1), end(render, tags))[1])
     _load(stem)
     # Two checks on the model's own render, then once for the default variables and
     # once more where a variable moves the declarations.

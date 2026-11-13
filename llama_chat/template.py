@@ -215,13 +215,13 @@ def common_suffix_length(one: Sequence, other: Sequence) -> int:
     return common_prefix_length(one[::-1], other[::-1])
 
 
-def shared_tags_length(text: str, other: str) -> int:
-    """How long a beginning the two share, ending where a tag or a word ends.
+def shared_tags_length(text: str, other: str, tags: tuple[str, ...]) -> int:
+    """How long a beginning the two share, ending where one of the model's ``tags`` or a word ends.
 
-    A tag ends at ``>`` or ``]`` and a word at whitespace, so the shared part
-    never stops inside a tag the two spell differently.
+    A word ends at whitespace, so the shared part never stops inside a tag or
+    a word the two spell differently.
     """
     shared = common_prefix_length(text, other)
-    while shared and not (text[shared - 1].isspace() or text[shared - 1] in ">]"):
+    while shared and not (text[shared - 1].isspace() or text[:shared].endswith(tags)):
         shared -= 1
     return shared

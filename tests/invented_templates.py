@@ -98,7 +98,7 @@ _SWITCHES = {
 
 
 # Every tag the invented templates write, as a test template's file lists its own.
-_TAGS = ("<[turn>", "<turn]>", "<call>", "</call>", "<decl>", "</decl>", "<result>", "</result>",
+TAGS = ("<[turn>", "<turn]>", "<call>", "</call>", "<decl>", "</decl>", "<result>", "</result>",
          "<done>", "<think_on>", "<thought>", "</thought>", "<sep>")
 
 
@@ -124,7 +124,7 @@ def _invented(**switches) -> dict:
         "render_variables": ({"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}
                              if can_reason else {"off": {}}),
         "chat_template": header + _TEXT.lstrip("\n"),
-        "tags": list(_TAGS),
+        "tags": list(TAGS),
     }
 
 

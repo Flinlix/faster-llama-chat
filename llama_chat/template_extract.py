@@ -87,18 +87,19 @@ def refusing(render: Render) -> Render:
     return rendered
 
 
-def as_probes_read(render: Render) -> Render:
+def as_probes_read(render: Render, tags: tuple[str, ...] = ()) -> Render:
     """``render`` as probes read it.
 
     It answers ``None`` where it raises, a template refusing a shape. A render
     without a generation prompt comes back without what the template writes
-    once after a conversation's last message, which belongs to no turn. A
-    render this made already comes back as it is.
+    once after a conversation's last message, which belongs to no turn, read
+    up to where one of the model's ``tags`` or a word ends. A render this
+    made already comes back as it is.
     """
     if getattr(render, "reads_as_probes", False):
         return render
     refused = refusing(render)
-    end = _conversation_end(refused)
+    end = _conversation_end(refused, tags)
 
     def rendered(*args, **kwargs):
         text = refused(*args, **kwargs)
@@ -110,7 +111,7 @@ def as_probes_read(render: Render) -> Render:
     return rendered
 
 
-def _conversation_end(render: Render) -> str:
+def _conversation_end(render: Render, tags: tuple[str, ...]) -> str:
     """What a render without a generation prompt writes after its last turn.
 
     Read as what follows a lone user turn but not the same turn followed by a
@@ -124,7 +125,7 @@ def _conversation_end(render: Render) -> str:
         return ""
     after_alone = alone.split(USER_SENTINEL, 1)[1]
     after_followed = followed.split(USER_SENTINEL, 1)[1]
-    end = after_alone[shared_tags_length(after_alone, after_followed):]
+    end = after_alone[shared_tags_length(after_alone, after_followed, tags):]
     return end if followed.endswith(end) else ""
 
 
@@ -145,7 +146,7 @@ def extract_fragments(render: Render, tags: tuple[str, ...] = ()) -> TemplateFra
     Returns:
         The fragments, or ``None`` where the model ships no usable template.
     """
-    render = as_probes_read(render)
+    render = as_probes_read(render, tags)
     user = render([{"role": "user", "content": USER_SENTINEL}], reasoning=False)
     if user is None or USER_SENTINEL not in user:
         return None
@@ -178,7 +179,7 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
         be recovered. A template without a switch that marks one reasons, or
         may, in every reply.
     """
-    render = as_probes_read(render)
+    render = as_probes_read(render, tags)
     found = (_thought_tags(render, fragments, tool_calls, tags)
              or _empty_thought_tags(render, tags))
     if found is None:
@@ -207,7 +208,7 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
     as the closing without its first slash. Such a template has no switch, so
     the model may reason in every reply.
     """
-    render = as_probes_read(render)
+    render = as_probes_read(render, tags)
     known = set(tags)
     for close in tags:
         opening = close.replace("/", "", 1)
@@ -302,7 +303,7 @@ def _past_exchange(render: Render, first_prefix: str,
     if not between.startswith(assistant_suffix):
         # A past reply closes with another tag than a newest one; the user
         # tag then starts where the role tags' shared opening last occurs.
-        opener = assistant_prefix[:shared_tags_length(assistant_prefix, first_prefix)]
+        opener = assistant_prefix[:shared_tags_length(assistant_prefix, first_prefix, tags)]
         start = between.rfind(opener) if opener else -1
         if start <= 0:
             return None
@@ -393,7 +394,7 @@ def _thought_tags(render: Render, fragments: TemplateFragments,
             # What the model writes itself after the generation prompt.
             thought_open = before[len(prompt):]
         else:
-            thought_open = before[shared_tags_length(before, fragments.assistant_prefix):]
+            thought_open = before[shared_tags_length(before, fragments.assistant_prefix, tags):]
         if not thought_open.strip():
             thought_open = _last_tag(before, tags)
         thought_close = rest.split(after, 1)[0] if after in rest else ""

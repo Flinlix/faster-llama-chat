@@ -31,8 +31,8 @@ _NUMBER = 1234
 _STRING2 = "VALTWO"
 
 
-def extract_tool_fragments(render: Render,
-                           fragments: TemplateFragments) -> ToolCallFragments | None:
+def extract_tool_fragments(render: Render, fragments: TemplateFragments,
+                           tags: tuple[str, ...]) -> ToolCallFragments | None:
     """Recover what a template wraps a generated tool call in.
 
     Two probes differing only in their argument's type, so what the renders
@@ -46,12 +46,13 @@ def extract_tool_fragments(render: Render,
             turn at all, and what came back would open a call with a turn tag.
             An assistant tag that is empty is no such case: the reply then
             begins where the user turn ends.
+        tags: The texts of the model's own tags, where a tag ends.
 
     Returns:
         The tags, or ``None`` where nothing usable can be recovered, which is
         what a model that cannot call tools looks like from here.
     """
-    render = as_probes_read(render)
+    render = as_probes_read(render, tags)
     if fragments.assistant_prefix == fragments.user_prefix:
         return None
     text = _render_call(render, {_KEY: _STRING})
@@ -70,7 +71,7 @@ def extract_tool_fragments(render: Render,
         return None
     turn = head.split(after_user, 1)[1]
     shared = (len(fragments.assistant_prefix) if turn.startswith(fragments.assistant_prefix)
-              else shared_tags_length(turn, fragments.assistant_prefix))
+              else shared_tags_length(turn, fragments.assistant_prefix, tags))
     if not shared and fragments.assistant_prefix:
         return None
     call_open = turn[shared:]
