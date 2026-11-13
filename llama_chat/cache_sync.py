@@ -312,7 +312,9 @@ def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int 
     memory, wanted = _as_text(held), _as_text(target)
     probe = wanted[start:start + 8]
     best, best_length, at = None, len(probe) - 1, memory.find(probe, start + 1) if probe else -1
-    while at >= 0:
+    longest = len(wanted) - start
+    # Later candidates can only match less than what is left after them.
+    while at >= 0 and best_length < min(longest, len(memory) - at):
         length = common_prefix_length(memory[at:], wanted[start:])
         if length > best_length:
             best, best_length = at, length

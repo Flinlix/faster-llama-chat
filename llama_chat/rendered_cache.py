@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import itertools
+import math
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields, replace
 
 from .cache_context import GenerationAccumulator
@@ -1233,17 +1236,61 @@ class RenderedCache:
                 room well below ``limit``, measure that room beside the turn,
                 so that a long result in it drops only the history it needs.
         """
-        def over(bound, most):
-            return (self._rendering.length(self._state.messages, generation_prompt) > bound
-                    or not tokens_only and self._too_many(most))
+        def length() -> int:
+            return self._rendering.length(self._state.messages, generation_prompt)
 
-        if not over(limit, self._config.max_history_exchanges):
+        def too_many(most: int | None) -> int:
+            limit = self._config.max_history_exchanges if most is None else most
+            return 0 if tokens_only or limit is None else max(
+                0, exchange_count(self._state.messages) - limit)
+
+        if length() <= limit and not too_many(self._config.max_history_exchanges):
             return False
         bound, most = self._drop_bound(limit, beside_open_turn), self._exchanges_after_drop()
-        dropped = False
-        while over(bound, most) and self._drop_oldest_exchange(newest_too):
-            dropped = True
-        return dropped
+        return self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
+
+    def _drop_oldest_exchanges(self, length: Callable[[], int], bound: int, at_least: int,
+                               newest_too: bool) -> bool:
+        """Drop the fewest oldest exchanges, ``at_least`` of them, after which ``length()`` is within ``bound``, or every one that can go; whether any went.
+
+        Each try renders what is left, so the count is found with few tries:
+        every one that can go first, which leaves the shortest render, then
+        counts placed where the lengths measured so far put the bound, halving
+        the range instead where that does not halve it.
+        """
+        messages, kept = list(self._state.messages), self._state.kept
+
+        def dropping(count: int) -> int:
+            """Drop ``count`` exchanges from the conversation as it was; how many could go."""
+            self._state.messages[:], self._state.kept = messages, kept
+            return sum(1 for _ in itertools.takewhile(
+                bool, (self._drop_oldest_exchange(newest_too) for _ in range(count))))
+
+        high = dropping(len(messages))
+        long_high = length()
+        if long_high > bound or high <= at_least:
+            return high > 0             # as many as can go, whether or not that is enough
+        dropping(0)
+        low, long_low = 0, length()     # over after ``low`` drops, within after ``high``
+        if at_least:
+            low = at_least - 1          # over in count, whatever its length
+        halve = False
+        while high - low > 1:
+            if halve or long_low <= long_high:
+                count = (low + high) // 2
+            else:
+                count = low + math.ceil((high - low) * (long_low - bound) / (long_low - long_high))
+            count = min(max(count, low + 1, at_least), high - 1)
+            dropping(count)
+            measured = length()
+            width = high - low
+            if measured > bound or count < at_least:
+                low, long_low = count, measured
+            else:
+                high, long_high = count, measured
+            halve = not halve and (high - low) * 2 > width
+        dropping(high)
+        return high > 0
 
     def _drop_bound(self, limit: int, beside_open_turn: bool = False) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.

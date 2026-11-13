@@ -7,7 +7,7 @@ from llama_chat.tools import Thought, ToolCall, ToolRegistry, ToolResult, ToolSp
 from llama_chat.wrapper import ChatWrapper
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
-from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS,
+from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS)
 
 from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
@@ -346,3 +346,15 @@ def test_begin_counts_the_items_kept_as_they_were_given():
     kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})])
     assert 3 <= kept < len(longer)
     assert w.conversation()["messages"][0] == longer[-kept]
+
+
+@pytest.mark.parametrize("context_size", [4096, 8192])
+def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_times_however_many_go(
+        context_size):
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=context_size), context=fake)
+    w.begin("sys", [m for _ in range(4000) for m in (("user", "ok"), ("assistant", "fine"))])
+    before = len(fake.rendered)
+    reply = w.reply("z" * int(context_size * 0.6)).finish()
+    # Dropping hundreds of exchanges costs a few renders, not one each.
+    assert reply.n_evicted_messages > 100 and len(fake.rendered) - before < 40

@@ -4287,3 +4287,28 @@ the past thought, so the kept turn is written the template's way at the
 first check and the cost ends there. Of the 41 test templates that call
 tools, 32 skip the check with reasoning off, Gemma 4 among them. A model
 whose template cannot call tools is not asked, as no turn can keep a call.
+
+### An eviction finds how many exchanges to drop in a few renders
+
+366.5 (K1). An eviction dropped the oldest exchange and rendered the whole
+conversation again, one exchange at a time, until it fitted. A long text
+asked into a context full of short exchanges stalled before its answer for
+that: 5 s at a 16k context, 21 s at 32k and 85 s at 64k on the review's
+stand-in, where 500 to 2,000 exchanges went.
+
+The count is now searched. The first try drops every exchange that can go,
+which leaves the shortest render and so the cheapest; where even that is too
+long, it stays so, as before. Otherwise each further try drops the count at
+which the lengths measured so far, read as a straight line, reach the bound,
+and a try that does not halve the range is followed by one that does, so an
+uneven conversation costs no more tries than halving. The count kept is the
+fewest that fit, as before; a count of exchanges over
+`max_history_exchanges` is a lower bound of it.
+
+The same request also spent its time finding where the cache goes on after
+the dropped stretch: with many alike exchanges, every one of them was a
+candidate, and each was compared to its end. The search now stops once no
+later candidate can match longer than the best one found, which leaves the
+same answer. Measured on the same stand-in after both changes: 0.2 s at 16k,
+0.4 s at 32k and 1.0 s at 64k, about two dozen renders instead of one per
+dropped exchange.
