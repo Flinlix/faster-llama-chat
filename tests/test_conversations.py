@@ -15,6 +15,7 @@ import json
 import math
 import os
 import sys
+import time
 
 import pytest
 
@@ -316,14 +317,19 @@ def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_an_argument_with_characters_json_may_escape_is_kept_apart_from_the_tags(stem):
-    """Written by ``tojson``, by hand, or as it is, a past call's text is found in its place."""
+def test_many_past_calls_whose_text_the_template_wraps_are_placed_in_little_time(stem):
+    """A text the template writes otherwise than as it is (escaped, wrapped) is still placed, and fast."""
     city = 'Is "<b> & c\'s" café\nfine?'
-    history = [("user", "Weather?"), ToolTurn((ToolCall(WEATHER.name, {"city": city}),
-                                               ToolResult(WEATHER.name, "sunny"), "Sunny."))]
-    run = _Run(stem)
+    history = []
+    for n in range(20):
+        history += [("user", f"Weather {n}?"),
+                    ToolTurn((ToolCall(WEATHER.name, {"city": city}),
+                              ToolResult(WEATHER.name, "sunny"), f"Sunny {n}."))]
+    run = _Run(stem, context_size=32768)
+    started = time.perf_counter()
     run.begin(history, tools=[WEATHER])
     run.chat.reply(QUESTIONS[0]).finish()
+    assert time.perf_counter() - started < 5
     assert_cache_reads_as_rendered(run.chat, run.context)
 
 

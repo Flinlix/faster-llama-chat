@@ -149,7 +149,7 @@ def _marked(messages: list[dict], declarations: list[dict] | None
 def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: int,
             written) -> SplitRender | None:
     """Where each marker's text sits in ``rendered``; ``None`` where it is not the marked render with the texts in place."""
-    placed = _walk(rendered, _MARKER.split(marked), 0, 0, values, written, ())
+    placed = _walk(rendered, _MARKER.split(marked), values, written)
     if placed is None:
         return None
     own, contents = [], [None] * n_messages
@@ -173,46 +173,61 @@ def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: i
     return SplitRender(rendered, tuple(own), tuple(contents), call_ends)
 
 
-def _walk(rendered: str, parts: list[str], k: int, at: int, values, written, placed: tuple):
-    """The marked render's parts from ``k`` on matched in ``rendered`` from ``at``, each marker's text placed; ``None`` where they do not match.
+def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
+    """The marked render's parts matched in ``rendered``, each marker's text placed; ``None`` where they do not match.
 
     A text the template writes otherwise than in any of its forms, wrapped in
     text of the template's own say, is what lies before the template's next
     text; it is placed only where exactly one place for it leaves the rest of
-    the render matching.
+    the render matching. How the rest matches from a part and a position is
+    worked out once, so that many such texts are placed in polynomial time.
     """
-    while k < len(parts):
-        part = parts[k]
-        if k % 2 == 0:
-            if not rendered.startswith(part, at):
-                return None
-            at, k = at + len(part), k + 1
-            continue
-        value = values.get(part)
-        if value is None:
-            return None
-        following = parts[k + 1] if k + 1 < len(parts) else ""
-        text = next((form for form in _forms(value, written)
-                     if rendered.startswith(form, at)
-                     and rendered.startswith(following, at + len(form))), None)
-        if text is not None:
-            span = (at, at + len(text))
-            placed += ((value, span, span),)
-            at, k = at + len(text), k + 1
-            continue
-        if not following:
-            return None
-        found, start = [], at
-        while (end := rendered.find(following, start)) >= 0 and len(found) < 2:
-            gap = rendered[at:end]
-            inner = gap.find(value.text) if value.text and gap.count(value.text) == 1 else -1
-            own = (at + inner, at + inner + len(value.text)) if inner >= 0 else (at, end)
-            rest = _walk(rendered, parts, k + 1, end, values, written,
-                         placed + ((value, (at, end), own),))
-            if rest is not None:
-                found.append(rest)
-            start = end + 1
-        return found[0] if len(found) == 1 else None
+    ways_from: dict[tuple[int, int], tuple[int, tuple | None]] = {}
+
+    def rest(k: int, at: int) -> tuple[int, tuple | None]:
+        """How many ways, at most two, the parts from ``k`` match from ``at``, and the placements where it is one."""
+        if (k, at) not in ways_from:
+            ways_from[k, at] = matched_from(k, at)
+        return ways_from[k, at]
+
+    def matched_from(k: int, at: int) -> tuple[int, tuple | None]:
+        placed = ()
+        while k < len(parts):
+            part = parts[k]
+            if k % 2 == 0:
+                if not rendered.startswith(part, at):
+                    return 0, None
+                at, k = at + len(part), k + 1
+                continue
+            value = values.get(part)
+            if value is None:
+                return 0, None
+            following = parts[k + 1] if k + 1 < len(parts) else ""
+            text = next((form for form in _forms(value, written)
+                         if rendered.startswith(form, at)
+                         and rendered.startswith(following, at + len(form))), None)
+            if text is not None:
+                span = (at, at + len(text))
+                placed += ((value, span, span),)
+                at, k = at + len(text), k + 1
+                continue
+            if not following:
+                return 0, None
+            ways, found, start = 0, None, at
+            while (end := rendered.find(following, start)) >= 0 and ways < 2:
+                gap = rendered[at:end]
+                inner = gap.find(value.text) if value.text and gap.count(value.text) == 1 else -1
+                own = (at + inner, at + inner + len(value.text)) if inner >= 0 else (at, end)
+                n, after = rest(k + 1, end)
+                if n:
+                    ways += n
+                    found = placed + ((value, (at, end), own),) + (after or ())
+                start = end + 1
+            return min(ways, 2), found if ways == 1 else None
+        return (1, placed) if at == len(rendered) else (0, None)
+
+    ways, placed = rest(0, 0)
+    return placed if ways == 1 else None
     return placed if at == len(rendered) else None
 
 
@@ -225,8 +240,5 @@ def _forms(value: _Value, written) -> list[str]:
     if value.kind == "content":
         forms += [written(form) for form in forms]
     if value.kind != "name":
-        quoted = json.dumps(text)[1:-1]
-        forms += [quoted, json.dumps(text, ensure_ascii=False)[1:-1],
-                  quoted.replace("<", "\\u003c").replace(">", "\\u003e")
-                  .replace("&", "\\u0026").replace("'", "\\u0027")]
+        forms.append(json.dumps(text, ensure_ascii=False)[1:-1])     # as the renderer's tojson
     return list(dict.fromkeys(forms))

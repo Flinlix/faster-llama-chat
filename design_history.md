@@ -3957,3 +3957,28 @@ conversation begins, so that the other templates skip it.
   three times; each is now worked out once for each set of template
   variables. Renders at load over the 52 test templates: 2,448 before, 1,964
   now.
+
+### A text placed by the gap between tags is found in polynomial time
+
+Review finding H1 and the question of H8. Where a caller's text is written
+otherwise than in any of its forms (minicpm-5 wraps an argument holding `<`,
+`&` or a newline in CDATA, say), it is placed as what lies before the
+template's next text, where exactly one such place leaves the rest of the
+render matching. That search tried the rest of the render again for every
+candidate place of every such text, so its cost grew about 3.5 times per
+text: on the stand-in, a minicpm-5 history of 11 such past calls took 2.9 s
+to begin and 3.6 s per reply, and every reply splits the history again. Now
+`_walk` works out once, for each part and position, in how many ways (none,
+one, or more) the rest matches, so the search is polynomial: 0.02 s at 11
+calls, 0.2 s at 40. A text is placed only where the whole render matches in
+exactly one way, which is stricter than before, where a candidate whose rest
+matched in two ways was only skipped.
+
+Of the JSON string forms a text is tried in, only `json.dumps(text,
+ensure_ascii=False)` is left, which is how the renderer's `tojson` writes it.
+Measured over the whole suite: the ASCII-escaped form matched only where it
+equals that one, and the form with `<`, `>`, `&` and `'` escaped as `<`
+and so on matched nothing, since no renderer writes it. The form that is left
+is not needed for correctness, since the gap search finds the same span, but
+for speed: without it a qwen-3 history of 9 such calls took 723 ms on the
+search before this change.
