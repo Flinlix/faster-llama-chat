@@ -4456,3 +4456,13 @@ test template of the same model: `qwen3`, `qwen3.5`, `qwen3-coder` and
 `mistral-3-reasoning`. They are renamed to the test templates' spelling. A
 shipped add-on file is found by its template's fingerprint, never by its
 name, so nothing a caller does changes.
+
+### The demo uses the public interface alone (366.32)
+
+366.32 (D14). The demo subclassed `KVContext`, which the package does not
+export, to count what each action decodes. It now reads the same from the
+public interface: the cache's size after `begin` and `inject`, and each
+reply's `n_prefilled_tokens`, and it loads its models with
+`ChatWrapper(config, on_load_progress=...)`. Run on Gemma 3 1B on the
+processor: 5 to 16 tokens decoded per reply, and the system prompt kept
+through every eviction of the small-context run.

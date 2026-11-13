@@ -8,9 +8,10 @@ Install the package first (see install.sh or README), then run:
     python examples/demo.py /path/to/model.gguf                  # CPU
     python examples/demo.py /path/to/model.gguf --gpu-layers -1  # GPU
 
-The demo proves the core claim by logging how many tokens are *prefilled* per
-action: after ``begin`` primes the conversation, each ``reply``
-prefills only its own new prompt, never the surviving history. The eviction
+The demo proves the core claim by logging how many tokens each ``reply``
+*prefilled*, read from the public ``Reply``: after ``begin`` primes the
+conversation, each prefills only its own new prompt, never the surviving
+history. The eviction
 stress run uses a deliberately tiny context to show the oldest messages being
 dropped while the system prompt survives and the total never crosses
 ``context_size``.
@@ -22,19 +23,6 @@ import argparse
 import sys
 
 from llama_chat import ChatWrapper, Config, ToolTurn
-from llama_chat.context import KVContext
-
-
-class CountingContext(KVContext):
-    """KVContext that records prefill volume so the demo can report reuse."""
-
-    def __init__(self, config: Config, on_load_progress=None) -> None:
-        super().__init__(config, on_load_progress=on_load_progress)
-        self.prefilled = 0
-
-    def prefill(self, token_ids, start_pos, want_logits):
-        self.prefilled += len(token_ids)
-        super().prefill(token_ids, start_pos, want_logits)
 
 
 def banner(title: str) -> None:
@@ -76,30 +64,28 @@ def main() -> None:
         gpu_layers=args.gpu_layers,
         max_reply_tokens=64,
     )
-    ctx = CountingContext(cfg, on_load_progress=load_bar)
+    w = ChatWrapper(cfg, on_load_progress=load_bar)
     load_bar(1.0)           # snap to 100% (the loader may report just short) ...
     print(file=sys.stderr)  # ... then terminate the bar's line
-    w = ChatWrapper(cfg, context=ctx)
 
     begin(w, "You are a concise, helpful assistant.",
           [("user", "Remember my name is Sam."), ("assistant", "Got it, Sam.")])
-    print(f"begin: prefilled {ctx.prefilled} tokens (system + history)")
+    print(f"begin: the cache holds {w.total_tokens} tokens (system + history)")
     show(w)
 
+    before = w.total_tokens
     w.inject("Context: the user is building a llama.cpp wrapper in Python.")
-    print(f"\nafter inject: total prefilled so far {ctx.prefilled}")
+    print(f"\nafter inject: {w.total_tokens - before} tokens more")
     show(w)
 
     # The first reply answers the injected message, so no two user turns follow each other.
     for q in [None, "What's my name?", "What am I building?", "Suggest one optimization."]:
-        before = ctx.prefilled
         reply = w.reply(q).finish()
         print(f"\n> {q or '(the injected message)'}")
         print(f"  reply: {reply.text.strip()[:200]}")
         print(
-            f"  prefilled {ctx.prefilled - before} new tokens "
-            f"(prefilled={reply.n_prefilled_tokens}, "
-            f"generated={reply.n_generated_tokens}, "
+            f"  prefilled {reply.n_prefilled_tokens} new tokens "
+            f"(generated={reply.n_generated_tokens}, "
             f"evicted={reply.n_evicted_messages}, stop={reply.stop_reason})"
         )
     show(w)
@@ -114,7 +100,7 @@ def main() -> None:
         gpu_layers=args.gpu_layers,
         max_reply_tokens=32,
     )
-    sw = ChatWrapper(small, context=KVContext(small))
+    sw = ChatWrapper(small)
     begin(sw, "You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
