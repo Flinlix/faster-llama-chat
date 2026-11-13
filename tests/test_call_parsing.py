@@ -101,6 +101,22 @@ def test_a_json_call_is_read_by_the_keys_its_template_names():
     assert call == ToolCall("calendar_add", {"title": "Zahnarzt", "minutes": 30})
 
 
+def test_a_json_number_reaches_a_text_parameter_as_the_model_wrote_it():
+    schema = {"f": {"type": "object", "properties": {
+        "zip": {"type": "string"}, "version": {"type": "string"}, "count": {"type": "number"}}}}
+    call, = parse_calls('{"name": "f", "arguments": {"zip": 12345, "version": 3.10, "count": 3.10}}',
+                        None, json_keys=_JSON_KEYS, parameters=schema)
+    assert call.arguments == {"zip": "12345", "version": "3.10", "count": 3.1}
+    assert type(call.arguments["count"]) is float
+
+
+def test_a_json_number_without_a_schema_stays_a_number_and_a_numbered_name_is_no_call():
+    call, = parse_calls('{"name": "f", "arguments": {"n": 12, "x": 1e5}}', None, json_keys=_JSON_KEYS)
+    assert call.arguments == {"n": 12, "x": 100000.0} and type(call.arguments["n"]) is int
+    with pytest.raises(ValueError):
+        parse_calls('{"name": 7, "arguments": {}}', None, json_keys=_JSON_KEYS)
+
+
 @pytest.mark.parametrize("raw", [
     '{"name": "x", "parameters": {"a": 1}}',        # keys the template does not name
     '{"name": "x", "arguments": "{\\"a\\": 1}"}',   # arguments nested as text

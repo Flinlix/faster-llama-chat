@@ -1013,6 +1013,22 @@ def test_a_reply_reads_at_most_three_unreadable_calls_in_a_row_then_the_model_an
     assert reply.stop_reason == "end_of_turn" and not wrapper.turn_open
 
 
+def test_a_number_a_model_writes_for_a_text_parameter_reaches_the_tool_as_it_was_written():
+    given = []
+    registry = ToolRegistry()
+
+    @registry.tool("Notes a version.")
+    def note(version: str) -> str:
+        given.append(version)
+        return "ok"
+
+    wrapper, fake = tool_wrapper(context_size=2048, template=JSON_TOOLS)
+    wrapper.begin("persona", tools=registry.specs())
+    fake.call_script = ['[{"name": "note", "arguments": {"version": 3.10}}]']
+    wrapper.reply("Notiere es.", tool_call_policy=registry).finish()
+    assert given == ["3.10"]
+
+
 def test_a_call_that_spends_the_reply_cap_is_not_run_and_its_turn_closes():
     probe, probe_fake = tool_wrapper(context_size=2048)
     probe.begin("persona")

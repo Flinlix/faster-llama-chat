@@ -99,7 +99,7 @@ def _nesting_depth(value) -> int:
 def _as_json_calls(text: str, keys: tuple[str, ...]) -> list[ToolCall]:
     """Read the calls of a JSON body by ``keys``, or nothing where any of them is not a call."""
     try:
-        decoded = json.loads(text)
+        decoded = _SPELLED.decode(text)
     except ValueError:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
@@ -117,7 +117,7 @@ def _one_json_call(decoded, keys: tuple[str, ...]) -> ToolCall | None:
         return None
     name_key, arguments_key = keys[:2]
     name = decoded.get(name_key)
-    if not isinstance(name, str) or not name:
+    if not isinstance(name, str) or isinstance(name, _Unmarked) or not name:
         return None
     arguments = decoded.get(arguments_key, {})
     if not isinstance(arguments, dict):
@@ -185,7 +185,7 @@ def _as_json_arguments(rest: str, call_body: CallBody) -> dict | None:
     """The arguments after a call's name as the JSON object they are, followed by nothing but what the template writes after one; ``None`` otherwise."""
     text = json_arguments(call_body.name_close, rest)
     try:
-        decoded, end = json.JSONDecoder().raw_decode(text)
+        decoded, end = _SPELLED.raw_decode(text)
     except ValueError:
         return None
     close = call_body.body_close
@@ -258,6 +258,11 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
 
 class _Unmarked(str):
     """A value a call format wrote without marking its type, read by :func:`_typed`."""
+
+
+# Reads JSON with each number kept as the text the model wrote, read by its tool's
+# schema afterwards: a number where text is asked is that text, as written.
+_SPELLED = json.JSONDecoder(parse_int=_Unmarked, parse_float=_Unmarked)
 
 
 def _typed(value, schema, root) -> Any:

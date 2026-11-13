@@ -4053,3 +4053,20 @@ template writes after the object (deepseek-r1-qwen3 closes a code fence
 there); delimiters remain the way back for anything else. This is the shape
 the template writes, as the rule "a call is read in the one shape its
 template writes" asks, and an add-on file's call keeps setting it as before.
+
+## 2026-11-13: The user's decisions on the answers page (356)
+
+### A number where a tool asks for text is the text the model wrote
+
+356.7A, revising "Unreached code removed where nothing needs it" (C14). A
+number a model writes in a JSON call where the tool's schema asks for text,
+such as a postcode `12345` or a version `3.10`, is what the model meant as
+text far more often than a mistake; telling it the argument is wrong costs a
+second round. Turning the decoded number back into text through Python would
+change its spelling (`3.10` to `3.1`, `1e5` to `100000.0`). So the JSON of a
+call is now decoded with each number kept as the text the model wrote, as a
+value written without a type mark already is (`_Unmarked`), and read against
+the tool's schema afterwards: text where the schema asks for text and not for
+a number, the number otherwise, and without a schema the number. A function
+name written as a number is no call. The registry's own check is unchanged:
+a number that reaches a text parameter by another way is still refused.
