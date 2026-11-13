@@ -69,6 +69,8 @@ class CallBody:
             nested values as JSON or a literal instead.
         item_open, item_close: Around each item of a nested list, empty where
             the model writes nested values as JSON or a literal instead.
+        arguments_json: Whether the arguments after the name are one JSON
+            object, as an add-on file's call says.
     """
 
     name_close: str
@@ -86,6 +88,7 @@ class CallBody:
     member_close: str = ""
     item_open: str = ""
     item_close: str = ""
+    arguments_json: bool = False
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:

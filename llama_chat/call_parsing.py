@@ -1,8 +1,9 @@
 """Reading a model's tool calls back out of the text it generated.
 
-Two shapes cover the field: a body that is JSON names itself, and anything else
-is read with the delimiters recovered from that model's own template. Nothing
-here runs anything; see :mod:`llama_chat.tools` for that half.
+A call is read in the one shape the model's template writes it in: a JSON
+object, read by the keys the template names the function and its arguments
+with, or the delimiters recovered from that template. Nothing here runs
+anything; see :mod:`llama_chat.tools` for that half.
 """
 
 from __future__ import annotations
@@ -22,21 +23,23 @@ MAX_ARGUMENT_DEPTH = 100
 
 
 def parse_calls(body: str, call_body: CallBody | None,
-                lead_in: str = "", parameters: dict[str, dict] | None = None) -> list[ToolCall]:
+                lead_in: str = "", parameters: dict[str, dict] | None = None,
+                json_keys: tuple[str, ...] | None = None) -> list[ToolCall]:
     """Read the calls out of the text a model generated between its call tags.
-
-    A body that is JSON names itself and needs no ``call_body``; anything else
-    is read with the delimiters recovered from this model's own template.
 
     Args:
         body: What the model generated, tags excluded.
-        call_body: This model's argument spelling, or ``None`` where only the
-            JSON shape can be read.
+        call_body: This model's argument spelling, where its calls are not
+            JSON; ``None`` where they are, or cannot be read.
         lead_in: Fixed text the model writes before the function name.
         parameters: The parameter schema of each declared tool, by its name.
             A value written without a type mark is text where its schema asks
             for text and not for the literal it spells, and that literal
             otherwise.
+        json_keys: Where the model writes a call as a JSON object, the keys
+            its template writes: the one naming the function, the one holding
+            the arguments, then any others. Such a body is read as JSON
+            alone, and an object with another key is not a call.
 
     Returns:
         One :class:`ToolCall` per call, in the order the model wrote them.
@@ -48,7 +51,7 @@ def parse_calls(body: str, call_body: CallBody | None,
             :data:`MAX_ARGUMENT_DEPTH`.
     """
     try:
-        calls = _read_calls(body, call_body, lead_in)
+        calls = _read_calls(body, call_body, lead_in, json_keys)
     except RecursionError as e:
         raise ValueError("the call's arguments nest deeper than can be read") from e
     for call in calls:
@@ -60,21 +63,22 @@ def parse_calls(body: str, call_body: CallBody | None,
             for call in calls]
 
 
-def _read_calls(body: str, call_body: CallBody | None, lead_in: str) -> list[ToolCall]:
+def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
+                json_keys: tuple[str, ...] | None) -> list[ToolCall]:
     """:func:`parse_calls` before the depth of the arguments is checked."""
     # Unstripped: the recovered delimiters carry their own whitespace.
     text = body
     if lead_in and text.startswith(lead_in):
         text = text[len(lead_in):]
-    # Whole first: a model whose call *is* JSON would have the lead-in cut out
-    # of that JSON. One that opens with a tag then writes JSON needs the second.
-    candidates = [body.strip()]
-    if text is not body:
-        candidates.append(text.strip())
-    for candidate in candidates:
-        calls = _as_json_calls(candidate)
-        if calls:
-            return calls
+    if json_keys is not None:
+        # Whole first: a model whose call *is* JSON would have the lead-in cut out
+        # of that JSON. One that opens with a tag then writes JSON needs the second.
+        candidates = [body.strip()] + ([text.strip()] if text is not body else [])
+        for candidate in candidates:
+            calls = _as_json_calls(candidate, json_keys)
+            if calls:
+                return calls
+        raise ValueError(f"not a call as this model writes one in JSON: {body!r}")
     if call_body is None:
         raise ValueError(f"no call_body to read this call with: {body!r}")
     return [_as_delimited_call(text, call_body)]
@@ -92,34 +96,30 @@ def _nesting_depth(value) -> int:
     return deepest
 
 
-def _as_json_calls(text: str) -> list[ToolCall]:
-    """Read the calls that name themselves, or nothing where any of them is not a call."""
+def _as_json_calls(text: str, keys: tuple[str, ...]) -> list[ToolCall]:
+    """Read the calls of a JSON body by ``keys``, or nothing where any of them is not a call."""
     try:
         decoded = json.loads(text)
     except ValueError:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
-    calls = [_one_json_call(item) for item in batch]
+    calls = [_one_json_call(item, keys) for item in batch]
     return calls if calls and None not in calls else []
 
 
-def _one_json_call(decoded) -> ToolCall | None:
-    """Read one entry of a batch, or ``None`` if it is not a call.
+def _one_json_call(decoded, keys: tuple[str, ...]) -> ToolCall | None:
+    """Read one entry of a batch by the keys its template writes, or ``None`` if it is not a call.
 
     Raises:
         ValueError: If it names a function but its arguments are no object.
     """
-    if not isinstance(decoded, dict):
+    if not isinstance(decoded, dict) or not set(decoded) <= set(keys):
         return None
-    name = decoded.get("name", decoded.get("tool_name"))      # both are in the wild
+    name_key, arguments_key = keys[:2]
+    name = decoded.get(name_key)
     if not isinstance(name, str) or not name:
         return None
-    arguments = decoded.get("arguments", decoded.get("parameters", {}))  # both are in the wild
-    if isinstance(arguments, str):          # some models nest it as JSON text
-        try:
-            arguments = json.loads(arguments)
-        except ValueError:
-            return None
+    arguments = decoded.get(arguments_key, {})
     if not isinstance(arguments, dict):
         raise ValueError(f"the arguments of the call to {name!r} are no object: {arguments!r}")
     return ToolCall(name=name, arguments=arguments)
@@ -136,7 +136,7 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
-    whole = _as_json_object(rest)
+    whole = _as_json_object(rest) if call_body.arguments_json else None
     if whole is not None:
         return ToolCall(name=name, arguments=whole)
     if call_body.key_in_close:

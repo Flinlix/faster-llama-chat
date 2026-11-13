@@ -91,18 +91,29 @@ def test_something_that_is_not_a_call_is_refused(body):
 
 
 # ----- a call that names itself --------------------------------------------
-def test_a_json_call_needs_no_grammar_at_all():
+_JSON_KEYS = ("name", "arguments")
+
+
+def test_a_json_call_is_read_by_the_keys_its_template_names():
     call, = parse_calls('{"name": "calendar_add", '
-                      '"arguments": {"title": "Zahnarzt", "minutes": 30}}', None)
+                      '"arguments": {"title": "Zahnarzt", "minutes": 30}}', None,
+                        json_keys=_JSON_KEYS)
     assert call == ToolCall("calendar_add", {"title": "Zahnarzt", "minutes": 30})
 
 
 @pytest.mark.parametrize("raw", [
-    '{"name": "x", "parameters": {"a": 1}}',        # the other spelling
+    '{"name": "x", "parameters": {"a": 1}}',        # keys the template does not name
     '{"name": "x", "arguments": "{\\"a\\": 1}"}',   # arguments nested as text
+    'fn:x{a:1}',                                    # not JSON at all
 ])
-def test_the_shapes_the_json_family_comes_in(raw):
-    assert parse_calls(raw, None)[0].arguments == {"a": 1}
+def test_a_call_in_another_shape_than_its_templates_json_is_unreadable(raw):
+    with pytest.raises(ValueError):
+        parse_calls(raw, CALL_BODY, "fn:", json_keys=_JSON_KEYS)
+
+
+def test_a_json_call_is_not_read_where_the_template_writes_none():
+    with pytest.raises(ValueError):
+        parse_calls('{"name": "x", "arguments": {}}', CALL_BODY, "fn:")
 
 
 @pytest.mark.parametrize("raw", [
@@ -115,7 +126,7 @@ def test_the_shapes_the_json_family_comes_in(raw):
 def test_arguments_that_are_no_object_make_the_call_unreadable(raw):
     """Read as no arguments, the tool would run with none of what the model gave."""
     with pytest.raises(ValueError):
-        parse_calls(raw, None)
+        parse_calls(raw, None, json_keys=_JSON_KEYS)
 
 
 _NESTED_TOO_DEEPLY = "[" * 150 + "]" * 150
@@ -126,11 +137,12 @@ _NESTED_PAST_THE_RECURSION_LIMIT = "[" * 3000 + "]" * 3000
 @pytest.mark.parametrize("written", ['{"name": "f", "arguments": {"a": %s}}',
                                      "fn:f{a:%s}"], ids=["json", "the-model-s-own"])
 def test_arguments_nested_too_deeply_make_the_call_unreadable_on_every_path(written, deep):
+    json_keys = _JSON_KEYS if written.startswith("{") else None
     with pytest.raises(ValueError, match="nest"):
-        parse_calls(written % deep, CALL_BODY, "fn:")
+        parse_calls(written % deep, CALL_BODY, "fn:", json_keys=json_keys)
 
 
-def test_without_a_grammar_anything_but_json_is_refused():
+def test_without_a_grammar_or_json_keys_a_call_is_refused():
     with pytest.raises(ValueError, match="no call_body"):
         parse_calls("fn:clock{}", None, "fn:")
 
@@ -139,7 +151,7 @@ def test_without_a_grammar_anything_but_json_is_refused():
 def test_a_json_array_yields_every_call_it_holds():
     calls = parse_calls('[{"name": "clock", "arguments": {}}, '
                         '{"name": "calendar_add", "arguments": {"title": "x"}}]',
-                        None)
+                        None, json_keys=_JSON_KEYS)
     assert calls == [ToolCall("clock", {}),
                      ToolCall("calendar_add", {"title": "x"})]
 
@@ -225,9 +237,10 @@ def test_a_call_body_that_cannot_end_a_name_is_refused():
                  body_close="", empty_close="")
 
 
-def test_a_json_call_may_name_its_function_as_tool_name():
+def test_a_json_call_may_name_its_function_and_arguments_by_other_keys():
     body = '[{"tool_call_id": "0", "tool_name": "clock", "parameters": {"zone": "CET"}}]'
-    assert parse_calls(body, None) == [ToolCall("clock", {"zone": "CET"})]
+    assert parse_calls(body, None, json_keys=("tool_name", "parameters", "tool_call_id")) == [
+        ToolCall("clock", {"zone": "CET"})]
 
 
 def test_a_value_after_its_written_type_is_read_by_that_type():

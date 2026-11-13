@@ -1024,7 +1024,8 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
 def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_question_back(
         stem, nothing):
     """These templates write no empty reply, so the request is taken back whole and the next question is answered."""
-    from tests.fake_context import ScriptedCall
+    from llama_chat.resolved_template import ResolvedTemplate
+    from tests.fake_context import ScriptedCall, written_call
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
     cancel, options = threading.Event(), {}
@@ -1033,7 +1034,10 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
         registry.tool(lambda city: (cancel.set(), "18 Grad")[1], description="Wetter.",
                       name=WEATHER.name, parameters=WEATHER.parameters)
         w.begin("", tools=registry.specs())
-        fake.replies = [ScriptedCall('{"name": "get_weather", "arguments": {"city": "Bonn"}}')]
+        reader = FakeContext(fixture(stem))
+        _opener, body, _closer = written_call(ResolvedTemplate(reader), reader, WEATHER.name,
+                                              {"city": "Bonn"})
+        fake.replies = [ScriptedCall(body)]
         options = dict(tool_call_policy=registry, cancel=cancel)
     else:
         w.begin("")

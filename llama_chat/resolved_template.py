@@ -14,7 +14,8 @@ from collections.abc import Mapping
 
 from .cache_context import MODEL_READER, RENDERER_VARIABLES, TOOL_USE_TEMPLATE, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
-                          extract_named_twice_opening, extract_tool_fragments)
+                          extract_json_call_keys, extract_named_twice_opening,
+                          extract_tool_fragments)
 from .call_parsing import parse_calls
 from .messages import call_id, calling_message, result_message, with_thought_as
 from .model_template import names_read
@@ -96,6 +97,8 @@ class ResolvedTemplate:
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
+        self._json_keys = (None if self._call_from_file or not self._calls_marked
+                           else extract_json_call_keys(self._read_as_probes))
         self._declares_before_newest_turn = self._resolve_declares_before_newest_turn()
         if not self._declares_before_newest_turn:
             self._variables = self._resolve_declaration_variables()
@@ -533,7 +536,8 @@ class ResolvedTemplate:
         text = generated_call_text
         if self._boundary.call_texts is not None:
             text = self._call_lead_in + text    # the opening text holds the lead-in's start
-        return parse_calls(text, self._call_body, self._call_lead_in, parameters)
+        return parse_calls(text, None if self._json_keys else self._call_body,
+                           self._call_lead_in, parameters, self._json_keys)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
         """Whether a plain-text opening begins with text of a reply's own opening.
@@ -594,7 +598,8 @@ class ResolvedTemplate:
         if self._call_from_file:
             # The name ends where the file says; the arguments are read as written.
             return CallBody(name_close=self._addon_call["name_close"], key_open="",
-                            key_close="", pair_sep="", body_close="", empty_close="")
+                            key_close="", pair_sep="", body_close="", empty_close="",
+                            arguments_json=True)
         call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
                      else self._tool_calls.call_open)
         return extract_call_body(self._read_as_probes, call_open, self.call_close_text)

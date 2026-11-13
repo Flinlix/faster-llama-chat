@@ -206,8 +206,10 @@ say how a model writes a call.
   template reads, where setting it changes nothing without tools; it is found
   at load and passed with every render.
 - **The argument spelling** comes from four probes that differ only in their
-  content; a JSON body is read directly, under `name` or `tool_name` and
-  `arguments` or `parameters`. Covered: JSON objects and arrays,
+  content. A template that writes its call as one JSON object is known at
+  load, with the keys it writes (see "Calls are read in the one shape their
+  template writes", 2026-11-13); its calls are read as JSON alone. Covered:
+  JSON objects and arrays,
   `name{key:value}`, `name(k="v")`, attribute-style XML,
   `<function=name><parameter=k>v</parameter>`,
   `name<arg_key>k</arg_key><arg_value>v</arg_value>`, with nested objects, lists
@@ -3766,3 +3768,29 @@ cache, and the template's closing is written whole. A reply that opens with a
 call is therefore empty. A mention of the opening in prose is not a call, as
 before: a plain-text opening counts only at the reply's start or right after
 a tag.
+
+## 2026-11-13: The user's decisions on the review of one-model cases (345.21A)
+
+### Calls are read in the one shape their template writes
+
+348.4A, review findings C7 to C10. Every call used to be tried as JSON first,
+once or twice, under the keys `name` or `tool_name` and `arguments` or
+`parameters` ("both are in the wild"), with arguments also accepted as JSON
+text ("some models"), and only then read by the template's own delimiters.
+That cost every non-JSON template one or two failed decodes per call (about 8
+to 20% of reading a call on the stand-in) and wrote two families' key names
+into the core. Now the load renders a probe call and decodes the JSON object
+or array around the function's name; where it finds one, the keys the
+template writes are kept: the one naming the function, the one holding the
+arguments, and any others. Such a template's calls are read as JSON alone, by
+those keys; an object with a key the template does not write is not a call.
+Any other template's calls are read by its delimiters alone. Of the 52 test
+templates, cohere-2 (`tool_name`, `parameters`), llama-3.2 (`name`,
+`parameters`), ministral-2410, qwen-2.5, qwen-3 and qwen-3-hermes (`name`,
+`arguments`) write JSON. Arguments written as a JSON object after the name
+are read so only where an add-on file's call says so (`arguments_json`),
+which only gpt-oss's does. Replaces the recorded rule "a body that is JSON
+names itself": a model that writes JSON where its template does not, or under
+other keys, is now answered that its call could not be read, instead of being
+understood. The tests' JSON batches run on an invented template that writes a
+turn's calls as one JSON array (`JSON_TOOLS`).

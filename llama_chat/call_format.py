@@ -9,6 +9,7 @@ format is recovered".
 from __future__ import annotations
 
 import dataclasses
+import json
 
 from .messages import calling_message
 from .template import (CallBody, TemplateFragments, ToolCallFragments, common_prefix_length,
@@ -296,6 +297,33 @@ def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
 def _common_suffix(one: str, other: str) -> str:
     """The longest ending the two share."""
     return one[len(one) - common_suffix_length(one, other):]
+
+
+def extract_json_call_keys(render: Render) -> tuple[str, ...] | None:
+    """Where the template writes a call as one JSON object, its keys: the one naming the function, the one holding the arguments, then the others; ``None`` where it does not.
+
+    Read from a call to ``TOOLNAME`` with one text argument: the JSON object
+    or array around the name is decoded, and the keys whose values are the
+    name and the arguments are taken.
+    """
+    arguments = {_KEY: _STRING}
+    rendered = _render_call(as_probes_read(render), arguments)
+    at = -1 if rendered is None else rendered.find(TOOL_SENTINEL)
+    decoder = json.JSONDecoder()
+    for start in (i for i in range(at, -1, -1) if rendered[i] in "{["):
+        try:
+            decoded, _end = decoder.raw_decode(rendered, start)
+        except ValueError:
+            continue
+        call = decoded[0] if isinstance(decoded, list) and decoded else decoded
+        if not isinstance(call, dict):
+            continue
+        name_key = next((key for key, value in call.items() if value == TOOL_SENTINEL), None)
+        arguments_key = next((key for key, value in call.items() if value == arguments), None)
+        if name_key is not None and arguments_key is not None:
+            return (name_key, arguments_key,
+                    *sorted(set(call) - {name_key, arguments_key}))
+    return None
 
 
 def _render_call(render: Render, arguments: dict) -> str | None:

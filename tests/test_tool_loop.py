@@ -15,7 +15,8 @@ from llama_chat import ChatWrapper, ContextOverflowError
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import FakeContext, ScriptedCall, written_call
-from tests.invented_templates import (KEYLESS_CALLS, NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN,
+from tests.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
+                                      NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN,
                                       RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
@@ -197,10 +198,10 @@ def test_a_call_the_library_runs_is_handed_over_in_the_stream_before_it_runs():
     seen = []
     registry = ToolRegistry()
     registry.tool(lambda: seen.append("ran") or "12:00", description="Die Zeit.", name="clock")
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona", tools=registry)
     # The second call is past the ceiling, so it does not run, and is not handed over.
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
 
     stream = wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1)
     for event in stream:
@@ -343,9 +344,9 @@ def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
 
 def test_a_result_under_the_wrong_name_is_refused():
     """Results are owed in call order, so only the oldest call owed is answered."""
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
     list(wrapper.reply("los", tool_call_policy="yield"))
 
@@ -496,9 +497,9 @@ def test_a_result_cut_under_a_registry_is_listed_on_its_reply():
 
 
 def _two_calls_owed(context_size):
-    wrapper, fake = tool_wrapper(context_size=context_size)
+    wrapper, fake = tool_wrapper(context_size=context_size, template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
     calls = [e for e in wrapper.reply("los", tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert [call.name for call in calls] == ["clock", "other"]
     return wrapper, fake, calls
@@ -516,9 +517,9 @@ def test_a_result_cut_leaves_room_for_the_results_still_owed_after_it():
 
 
 def test_short_results_that_fit_together_are_written_whole_and_keep_the_turn_open():
-    wrapper, fake = tool_wrapper(context_size=400)
+    wrapper, fake = tool_wrapper(context_size=400, template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
     first, second = [e for e in wrapper.reply("q" * 230, tool_call_policy="yield")
                      if isinstance(e, ToolCall)]
     wrapper.inject_tool_result(first, "a")          # shorter than the note a cut leaves
@@ -1292,9 +1293,9 @@ def test_a_thread_that_reads_no_reply_waits_for_one_rather_than_being_refused():
 
 # ----- a model that writes a batch -----------------------------------------
 def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
 
     asked = list(wrapper.reply("los", tool_call_policy="yield"))
@@ -1313,9 +1314,9 @@ def test_every_call_of_a_batch_owes_a_result_before_the_reply_resumes():
 
 
 def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{"city":"Bonn"}}]']
     asked = list(wrapper.reply("los", tool_call_policy="yield"))
     assert wrapper.pending_calls == asked
@@ -1350,13 +1351,13 @@ def test_the_pending_calls_are_read_without_waiting_for_a_running_reply():
 
 
 def test_a_running_reply_answers_every_call_of_a_batch():
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona")
     registry = ToolRegistry()
     ran = []
     registry.tool(lambda: ran.append("clock") or {}, description="…", name="clock")
     registry.tool(lambda: ran.append("other") or {}, description="…", name="other")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
 
     list(wrapper.reply("los", tool_call_policy=registry))
@@ -1365,11 +1366,11 @@ def test_a_running_reply_answers_every_call_of_a_batch():
 
 
 def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
-    fake = FakeContext(RESULT_LINES)
+    fake = FakeContext(JSON_RESULT_LINES)
     wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9),
                           context=fake)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         '{"name":"other","arguments":{}}]']
     list(wrapper.reply("los", tool_call_policy="yield"))
     before = len(fake.cache)
@@ -1433,9 +1434,9 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     registry = ToolRegistry()
     registry.tool(lambda: ran.append(1) or "09:00", description="Zeit.", name="clock")
 
-    wrapper, fake = tool_wrapper()
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
     wrapper.begin("persona")
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},'
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
                         ' {"name":"clock","arguments":{}},'
                         ' {"name":"clock","arguments":{}}]']
     list(wrapper.reply("frage", tool_call_policy=registry, max_calls=1))
@@ -2112,9 +2113,9 @@ def test_a_failed_reply_that_gives_max_calls_leaves_the_turn_what_was_left_of_it
 
 def test_a_stream_closed_at_a_later_call_of_a_round_writes_the_results_of_those_that_ran():
     registry, ran = _counting_clock()
-    wrapper, fake = tool_wrapper(context_size=1024)
+    wrapper, fake = tool_wrapper(context_size=1024, template=JSON_TOOLS)
     wrapper.begin("persona", tools=registry)
-    fake.call_script = ['fn:[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
     with wrapper.reply("wie spät?", tool_call_policy=registry) as stream:
         handed = []
         for event in stream:

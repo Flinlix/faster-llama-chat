@@ -16,8 +16,8 @@ from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN, REASONING, TOOLS
 
 
-def tool_wrapper(context_size=512, **kw):
-    fake = FakeContext(TOOLS, **kw)
+def tool_wrapper(context_size=512, template=None, **kw):
+    fake = FakeContext(template or TOOLS, **kw)
     return ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.9),
                        context=fake), fake
 

@@ -15,6 +15,14 @@ _TEXT = r"""
 {%- set ns = namespace(open=false, previous=none, newest=none) -%}
 {%- set reasons = can_reason and not (enable_thinking is defined and not enable_thinking) -%}
 {%- macro call_blocks(calls) -%}
+  {%- if calls_json and calls -%}
+    {{- '<call>[' -}}
+    {%- for call in calls -%}
+      {{- (', ' if not loop.first else '') ~ '{"name": "' ~ call.function.name ~ '", "arguments": ' -}}
+      {{- call.function.arguments | tojson ~ '}' -}}
+    {%- endfor -%}
+    {{- ']</call>' -}}
+  {%- else -%}
   {%- for call in calls -%}
     {{- '<call>fn:' ~ call.function.name ~ '{' -}}
     {%- for key, value in call.function.arguments.items() -%}
@@ -23,6 +31,7 @@ _TEXT = r"""
     {%- endfor -%}
     {{- '}</call>' -}}
   {%- endfor -%}
+  {%- endif -%}
 {%- endmacro -%}
 {%- macro declarations() -%}
   {%- for tool in tools or [] -%}{{- '<decl>' ~ tool.function.name ~ '</decl>' -}}{%- endfor -%}
@@ -76,6 +85,7 @@ _TEXT = r"""
 _SWITCHES = {
     "calls_tools": False,               # a call is written; without, it is left out
     "call_keys": True,                  # a call's values are written after their keys
+    "calls_json": False,                # a turn's calls are written as one JSON array
     "declares": "in the system turn",   # where tools are declared: or "in the newest turn", or None
     "writes_results": True,             # a result is written; without, it is left out
     "result_lines": False,              # results one per line, their block closed once
@@ -118,6 +128,7 @@ REFUSES_TWO_USER_TURNS = _invented(user_join=None)
 # Two user turns in a row are refused, and so is the text "refused".
 REFUSES_A_TEXT = _invented(user_join=None, refused_content="refused")
 TOOLS = _invented(calls_tools=True)
+JSON_TOOLS = _invented(calls_tools=True, calls_json=True)
 TOOLS_REFUSING_TWO_USER_TURNS = _invented(calls_tools=True, user_join=None)
 TOOLS_CLOSING_OPEN_TURNS = _invented(calls_tools=True, closes_turn_before_next=True)
 TOOLS_DECLARED_IN_THE_NEWEST_TURN = _invented(calls_tools=True, declares="in the newest turn")
@@ -125,6 +136,7 @@ KEYLESS_CALLS = _invented(calls_tools=True, call_keys=False)
 NO_DECLARATIONS = _invented(calls_tools=True, declares=None)
 NO_RESULT_BLOCK = _invented(calls_tools=True, writes_results=False)
 RESULT_LINES = _invented(calls_tools=True, result_lines=True)
+JSON_RESULT_LINES = _invented(calls_tools=True, result_lines=True, calls_json=True)
 REASONING = _invented(calls_tools=True, can_reason=True)
 REASONING_KEEPING_THOUGHTS = _invented(calls_tools=True, can_reason=True, keeps_thought=True)
 # A model whose default template knows no tools, and which ships a template of its own for a
