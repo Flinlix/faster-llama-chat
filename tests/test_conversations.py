@@ -299,6 +299,34 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
     assert spliced == [True, False, True, True]
 
 
+def _writes_two_user_turns(stem):
+    """Whether the test template writes two user turns in a row."""
+    return _Run(stem).render([{"role": "user", "content": "One?"},
+                              {"role": "user", "content": "Two?"}], None) is not None
+
+
+@pytest.mark.parametrize("stem", [stem for stem in sorted(_FIXTURES)
+                                  if _FIXTURES[stem]["can_reason"] and _writes_two_user_turns(stem)])
+def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_may_follow(stem):
+    run = _Run(stem, replies=["", ANSWERS[1]], reasoning=True)
+    run.begin()
+    assert run.chat.reply(QUESTIONS[0]).finish().text == ""
+    assert run.chat.conversation()["messages"][-1] == {"role": "user", "content": QUESTIONS[0]}
+    assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_an_argument_with_characters_json_may_escape_is_kept_apart_from_the_tags(stem):
+    """Written by ``tojson``, by hand, or as it is, a past call's text is found in its place."""
+    city = 'Is "<b> & c\'s" café\nfine?'
+    history = [("user", "Weather?"), ToolTurn((ToolCall(WEATHER.name, {"city": city}),
+                                               ToolResult(WEATHER.name, "sunny"), "Sunny."))]
+    run = _Run(stem)
+    run.begin(history, tools=[WEATHER])
+    run.chat.reply(QUESTIONS[0]).finish()
+    assert_cache_reads_as_rendered(run.chat, run.context)
+
+
 # ----- evictions: whole exchanges, in place --------------------------------------
 @pytest.mark.parametrize("stem", _EVERY)
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
