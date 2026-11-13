@@ -3810,3 +3810,17 @@ cohere-2 and inkling read no header at all, while gpt-oss keeps
 other check C5 named, whether a thought closes with the token that ends a
 turn, is one string comparison per reply; it is left where it is, since
 moving it saves nothing measurable.
+
+### Call ids keep nine characters
+
+345.11, review finding B12. The library numbers the calls it writes as
+`call` and a number, nine letters and digits in all, because the Mistral test
+templates refuse any other id: ministral-2410 raises unless an id is exactly
+9 alphanumeric characters, and mistral-small-3.2 refuses a short one such as
+`c1`. Nine characters suit every other test template too, so the length is
+the library's one rule for every model and needs no add-on key. The number was
+written in five decimal digits, so the 100,000th call of a conversation
+(`call100000`) was ten characters, which ministral-2410 refused. It is now
+written in five base-36 digits (`call0000a` after `call00009`), nine
+characters for the first 36**5 calls, about 60 million; ids read from a
+history are taken back the same way, so every new id stays unused.

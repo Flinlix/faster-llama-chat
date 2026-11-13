@@ -135,17 +135,24 @@ def ensure_role(role) -> None:
 
 
 def call_id(n: int) -> str:
-    """The id of the ``n``-th call this library writes: ``call`` and ``n``, at least five digits long."""
-    return f"call{n:05d}"
+    """The id of the ``n``-th call this library writes: ``call`` and ``n`` in five base-36 digits, nine letters and digits in all for the first 36**5 calls."""
+    digits = ""
+    while n or len(digits) < _ID_DIGITS:
+        n, digit = divmod(n, 36)
+        digits = _BASE36[digit] + digits
+    return "call" + digits
 
 
 def next_call_number(ids) -> int:
     """One past the highest number among ``ids`` that :func:`call_id` writes, so that every id numbered from it is new."""
-    numbers = [int(found.group(1)) for found in map(_CALL_ID.fullmatch, ids) if found]
+    numbers = [int(found.group(1), 36) for found in map(_CALL_ID.fullmatch, ids) if found]
     return max(numbers, default=-1) + 1
 
 
-_CALL_ID = re.compile(r"call(\d{5,})")
+# How many base-36 digits a call's number is written with, at the least.
+_ID_DIGITS = 5
+_BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+_CALL_ID = re.compile(r"call([0-9a-z]{5,})")
 
 
 def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:

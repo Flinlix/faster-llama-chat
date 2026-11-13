@@ -3,7 +3,8 @@
 import itertools
 from dataclasses import replace
 
-from llama_chat.messages import as_history, as_messages, exchange_count, exchange_starts
+from llama_chat.messages import (as_history, as_messages, call_id, exchange_count,
+                                 exchange_starts, next_call_number)
 from llama_chat.tools import ToolCall, ToolResult, ToolTurn
 
 
@@ -70,3 +71,11 @@ def test_each_result_of_a_batch_answers_its_own_call():
     messages = as_messages([("user", "q"), turn])
     calls = [call["id"] for m in messages for call in m.get("tool_calls", [])]
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == calls
+
+
+def test_every_call_id_of_a_long_conversation_is_nine_letters_and_digits_and_new():
+    numbers = [0, 9, 10, 35, 36, 99_999, 100_000, 1_000_000, 36 ** 5 - 1]
+    ids = [call_id(n) for n in numbers]
+    assert all(len(found) == 9 and found.isalnum() for found in ids)
+    assert len(set(ids)) == len(ids)
+    assert next_call_number(ids) == 36 ** 5
