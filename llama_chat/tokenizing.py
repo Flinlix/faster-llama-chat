@@ -41,7 +41,8 @@ def first_special_token(reader: ModelReader, text: str) -> int | None:
 
 def tag_texts(reader: ModelReader) -> tuple[str, ...]:
     """The texts of every one of the model's own tags."""
-    return tuple(reader.token_text(token) for token in reader.special_tokens())
+    return tuple(text for text in (reader.token_text(token) for token in reader.special_tokens())
+                 if text)
 
 
 def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,

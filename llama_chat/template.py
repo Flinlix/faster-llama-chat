@@ -215,6 +215,19 @@ def common_suffix_length(one: Sequence, other: Sequence) -> int:
     return common_prefix_length(one[::-1], other[::-1])
 
 
+def _ends_a_tag(text: str, at: int, tags: tuple[str, ...]) -> bool:
+    """Whether one of ``tags`` ends at ``at`` in ``text`` and none of them runs across it."""
+    if not text[:at].endswith(tags):
+        return False
+    for tag in tags:
+        found = text.find(tag)
+        while 0 <= found < at:
+            if found + len(tag) > at:
+                return False
+            found = text.find(tag, found + 1)
+    return True
+
+
 def shared_tags_length(text: str, other: str, tags: tuple[str, ...]) -> int:
     """How long a beginning the two share, ending where one of the model's ``tags`` or a word ends.
 
@@ -222,6 +235,6 @@ def shared_tags_length(text: str, other: str, tags: tuple[str, ...]) -> int:
     a word the two spell differently.
     """
     shared = common_prefix_length(text, other)
-    while shared and not (text[shared - 1].isspace() or text[:shared].endswith(tags)):
+    while shared and not (text[shared - 1].isspace() or _ends_a_tag(text, shared, tags)):
         shared -= 1
     return shared

@@ -278,3 +278,12 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows(stem)
         assert fake.edit_count("cut" if can_shift else "restore") == 1
         w.reply("again").finish()
         assert_consistent(w, fake)
+
+
+def test_a_cache_context_whose_list_of_tags_leaves_one_out_is_refused_at_load_naming_why():
+    class _FewTags(FakeContext):
+        def special_tokens(self):
+            return ()
+
+    with pytest.raises(ValueError, match="list every tag"):
+        ChatWrapper(Config(context_size=500), context=_FewTags(PLAIN))

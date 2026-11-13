@@ -4086,3 +4086,29 @@ that use it: the conversation's end text, the user tag after a past reply,
 the thought's opening, a call's opening after the reply's tag, the answer's
 opening, and the text a reply ends with where a call opens with the start of
 its closing. No bracket character is left written into the code for it.
+
+### Fixes from the review of 356.7A and 356.10A (J1 to J7)
+
+- **The tag list is checked where a model is adopted (J1).** Since tag ends
+  are read from the model's tag list alone, a cache context of one's own that
+  listed too few tags loaded and wrote its turns wrongly (on llama-3.2 the
+  user turn's closing moved into the assistant tag, and the call format was
+  lost). The load now tokenizes a probe render and refuses, naming the tags,
+  where the tokenizer reads one the list leaves out.
+- **Every probe of the model's own render reads the tags (J2).** The content
+  rewrite probe read its render without them, so its "conversation end" was
+  the user turn's own closing tag; it now gets the tag list, and
+  `extract_fragments` and `extract_content_rewrites` take it as a required
+  argument.
+- **A tag that begins a longer one (J3), and an empty tag (J4).** A shared
+  beginning may end where a tag ends only where no other tag runs across that
+  point, and an empty tag text is no tag.
+- **Numbers in nested JSON values (J5).** A nested value a delimited call
+  writes as JSON keeps each number's spelling too, read by the schema
+  afterwards; one written as a Python literal still yields numbers.
+- **A number too long to read (J6).** A JSON integer past Python's 4,300 digit
+  limit used to be refused by the decoder; read as text first, it would have
+  turned into infinity. It now makes the call unreadable.
+- **Tests (J7).** A unit test shows the end text a template writes after the
+  last message read by tags of another shape, which the bracket rule read too
+  wide.

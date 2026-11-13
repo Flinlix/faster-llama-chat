@@ -129,7 +129,7 @@ def _conversation_end(render: Render, tags: tuple[str, ...]) -> str:
     return end if followed.endswith(end) else ""
 
 
-def extract_fragments(render: Render, tags: tuple[str, ...] = ()) -> TemplateFragments | None:
+def extract_fragments(render: Render, tags: tuple[str, ...]) -> TemplateFragments | None:
     """Recover template fragments by probing ``render`` with sentinel content.
 
     The user and assistant tags are read from a conversation of two user turns,
@@ -421,7 +421,8 @@ def _last_tag(text: str, tags: tuple[str, ...]) -> str:
 ESCAPABLE = ("<", ">", "&", '"', "'")
 
 
-def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ...]:
+def extract_content_rewrites(render: Render, texts,
+                             tags: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
     """What the template writes in a user message's content for each of ``texts`` it changes.
 
     One render, each text between markers of its own, so a template that
@@ -431,7 +432,7 @@ def extract_content_rewrites(render: Render, texts) -> tuple[tuple[str, str], ..
     texts = [text for text in dict.fromkeys(texts) if text and _MARK not in text]
     marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]
     content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
-    rendered = as_probes_read(render)([{"role": "user", "content": content}], reasoning=False)
+    rendered = as_probes_read(render, tags)([{"role": "user", "content": content}], reasoning=False)
     start = -1 if rendered is None else rendered.find(marks[0])
     if start < 0:
         return ()

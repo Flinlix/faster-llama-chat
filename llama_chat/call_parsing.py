@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -237,7 +238,7 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
         # Nested values are JSON in some models, the Python literal a template
         # interpolates in others, and these delimiters in the rest.
         try:
-            return json.loads(text)
+            return _SPELLED.decode(text)
         except ValueError:
             pass
         try:
@@ -329,9 +330,12 @@ def _literal(text: str) -> Any:
         return None
     for number in (int, float):
         try:
-            return number(text)
+            value = number(text)
         except ValueError:
-            pass
+            continue
+        if number is float and not math.isfinite(value) and text.strip().lstrip("+-").isdigit():
+            raise ValueError(f"a number too long to be read: {text[:40]}...")
+        return value
     return text
 
 

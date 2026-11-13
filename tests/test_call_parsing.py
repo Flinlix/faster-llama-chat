@@ -293,3 +293,17 @@ def test_nested_delimiters_come_whole_or_not_at_all():
     with pytest.raises(ValueError, match="nested delimiters"):
         CallBody(name_close="(", key_open="", key_close="=", pair_sep=",", body_close=")",
                  empty_close=")", member_open="<{key}>", member_close="</{key}>")
+
+
+def test_a_number_nested_in_a_json_value_of_a_delimited_call_is_read_as_written():
+    schema = {"f": {"type": "object", "properties": {"addr": {"type": "object", "properties": {
+        "zip": {"type": "string"}}}}}}
+    call, = parse_calls('fn:f{addr:{"zip": 12345}}', CALL_BODY, "fn:", parameters=schema)
+    assert call.arguments == {"addr": {"zip": "12345"}}
+
+
+def test_a_number_too_long_to_read_makes_the_call_unreadable_instead_of_infinite():
+    schema = {"f": {"type": "object", "properties": {"n": {"type": "number"}}}}
+    with pytest.raises(ValueError, match="too long"):
+        parse_calls('{"name": "f", "arguments": {"n": 1' + "0" * 5000 + "}}", None,
+                    json_keys=_JSON_KEYS, parameters=schema)

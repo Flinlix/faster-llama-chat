@@ -18,7 +18,8 @@ from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.model_template import names_read
 from llama_chat.tokenizing import tag_texts
 from llama_chat.template import CallBody
-from llama_chat.template_extract import extract_content_rewrites, extract_fragments, reasoning_switch
+from llama_chat.template_extract import (as_probes_read, extract_content_rewrites,
+                                         extract_fragments, reasoning_switch)
 
 from .chat_templates import STEMS, expected, fixture
 from .fake_context import FakeContext
@@ -57,7 +58,7 @@ def test_a_templates_turn_fragments_are_the_tags_it_writes(stem):
 
 
 def test_no_template_returns_none():
-    assert extract_fragments(lambda messages, **_options: None) is None
+    assert extract_fragments(lambda messages, **_options: None, INVENTED_TAGS) is None
 
 
 def _inconsistent_render(messages, **_options):
@@ -74,7 +75,7 @@ def test_a_render_whose_reply_cannot_be_split_off_gives_no_fragments_rather_than
     # The user fragment recovered from the single-message probe does not occur
     # in the two-message render, so the assistant's tags cannot be read: the
     # template is refused, not read with the user's tags.
-    assert extract_fragments(_inconsistent_render) is None
+    assert extract_fragments(_inconsistent_render, INVENTED_TAGS) is None
 
 
 def _prefix_only_render(messages, **_options):
@@ -83,7 +84,7 @@ def _prefix_only_render(messages, **_options):
 
 
 def test_empty_suffix_template_extracts_without_crashing():
-    f = extract_fragments(_prefix_only_render)
+    f = extract_fragments(_prefix_only_render, INVENTED_TAGS)
     assert f.user_prefix == "<[user>"
     assert f.user_suffix == ""
     assert f.assistant_prefix == "<[assistant>"
@@ -323,7 +324,7 @@ def _dropped_assistant_render(messages, **_options):
 
 def test_a_template_that_drops_the_reply_it_is_given_is_refused_rather_than_read_with_the_user_tags():
     """Read with the user tags, a call would be found in the middle of the conversation."""
-    assert extract_fragments(_dropped_assistant_render) is None
+    assert extract_fragments(_dropped_assistant_render, INVENTED_TAGS) is None
 
 
 def _degenerate_render(dropped, constant_body):
@@ -452,20 +453,20 @@ def _escaping_render(messages, **options):
 
 
 def test_each_text_a_template_changes_in_content_is_read_as_the_template_writes_it():
-    assert extract_content_rewrites(_escaping_render, ["<drop>", "<keep>", "<", ">", "plain"]) \
+    assert extract_content_rewrites(_escaping_render, ["<drop>", "<keep>", "<", ">", "plain"], ()) \
         == (("<drop>", ""), ("<keep>", "&lt;keep>"), ("<", "&lt;"))
 
 
 def test_a_render_that_loses_a_texts_place_reads_no_rewrites():
     def truncating(messages, **options):
         return messages[-1]["content"][:-1]
-    assert extract_content_rewrites(truncating, ["<a>", "<b>"]) == ()
+    assert extract_content_rewrites(truncating, ["<a>", "<b>"], ()) == ()
 
 
 def test_the_rewrites_of_many_texts_are_read_in_one_pass_over_the_render():
     texts = [f"<tag{n}>" for n in range(20_000)]
     started = time.perf_counter()
-    rewrites = extract_content_rewrites(_escaping_render, texts)
+    rewrites = extract_content_rewrites(_escaping_render, texts, ())
     assert time.perf_counter() - started < 0.5
     assert len(rewrites) == len(texts)
 
@@ -516,3 +517,33 @@ def test_a_shared_beginning_ends_where_one_of_the_models_tags_ends_whatever_its_
     assert shared_tags_length("«turn»model", "«turn»user", ("«turn»",)) == len("«turn»")
     assert shared_tags_length("«turn»model", "«turn»user", ()) == 0
     assert shared_tags_length("say model", "say user", ()) == len("say ")
+
+
+def test_a_shared_beginning_never_ends_inside_a_tag_that_a_shorter_tag_begins():
+    from llama_chat.template import shared_tags_length
+    assert shared_tags_length("<a><ab>x", "<a><ac>y", ("<a", "<ab>", "<ac>")) == 2
+
+
+def test_an_empty_tag_text_is_no_tag():
+    from llama_chat.tokenizing import tag_texts
+
+    class _Reader:
+        def special_tokens(self):
+            return (1, 2)
+
+        def token_text(self, token):
+            return {1: "", 2: "<x>"}[token]
+
+    assert tag_texts(_Reader()) == ("<x>",)
+
+
+def test_what_a_template_writes_once_after_the_last_message_is_read_by_tags_of_any_shape():
+    def render(messages, generation_prompt=False, **_options):
+        turns = "".join(f"«{m['role']}»{m['content']}«end»" for m in messages)
+        return turns + ("«assistant»" if generation_prompt else "«close»")
+
+    tags = ("«user»", "«assistant»", "«end»", "«close»")
+    alone = [{"role": "user", "content": "U"}]
+    assert as_probes_read(render, tags)(alone, reasoning=False) == "«user»U«end»"
+    # Without the model's tags the end is read wider, taking the turn's own closing.
+    assert as_probes_read(render, ())(alone, reasoning=False) == "«user»U"

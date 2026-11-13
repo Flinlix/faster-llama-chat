@@ -88,6 +88,7 @@ class ResolvedTemplate:
         self._declares_in_system_turn_for: dict[tuple, bool] = {}
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
         self._tag_texts = tag_texts(context)
+        self._ensure_tags_listed()
         text = context.chat_template_text(template_name)
         self._reads_clock = text is None or _CLOCK in text
         self._fragments = self._resolve_fragments()
@@ -351,6 +352,27 @@ class ResolvedTemplate:
                 "this model's template renders no tool result, so a call could "
                 "be made but never answered")
 
+    def _ensure_tags_listed(self) -> None:
+        """Refuse a model whose tokenizer reads a tag in its template's render that its list of tags leaves out, so that no tag's end is taken for text.
+
+        Raises:
+            ValueError: If it does.
+        """
+        probe = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT},
+                 {"role": "assistant", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
+        rendered = self._probe_render(probe, generation_prompt=True, reasoning=False)
+        if rendered is None:
+            return
+        read = {self._context.token_text(token)
+                for token in self._context.tokenize(rendered, add_special=False, parse_special=True)
+                if self._context.is_special(token)}
+        missing = sorted(text for text in read - set(self._tag_texts) if text)
+        if missing:
+            raise ValueError(
+                f"the model's tokenizer reads {', '.join(map(repr, missing[:3]))} as tags, which "
+                "its list of tags leaves out, so where its tags end could not be told; the "
+                "cache context must list every tag")
+
     def _resolve_fragments(self) -> TemplateFragments:
         """Recover the template fragments from the model's own chat template, which a context that reports no template text ships none of."""
         has_text = self._context.chat_template_text(self._template_name) is not None
@@ -365,7 +387,8 @@ class ResolvedTemplate:
                 "this model's chat template writes no turn whose reply can be told from the "
                 "question, so a conversation cannot be written with it"
             )
-        rewrites = extract_content_rewrites(self._model_render, (*self._tag_texts, *ESCAPABLE))
+        rewrites = extract_content_rewrites(self._model_render, (*self._tag_texts, *ESCAPABLE),
+                                            self._tag_texts)
         return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
 
     def _validate_template(self) -> None:
