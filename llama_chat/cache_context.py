@@ -217,8 +217,8 @@ def ensure_can_go_back(context) -> None:
     """Refuse a context whose cache can neither shift, cut its end nor save a state.
 
     Raises:
-        ValueError: If ``save_state`` gives ``None`` or raises where the cache
-            can neither shift nor cut.
+        ValueError: If ``save_state`` gives ``None`` or raises
+            ``RuntimeError`` where the cache can neither shift nor cut.
     """
     if context.can_shift or context.can_cut_tail:
         return

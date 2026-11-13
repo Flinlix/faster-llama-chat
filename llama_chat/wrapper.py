@@ -235,7 +235,7 @@ class ChatWrapper:
               tool_call_policy: ToolCallPolicy | ToolRegistry | None = None,
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
-              stop: str | list[str] | None = None,
+              stop: str | Iterable[str] | None = None,
               cancel: threading.Event | None = None,
               sampling: Sampling | None = None) -> ReplyStream:
         """Generate the reply, streaming it as it is generated.
@@ -298,8 +298,9 @@ class ChatWrapper:
                 every generation of it together, a thought included, in place
                 of the config's.
             stop: Texts that end the answer, matched against the answer
-                only; a single ``str`` is one such text. Read when this is
-                called, so a later change to the list changes nothing.
+                only; a single ``str`` is one such text, any other iterable
+                holds them. Read when this is called, so a later change to
+                it changes nothing.
             cancel: Setting it, from any thread, stops generation within one
                 token and ends the turn with ``stop_reason == "interrupted"``.
             sampling: This request's own sampling settings, in place of the
@@ -315,13 +316,15 @@ class ChatWrapper:
             ValueError: At once, if no conversation has been begun; if a tool
                 call has left a reply open and ``text`` is given, or a result
                 is still owed; if ``text`` is ``None`` with nothing to answer;
-                or if ``max_calls`` is given without a registry or is not a
-                whole number of at least 0. At the first
+                if ``tool_call_policy`` is neither one of
+                :data:`~llama_chat.reply.TOOL_CALL_POLICIES`, ``None`` nor a
+                registry; or if ``max_calls`` is given without a registry or
+                is not a whole number of at least 0. At the first
                 iteration, if a registry holding tools is given to a model
                 that could never call one, or if ``max_calls`` is given and
                 the turn the reply goes on with by then runs no call.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
-                ``stop`` is neither a ``str`` nor a list of ``str``, ``cancel``
+                ``stop`` is neither a ``str`` nor an iterable of ``str``, ``cancel``
                 has no ``is_set``, or ``sampling`` is neither ``None`` nor a
                 :class:`~llama_chat.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
@@ -732,13 +735,8 @@ class ChatWrapper:
                 generations.append(generation)
                 if not _answerable(generation.tool_calls):
                     if self._conversation.turn_open:
-                        # An unreadable call: its result is already written, and
-                        # the turn wants the reply that follows it. Nothing is
-                        # owed, since nothing could be read, so the resume is
-                        # free to run. It spends budget like any other failed
-                        # call, so a model that cannot write a readable one
-                        # retries at most `max_calls` times, and never more than
-                        # MAX_UNREADABLE_CALLS_IN_A_ROW times in a row.
+                        # An unreadable call, already answered: the turn goes on, spending
+                        # budget. See design_history.md, "An unreadable call spends the budget".
                         any_call_asked = True
                         unreadable_in_a_row += 1
                         if registry is not None and budget.calls_left > 0:
@@ -1083,12 +1081,12 @@ def _stop_texts(stop) -> tuple[str, ...]:
     """A request's stop texts, read once; a single ``str`` is one stop text.
 
     Raises:
-        TypeError: If ``stop`` is neither a ``str`` nor a list of ``str``.
+        TypeError: If ``stop`` is neither a ``str`` nor an iterable of ``str``.
     """
     texts = (stop,) if isinstance(stop, str) else tuple(stop) if isinstance(stop, Iterable) else stop
     if texts is not None and (not isinstance(texts, tuple)
                               or not all(isinstance(text, str) for text in texts)):
-        raise TypeError(f"stop must be a str or a list of str, not {stop!r}")
+        raise TypeError(f"stop must be a str or an iterable of str, not {stop!r}")
     return texts or ()
 
 
@@ -1144,13 +1142,10 @@ _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be rea
 
 
 def _explain_failure(result, may_call_again: bool):
-    """Say that the call failed and what to do next, leaving a real result alone.
+    """Say that the call failed and whether to call again, leaving a real result alone.
 
     A dict carrying ``error`` is a failure, whether the registry built it or a
-    tool returned one itself. Its ``message`` becomes the reason inside a
-    sentence that names the failure and ends in the one instruction that is not
-    already implied: whether another call is worth making. What to do instead is
-    left unsaid, there being nothing to do but answer.
+    tool returned one itself; its ``message`` becomes the reason.
     """
     if not isinstance(result, dict) or "error" not in result:
         return result

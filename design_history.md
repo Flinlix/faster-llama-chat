@@ -4025,7 +4025,7 @@ be told from the question.
 Review finding H5. The next call number was one past the highest number among
 a history's ids that read as the library's own, letters included, so an id
 `callzzzzz` (nine characters, valid for ministral-2410) made the next one
-`call100000`, which that template refuses, and an id such as `callbacks` fed
+`call100000`, which that template refuses, and an id such as `callbackid` fed
 the count as well. Only ids of exactly five base-36 digits are counted now.
 Where one past the highest would leave fewer than 1,000 numbers below 36**5,
 the conversation numbers from the lowest run of 1,000 numbers that no id of
@@ -4332,3 +4332,26 @@ later candidate can match longer than the best one found, which leaves the
 same answer. Measured on the same stand-in after both changes: 0.2 s at 16k,
 0.4 s at 32k and 1.0 s at 64k, about two dozen renders instead of one per
 dropped exchange.
+
+### Small text errors (366.31)
+
+366.31 (D5 to D8, D11 to D13). Corrected: the example of an id that fed the
+call count (`callbacks` is five base-36 digits after `call` and still counts;
+`callbackid` is the example now); the refusal of an unknown
+`tool_call_policy`, now named in `reply`'s docstring and the README; `stop`,
+which takes any iterable of `str`, not only a list, in the signature, the
+docstring, the README and the error; the docstring of `ensure_can_go_back`,
+which catches only `RuntimeError` from `save_state`; the description of the
+real-template tests, as some families have several templates; and a test
+that only showed a removed setting stays removed.
+
+#### An unreadable call spends the budget; how a failure is told
+
+Two comments in the wrapper argued their case at length. Kept here: a call
+that could not be read is answered at once, so nothing is owed and the turn
+goes on; it spends a call of the budget like any failed call, so a model that
+cannot write a readable call retries at most `max_calls` times, and never more
+than `MAX_UNREADABLE_CALLS_IN_A_ROW` times in a row. The answer to a failed
+call names the failure and ends in the one instruction not already implied,
+whether another call is worth making; what to do instead is left unsaid, as
+there is nothing to do but answer.

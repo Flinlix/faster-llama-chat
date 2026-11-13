@@ -1,7 +1,7 @@
 """Real chat templates of many families, each through the check a model meets at load, and what that load reads from it.
 
-``tests/templates/`` holds one template per family, read from a published
-model file that each file names. The renderer is the one a model is loaded
+``tests/templates/`` holds templates of many families, some with several,
+each read from a published model file that it names. The renderer is the one a model is loaded
 with; only the tokenizer is a stand-in, one token per character and one per
 tag, so what is compared is the text. Whole conversations on these templates
 are in ``test_conversations.py``.

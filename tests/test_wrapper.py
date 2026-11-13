@@ -407,10 +407,6 @@ def test_a_single_stop_text_is_one_stop_text_and_not_its_letters():
     assert (reply.text, reply.stop_reason) == ("hello", "stop_string")
 
 
-def test_stop_texts_are_a_request_option_and_no_setting():
-    assert "stop_strings" not in {field.name for field in dataclasses.fields(Config)}
-
-
 def test_generator_close_marks_interrupted():
     # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).
