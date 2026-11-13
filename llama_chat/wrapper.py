@@ -927,7 +927,7 @@ class ChatWrapper:
         reply_text = ReplyText(self._template.reasoning,
                                self._template.answer_opening(conversation.reasoning),
                                self._template.reply_header(conversation.reasoning),
-                               conversation.prompt_text, list(stop))
+                               conversation.prompt_text, list(stop), generated.tag_spans)
         pieces = conversation.generate(
             max_generated_tokens, generated, cancel=cancel,
             sampling=sampling,
@@ -975,7 +975,8 @@ class ChatWrapper:
         if turn_end is None:
             return None
         return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end),
-                                        generated.token_ids, self._context.token_bytes)
+                                        generated.token_ids, self._context.token_bytes,
+                                        self._context.is_special)
 
     def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
                       may_call_again: bool) -> int:

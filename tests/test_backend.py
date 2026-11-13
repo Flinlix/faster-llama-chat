@@ -263,6 +263,7 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == "<end>",
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
+        is_special=lambda vocab, token: False,
         token_to_piece_bytes=lambda vocab, token: token.encode())
     out = GenerationAccumulator()
     shown = "".join(generate(context, 0, 10, out=out, ends_turn=lambda token: token == "<response_end>"))
@@ -321,6 +322,7 @@ def _sampling_context(sampled):
         is_eog=lambda vocab, token: token == "<end>",
         decode=lambda ctx, tokens, pos, *rest: decoded.extend(tokens),
         kv_seq_rm=lambda ctx, seq, start, end: removed.append(start) or True,
+        is_special=lambda vocab, token: False,
         token_to_piece_bytes=lambda vocab, token: token.encode())
     return context, decoded, removed
 
@@ -764,6 +766,7 @@ def _stub_context(chains):
         is_eog=lambda vocab, tok: False,
         decode=lambda *args: None,
         token_to_piece_bytes=lambda vocab, tok: b"x",
+        is_special=lambda vocab, tok: False,
         free_sampler=lambda sampler: chains["freed"].append(sampler),
     )
     ctx._vocab, ctx._engine_context = None, None

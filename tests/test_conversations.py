@@ -1536,11 +1536,10 @@ def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
 
 @pytest.mark.parametrize("stem, reasoning", _each_mode(
     [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["marks_thought"]]))
-def test_an_answer_holding_its_templates_thought_closing_is_kept_as_the_template_writes_it(stem, reasoning):
+def test_an_answer_holding_its_templates_thought_tags_is_kept_as_the_template_writes_it(stem, reasoning):
     tags = _Run(stem, reasoning=reasoning).template.reasoning
-    if tags.thought_open.strip() in tags.thought_close:
-        pytest.skip("the closing holds the opening, which opens a thought in an answer")
-    answers = [f"Close it with {tags.thought_close} like this.", f"{tags.thought_close}", ANSWERS[0]]
+    answers = [f"Close it with {tags.thought_close} like this.", f"Open it with {tags.thought_open} so.",
+               f"{tags.thought_close}", ANSWERS[0]]
     run = _Run(stem, reasoning=reasoning)
     tools = [WEATHER] if run.fixture["calls_tools"] else None
     replies = _as_generated(run.template, answers, reasoning)
@@ -1569,3 +1568,15 @@ def test_an_answer_holding_its_templates_thought_closing_is_kept_as_the_template
         assert written == run.render(sent[:at + 1] + [{"role": "assistant", "content": answer},
                                                       {"role": "user", "content": "Next?"}])
     assert {"role": "user", "content": questions[-1]} in sent
+
+
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_tag_the_model_writes_inside_its_answer_is_never_shown(stem):
+    marker = "<|stray_marker|>"
+    run = _Run(stem, writes_tags=True, extra_tags=(marker,),
+               replies=[f"Rain first.{marker} Then sun.", ANSWERS[1]])
+    run.begin()
+    shown = "".join(run.chat.reply(QUESTIONS[0]))
+    assert shown == "Rain first. Then sun."
+    assert run.chat.conversation()["messages"][-1]["content"] == shown
+    run.chat.reply(QUESTIONS[1]).finish()

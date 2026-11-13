@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import codecs
 from collections.abc import Callable
 
@@ -21,21 +22,40 @@ class ReplyText:
         prompt_text: The template text the generation follows, which says
             whether it opens in a thought.
         stops: Stop strings, matched against the answer only.
+        tag_spans: Where each of the model's own tags stands in the text fed,
+            as it streams; ``None`` where that is not known, and every text a
+            tag spells counts as the tag.
+
+    Once answer text has passed, a thought opens only at the model's own tag,
+    not at its letters, and a tag the model writes in its answer is not shown.
     """
 
     def __init__(self, reasoning: Reasoning | None, answer_opening: str,
-                 header: tuple[str, str] | None, prompt_text: str, stops: list[str]) -> None:
+                 header: tuple[str, str] | None, prompt_text: str, stops: list[str],
+                 tag_spans: list[tuple[int, int]] | None = None) -> None:
         self._reasoning = reasoning
         self._opens_in_thought = reasoning is not None and begins_in_thought(reasoning, prompt_text)
-        self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought)
+        self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought, tag_spans)
                          if reasoning is not None else None)
         self._opening = _AnswerOpening(answer_opening, header)
         self._stops = _AnswerStops(stops)
+        self._tag_spans = tag_spans
+        self._fed = 0               # how much text was fed
+        self._hides_tags = False    # set once answer text has passed
 
     def feed(self, piece: str) -> str:
         """The part of ``piece`` that is certainly answer, possibly empty."""
-        text = self._thought.feed(piece) if self._thought else piece
-        return self._stops.feed(self._opening.feed(text))
+        at, self._fed = self._fed, self._fed + len(piece)
+        if self._thought:
+            text = self._thought.feed(piece)
+        else:
+            text = without_tags(piece, at, self._tag_spans) if self._hides_tags else piece
+        shown = self._stops.feed(self._opening.feed(text))
+        if not self._hides_tags and self._tag_spans is not None and self.answer.strip():
+            self._hides_tags = True
+            if self._thought:
+                self._thought.hides_tags = True
+        return shown
 
     def finish(self, stop_reason: StopReason) -> str:
         """The answer still held back, once the generation has ended for ``stop_reason``."""
@@ -67,7 +87,8 @@ class ReplyText:
         return self._stops.stopped
 
     def turn_end_test(self, turn_end: int, turn_end_text: str, generated: list[int],
-                      token_bytes: Callable[[int], bytes]) -> Callable[[int], bool]:
+                      token_bytes: Callable[[int], bytes],
+                      is_tag: Callable[[int], bool]) -> Callable[[int], bool]:
         """Whether a sampled token ends the reply, besides the end-of-generation tokens.
 
         Where a thought's closing begins with the turn's end, that token is the
@@ -77,14 +98,19 @@ class ReplyText:
         tags = self._reasoning
         if tags is None or not tags.thought_close.strip().startswith(turn_end_text):
             return lambda token: token == turn_end
-        thought = _ThoughtFilter(tags, self._opens_in_thought)
+        spans: list[tuple[int, int]] = []
+        thought = _ThoughtFilter(tags, self._opens_in_thought, spans)
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        read = 0
+        read = fed = 0
 
         def ends(token: int) -> bool:
-            nonlocal read
+            nonlocal read, fed
             for earlier in generated[read:]:
-                thought.feed(decoder.decode(token_bytes(earlier)))
+                text = decoder.decode(token_bytes(earlier))
+                if text and is_tag(earlier):
+                    spans.append((fed, fed + len(text)))
+                fed += len(text)
+                thought.feed(text)
             read = len(generated)
             return token == turn_end and not thought.in_thought
         return ends
@@ -98,19 +124,30 @@ class _ThoughtFilter:
     Whitespace at the reply's very start is held until what follows says whose
     it is: a thought's tag makes it the tag's, answer text the answer's.
 
+    Once answer text has begun, a thought opens only where a tag of the
+    model's stands in its opening's text, where ``tag_spans`` says where they
+    stand.
+
     Args:
         reasoning: The model's thought tags.
         inside: Whether the text begins inside a thought, its opening tag
             having been decoded with the generation prompt.
+        tag_spans: As :class:`ReplyText` takes them.
 
     Attributes:
         thought_pieces: How many of the pieces fed held thought.
+        hides_tags: Whether a tag of the model's in the answer is left out.
     """
 
-    def __init__(self, reasoning: Reasoning, inside: bool = False) -> None:
+    def __init__(self, reasoning: Reasoning, inside: bool = False,
+                 tag_spans: list[tuple[int, int]] | None = None) -> None:
         self._open = reasoning.thought_open.strip()
         self._close = reasoning.thought_close.strip()
+        self._tag_spans = tag_spans
         self._held = ""             # text not yet known to be thought or answer
+        self._held_at = 0           # where the held text starts in the text fed
+        self._answered = False      # whether answer text has begun
+        self.hides_tags = False
         self._in_thought = inside
         self._uncounted_held = 0    # pieces the held text came from, not yet counted
         self._strips_answer_start = False   # set after a thought
@@ -129,21 +166,19 @@ class _ThoughtFilter:
                 end = self._held.find(self._close)
                 if end < 0:
                     keep = len(self._close)                      # a close it may begin
-                    self._thought.append(self._held[:-keep])
-                    self._held = self._held[-keep:]
+                    self._thought.append(self._take(len(self._held) - keep))
                     break
-                self._thought.append(self._held[:end])
-                self._held = self._held[end + len(self._close):]
+                self._thought.append(self._take(end))
+                self._take(len(self._close))
                 self._in_thought, self._strips_answer_start = False, True
                 continue
-            start = self._held.find(self._open)
+            start = self._opening_at()
             if start < 0:
                 keep = self._open_prefix_length()
-                shown.append(self._answer(self._held[:len(self._held) - keep]))
-                self._held = self._held[len(self._held) - keep:]
+                shown.append(self._answer(len(self._held) - keep))
                 break
-            shown.append(self._answer(self._held[:start], before_thought=True))
-            self._held = self._held[start + len(self._open):]
+            shown.append(self._answer(start, before_thought=True))
+            self._take(len(self._open))
             if not counted:
                 # The earlier pieces the opening tag began in; this one below.
                 self.thought_pieces += self._uncounted_held - 1
@@ -173,12 +208,33 @@ class _ThoughtFilter:
                 cut keeps none of it, the held text being the start of a tag.
         """
         if self._in_thought:
-            self._thought.append(self._held)
-        held, self._held = ("" if self._in_thought or not complete else self._held), ""
-        return self._answer(held) + (self._leading_space if complete else "")
+            self._thought.append(self._take(len(self._held)))
+        if self._in_thought or not complete:
+            self._take(len(self._held))
+        return self._answer(len(self._held)) + (self._leading_space if complete else "")
 
-    def _answer(self, text: str, before_thought: bool = False) -> str:
-        """``text`` as answer, with the whitespace rules of the reply's start."""
+    def _take(self, n: int) -> str:
+        """The first ``n`` characters of the held text, no longer held."""
+        n = max(0, n)
+        taken, self._held = self._held[:n], self._held[n:]
+        self._held_at += len(taken)
+        return taken
+
+    def _opening_at(self) -> int:
+        """Where in the held text a thought opens, -1 where none does."""
+        at = self._held.find(self._open)
+        while at >= 0 and self._answered and self._tag_spans is not None \
+                and not _holds_tag(self._tag_spans, self._held_at + at,
+                                   self._held_at + at + len(self._open)):
+            at = self._held.find(self._open, at + 1)        # its letters, written as text
+        return at
+
+    def _answer(self, n: int, before_thought: bool = False) -> str:
+        """The first ``n`` held characters as answer, with the whitespace rules of the reply's start."""
+        at = self._held_at
+        text = self._take(n)
+        if self.hides_tags:
+            text = without_tags(text, at, self._tag_spans)
         if not self._started:
             if before_thought and not text.strip():
                 self._leading_space, self._started = "", True   # the tag's
@@ -191,6 +247,7 @@ class _ThoughtFilter:
         if self._strips_answer_start:
             text = text.lstrip()
             self._strips_answer_start = not text
+        self._answered = self._answered or bool(text.strip())
         return text
 
     def _open_prefix_length(self) -> int:
@@ -277,6 +334,29 @@ def _outside_tags(text: str, at: int, tags: tuple[str, ...], backwards: bool) ->
                 return found if backwards else found + len(tag)
             found = text.find(tag, found + 1)
     return at
+
+
+def without_tags(text: str, at: int, tag_spans: list[tuple[int, int]] | None) -> str:
+    """``text``, which starts at ``at`` in the text fed, without the model's tags ``tag_spans`` places in it."""
+    if not tag_spans or not text:
+        return text
+    end = at + len(text)
+    kept, cursor = [], at
+    for start, stop in tag_spans[max(0, bisect.bisect_left(tag_spans, (at,)) - 1):]:
+        if start >= end:
+            break
+        if stop <= at:
+            continue
+        kept.append(text[cursor - at:max(start, cursor) - at])
+        cursor = max(cursor, min(stop, end))
+    kept.append(text[cursor - at:])
+    return "".join(kept)
+
+
+def _holds_tag(tag_spans: list[tuple[int, int]], start: int, end: int) -> bool:
+    """Whether a tag of ``tag_spans`` overlaps the text from ``start`` to ``end``."""
+    before = bisect.bisect_left(tag_spans, (end,))
+    return before > 0 and tag_spans[before - 1][1] > start
 
 
 def begins_in_thought(reasoning: Reasoning, decoded: str) -> bool:

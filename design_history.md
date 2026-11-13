@@ -4187,3 +4187,25 @@ produced. The conversation is published once, when recording ends, so a
 reader never sees a call that is withdrawn in the same step. Rejected: taking
 every such reply back with its question (366.1B), which loses an answer the
 user saw in full.
+
+### Only the model's own tag opens a thought once the answer has begun
+
+366.15 (K3) and 370.1. The stream was filtered by text alone: a thought
+opened wherever the answer spelled the thought tag's letters, so an answer
+explaining the tag lost the rest of itself into a hidden thought; and a tag
+the model wrote inside its answer, as North-Mini-Code wrote "end of thinking"
+and "start of answer" between two copies of its answer in the benchmark, was
+shown as text.
+
+Each generation now notes where the tokens it writes that are the model's own
+tags stand in its text. Before any answer text, a tag's text opens a thought
+as before, whether written as the tag or as its letters, since a model writes
+its opening there. Once answer text has passed the filter, a thought opens
+only where one of the model's tags stands within the opening's text, and any
+tag of the model's in the answer is left out of the stream, `Reply.text` and
+the conversation; the cache is brought to the template's render of the answer
+as for any reply. A reply may still hold several thoughts where the model
+writes each opening as its tag. The test of the turn's end, which follows the
+thought on its own, reads the same tags from the tokens. The check costs one
+lookup of the token's kind per generated token, which the generation loop
+already made where a call may open as text.

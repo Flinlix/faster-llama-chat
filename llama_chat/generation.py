@@ -201,8 +201,9 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             upto = len(visible)
         elif marks:
             starts.append(len(visible))
-            visible.append(piece)
-            if call_opens_as_text and context.is_special(tok) \
+            is_tag = context.is_special(tok)
+            _append(visible, piece, is_tag, generated)
+            if call_opens_as_text and is_tag \
                     and piece.strip() not in boundary.thought_tags:
                 held_tag = (starts[-1], len(visible))
             mark_at = visible.find(marks, marks_from)
@@ -253,7 +254,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                 if held_tag is not None:
                     upto = min(upto, held_tag[0])
         else:
-            visible.append(piece)
+            _append(visible, piece, context.is_special(tok), generated)
             upto = len(visible)
         delta = visible.emit(upto)
         if delta:
@@ -280,6 +281,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         if delta:
             generated.text_pieces.append(delta)
             yield delta
+
+
+def _append(visible: _TextBuffer, piece: str, is_tag: bool, generated: GenerationAccumulator) -> None:
+    """Add a token's text to ``visible``, noting where it stands where the token is one of the model's tags."""
+    if is_tag and piece:
+        generated.tag_spans.append((len(visible), len(visible) + len(piece)))
+    visible.append(piece)
 
 
 def _after_tag(context: CacheContext, starts: list[int], tokens: list[int],

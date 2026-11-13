@@ -359,11 +359,16 @@ switch cannot be read from the template alone, the model's
 [add-on file](#add-on-files) names the template variables that turn it on.
 Every
 stream yields the answer alone, with or without reasoning, and a header a
-template writes for another reader is kept out of it too. Stop strings are
+template writes for another reader is kept out of it too. Once the answer has
+begun, a thought opens only where the model writes its own thought tag, not
+where the answer spells the tag's letters, and any other tag of the model's
+that it writes inside its answer is left out of the stream. Stop strings are
 matched against the answer only. A finished reply is kept as the template
 writes a past reply, without its thought where the template leaves one out,
 and with it, handed over in the form the template reads one in, where the
-template keeps it. Where that differs from what was generated, the cache is brought to that form
+template keeps it. An answer that spells the thought tag's letters is kept
+as the part of it the template writes, and taken back with its question
+where that is nothing. Where that differs from what was generated, the cache is brought to that form
 right after the reply, while it is read. A turn that called tools keeps the
 tokens it was generated as. A thought the template keeps comes back from
 `conversation()`: a reply's as `{"role": "assistant", "content": text,

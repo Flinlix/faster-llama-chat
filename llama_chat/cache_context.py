@@ -44,6 +44,8 @@ class GenerationAccumulator:
             whole later; the caller cuts them away again.
         cut_inside_call: Whether the reply cap or a cancel ended it inside a
             call, which is then dropped.
+        tag_spans: Where each of the model's own tags it wrote stands in the
+            visible text, as its start and end there.
     """
 
     token_ids: list[int] = field(default_factory=list)
@@ -52,6 +54,7 @@ class GenerationAccumulator:
     tool_call: str = ""
     cached_beyond: int = 0
     cut_inside_call: bool = False
+    tag_spans: list[tuple[int, int]] = field(default_factory=list)
 
     @property
     def text(self) -> str:

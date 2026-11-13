@@ -41,10 +41,44 @@ def test_the_turns_end_closes_a_thought_the_generated_text_is_in_though_none_of_
     texts = {1: b"<|ch|>think<|msg|>", 2: b"Kurz.", 3: b"<|stop|>", 4: b"<|ch|>final<|msg|>"}
     generated = [1, 2]
     ends = ReplyText(tags, "", None, "", []).turn_end_test(3, "<|stop|>", generated,
-                                                     texts.__getitem__)
+                                                     texts.__getitem__, lambda token: token != 2)
     assert not ends(3)
     generated += [3, 4, 2]
     assert ends(3)
+
+
+def _fed_as_tokens(reply, tokens, tag_spans):
+    """Feed ``tokens``, each a text and whether it is one of the model's tags, as a generation does."""
+    shown, at = [], 0
+    for text, is_tag in tokens:
+        if is_tag:
+            tag_spans.append((at, at + len(text)))
+        at += len(text)
+        shown.append(reply.feed(text))
+    return "".join(shown) + reply.finish("end_of_turn")
+
+
+@pytest.mark.parametrize("written_as_tag", [True, False])
+def test_after_answer_text_only_the_models_own_tag_opens_a_thought(written_as_tag):
+    tags = Reasoning("<thought>", "</thought>", "", "")
+    spans = []
+    reply = ReplyText(tags, "", None, "", [], spans)
+    shown = _fed_as_tokens(reply, [("<thought>", True), ("plan", False), ("</thought>", True),
+                                   ("Write ", False), ("<thought>", written_as_tag),
+                                   (" to start one.", False)], spans)
+    if written_as_tag:
+        assert (shown, reply.thought) == ("Write ", "plan to start one.")
+    else:
+        assert (shown, reply.thought) == ("Write <thought> to start one.", "plan")
+
+
+@pytest.mark.parametrize("tags", [None, Reasoning("<thought>", "</thought>", "", "")])
+def test_a_tag_the_model_writes_in_its_answer_is_not_shown_and_its_letters_are(tags):
+    spans = []
+    reply = ReplyText(tags, "<|text|>", None, "", [], spans)
+    shown = _fed_as_tokens(reply, [("<|text|>", True), ("Rain later.", False), ("</thought>", True),
+                                   ("<|text|>", True), (" Spell <|text|> so.", False)], spans)
+    assert shown == reply.answer == "Rain later. Spell <|text|> so."
 
 
 # ----- a channel's header --------------------------------------------------

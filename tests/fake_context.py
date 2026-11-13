@@ -186,7 +186,7 @@ class FakeContext:
             found = set(fixture["tags"]) | set(extra_tags)
         else:
             found = set(TAG.findall("".join(self._texts.values()))) | self._rendered_tags()
-            found |= {tag.replace("/", "", 1) for tag in found if "/" in tag}
+            found |= {tag.replace("/", "", 1) for tag in found if "/" in tag} | set(extra_tags)
         self._listed = tuple(self._tag_token(tag) for tag in sorted(found))
         self._tag_pattern = re.compile("|".join(map(re.escape, sorted(found, key=len, reverse=True)))
                                        or r"(?!)")
