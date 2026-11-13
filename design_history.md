@@ -3914,3 +3914,46 @@ the tokenizer finds but cannot place (finding A19) hands the text to the
 model's own tokenizer, which the load check verifies, so it guesses nothing;
 the cache's and the rendering's unreached fallbacks (finding B11) need a test
 template that takes them, or a proof that they cannot run, before they go.
+
+### What every model no longer pays for
+
+345.1 to 345.6, review findings B1 to B5, B9, A3, A4 and A15. Each moves work
+that only some templates need to a check made once, at load or when a
+conversation begins, so that the other templates skip it.
+
+- **A repeated question (B2).** The fix of 316.5 rendered the whole
+  conversation before any question that repeated an earlier message, for
+  every model, although only ministral-2410 with tools writes such a question
+  otherwise (it compares messages to find the newest question). Now one probe
+  pair when a conversation begins tells whether the template writes a
+  repeated question as any other; only where it does not is the repeat
+  rendered whole. Measured on the stand-in with 20 exchanges: the first word
+  after a repeated "Thanks!" 1.15 to 1.21 ms before, 0.38 ms now, the same as
+  a new question; the review measured 16.6 ms against 1.2 ms on gemma-4 at 41
+  messages.
+- **The clock (B1, A15).** Every action rendered the conversation's opening
+  again to see whether the date had moved, and a failed split was rendered a
+  second time in case the clock moved between two renders. Both now run only
+  where the template's text names `strftime_now` (`ResolvedTemplate.reads_clock`),
+  6 of the 52 test templates; a template whose text cannot be read is taken
+  to read the clock. A text search suffices: a template that does not name
+  the function cannot call it. Reading the names through the template parser
+  instead cost a compile per load, which tripled the test time.
+- **A question's placement check (B3).** Each question rendered a probe
+  conversation with the stand-in and one with the question; the stand-in's
+  render is now made once per conversation start (`splice_probe`).
+- **Saved states (B4, B5).** The opening's length for the pinned state, and a
+  state saved before a reply's prompt at `begin`, are worked out only where
+  the cache goes back to saved states, a cache that can neither shift nor cut
+  (`CacheSync.keeps_saved_states`); before, every begin and declaration paid
+  two full renders and tokenizations for them, 0.6 to 1.2 ms on the stand-in.
+- **Windows (B9).** Where the declarations move with each newest question
+  (ministral-2410 and mistral-small-3.2 with tools), the window check passed
+  at load but failed at every reply, which then rendered whole after doing
+  the window's work; such a conversation now renders no windows.
+- **Load checks worked out again (A3, A4).** What a template writes after a
+  conversation's last message was worked out by every load check that read
+  renders as probes, and whether it declares tools in the system turn up to
+  three times; each is now worked out once for each set of template
+  variables. Renders at load over the 52 test templates: 2,448 before, 1,964
+  now.
