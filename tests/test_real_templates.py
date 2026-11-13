@@ -20,7 +20,8 @@ from llama_chat.tokenizing import first_special_token
 from llama_chat.tools import ToolCall, ToolRegistry
 
 from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
-from .fake_context import FakeContext, call_marks, shipped_addon_call, written_call
+from .fake_context import (FakeContext, call_marks, shipped_addon_call, shipped_addon_reasoning_on,
+                           written_call)
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
@@ -32,7 +33,9 @@ def _load(stem):
     context = FakeContext(fixture(stem))
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
-    return context, ResolvedTemplate(context, shipped_addon_call(fixture(stem)["chat_template"]))
+    text = fixture(stem)["chat_template"]
+    return context, ResolvedTemplate(context, shipped_addon_call(text),
+                                     reasoning_on=shipped_addon_reasoning_on(text))
 
 
 @pytest.mark.parametrize("stem", STEMS)
@@ -70,6 +73,19 @@ def test_a_load_works_out_what_a_template_writes_after_the_last_message_once_per
     # Two checks on the model's own render, then once for the default variables and
     # once more where a variable moves the declarations.
     assert len(worked_out) <= 4
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if shipped_addon_reasoning_on(fixture(stem)["chat_template"])])
+def test_a_template_reasons_only_with_the_reasoning_its_add_on_file_names(stem):
+    """Without it, its prompt "with reasoning" closes the thought at once: it cannot reason."""
+    context = FakeContext(fixture(stem))
+    alone = ResolvedTemplate(context, shipped_addon_call(fixture(stem)["chat_template"]))
+    assert not alone.can_reason
+    with pytest.raises(ValueError, match="reasoning_on"):
+        alone.generation_prompt(True)
+    _context, template = _load(stem)
+    assert template.can_reason
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if "[/" in fixture(stem)["chat_template"]])

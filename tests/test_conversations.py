@@ -27,7 +27,8 @@ from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolT
 
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
-from .fake_context import FakeContext, ScriptedCall, call_marks, shipped_addon_call, written_call
+from .fake_context import (FakeContext, ScriptedCall, call_marks, shipped_addon_call,
+                           shipped_addon_reasoning_on, written_call)
 from .wrappers import assert_cache_reads_as_rendered, rendered_pieces
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
@@ -74,8 +75,9 @@ class _Run:
                  writes_tags=False):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
-        self.template = ResolvedTemplate(self.reader,
-                                         shipped_addon_call(self.fixture["chat_template"]))
+        text = self.fixture["chat_template"]
+        self.template = ResolvedTemplate(self.reader, shipped_addon_call(text),
+                                         reasoning_on=shipped_addon_reasoning_on(text))
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                            can_shift=can_shift, writes_tags=writes_tags)

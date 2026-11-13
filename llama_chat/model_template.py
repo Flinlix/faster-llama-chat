@@ -27,8 +27,7 @@ class ModelTemplate:
                            for prompted in (False, True)}
         self._switch = reasoning_switch(lambda messages, generation_prompt, variables:
                                         self._renderers[generation_prompt](
-                                            messages=messages, **variables).prompt,
-                                        template_names_read(self._renderers[False]))
+                                            messages=messages, **variables).prompt)
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None,

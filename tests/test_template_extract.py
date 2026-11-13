@@ -404,41 +404,29 @@ def _rendering(open_thought):
 _SHARED_FLAG = ({"enable_thinking": True}, {"enable_thinking": False})
 
 
-@pytest.mark.parametrize("ending, names, switch_on, switch_off", [
+@pytest.mark.parametrize("ending, switch_on, switch_off", [
     # Reads the shared variable: it stays the switch.
-    (lambda v: "<reason>" if v.get("enable_thinking") else "<reason></reason>", (), *_SHARED_FLAG),
-    # Reads only an effort, and that opens the thought: the effort is the switch.
-    (lambda v: "<reason>" if v.get("reasoning_effort") == "high" else "<reason></reason>", (),
-     {"reasoning_effort": "high"}, {}),
+    (lambda v: "<reason>" if v.get("enable_thinking") else "<reason></reason>", *_SHARED_FLAG),
     # Reasons unless the effort is none: none is off, and the template's own default is on.
-    (lambda v: "<reason></reason>" if v.get("reasoning_effort") == "none" else "<reason>", (),
+    (lambda v: "<reason></reason>" if v.get("reasoning_effort") == "none" else "<reason>",
      {}, {"reasoning_effort": "none"}),
     # Reasons by default, writes more for high, and stops only for none: the default
     # stays on rather than the higher effort.
     (lambda v: {"none": "<reason></reason>", "high": "<more><reason>"}.get(
-        v.get("reasoning_effort"), "<reason>"), (),
+        v.get("reasoning_effort"), "<reason>"),
      {}, {"reasoning_effort": "none"}),
+    # An effort that opens the thought only at some other value is no switch the
+    # template states; the add-on file's reasoning_on names it.
+    (lambda v: "<reason>" if v.get("reasoning_effort") == "high" else "<reason></reason>",
+     *_SHARED_FLAG),
     # An effort that changes nothing after the user turn is not a switch.
-    (lambda v: "", (), *_SHARED_FLAG),
-    # A flag of another name that opens the thought is the switch.
-    (lambda v: "<reason>" if v.get("thinking") is True else "<reason></reason>",
-     ("messages", "thinking"), {"thinking": True}, {"thinking": False}),
-    # An effort of another name is read by the effort's rule.
-    (lambda v: "<reason></reason>" if v.get("reasoning_strength") == "none" else "<reason>",
-     ("reasoning_strength",), {}, {"reasoning_strength": "none"}),
-    # The shared variable is tried first, where the template reads another as well.
-    (lambda v: "<reason>" if v.get("enable_thinking") or v.get("thinking") else "<reason></reason>",
-     ("thinking",), *_SHARED_FLAG),
-    # A variable whose name speaks of neither thinking nor reasoning is no switch,
-    # however it changes what follows the user turn.
-    (lambda v: "<reason>" if v.get("low_effort") is False else "<reason></reason>",
-     ("low_effort",), *_SHARED_FLAG),
-    # Nor is one that speaks of thinking and changes nothing after the user turn.
-    (lambda v: "", ("keep_thinking",), *_SHARED_FLAG),
+    (lambda v: "", *_SHARED_FLAG),
+    # Nor is a variable of another name, however it changes what follows the user turn.
+    (lambda v: "<reason>" if v.get("thinking") is True else "<reason></reason>", *_SHARED_FLAG),
 ])
-def test_the_reasoning_switch_is_the_variable_that_opens_the_thought(ending, names, switch_on,
-                                                                     switch_off):
-    switch = reasoning_switch(_rendering(ending), names)
+def test_the_reasoning_switch_is_the_shared_variable_or_an_effort_that_none_turns_off(
+        ending, switch_on, switch_off):
+    switch = reasoning_switch(_rendering(ending))
     assert switch(True) == switch_on
     assert switch(False) == switch_off
     assert switch(None) == {}

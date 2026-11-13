@@ -107,6 +107,11 @@ class ResolvedTemplate:
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
         self._reasoning = self._resolve_reasoning()
+        # A prompt "with reasoning" that closes the thought already reasons not at all.
+        self._can_reason = self._reasoning is not None and not (
+            self._reasoning.thought_close.strip()
+            and self._reasoning.generation_prompt.rstrip().endswith(
+                self._reasoning.thought_close.strip()))
         if self._reasoning is not None:
             tags = (self._reasoning.thought_open.strip(), self._reasoning.thought_close.strip())
             self._boundary = dataclasses.replace(self._boundary,
@@ -178,8 +183,8 @@ class ResolvedTemplate:
 
     @property
     def can_reason(self) -> bool:
-        """Whether a conversation can be asked to reason, as the template does it."""
-        return self._reasoning is not None
+        """Whether a conversation can be asked to reason, as the template does it: it marks a thought, and its prompt with reasoning on leaves the thought open."""
+        return self._can_reason
 
     @property
     def can_turn_off_reasoning(self) -> bool:
@@ -213,8 +218,10 @@ class ResolvedTemplate:
             ValueError: If this model cannot reason.
         """
         if not self.can_reason:
-            raise ValueError("this model's template marks no thought that could be "
-                             "told from the answer, so it cannot be asked for reasoning")
+            raise ValueError("this model's template marks no thought that could be told "
+                             "from the answer, or its prompt with reasoning on closes the "
+                             "thought at once, so it cannot be asked for reasoning; an "
+                             "add-on file's reasoning_on can name what turns it on")
 
     def generation_prompt(self, reasoning: bool = False) -> str:
         """The generation prompt a reply is sampled after, in the reasoning mode given.

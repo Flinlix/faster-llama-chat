@@ -121,7 +121,7 @@ def test_a_file_next_to_the_model_that_names_its_template_comes_before_a_shipped
 def test_every_shipped_file_names_its_templates_and_says_where_its_values_come_from(path):
     found = json.loads(path.read_text())
     assert found["templates"] and all(re.fullmatch("[0-9a-f]{64}", t) for t in found["templates"])
-    assert found["source"] and (found.get("sampling") or found.get("call"))
+    assert found["source"] and (found.get("sampling") or found.get("call") or found.get("reasoning_on"))
     read_addon_file(path)                       # passes the check a model's load runs
 
 

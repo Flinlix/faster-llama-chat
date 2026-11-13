@@ -3837,3 +3837,22 @@ beginning stops where a tag ends at `>` or `]` or a word at whitespace
 (`shared_tags_length`) is left as it is: it is the library's rule for every
 template, not one model's, and replacing it would carry the tag list into
 nine places for no measured gain.
+
+### Only the shared reasoning switches are read from a template
+
+348.2A and 345.16, review findings A1, A2, D1 and D2. The switch search
+read `enable_thinking`, then `reasoning_effort` with `"none"` as off and,
+where the default did not reason, `"high"` as on, then any variable whose name
+held "think" or "reason". None of the 52 test templates needed the name search
+(it cost up to 30 renders and 7 ms per load on 7 of them), and `"high"` was
+the vocabulary of two families, hunyuan-3 and hunyuan-memory, written into the
+core. Now the template is read for `enable_thinking`, and for a
+`reasoning_effort` whose `"none"` turns reasoning off (the user's 248.4A,
+unchanged); everything else is named in the add-on file's `reasoning_on`, and
+the two Hunyuan add-on files (`llama_chat/addons/hunyuan-3.json`,
+`hunyuan-memory.json`) name `{"reasoning_effort": "high"}`, which renders the
+same prompts as before. A new load check guards the case the add-on is
+missing for: a prompt with reasoning on that already closes the thought
+(hunyuan-3 without its file writes `<think:opensource></think:opensource>`)
+means the model cannot reason, so asking for reasoning is refused with a
+pointer to `reasoning_on` instead of giving an answer that never thought.

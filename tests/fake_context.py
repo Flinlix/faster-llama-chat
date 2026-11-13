@@ -90,6 +90,11 @@ class ScriptedCall:
         self.closes = closes
 
 
+def shipped_addon_reasoning_on(template_text: str) -> dict:
+    """What the shipped add-on file that names ``template_text`` says turns reasoning on, as a wrapper finds it."""
+    return addon_file(None, template_text)["reasoning_on"]
+
+
 def shipped_addon_call(template_text: str) -> dict:
     """How the shipped add-on file that names ``template_text`` says a call is written, as a wrapper finds it."""
     return addon_file(None, template_text)["call"]

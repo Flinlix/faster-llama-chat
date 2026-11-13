@@ -516,11 +516,15 @@ how the model writes a call where its template shows none it can be read from:
 the text a call opens with, the text after the function's name, and the text
 that closes it; it is refused where the template never writes that closing.
 `reasoning_on` names the template variables, with their values, that turn the
-model's reasoning on, in place of what the library reads off the template; it
-is for a template whose default does not reason although it writes something
-of its own for the effort `"none"`, which the template alone reads as a default
-that reasons. It is refused at load where it writes the prompt as reasoning off
-does.
+model's reasoning on, in place of what the library reads off the template. The
+library reads only the switches templates share: `enable_thinking`, and a
+`reasoning_effort` whose `"none"` turns reasoning off, the template's default
+then being on. Any other switch is named here, such as an effort whose
+`"high"` turns reasoning on, and so is the case of a template whose default
+does not reason although it writes something of its own for `"none"`. A
+template whose prompt with reasoning on closes the thought at once is read as
+unable to reason. `reasoning_on` is refused at load where it writes the prompt
+as reasoning off does.
 
 ## A model without a usable template
 

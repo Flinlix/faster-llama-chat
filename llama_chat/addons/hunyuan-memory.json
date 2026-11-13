@@ -1,0 +1,9 @@
+{
+ "templates": [
+  "8759492d33deb19b2f58855f62d3e431276da89d698b2800d1e353fbb12d5320"
+ ],
+ "source": "rapatsky/Hy-Memory-30B-A3B-GGUF, chat template: reasoning_effort is \"no_think\" (its default), \"low\" or \"high\"; \"high\" turns reasoning on",
+ "reasoning_on": {
+  "reasoning_effort": "high"
+ }
+}

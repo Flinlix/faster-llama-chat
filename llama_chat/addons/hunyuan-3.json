@@ -1,0 +1,9 @@
+{
+ "templates": [
+  "7fc351fee674c13754656ba7f33a3ca426bfb7231039f48444360a3f3c5ecf3e"
+ ],
+ "source": "AngelSlim/Hy3-GGUF, chat template: reasoning_effort is \"no_think\" (its default), \"low\" or \"high\"; \"high\" turns reasoning on",
+ "reasoning_on": {
+  "reasoning_effort": "high"
+ }
+}
