@@ -4466,3 +4466,24 @@ reply's `n_prefilled_tokens`, and it loads its models with
 `ChatWrapper(config, on_load_progress=...)`. Run on Gemma 3 1B on the
 processor: 5 to 16 tokens decoded per reply, and the system prompt kept
 through every eviction of the small-context run.
+
+### A reply that fails before it generates changes nothing (366.11A, 366.12)
+
+366.11A (T4). After a reply's question was decoded, a few steps prepared the
+generation (the reply text's filter, the test of the turn's end, the call
+boundary) outside the protection that takes a failed request back. A fault
+there left the question in the conversation without an answer, and on a
+template that writes no two questions in a row the next question was then
+refused. The conversation now keeps what it was before the newest question,
+until a generation follows it, and a fault in those steps leaves the
+conversation and the cache as they were before the request, as the README
+promises. Chosen over storing a placeholder answer such as "error during
+reply" (366.11B), which the model would later read as its own words, and
+over joining the question with the next (366.11C), which changes what was
+sent.
+
+366.12 (T5). A reply notes the policy and the call budget its turn keeps as
+its generation starts. One that then failed before writing anything still
+changed them, so the next `reply()` of a turn its history opened handed a
+call over where it would otherwise have answered it. A reply that wrote
+nothing now leaves both as they were.

@@ -943,17 +943,24 @@ class ChatWrapper:
 
         generated = GenerationAccumulator()
         results_cut = conversation.results_cut
-        reply_text = ReplyText(self._template.reasoning,
-                               self._template.answer_opening(conversation.reasoning),
-                               self._template.reply_header(conversation.reasoning),
-                               conversation.prompt_text, list(stop), generated.tag_spans)
-        pieces = conversation.generate(
-            max_generated_tokens, generated, cancel=cancel,
-            sampling=sampling,
-            ends_turn=self._turn_end_test(reply_text, generated),
-            boundary=replace(self._template.call_boundary(recognizes_calls, withhold),
-                             starts_in_thought=reply_text.opens_in_thought))
-        on_started()
+        noted = self._turn_policy, self._turn_budget
+        try:
+            reply_text = ReplyText(self._template.reasoning,
+                                   self._template.answer_opening(conversation.reasoning),
+                                   self._template.reply_header(conversation.reasoning),
+                                   conversation.prompt_text, list(stop), generated.tag_spans)
+            pieces = conversation.generate(
+                max_generated_tokens, generated, cancel=cancel,
+                sampling=sampling,
+                ends_turn=self._turn_end_test(reply_text, generated),
+                boundary=replace(self._template.call_boundary(recognizes_calls, withhold),
+                                 starts_in_thought=reply_text.opens_in_thought))
+            on_started()
+        except BaseException:
+            # Failed before it generated: taken back with its question, as a failed request.
+            self._turn_policy, self._turn_budget = noted
+            conversation.take_back_question()
+            raise
         try:
             for piece in pieces:
                 shown = reply_text.feed(piece)
@@ -968,8 +975,12 @@ class ChatWrapper:
                     yield shown
         finally:
             pieces.close()
-            # Runs on normal completion and on early close alike.
-            n_evicted_messages += self._record_reply(generated, reply_text, may_call_again)
+            try:
+                # Runs on normal completion and on early close alike.
+                n_evicted_messages += self._record_reply(generated, reply_text, may_call_again)
+            finally:
+                if not generated.token_ids:
+                    self._turn_policy, self._turn_budget = noted    # it wrote nothing: nothing changes
         return Reply(
             text=reply_text.answer,
             n_prefilled_tokens=conversation.decoded - decoded_from,

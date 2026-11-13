@@ -154,6 +154,8 @@ class RenderedCache:
         # Where the newest generation's turn starts in the cache, whether it went on with an open
         # turn, the cache before the question it answers, and how long the cache was when it began.
         self._generation: tuple[int, bool, list[int] | None, int] = (0, False, None, 0)
+        # The conversation and the cache before the newest question, until a generation follows it.
+        self._before_ask: tuple[_ConversationState, list[int]] | None = None
         self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
@@ -392,6 +394,7 @@ class RenderedCache:
                 its reply, checked against the system prompt alone before
                 anything is dropped.
         """
+        as_it_was = self._state.copied(), list(self._memory.tokens)
         with self._action():
             _ensure_ready(self, "start a request", "generate into")
             room = self._max_prompt_tokens
@@ -417,7 +420,18 @@ class RenderedCache:
                     f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
                     "the request or lower evict_above_fraction")
             self._state.asked = before, self._made_for_now()
+            self._before_ask = as_it_was
             return n_before + 1 - len(as_history(self._state.messages))
+
+    def take_back_question(self) -> None:
+        """Leave the conversation and the cache as they were before the newest question, where no generation has followed it; else change nothing."""
+        if self._before_ask is None:
+            return
+        (self._state, tokens), self._before_ask = self._before_ask, None
+        self._memory.replace(tokens)
+        with contextlib.suppress(Exception):
+            self._memory.repair()           # where it fails, the next action decodes again
+        self._publish()
 
     def _splice(self, question: dict, room: int) -> bool:
         """Add ``question``, decoded in the stand-in's place in the render made ahead, where that is exact; whether it was."""
@@ -527,6 +541,7 @@ class RenderedCache:
         """
         _ensure_can_reply(self, asks_question=False)
         asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
+        self._before_ask = None
         self._state.results_cut = []
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),

@@ -8,7 +8,7 @@ import pytest
 
 from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError, rendered_cache
 from llama_chat.rendering import ConversationRendering
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests.internals import kept_turns
@@ -658,3 +658,42 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
                               and messages[1]["content"].strip()
                               and messages[1]["content"] in said)
     w.reply("Weiter?").finish()
+
+
+@pytest.mark.parametrize("template", [TOOLS, TOOLS_REFUSING_TWO_USER_TURNS], ids=["plain", "refusing two"])
+def test_a_reply_failing_before_it_generates_is_taken_back_with_its_question(monkeypatch, template):
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                    context=FakeContext(template, gen_tokens=3))
+    w.begin("persona", [("user", "alt"), ("assistant", "älter")])
+    w.reply("eins").finish()
+    before = _state(w)
+
+    def failing(*args, **kwargs):
+        raise RuntimeError("set-up failed")
+
+    monkeypatch.setattr(ChatWrapper, "_turn_end_test", failing)
+    with pytest.raises(RuntimeError, match="set-up failed"):
+        w.reply("zwei").finish()
+    monkeypatch.undo()
+    assert _state(w) == before
+    w.reply("drei").finish()
+
+
+def test_a_reply_that_fails_before_writing_anything_leaves_its_turns_policy_as_it_was():
+    def turn_opened_by_its_history():
+        fake = _Flaky(TOOLS, gen_tokens=3)
+        w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
+        w.begin("s", [("user", "x"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),
+                                               ToolResult("weather", "18")))],
+                tools=weather_registry().specs())
+        return w, fake
+
+    w, fake = turn_opened_by_its_history()
+    fake.fail = "generate"
+    with pytest.raises(RuntimeError, match="generation failed"):
+        w.reply(tool_call_policy="yield").finish()
+    fake.call_script = ['fn:weather{"city":"Köln"}']
+    after_failure = [type(event).__name__ for event in w.reply()]
+    w, fake = turn_opened_by_its_history()
+    fake.call_script = ['fn:weather{"city":"Köln"}']
+    assert after_failure == [type(event).__name__ for event in w.reply()]
