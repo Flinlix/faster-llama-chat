@@ -40,6 +40,12 @@ class CallBoundary:
     ends_at_call: bool = False
 
 
+def json_arguments(name_close: str, rest: str) -> str:
+    """The arguments after a call's name, ``rest``, as one JSON object: with the brace that opens it where ``name_close`` holds it."""
+    brace = name_close.rfind("{")
+    return name_close[brace:] + rest if brace >= 0 else rest
+
+
 @dataclass(frozen=True)
 class CallBody:
     """How a model spells a function name and its arguments between the tags.
@@ -70,7 +76,8 @@ class CallBody:
         item_open, item_close: Around each item of a nested list, empty where
             the model writes nested values as JSON or a literal instead.
         arguments_json: Whether the arguments after the name are one JSON
-            object, as an add-on file's call says.
+            object, as the template writes them or an add-on file's call says;
+            such arguments are read as JSON first, however they are spaced.
     """
 
     name_close: str

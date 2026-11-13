@@ -13,7 +13,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from .template import CallBody
+from .template import CallBody, json_arguments
 from .tools import ToolCall
 
 # How many levels of lists and objects a call's arguments may nest, the arguments'
@@ -136,7 +136,7 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
-    whole = _as_json_object(rest) if call_body.arguments_json else None
+    whole = _as_json_arguments(rest, call_body) if call_body.arguments_json else None
     if whole is not None:
         return ToolCall(name=name, arguments=whole)
     if call_body.key_in_close:
@@ -181,13 +181,18 @@ def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
     return parsed
 
 
-def _as_json_object(text: str) -> dict | None:
-    """``text`` as the JSON object it holds, or ``None`` where it holds none."""
+def _as_json_arguments(rest: str, call_body: CallBody) -> dict | None:
+    """The arguments after a call's name as the JSON object they are, followed by nothing but what the template writes after one; ``None`` otherwise."""
+    text = json_arguments(call_body.name_close, rest)
     try:
-        decoded = json.loads(text)
+        decoded, end = json.JSONDecoder().raw_decode(text)
     except ValueError:
         return None
-    return decoded if isinstance(decoded, dict) else None
+    close = call_body.body_close
+    after_object = close[close.find("}") + 1:].strip() if "}" in close else ""
+    if not isinstance(decoded, dict) or text[end:].strip() not in ("", after_object):
+        return None
+    return decoded
 
 
 def _parse_pairs(text: str, call_body: CallBody) -> dict:

@@ -4037,3 +4037,19 @@ its reply and the conversation's system prompt; where any is written
 otherwise, a question repeating an earlier message is rendered whole, and such
 a template, whose text depends on another message's, is refused before the
 reply, the conversation left as it was.
+
+### Arguments a template writes as one JSON object are read as JSON
+
+Review finding H7. Seven test templates write a call's arguments as one JSON
+object after the name (mistral-3, ministral-3-instruct, mistral-3-reasoning,
+mistral-large-4, mistral-small-3.2, devstral-2, deepseek-r1-qwen3), and those
+arguments were read by delimiters cut from the template's own spacing,
+`{"city": "Bonn"}`, so a model writing `{"city":"Bonn"}` had its call answered
+as unreadable. The load now notes, as `CallBody.arguments_json`, where the
+arguments after the name decode as that JSON object for both probe calls, the
+opening brace taken from the text after the name where it stands there, and
+such arguments are read as JSON first, followed by nothing but what the
+template writes after the object (deepseek-r1-qwen3 closes a code fence
+there); delimiters remain the way back for anything else. This is the shape
+the template writes, as the rule "a call is read in the one shape its
+template writes" asks, and an add-on file's call keeps setting it as before.

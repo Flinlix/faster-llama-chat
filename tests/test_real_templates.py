@@ -311,6 +311,17 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, argument
         assert read == [ToolCall("fn", arguments)]
 
 
+@pytest.mark.parametrize("stem", _ARGUMENT_STEMS)
+def test_arguments_written_as_one_json_object_read_back_however_they_are_spaced(stem):
+    context, template = _load(stem)
+    arguments = {"city": "Bonn", "days": 2}
+    written = _call_body(context, template, arguments)
+    if json.dumps(arguments) not in written:
+        return                          # it writes its arguments as no JSON object
+    compact = written.replace(json.dumps(arguments), json.dumps(arguments, separators=(",", ":")))
+    assert template.read_calls(compact) == [ToolCall("fn", arguments)]
+
+
 @pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
 @pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
 def test_every_argument_shape_reads_back_in_the_spelling_an_add_on_file_gives(stem, arguments):

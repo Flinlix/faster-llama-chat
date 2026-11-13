@@ -13,7 +13,7 @@ import json
 
 from .messages import calling_message
 from .template import (CallBody, TemplateFragments, ToolCallFragments, common_prefix_length,
-                       common_suffix_length, shared_tags_length)
+                       common_suffix_length, json_arguments, shared_tags_length)
 from .template_extract import (ASSISTANT_SENTINEL, TOOL_SENTINEL, USER_SENTINEL, Render,
                                as_probes_read)
 from .tools import ToolCall
@@ -206,6 +206,11 @@ def extract_call_body(render: Render, call_open: str,
         type_close=type_close,
         string_type=string_type,
         key_in_close=key_in_close,
+        arguments_json=all(_reads_as_json(json_arguments(
+                               name_close, body.split(TOOL_SENTINEL, 1)[1][len(name_close):]),
+                                          arguments)
+                           for body, arguments in ((text, {_KEY: _STRING}),
+                                                   (pair, {_KEY: _STRING, _KEY2: _STRING2}))),
         **_nested_forms(rendered_body, text, before_value[len(bare_before):], quote_close),
     )
     # A delimiter still holding a probe's own text is no fixed delimiter at all.
@@ -324,6 +329,15 @@ def extract_json_call_keys(render: Render) -> tuple[str, ...] | None:
             return (name_key, arguments_key,
                     *sorted(set(call) - {name_key, arguments_key}))
     return None
+
+
+def _reads_as_json(text: str, arguments: dict) -> bool:
+    """Whether ``text``, whatever follows it aside, is ``arguments`` written as one JSON object."""
+    try:
+        decoded, _end = json.JSONDecoder().raw_decode(text.lstrip())
+    except ValueError:
+        return False
+    return decoded == arguments
 
 
 def _render_call(render: Render, arguments: dict) -> str | None:
