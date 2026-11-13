@@ -149,7 +149,7 @@ def _conversation_end(render: Render) -> str:
     return end if followed.endswith(end) else ""
 
 
-def extract_fragments(render: Render) -> TemplateFragments | None:
+def extract_fragments(render: Render, tags: tuple[str, ...] = ()) -> TemplateFragments | None:
     """Recover template fragments by probing ``render`` with sentinel content.
 
     The user and assistant tags are read from a conversation of two user turns,
@@ -161,6 +161,7 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
 
     Args:
         render: As ``Render`` above.
+        tags: The texts of the model's own tags, where a user tag may begin.
 
     Returns:
         The fragments, or ``None`` where the model ships no usable template.
@@ -170,9 +171,9 @@ def extract_fragments(render: Render) -> TemplateFragments | None:
     if user is None or USER_SENTINEL not in user:
         return None
     first_prefix, _, user_suffix = user.partition(USER_SENTINEL)
-    tags = (_past_exchange(render, first_prefix, user_suffix)
-            or _newest_exchange(render, first_prefix, user_suffix))
-    user_prefix, assistant_prefix, assistant_suffix = tags
+    found = (_past_exchange(render, first_prefix, user_suffix, tags)
+             or _newest_exchange(render, first_prefix, user_suffix))
+    user_prefix, assistant_prefix, assistant_suffix = found
     return TemplateFragments(
         user_prefix=user_prefix, user_suffix=user_suffix,
         assistant_prefix=assistant_prefix, assistant_suffix=assistant_suffix,
@@ -295,7 +296,7 @@ def _reply_with_thought() -> dict:
 
 
 def _past_exchange(render: Render, first_prefix: str,
-                   user_suffix: str) -> tuple[str, str, str] | None:
+                   user_suffix: str, tags: tuple[str, ...]) -> tuple[str, str, str] | None:
     """The user and assistant tags, read from a reply that a later turn follows."""
     rendered = render([
         {"role": "user", "content": USER_SENTINEL},
@@ -329,7 +330,7 @@ def _past_exchange(render: Render, first_prefix: str,
     if user_prefix and not first_prefix.endswith(user_prefix):
         # A past reply closes with a tag a newest one lacks; the user tag is
         # then the longest end of what follows that a first turn's opening shares.
-        user_prefix = _longest_shared_end(user_prefix, first_prefix)
+        user_prefix = _longest_shared_end(user_prefix, first_prefix, tags)
         assistant_suffix = between[:len(between) - len(user_prefix)]
     # What a first turn carries beyond the tag is written once, before it.
     if not user_prefix or not first_prefix.endswith(user_prefix):
@@ -337,10 +338,10 @@ def _past_exchange(render: Render, first_prefix: str,
     return user_prefix, assistant_prefix, assistant_suffix
 
 
-def _longest_shared_end(text: str, other: str) -> str:
-    """The longest end of ``text`` that ``other`` ends with, starting where a tag starts."""
+def _longest_shared_end(text: str, other: str, tags: tuple[str, ...]) -> str:
+    """The longest end of ``text`` that ``other`` ends with, starting where one of the model's ``tags`` starts."""
     for start in range(len(text)):
-        if text[start] in "<[" and other.endswith(text[start:]):
+        if text.startswith(tags, start) and other.endswith(text[start:]):
             return text[start:]
     return ""
 

@@ -3824,3 +3824,16 @@ written in five decimal digits, so the 100,000th call of a conversation
 written in five base-36 digits (`call0000a` after `call00009`), nine
 characters for the first 36**5 calls, about 60 million; ids read from a
 history are taken back the same way, so every new id stays unused.
+
+### A user tag after a past reply's own closing is found by the model's tags
+
+345.12, review finding A7. Where a past reply closes with another tag than a
+newest one (gpt-oss, hunyuan-3, hunyuan-memory among the test templates), the
+user tag that follows was found as the longest shared end starting at a `<`
+or `[`. It now starts where one of the model's own tags starts, from the
+tokenizer's tag list the load already reads, so a family whose tags are
+written otherwise is read the same way. The general rule that a shared
+beginning stops where a tag ends at `>` or `]` or a word at whitespace
+(`shared_tags_length`) is left as it is: it is the library's rule for every
+template, not one model's, and replacing it would carry the tag list into
+nine places for no measured gain.

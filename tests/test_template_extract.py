@@ -16,6 +16,7 @@ import pytest
 import llama_chat
 from llama_chat.call_format import extract_call_body, extract_tool_fragments
 from llama_chat.model_template import names_read
+from llama_chat.tokenizing import tag_texts
 from llama_chat.template import CallBody
 from llama_chat.template_extract import extract_content_rewrites, extract_fragments, reasoning_switch
 
@@ -45,7 +46,7 @@ def _stems_with(key):
 @pytest.mark.parametrize("stem", _stems_with("fragments"))
 def test_a_templates_turn_fragments_are_the_tags_it_writes(stem):
     known = expected(fixture(stem), "fragments")
-    f = extract_fragments(_real(stem))
+    f = extract_fragments(_real(stem), tag_texts(FakeContext(fixture(stem))))
     assert {name: getattr(f, name) for name in known} == known
 
 
@@ -516,3 +517,10 @@ def test_no_render_sentinel_contains_another():
         others = [v for n, v in sentinels.items() if n != name]
         assert not any(value in other for other in others), \
             f"{name}={value!r} occurs inside another sentinel"
+
+
+def test_a_user_tag_after_a_past_replys_own_closing_is_found_by_the_models_tags_of_any_shape():
+    from llama_chat.template_extract import _longest_shared_end
+    tags = ("{{user}}", "{{bos}}")
+    assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", tags) == "{{user}}"
+    assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", ()) == ""
