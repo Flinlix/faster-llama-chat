@@ -311,6 +311,15 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, argument
         assert read == [ToolCall("fn", arguments)]
 
 
+@pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_every_argument_shape_reads_back_in_the_spelling_an_add_on_file_gives(stem, arguments):
+    _context, template = _load(stem)
+    call = shipped_addon_call(fixture(stem)["chat_template"])
+    written = "fn" + call["name_close"] + json.dumps(arguments)
+    assert template.read_calls(written) == [ToolCall("fn", arguments)]
+
+
 @pytest.mark.parametrize("stem", _ARGUMENT_STEMS)
 def test_a_text_that_reads_as_a_number_reads_back_as_text_where_the_template_writes_it_as_one(stem):
     context, template = _load(stem)
