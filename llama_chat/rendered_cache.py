@@ -292,13 +292,13 @@ class RenderedCache:
             # The records made ahead for the conversation before, freed with it.
             self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
             self._state.opening = self._rendering.opening_render(self._system_part())
-            self._memory.pin(self._rendering.opening_length(self._system_part()))
+            self._pin_opening()
             if self.pending_calls:
                 self._sync(self._settled_while_owed(), logits=False)
             elif self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 prompted = self._prompted()
                 opening = self._prompt_text_start(prompted.tokens)
-                if opening < len(prompted.tokens):
+                if opening < len(prompted.tokens) and self._memory.keeps_saved_states:
                     # A state saved before the template's text a reply follows, which a cache
                     # that cannot be cut goes back to where what follows is written otherwise.
                     self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False)
@@ -822,12 +822,17 @@ class RenderedCache:
             limit = self._config.evict_above_tokens
             self._check_renders()
             self._state.opening = self._rendering.opening_render(self._system_part())
-            self._memory.pin(self._rendering.opening_length(self._system_part()))
+            self._pin_opening()
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._render_ahead(dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
+
+    def _pin_opening(self) -> None:
+        """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
+        self._memory.pin(self._rendering.opening_length(self._system_part())
+                         if self._memory.keeps_saved_states else None)
 
     def _check_renders(self) -> None:
         """Check again what the template's renders allow, as the system turn, the declarations and the clock now leave them.

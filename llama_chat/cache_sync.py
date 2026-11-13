@@ -203,6 +203,11 @@ class CacheSync:
                              + [(self._end, state)])
 
     @property
+    def keeps_saved_states(self) -> bool:
+        """Whether the cache goes back to saved states, as one that can neither shift nor cut its end does."""
+        return not self._can_cut
+
+    @property
     def _can_cut(self) -> bool:
         return self._context.can_shift or self._context.can_cut_tail
 

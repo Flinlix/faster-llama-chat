@@ -515,6 +515,17 @@ def test_results_that_need_room_decode_a_cache_that_cannot_shift_again_only_ever
 
 
 @pytest.mark.parametrize("stem", _EVERY)
+def test_a_cache_that_can_cut_renders_nothing_for_saved_states_when_a_conversation_begins(stem):
+    rendered = {}
+    for can_shift in (True, False):
+        run = _Run(stem, can_shift=can_shift)
+        before = len(run.context.rendered)
+        run.begin()
+        rendered[can_shift] = len(run.context.rendered) - before
+    assert rendered[True] < rendered[False]
+
+
+@pytest.mark.parametrize("stem", _EVERY)
 def test_a_cache_that_cannot_be_cut_goes_back_to_a_saved_state_rather_than_decoding_all_again(stem):
     run = _Run(stem, can_shift=False)
     run.begin()
