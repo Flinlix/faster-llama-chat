@@ -4402,3 +4402,25 @@ writes the results of the calls that ran for anything raised while a call
 runs, as it already did where the stream was closed at a call, and the rest
 stay owed. `ToolRegistry.call` still turns only an `Exception` into a result,
 so a stop is never told to the model as a tool failure.
+
+### Room for a call's closing, and the cache after a reply taken back (366.21, 366.14)
+
+366.21 (K4). A reply kept room after itself only for the closing of a reply's
+text. A model that ended its turn inside a call at the last free token had the
+call closed as the template closes one, which can take more tokens (16 on
+DeepSeek V4.1, 3 on Muse Glimmer): the decode ran past the context and the
+reply failed with the engine's error. The room kept is now the longer of the
+two closings, read once at load.
+
+The test of it found a second gap: a call withdrawn because no room is left
+for its answer leaves a reply, but that reply skipped the check that the
+template writes it, as only a reply that made no call was checked. Every
+reply whose newest message holds no call is checked now.
+
+366.14 (K2). Where a reply was taken back with its question, the cache was
+brought to the render of what was left without the question's opening. On a
+template that writes a default system prompt only ahead of a question (the
+Mistral 3 family, Devstral 2, Mistral Large 4), that render of an empty
+conversation is empty, so the cache lost the 2,400 tokens `begin` had decoded,
+and the next question decoded them again. A reply taken back now leaves the
+cache decoded ahead of the next question, as after any other reply.

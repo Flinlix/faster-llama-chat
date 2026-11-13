@@ -1651,3 +1651,41 @@ def test_the_tokenizer_memory_holds_no_more_text_than_its_bound_however_long_a_r
         memo.tokenize("z" * 5_000_000)
     held = sum(len(text) for text, _special, _parse in memo._known)
     assert held <= MemoTokenizer._BOUND_CHARS
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_calls_closing(stem):
+    size = 8192
+
+    class Bounded(FakeContext):
+        """A cache that holds no more than its context, as a real one."""
+
+        def decode_generated(self, token_ids, start_pos):
+            assert start_pos + len(token_ids) <= size, "decoded past the context"
+            super().decode_generated(token_ids, start_pos)
+
+    fake = Bounded(_FIXTURES[stem])
+    chat = ChatWrapper(Config(context_size=size, min_reply_tokens=32), context=fake)
+    chat.begin("")
+    opening = fake._call_marks()[0]
+
+    def filling_the_room(_text):
+        room = size - len(fake.cache) - chat._conversation.template.n_closing_tokens
+        fake.replies = [ScriptedCall("x" * (room - 1 - len(opening)), closes=False)]
+
+    fake.before_reply = filling_the_room
+    reply = chat.reply("Call something.", tool_call_policy="yield").finish()
+    fake.before_reply = None
+    assert reply.stop_reason in ("tool_call", "unreadable_tool_call", "token_limit")
+
+
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_first_reply_that_produces_nothing_leaves_what_begin_decoded_in_the_cache(stem):
+    fake = FakeContext(_fixture(stem))
+    chat = ChatWrapper(Config(context_size=8192), context=fake)
+    chat.begin("")
+    begun = chat.total_tokens
+    fake.gen_tokens = 0
+    chat.reply("hello").finish()
+    # Taken back, or left unanswered: what begin decoded ahead, such as a default system prompt, stays.
+    assert chat.total_tokens >= begun

@@ -122,8 +122,13 @@ class ResolvedTemplate:
         if reasoning_on:
             self._ensure_reasoning_on_changes_the_prompt()
         self._check_what_generation_reads()
-        self._n_closing_tokens = len(context.tokenize(self._fragments.assistant_suffix,
-                                                      add_special=False))
+        boundary = self._boundary
+        # A turn may end inside a call, which is then closed as the template closes one.
+        call_closing = (len(context.tokenize(boundary.call_texts[1], add_special=False,
+                                             parse_special=True)) if boundary.call_texts
+                        else 1 if boundary.tool_tokens else 0)
+        self._n_closing_tokens = max(call_closing, len(context.tokenize(
+            self._fragments.assistant_suffix, add_special=False)))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -279,7 +284,7 @@ class ResolvedTemplate:
 
     @property
     def n_closing_tokens(self) -> int:
-        """How many tokens the closing after a reply's text takes."""
+        """How many tokens the closing after a reply's text, or after a call its turn ends inside, takes at most."""
         return self._n_closing_tokens
 
     @property

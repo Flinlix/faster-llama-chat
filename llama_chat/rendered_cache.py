@@ -671,8 +671,10 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False)
             return 0
-        if not called and not self._writes(self._state.messages if not answer
-                                           else self._newest_exchange()):
+        # A reply whose call was withdrawn, for want of room for its answer, is a reply too.
+        replied = not self._state.messages[-1].get("tool_calls")
+        if replied and not self._writes(self._state.messages if not answer
+                                        else self._newest_exchange()):
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
@@ -1021,8 +1023,9 @@ class RenderedCache:
             n_before = len(as_history(self._state.messages))
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
-            self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
-                       logits=False, dropped=dropped)
+            # As after any reply, so that what the template writes ahead of the next
+            # question, a default system prompt say, stays in the cache.
+            self._render_ahead(dropped=dropped)
             self._memory.rest()
             return n_before - len(as_history(self._state.messages))
 
