@@ -1234,13 +1234,13 @@ class RenderedCache:
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
         self._rendering.forget_renders()
         self._memory.repair()
-        if self._state.begun:
+        if self._state.begun and self.template.reads_clock:
             opening = self._rendering.opening_render(self._system_part())
             if opening != self._state.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._check_renders()
                 self._state.opening = opening
-                self._memory.pin(self._rendering.opening_length(self._system_part()))
+                self._pin_opening()
         saved = self._state.copied()
         held = list(self._memory.tokens)
         try:

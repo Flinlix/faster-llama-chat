@@ -58,19 +58,22 @@ class SplitRender:
 
 def split_render(render: Callable[[list[dict], list[dict] | None], str | None],
                  messages: list[dict], written: Callable[[str], str],
-                 declarations: list[dict] | None = None) -> SplitRender | None:
+                 declarations: list[dict] | None = None,
+                 reads_clock: bool = True) -> SplitRender | None:
     """``messages`` rendered with ``declarations`` and split; ``None`` where the template refuses them.
 
     Args:
         render: The template's render of a list of messages and of declarations.
         written: A content's text with the template's rewrites applied, tried
             on the text itself and on each of its stripped forms.
+        reads_clock: Whether the template reads the clock, so that the two
+            renders may differ by a moment and are made again once.
 
     Raises:
         ValueError: If the render is not the marked render with each marker
             replaced by its text.
     """
-    for attempt in range(2):
+    for attempt in range(2 if reads_clock else 1):
         rendered = render(messages, declarations)
         if rendered is None:
             return None

@@ -25,6 +25,8 @@ from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_frag
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
 
+# The function a template calls to read the clock, as the renderer provides it.
+_CLOCK = "strftime_now"
 # Where the prompt and a tool result go in a render. Neither contains the
 # other, so a split on either lands where it means to.
 _PROMPT = "PROMPTMSG"
@@ -80,6 +82,8 @@ class ResolvedTemplate:
         self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
         self._tag_texts = tag_texts(context)
+        text = context.chat_template_text(template_name)
+        self._reads_clock = text is None or _CLOCK in text
         self._fragments = self._resolve_fragments()
         self._has_system_turn = self._resolve_has_system_turn()
         self._validate_template()
@@ -268,6 +272,11 @@ class ResolvedTemplate:
         if self._boundary.tool_tokens is not None:
             return self._context.token_text(self._boundary.tool_tokens[1])
         return ""
+
+    @property
+    def reads_clock(self) -> bool:
+        """Whether the template may read the clock, so that a render can change while the conversation does not; true where its text names the clock or cannot be read."""
+        return self._reads_clock
 
     @property
     def declares_before_newest_turn(self) -> bool:

@@ -122,7 +122,8 @@ class ConversationRendering:
             self._memo[key] = split_render(
                 lambda m, declared: self._render_given(
                     m, generation_prompt, None if declared is declarations else declared),
-                given, self._template.fragments.content, declarations)
+                given, self._template.fragments.content, declarations,
+                reads_clock=self._template.reads_clock)
         return self._memo[key]
 
     def opening_render(self, system: list[dict]) -> str | None:
