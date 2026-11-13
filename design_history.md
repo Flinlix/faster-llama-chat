@@ -4253,3 +4253,11 @@ first, as closing its stream does, recording what it produced, and then
 closes; the caller's error comes through unchanged. From a tool the reply
 runs, where the reply is still executing, `close()` stays refused as every
 other action is, and the tool is answered as one that raised.
+
+### The quick start answers the message it injects
+
+366.7 (D1). The README's quick start injected a message and then asked a
+question, two user turns in a row, which 7 of the 52 test templates refuse
+(Gemma 3, the Mistral and Ministral family, Aya). It now injects the
+question with its reference and answers it with `reply()`, as the demo does.
+A test runs the same steps on every test template.

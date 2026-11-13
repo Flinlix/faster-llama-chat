@@ -91,10 +91,11 @@ chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192
 chat.begin("You are a helpful assistant.", [("user", "Hi"), ("assistant", "Hello!")])
 
 # inject: prefill one message as context, without generating
-chat.inject("Reference: the deadline is Friday.")
+chat.inject("Reference: the deadline is Friday. What's the deadline?")
 
-# reply: prefill only the new request, then stream the reply
-for delta in chat.reply("What's the deadline?"):
+# reply: prefill only what is new, then stream the reply; reply() answers the
+# injected message, as some templates refuse two user turns in a row
+for delta in chat.reply():
     print(delta, end="", flush=True)
 
 reply = chat.reply("Summarize the plan.").finish()    # or read it to its end at once

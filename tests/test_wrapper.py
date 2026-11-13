@@ -1174,3 +1174,14 @@ def test_closing_on_the_thread_that_reads_an_unfinished_reply_ends_it_and_keeps_
                 raise ValueError("the reader failed")
     assert raised.value.__context__ is None
     assert closed == [True]
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_the_readmes_quick_start_runs_on_every_template(stem):
+    chat = ChatWrapper(Config(context_size=8192), context=FakeContext(fixture(stem)))
+    chat.begin("You are a helpful assistant." if chat.can_take_system_prompt else "",
+               [("user", "Hi"), ("assistant", "Hello!")])
+    chat.inject("Reference: the deadline is Friday. What's the deadline?")
+    for _ in chat.reply():
+        pass
+    chat.reply("Summarize the plan.").finish()
