@@ -1601,3 +1601,33 @@ def test_a_call_after_text_is_read_where_the_template_writes_a_call_after_text(s
     # A call that opens with a tag opens anywhere; one that opens as text, where the template writes it.
     reads_after_text = not boundary.opens_as_text or after.startswith(boundary.call_texts[0].strip())
     assert called == ([ToolCall(WEATHER.name, {"city": "Bonn"}, called[0].id)] if reads_after_text else [])
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more_than_after_its_history(
+        stem):
+    renders = {}
+    for live in (True, False):
+        run = _Run(stem)
+        if live:
+            _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+            run.context.replies = [ScriptedCall(body), "Sunny."] + ANSWERS[:3]
+            run.begin(tools=[WEATHER])
+            call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+                     if isinstance(e, ToolCall)]
+            run.chat.inject_tool_result(call, "sunny")
+            run.chat.reply().finish()
+            stays = internals.tool_turns_stay(run.chat)
+        else:
+            run.context.replies = ANSWERS[:3]
+            run.begin([("user", "Weather?"), ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}),
+                                                       ToolResult(WEATHER.name, "sunny"), "Sunny."))],
+                      tools=[WEATHER])
+        counts = []
+        for question in QUESTIONS[:3]:
+            before = len(run.context.rendered)
+            run.chat.reply(question).finish()
+            counts.append(len(run.context.rendered) - before)
+        renders[live] = counts
+    if stays:
+        assert renders[True] == renders[False]

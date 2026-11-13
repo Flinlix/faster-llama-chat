@@ -26,8 +26,8 @@ from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
                        kept_items, next_call_number, result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
-                            repeated_question_written_alike, splice_probe, windows_are_exact,
-                            writes_two_user_turns)
+                            repeated_question_written_alike, splice_probe, tool_turns_stay_written,
+                            windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
@@ -90,6 +90,8 @@ class _ConversationState:
     windows: bool = False                 # whether windows of the conversation stand for its render
     splice_probe: str | None = None       # what a question's render after one exchange is compared with
     repeats_alike: bool = True            # whether a repeated question is written as any other
+    # Whether a past turn that called tools is written as before once another exchange follows.
+    tool_turns_stay: bool = False
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
     prompt_start: int = 0                 # where in the cache the generation prompt begins
@@ -628,7 +630,9 @@ class RenderedCache:
                                              bool(asked)))
             self._state.kept_at[self._state.kept[-1]] = start
         self._state.messages.append(message)
-        return answer, self._drop_unplaceable(), unwritten
+        # A reply that leaves every turn that called tools as it was cannot move one.
+        moves_kept = called or resumed or not self._state.tool_turns_stay
+        return answer, moves_kept and self._drop_unplaceable(), unwritten
 
     def _after_reply(self, answer: str, called: bool, unreadable: bool, unplaced: bool,
                      unwritten: bool, unreadable_result: dict) -> int:
@@ -930,6 +934,10 @@ class RenderedCache:
                                                      self._rendering.tag_from))
         self._state.splice_probe = splice_probe(self._rendering.render, system)
         self._state.repeats_alike = repeated_question_written_alike(self._rendering.render, system)
+        # Without the steps tool calling needs, no turn keeps a call, and the template is not asked.
+        self._state.tool_turns_stay = self.template.can_call_tools and tool_turns_stay_written(
+            self._rendering.render, system, self._state.tools[0].name if self._state.tools else "probe",
+            thought=self._state.reasoning)
 
     def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.

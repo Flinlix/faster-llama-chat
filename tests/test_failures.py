@@ -458,21 +458,23 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
 
 
 @pytest.mark.parametrize("fault", [RuntimeError, KeyboardInterrupt])
-@pytest.mark.parametrize("ending", ["answer", "call"])
-def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending):
+@pytest.mark.parametrize("ending, step", [("answer", "_holds_thought_tags"),
+                                          ("call", "_drop_unplaceable")])
+def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending,
+                                                                       step):
     w, fake = tool_wrapper()
     w.begin("persona", tools=weather_registry().specs())
     w.reply("eins").finish()
     before = _state(w)
-    recorded = rendered_cache.RenderedCache._drop_unplaceable
+    recorded = getattr(rendered_cache.RenderedCache, step)
     failing = iter([True])
 
-    def recording(self):
+    def recording(self, *args):
         if next(failing, False):
             raise fault("recording failed")
-        return recorded(self)
+        return recorded(self, *args)
 
-    monkeypatch.setattr(rendered_cache.RenderedCache, "_drop_unplaceable", recording)
+    monkeypatch.setattr(rendered_cache.RenderedCache, step, recording)
     fake.call_script = ['fn:weather{"city": "Bonn"}'] if ending == "call" else []
     with pytest.raises(fault, match="recording failed"):
         w.reply("zwei", tool_call_policy="yield").finish()

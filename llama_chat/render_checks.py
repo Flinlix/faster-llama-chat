@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .messages import THOUGHT_KEY, call_id, calling_message, result_message
+from .tools import ToolCall
+
 Render = Callable[[list[dict], bool], "str | None"]
 
 # Stands where the next question will go in the render made ahead of it.
@@ -109,6 +112,32 @@ def ensure_history_stays_written(render: Render, system: list[dict]) -> None:
     if two[:kept] != three[:kept]:
         raise ValueError("this model's template writes an older exchange otherwise once "
                          "another follows, which a rolling memory cannot keep")
+
+
+def tool_turns_stay_written(render: Render, system: list[dict], tool: str, thought: bool) -> bool:
+    """Whether the template writes a past turn that called ``tool``, with a ``thought`` or without, as before once another exchange follows.
+
+    ``False`` also where it refuses the probe, so that the turn is checked after every reply.
+    """
+    thoughts = ({THOUGHT_KEY: "QQTHOUGHTQQ"}, {THOUGHT_KEY: "QQLATERQQ"}) if thought else ({}, {})
+    turn = [{"role": "user", "content": "QQASKQQ"},
+            {**calling_message("QQBEFOREQQ", [ToolCall(tool, {})]), **thoughts[0]},
+            result_message(tool, call_id(0), "QQRESULTQQ"),
+            {"role": "assistant", "content": "QQANSWERQQ", **thoughts[1]}]
+    alone = render(system + turn, False)
+    followed = render(system + turn + [{"role": "user", "content": "QQNEXTQQ"},
+                                       {"role": "assistant", "content": "QQNEXTREPLYQQ"}], False)
+    first = "QQTHOUGHTQQ" if thought else "QQBEFOREQQ"
+
+    def written_turn(render_text):
+        """The turn as the model wrote it, its thought or its text first, to its answer's end."""
+        start, end = render_text.find(first), render_text.find("QQANSWERQQ")
+        return None if start < 0 or end < start else render_text[start:end + len("QQANSWERQQ")]
+
+    if alone is None or followed is None:
+        return False
+    turn_alone = written_turn(alone)
+    return turn_alone is not None and turn_alone == written_turn(followed)
 
 
 def writes_two_user_turns(render: Render) -> bool:

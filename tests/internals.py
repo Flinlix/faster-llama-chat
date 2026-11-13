@@ -127,3 +127,8 @@ def read_fragments_as(monkeypatch, **changes) -> None:
     read = ResolvedTemplate._resolve_fragments
     monkeypatch.setattr(ResolvedTemplate, "_resolve_fragments",
                         lambda self: dataclasses.replace(read(self), **changes))
+
+
+def tool_turns_stay(wrapper) -> bool:
+    """Whether the conversation's template keeps a past turn that called tools as written once another exchange follows."""
+    return wrapper._conversation._state.tool_turns_stay

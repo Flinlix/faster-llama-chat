@@ -4261,3 +4261,29 @@ question, two user turns in a row, which 7 of the 52 test templates refuse
 (Gemma 3, the Mistral and Ministral family, Aya). It now injects the
 question with its reference and answers it with `reply()`, as the demo does.
 A test runs the same steps on every test template.
+
+### A past tool turn is checked after a reply only where a reply can move it
+
+366.6 (P1). After every reply, the library checked that each turn kept as
+the tokens the model generated still had its place in the template's render,
+and wrote one that had none the template's way. That check renders the whole
+conversation four times: once as it is and once with markers for the
+caller's texts, each without and with the answer prompt. With a past tool
+turn on Gemma 4 at 31,000 tokens it took 1.1 to 1.8 s after every reply, and
+the next question waited for it, until the turn was dropped (measured by the
+review; 2 ms without a tool turn).
+
+A reply can move a kept turn only where it adds to or goes on with a turn
+that called tools, or where the template writes a past tool turn otherwise
+once another exchange follows. The second is now read where the template's
+renders are checked (at `begin`, a declaration and a clock change): a probe
+turn with a text before its call, a result and an answer, and a thought where
+the conversation reasons, is rendered alone and followed by another exchange,
+and the text the model would have written, from its thought or its text to
+its answer's end, must be the same in both. Only where it is, an ordinary
+reply skips the check. A template that writes the turn otherwise, or refuses
+the probe, keeps the check after every reply, as before; most of these drop
+the past thought, so the kept turn is written the template's way at the
+first check and the cost ends there. Of the 41 test templates that call
+tools, 32 skip the check with reasoning off, Gemma 4 among them. A model
+whose template cannot call tools is not asked, as no turn can keep a call.
