@@ -1460,6 +1460,8 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
     # The template opens a call with plain text; a reply quoting it is still prose.
     opener = expected(_FIXTURES[stem], "call_opening_text")
     run = _Run(stem, replies=[f"Write {opener}x in the file."])
+    if run.template.call_boundary().follows_text:
+        pytest.skip("the template writes a call after text, so its opening there opens one")
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
@@ -1580,3 +1582,22 @@ def test_a_tag_the_model_writes_inside_its_answer_is_never_shown(stem):
     assert shown == "Rain first. Then sun."
     assert run.chat.conversation()["messages"][-1]["content"] == shown
     run.chat.reply(QUESTIONS[1]).finish()
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_call_after_text_is_read_where_the_template_writes_a_call_after_text(stem):
+    run = _Run(stem)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    run.context.replies = [ScriptedCall(body, before="Let me look. "), "Sunny."]
+    run.begin(tools=[WEATHER])
+    called = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    boundary = run.template.call_boundary()
+    rendered = run.render([{"role": "user", "content": "Weather?"},
+                           {"role": "assistant", "content": "Let me look.", "tool_calls": [
+                               {"id": "call00000", "type": "function",
+                                "function": {"name": WEATHER.name, "arguments": {"city": "Bonn"}}}]}],
+                          [WEATHER])
+    after = rendered.partition("Let me look.")[2].lstrip() if rendered else ""
+    # A call that opens with a tag opens anywhere; one that opens as text, where the template writes it.
+    reads_after_text = not boundary.opens_as_text or after.startswith(boundary.call_texts[0].strip())
+    assert called == ([ToolCall(WEATHER.name, {"city": "Bonn"}, called[0].id)] if reads_after_text else [])

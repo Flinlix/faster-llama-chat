@@ -35,6 +35,7 @@ _CLOCK = "strftime_now"
 _PROMPT = "PROMPTMSG"
 _RESULT = "RESULTMSG"
 _NEXT = "NEXTMSG"
+_TEXT = "TEXTMSG"
 _SYSTEM = "SYSTEMMSG"
 # A reply and a user turn after the first, so a template that declares tools
 # before the newest user turn shows it after the first turn, not ahead of it.
@@ -509,7 +510,9 @@ class ResolvedTemplate:
         if call_texts is not None:
             lead_in = self._text_after_last_tag(call_texts[0])
         turn_end_text = self._resolve_turn_end_text(call_texts)
-        boundary = CallBoundary(tool_tokens, call_texts, opens_as_text, turn_end_text)
+        boundary = CallBoundary(tool_tokens, call_texts, opens_as_text, turn_end_text,
+                                follows_text=opens_as_text and self._writes_call_after_text(
+                                    call_texts[0]))
         return boundary, lead_in, from_file, None if turn_end_text else turn_end_token
 
     def _resolve_call_texts(self) -> tuple[tuple[str, str] | None, bool]:
@@ -529,6 +532,14 @@ class ResolvedTemplate:
             raise ValueError("the model's add-on file closes a call with text its "
                              "template never writes after one")
         return (call["opening"], call["closing"]), True
+
+    def _writes_call_after_text(self, opening: str) -> bool:
+        """Whether the template writes a call's ``opening`` right after a reply's text, whitespace apart."""
+        rendered = self._render([{"role": "user", "content": _PROMPT},
+                                 calling_message(_TEXT, [ToolCall(_PROBE_FUNCTION, {})], 0)])
+        if rendered is None or _TEXT not in rendered:
+            return False
+        return rendered.partition(_TEXT)[2].lstrip().startswith(opening.strip())
 
     def _template_call_texts(self) -> tuple[str, str] | None:
         """The texts around a call, for a template whose call tags also mark every reply."""

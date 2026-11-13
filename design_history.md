@@ -192,7 +192,9 @@ say how a model writes a call.
   cache again, and the closing is written whole.
 - **A plain-text opening,** such as `<function name="`, counts only at a
   reply's start or right after a tag, so a sentence that mentions it stays
-  text. One that begins with the words of a reply's own opening, such as a role
+  text. (Revised by "A call after text where the template writes one there":
+  a template that writes a call right after a reply's text opens one there
+  too.) One that begins with the words of a reply's own opening, such as a role
   name in a header, is refused: a model may write its header in another order
   than its template, so the template cannot tell how a generated call begins.
 - **A function named twice,** in the turn's header and the call's body: the call
@@ -4209,3 +4211,21 @@ writes each opening as its tag. The test of the turn's end, which follows the
 thought on its own, reads the same tags from the tokens. The check costs one
 lookup of the token's kind per generated token, which the generation loop
 already made where a call may open as text.
+
+### A call after text where the template writes one there
+
+366.2A (V2). A call whose opening is plain text counted only at a reply's
+start or right after a tag, so that a sentence quoting the opening stays
+text. Two test templates (DeepSeek V4.1 and MiniCPM 5) write a calling
+message's text and then its call with only whitespace between them, as in
+"Let me look." followed by the call. A model that did exactly that had its
+call read as prose: nothing ran, and the raw call text reached the user.
+
+The load now renders a calling message with a text and reads whether the
+call's opening follows that text directly, whitespace apart. Where it does,
+the opening opens a call after any text as well, and the text before it is
+held back while it may begin one, as at a reply's start. Every other template
+keeps the rule as it was, and pays nothing for this check after load. On
+these two templates a sentence that quotes the opening is read as a call,
+which is how the template itself writes one. The property is the template's,
+so it is read from the template, not stated in an add-on file.

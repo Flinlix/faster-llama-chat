@@ -141,7 +141,8 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     # A call's texts are matched without the whitespace around them, as a thought's tags are.
     open_text, close_text = ((text.strip() for text in boundary.call_texts)
                              if boundary.call_texts else (None, None))
-    call_opens_as_text = boundary.opens_as_text and open_text is not None
+    # An opening in plain text counts only after a tag, unless the template writes a call after text.
+    call_opens_as_text = boundary.opens_as_text and open_text is not None and not boundary.follows_text
     marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
     opening_owns_space = open_text is not None and boundary.call_texts[0][:1].isspace()
     starts = []            # where each token's text begins in ``visible``

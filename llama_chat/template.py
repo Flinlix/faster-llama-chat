@@ -20,7 +20,11 @@ class CallBoundary:
         call_texts: The ``(open, close)`` texts around a call, where it has
             none, matched in a generation without the whitespace around them.
         opens_as_text: Whether the opening of ``call_texts`` is plain text,
-            which opens a call only at the reply's start or right after a tag.
+            which opens a call only at the reply's start or right after a tag,
+            unless ``follows_text``.
+        follows_text: Whether the template writes a call right after a
+            reply's text, so that a plain-text opening opens a call after
+            text too.
         turn_end_text: Text that ends a reply where generated, removed from the
             reply again and never yielded.
         withheld_tokens: Tokens never drawn, such as the one that opens a
@@ -35,6 +39,7 @@ class CallBoundary:
     call_texts: tuple[str, str] | None = None
     opens_as_text: bool = False
     turn_end_text: str | None = None
+    follows_text: bool = False
     withheld_tokens: tuple[int, ...] = ()
     thought_tags: tuple[str, ...] = ()
     ends_at_call: bool = False
