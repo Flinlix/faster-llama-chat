@@ -529,6 +529,16 @@ def test_short_results_that_fit_together_are_written_whole_and_keep_the_turn_ope
     assert wrapper.reply().finish().tool_results_cut == []
 
 
+@pytest.mark.parametrize("length", range(200, 300))
+def test_a_round_of_results_keeps_its_turn_however_long_the_first_result_is(length):
+    wrapper, fake, (first, second) = _two_calls_owed(context_size=400)
+    wrapper.inject_tool_result(first, "x" * length)
+    wrapper.inject_tool_result(second, "y")
+    assert wrapper.turn_open and not wrapper.pending_calls
+    fake.call_script = []
+    assert set(wrapper.reply().finish().tool_results_cut) <= {first, second}
+
+
 def test_a_turn_closed_for_want_of_room_lists_no_result_it_dropped_as_cut():
     wrapper, fake, (first, second) = _two_calls_owed(context_size=400)
     wrapper.inject_tool_result(first, "x" * 5000)

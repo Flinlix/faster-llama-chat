@@ -3982,3 +3982,17 @@ and so on matched nothing, since no renderer writes it. The form that is left
 is not needed for correctness, since the gap search finds the same span, but
 for speed: without it a qwen-3 history of 9 such calls took 723 ms on the
 search before this change.
+
+### A round of results keeps its turn at every length
+
+Review finding H2, a regression of the fix for G1. A result was written whole
+wherever it fit, with no room kept for the results still owed after it, so a
+first result that just fit (253 to 256 characters at a context of 400 on the
+stand-in) left a one-character second result no room even cut to nothing,
+and the turn closed, its results dropped. Now a result is written whole only
+where each result still owed after it fits empty beside it, and where a later
+result fits not even cut to nothing, the newest result written whole earlier
+in the round is cut to make room for it, its call then listed as cut. Measured
+over every first result from 200 to 299 characters: the turn stays open at
+each length, where before it closed at four lengths, and at one after the
+first part of this fix.

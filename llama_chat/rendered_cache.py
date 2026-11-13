@@ -689,9 +689,9 @@ class RenderedCache:
         as a question does, the turn it answers kept whole. Where it still
         cannot fit, it is cut, :data:`RESULT_CUT_NOTE` after it telling the
         model how much was kept, and its call is noted in :attr:`results_cut`.
-        Where it does not fit whole, the room left keeps space for each
-        result still owed after it, as that note with nothing kept, unless
-        not even this one would fit then.
+        It is written whole where each result still owed after it still fits
+        empty; otherwise the room left keeps space for each of them as that
+        note with nothing kept, unless not even this one would fit then.
 
         Raises:
             ValueError: If no call is waiting, this is not the one owed, the
@@ -718,12 +718,16 @@ class RenderedCache:
                                  "result cannot be written")
             room = self._max_prompt_tokens
             n_before = len(as_history(self._state.messages))
-            self._state.messages.append(message)
-            at = len(self._state.messages) - 1
+            # Each result still owed after this one is held empty, so that this one is
+            # written whole only where those still fit after it.
+            self._state.messages += [message] + [result_message(later.name, later_id, "")
+                                                 for later, later_id in waiting[1:]]
+            at = len(self._state.messages) - len(waiting)
             dropped = False
             if not self._fits(at, text, room):
-                # Each result still owed after this one is held cut to nothing, so that
-                # what this one is cut to leaves room for them.
+                # Held cut to nothing instead, so that what this one is cut to leaves room
+                # for each of them, its note included.
+                del self._state.messages[at + 1:]
                 self._state.messages += [result_message(later.name, later_id, _cut(text, 0))
                                          for later, later_id in waiting[1:]]
                 dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True,
@@ -732,6 +736,8 @@ class RenderedCache:
                 if not self._fits(at, text, room):
                     if text and not self._fits(at, _cut(text, 0), room):
                         del self._state.messages[at + 1:]       # this one first, if only it fits
+                    if text and not self._fits(at, _cut(text, 0), room):
+                        self._cut_an_earlier_result(at, _cut(text, 0), room)
                     if not text or not self._fits(at, _cut(text, 0), room):
                         raise ContextOverflowError(
                             "not even the result cut to nothing leaves room for the reply in "
@@ -753,6 +759,31 @@ class RenderedCache:
                 self._memory.repair()           # with the logits the reply needs, then saved
                 self._memory.rest()
             return n_before - len(as_history(self._state.messages))
+
+    def _cut_an_earlier_result(self, at: int, content: str, room: int) -> None:
+        """Cut a result written whole earlier in this round, the newest one that makes room for the one at ``at`` holding ``content``."""
+        calling = max(i for i in range(at) if self._state.messages[i].get("tool_calls"))
+        cut_ids = {call.id for call in self._state.results_cut}
+        for j in range(at - 1, calling, -1):
+            earlier = self._state.messages[j]
+            if earlier["role"] != "tool" or earlier["tool_call_id"] in cut_ids:
+                continue
+            whole = earlier["content"]
+            self._state.messages[j] = {**earlier, "content": _cut(whole, 0)}
+            if not self._fits(at, content, room):
+                self._state.messages[j] = earlier
+                continue
+            low, high = 0, len(whole)
+            while low < high:
+                middle = (low + high + 1) // 2
+                self._state.messages[j] = {**earlier, "content": _cut(whole, middle)}
+                low, high = (middle, high) if self._fits(at, content, room) else (low, middle - 1)
+            self._state.messages[j] = {**earlier, "content": _cut(whole, low)}
+            call, = [c for c in self._state.messages[calling]["tool_calls"]
+                     if c["id"] == earlier["tool_call_id"]]
+            self._state.results_cut.append(ToolCall(call["function"]["name"],
+                                                    call["function"]["arguments"], call["id"]))
+            return
 
     def _fits(self, at: int, content: str, room: int) -> bool:
         """Whether the conversation, its message at ``at``, a result, holding ``content``, fits in ``room`` with the generation prompt."""
