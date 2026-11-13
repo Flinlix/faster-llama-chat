@@ -20,8 +20,9 @@ from .messages import call_id, calling_message, result_message, with_thought_as
 from .model_template import names_read
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
                        ToolCallFragments, common_prefix_length, shared_tags_length)
-from .template_extract import (ESCAPABLE, extract_content_rewrites, extract_fragments,
-                               extract_reasoning, extract_removed_thought, refusing)
+from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
+                               extract_fragments, extract_reasoning, extract_removed_thought,
+                               refusing)
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
 
@@ -81,6 +82,8 @@ class ResolvedTemplate:
             dict(reasoning_on or {}))
         self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
+        self._read_as_probes_for: tuple | None = None   # the variables it was made for
+        self._declares_in_system_turn_for: dict[tuple, bool] = {}
         self._tag_texts = tag_texts(context)
         text = context.chat_template_text(template_name)
         self._reads_clock = text is None or _CLOCK in text
@@ -89,7 +92,7 @@ class ResolvedTemplate:
         self._validate_template()
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
-        self._tool_calls = extract_tool_fragments(self._render, self._fragments)
+        self._tool_calls = extract_tool_fragments(self._read_as_probes, self._fragments)
         (self._boundary, self._call_lead_in, self._call_from_file,
          self._turn_end_token) = self._resolve_calls(turn_end_token)
         self._call_body = self._resolve_call_body()
@@ -121,6 +124,14 @@ class ResolvedTemplate:
                         for message in messages]
         return self._model_render(messages, tools, generation_prompt=generation_prompt,
                                   reasoning=reasoning, variables=self._variables)
+
+    @property
+    def _read_as_probes(self):
+        """:meth:`_render` as the load checks read it, made once for each set of template variables."""
+        key = tuple(sorted(self._variables.items()))
+        if self._read_as_probes_for != key:
+            self._probes_render, self._read_as_probes_for = as_probes_read(self._render), key
+        return self._probes_render
 
     def _render(self, messages, tools=None, *, variables=None, **options):
         """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
@@ -409,7 +420,7 @@ class ResolvedTemplate:
 
     def _resolve_reasoning(self) -> Reasoning | None:
         """What turns this model's reasoning on, recovered from its template."""
-        render = self._render
+        render = self._read_as_probes
         found = extract_reasoning(render, self._fragments, self._tool_calls, self._tag_texts)
         if found is None:
             found = extract_removed_thought(render, self._fragments, self._tag_texts)
@@ -477,13 +488,13 @@ class ResolvedTemplate:
         call_open = self._tool_calls.call_open
         if first_special_token(self._context, call_open) is None:
             # Named in the header first: the call opens where the name is written again.
-            opening = extract_named_twice_opening(self._render, call_open)
+            opening = extract_named_twice_opening(self._read_as_probes, call_open)
             if opening:
-                close = extract_call_close_text(self._render, opening)
+                close = extract_call_close_text(self._read_as_probes, opening)
                 return (opening, close) if close else None
             if self._opens_in_reply_header(call_open):
                 return None
-        close = extract_call_close_text(self._render, call_open)
+        close = extract_call_close_text(self._read_as_probes, call_open)
         return (call_open, close) if close else None
 
     def _text_after_last_tag(self, text: str) -> str:
@@ -559,7 +570,7 @@ class ResolvedTemplate:
         last argument with a tag of its own first. Otherwise the first tag of
         ``call_close``.
         """
-        separator = extract_call_separator(self._render,
+        separator = extract_call_separator(self._read_as_probes,
                                            fragments.call_open)
         tags = self._tags_in(separator or "")
         if tags and self._context.token_text(tags[-1]) in fragments.call_close:
@@ -586,7 +597,7 @@ class ResolvedTemplate:
                             key_close="", pair_sep="", body_close="", empty_close="")
         call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
                      else self._tool_calls.call_open)
-        return extract_call_body(self._render, call_open, self.call_close_text)
+        return extract_call_body(self._read_as_probes, call_open, self.call_close_text)
 
     def _resolve_can_declare_tools(self) -> bool:
         """Whether this model's template renders tool declarations at all.
@@ -680,11 +691,15 @@ class ResolvedTemplate:
         return rendered.split(opened, 1)[0]
 
     def _declares_in_system_turn(self) -> bool:
-        """Whether the system turn the template renders holds a stand-in tool's declaration."""
-        rendered = self._system_turn([_PROBE_TOOL.as_declaration()])
-        plain = self._system_turn(None)
-        return (rendered is not None and plain is not None and _PROMPT in rendered
+        """Whether the system turn the template renders holds a stand-in tool's declaration, worked out once for each set of template variables."""
+        key = tuple(sorted(self._variables.items()))
+        if key not in self._declares_in_system_turn_for:
+            rendered = self._system_turn([_PROBE_TOOL.as_declaration()])
+            plain = self._system_turn(None)
+            self._declares_in_system_turn_for[key] = (
+                rendered is not None and plain is not None and _PROMPT in rendered
                 and _PROMPT in plain and rendered != plain)
+        return self._declares_in_system_turn_for[key]
 
 
 def with_reasoning_on(render, reasoning_on: Mapping[str, object]):

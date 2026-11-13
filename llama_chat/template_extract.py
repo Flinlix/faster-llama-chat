@@ -113,8 +113,11 @@ def as_probes_read(render: Render) -> Render:
 
     It answers ``None`` where it raises, a template refusing a shape. A render
     without a generation prompt comes back without what the template writes
-    once after a conversation's last message, which belongs to no turn.
+    once after a conversation's last message, which belongs to no turn. A
+    render this made already comes back as it is.
     """
+    if getattr(render, "reads_as_probes", False):
+        return render
     refused = refusing(render)
     end = _conversation_end(refused)
 
@@ -124,6 +127,7 @@ def as_probes_read(render: Render) -> Render:
                 and text.endswith(end):
             return text[:-len(end)]
         return text
+    rendered.reads_as_probes = True
     return rendered
 
 

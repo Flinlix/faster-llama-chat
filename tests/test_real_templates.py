@@ -58,6 +58,20 @@ def test_a_template_is_known_to_read_the_clock_where_it_names_it_and_every_one_w
     assert template.reads_clock or not expected(fixture(stem), "date_format")
 
 
+@pytest.mark.parametrize("stem", STEMS)
+def test_a_load_works_out_what_a_template_writes_after_the_last_message_once_per_set_of_variables(
+        stem, monkeypatch):
+    from llama_chat import template_extract
+    worked_out = []
+    end = template_extract._conversation_end
+    monkeypatch.setattr(template_extract, "_conversation_end",
+                        lambda render: (worked_out.append(1), end(render))[1])
+    _load(stem)
+    # Two checks on the model's own render, then once for the default variables and
+    # once more where a variable moves the declarations.
+    assert len(worked_out) <= 4
+
+
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if "[/" in fixture(stem)["chat_template"]])
 def test_a_bracketed_tag_a_template_closes_with_is_one_token_as_its_opening_is(stem):
     context = FakeContext(fixture(stem))
