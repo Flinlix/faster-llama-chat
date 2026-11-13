@@ -480,9 +480,6 @@ def _mapping(arguments: tuple) -> tuple[dict, _Reader]:
 def _scalar_reader(kind: type) -> _Reader:
     """The reader of a value of one plain type; ``True`` and ``False`` are never numbers."""
     def read(value, where):
-        if kind is str and isinstance(value, (int, float)) and not isinstance(value, bool):
-            # A format that marks no strings reads a number written as text as a number.
-            return json.dumps(value)
         fits = (isinstance(value, (int, float)) if kind is float else isinstance(value, kind))
         if not fits or isinstance(value, bool) and kind is not bool:
             raise TypeError(f"{where} must be {_ARGUMENT_KIND_NAMES[kind]}, not {value!r}")

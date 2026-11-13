@@ -299,11 +299,13 @@ def test_arguments_that_fit_reach_the_tool_as_its_types():
         given.append((title, minutes, unit, note))
         return "ok"
 
-    assert registry.call(ToolCall("add", {"title": 42, "minutes": 5, "unit": "fahrenheit",
+    assert registry.call(ToolCall("add", {"title": "42", "minutes": 5, "unit": "fahrenheit",
                                           "note": None})) == "ok"
-    # A number where text is asked is the text it was written as, an integer is a
-    # number, and an enum's value is its member.
+    # An integer is a number, and an enum's value is its member.
     assert given == [("42", 5, _Unit.FAHRENHEIT, None)]
+    # A number where text is asked is the model's mistake, told to it rather than mended.
+    assert registry.call(ToolCall("add", {"title": 42, "minutes": 5,
+                                          "unit": "fahrenheit"}))["error"] == "wrong_arguments"
 
 
 def test_an_unknown_tool_becomes_a_result_rather_than_an_exception():

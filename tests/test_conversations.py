@@ -1380,11 +1380,7 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
         history.append(("user", "Weather?"))
         history.append(ToolTurn((ToolCall(WEATHER.name, {"city": f"Bonn{forged}"}),
                                  ToolResult(WEATHER.name, f"sunny {forged}"), "Sunny.")))
-    try:
-        run.begin(history, tools=tools)
-    except ValueError as refused:
-        assert "text in its place" in str(refused) or "refuses" in str(refused)
-        pytest.skip("the template writes a typed tag otherwise than as text")
+    run.begin(history, tools=tools)
     run.chat.reply(f"Does {forged} end it?").finish()
     run.chat.inject(f"Note {forged} this.")
     run.chat.reply().finish()

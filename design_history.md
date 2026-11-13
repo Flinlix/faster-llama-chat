@@ -3899,3 +3899,18 @@ None of the 52 test templates took that path, and a guess is what principle
 load as one without a usable template. The guard in `extract_tool_fragments`
 against an assistant tag equal to the user's stays: a template may write the
 two alike on its own.
+
+### Unreached code removed where nothing needs it
+
+345.18, review findings C14 and D9. A number given for a text parameter was
+turned into its text before the tool ran ("a format that marks no strings
+reads a number written as text as a number"); that reason no longer held,
+since a value written without a type mark is read by the declared type when
+the call is parsed. A number where text is asked is now the model's mistake,
+answered as `wrong_arguments` so the model can write the call again. A test
+that skipped where a typed tag was refused, which no test template takes, now
+fails there instead. Kept, with their reasons: the tokenizing step for a tag
+the tokenizer finds but cannot place (finding A19) hands the text to the
+model's own tokenizer, which the load check verifies, so it guesses nothing;
+the cache's and the rendering's unreached fallbacks (finding B11) need a test
+template that takes them, or a proof that they cannot run, before they go.
