@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import threading
+
 from .cache_context import CacheContext, GenerationAccumulator
 from .generation import generate
 from .template import common_prefix_length
 
 # Maps a token id to one character, so token lists search as strings.
 _TOKEN_OFFSET = 0x10000
+# At most how many tokens a long decode runs on after a cancel is set, where one is watched.
+_CANCEL_PART_TOKENS = 512
+
+
+class Cancelled(Exception):
+    """A decode that :attr:`CacheSync.cancel` stopped between its parts."""
 
 
 class CacheSync:
@@ -33,6 +41,8 @@ class CacheSync:
         self._logits = False            # whether the newest decode left logits for its last token
         self.decoded = 0                # every token decoded so far, for what a request cost
         self.version = 0                # changes whenever the tokens do
+        # Watched between the parts of a long decode, which then raises Cancelled.
+        self.cancel: threading.Event | None = None
         # (tokens held, state): at most the two newest a cache rested in.
         self._rest_states: list[tuple[int, object]] = []
         self._pin: int | None = None    # where a state is kept, besides those
@@ -233,6 +243,17 @@ class CacheSync:
         """Decode ``tokens`` at the cache's end; ``appended`` where they are in :attr:`tokens` already."""
         if not tokens:
             return
+        if self.cancel is not None:
+            if self.cancel.is_set():
+                raise Cancelled("cancelled before the decode")
+            if len(tokens) > _CANCEL_PART_TOKENS:
+                for at in range(0, len(tokens), _CANCEL_PART_TOKENS):
+                    if at and self.cancel.is_set():
+                        raise Cancelled("cancelled during the decode")
+                    part = tokens[at:at + _CANCEL_PART_TOKENS]
+                    self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
+                                        appended)
+                return
         if self._needs_pinned_state() and self._end < self._pin < self._end + len(tokens):
             # Decoded in two, so that the state where the pin is can be saved; all of
             # them held first, so that a failure in either leaves none out.

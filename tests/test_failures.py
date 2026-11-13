@@ -356,19 +356,20 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error(re
     assert "unwritable_result" in held_text(fake) and "NaN" not in held_text(fake)
 
 
-def test_a_resumed_turn_whose_answer_is_cut_at_once_closes_and_keeps_its_call():
+def test_a_resumed_turn_cancelled_before_it_starts_stays_open_and_goes_on_later():
     w, fake = tool_wrapper()
     w.begin("persona")
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     w.inject_tool_result(call, "12:00")
+    before = _state(w)
     cancel = threading.Event()
     cancel.set()
-    assert w.reply(cancel=cancel).finish().text == ""
-    assert not w.turn_open and kept_turns(w)
-    assert "fn:clock{}" in held_text(fake)
-    w.reply("und jetzt?").finish()
-    assert "fn:clock{}" in held_text(fake)
+    reply = w.reply(cancel=cancel).finish()
+    assert (reply.text, reply.stop_reason) == ("", "interrupted") and _state(w) == before
+    fake.call_script = []
+    w.reply(tool_call_policy="yield").finish()
+    assert not w.turn_open and kept_turns(w) and "fn:clock{}" in held_text(fake)
 
 
 def test_an_action_whose_render_cannot_place_a_kept_turn_is_refused_and_changes_nothing(
@@ -697,3 +698,38 @@ def test_a_reply_that_fails_before_writing_anything_leaves_its_turns_policy_as_i
     w, fake = turn_opened_by_its_history()
     fake.call_script = ['fn:weather{"city":"Köln"}']
     assert after_failure == [type(event).__name__ for event in w.reply()]
+
+
+@pytest.mark.parametrize("template", [PLAIN, REFUSES_TWO_USER_TURNS], ids=["plain", "refusing two"])
+def test_a_request_cancelled_before_it_starts_changes_nothing(template):
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, min_reply_tokens=20),
+                    context=FakeContext(template, gen_tokens=5))
+    w.begin("s")
+    for n in range(8):
+        w.reply(f"frage {n} " + "x" * 20).finish()
+    before = _state(w)
+    cancel = threading.Event()
+    cancel.set()
+    reply = w.reply("eine lange neue frage " + "y" * 60, cancel=cancel).finish()
+    assert (reply.stop_reason, reply.n_evicted_messages, reply.n_prefilled_tokens) == ("interrupted", 0, 0)
+    assert _state(w) == before
+
+
+def test_a_long_question_stops_decoding_within_a_part_once_cancelled():
+    fake = FakeContext(PLAIN, gen_tokens=5)
+    w = ChatWrapper(Config(context_size=8192), context=fake)
+    w.begin("s")
+    w.reply("eins").finish()
+    before, cancel, decoded = _state(w), threading.Event(), []
+    prefill = fake.prefill
+
+    def cancelling_after_the_first_part(token_ids, start_pos, want_logits):
+        decoded.append(len(token_ids))
+        prefill(token_ids, start_pos, want_logits)
+        cancel.set()                            # as another thread would, mid-decode
+
+    fake.prefill = cancelling_after_the_first_part
+    reply = w.reply("z" * 3000, cancel=cancel).finish()
+    del fake.prefill
+    assert reply.stop_reason == "interrupted" and len(decoded) == 1 and decoded[0] <= 512
+    assert _state(w) == before

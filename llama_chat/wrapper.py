@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers,
                             ensure_can_go_back)
+from .cache_sync import Cancelled
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
@@ -741,7 +742,8 @@ class ChatWrapper:
                     deltas, after=open_turn_text + "".join(g.text for g in generations))
                 generations.append(generation)
                 if not _answerable(generation.tool_calls):
-                    if self._conversation.turn_open:
+                    # A request cancelled before it started leaves an open turn open.
+                    if self._conversation.turn_open and generation.stop_reason != "interrupted":
                         # An unreadable call, already answered: the turn goes on, spending
                         # budget. See design_history.md, "An unreadable call spends the budget".
                         any_call_asked = True
@@ -821,7 +823,8 @@ class ChatWrapper:
                                max_reply_tokens=max(0, reply_cap - used), **kwargs),
                 after=open_turn_text + "".join(g.text for g in generations))
             generations.append(generation)
-            if _answerable(generation.tool_calls) or not self._conversation.turn_open:
+            if (_answerable(generation.tool_calls) or not self._conversation.turn_open
+                    or generation.stop_reason == "interrupted"):
                 return generation if len(generations) == 1 else _sum_generations(generations, False)
             text = None
             kwargs.pop("on_started", None)
@@ -907,7 +910,7 @@ class ChatWrapper:
                   max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: Sampling,
                   withhold: bool = False,
-                  on_started: Callable[[], None] = lambda: None) -> Generator[str, None, Reply]:
+                  on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end and record what it left, as a Reply.
 
         Without ``text``, it goes on with the open turn, adding no message of
@@ -928,16 +931,27 @@ class ChatWrapper:
                 that call tells the model.
             withhold: Also keep a call's opening token from ever being drawn.
             on_started: Called once the request is written and the generation
-                starts, before anything it produces is recorded.
+                starts, before anything it produces is recorded; given to a
+                request's first generation alone, which a ``cancel`` set
+                before it leaves without any change.
         """
         self._ensure_open()
         conversation = self._conversation
         decoded_from = conversation.decoded
         n_evicted_messages = 0
-        if text is not None:
-            n_evicted_messages = conversation.ask(text)
-        elif not conversation.turn_open:
-            conversation.prompt()
+        try:
+            # Only a request's first generation, the one that notes its start, can be cancelled
+            # before the request began.
+            if on_started is not None and cancel is not None and cancel.is_set():
+                raise Cancelled("cancelled before the request was written")
+            if text is not None:
+                n_evicted_messages = conversation.ask(text, cancel)
+            elif not conversation.turn_open:
+                conversation.prompt()
+        except Cancelled:
+            # Cancelled before its first word was drawn: the request changes nothing.
+            return Reply(text="", n_prefilled_tokens=0, n_prompt_tokens=conversation.total_tokens,
+                         n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
         max_generated_tokens = self._reply_cap(max_reply_tokens)
         n_prompt_tokens = conversation.total_tokens
 
@@ -955,7 +969,8 @@ class ChatWrapper:
                 ends_turn=self._turn_end_test(reply_text, generated),
                 boundary=replace(self._template.call_boundary(recognizes_calls, withhold),
                                  starts_in_thought=reply_text.opens_in_thought))
-            on_started()
+            if on_started is not None:
+                on_started()
         except BaseException:
             # Failed before it generated: taken back with its question, as a failed request.
             self._turn_policy, self._turn_budget = noted

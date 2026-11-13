@@ -20,11 +20,12 @@ import contextlib
 import copy
 import itertools
 import math
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields, replace
 
 from .cache_context import GenerationAccumulator
-from .cache_sync import CacheSync
+from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
                        kept_items, next_call_number, result_message, system_part)
@@ -384,7 +385,7 @@ class RenderedCache:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
     # ----- adding messages --------------------------------------------------------------
-    def ask(self, text: str) -> int:
+    def ask(self, text: str, cancel: threading.Event | None = None) -> int:
         """Decode ``text`` as the next question, with the generation prompt after it; how many history items were dropped for it.
 
         Raises:
@@ -393,8 +394,23 @@ class RenderedCache:
             ContextOverflowError: If the question cannot fit beside room for
                 its reply, checked against the system prompt alone before
                 anything is dropped.
+            Cancelled: If ``cancel`` was set before the question was decoded
+                whole, which leaves everything as it was.
         """
         as_it_was = self._state.copied(), list(self._memory.tokens)
+        self._memory.cancel = cancel
+        try:
+            return self._ask(text, as_it_was)
+        except Cancelled:
+            self._memory.cancel = None
+            with contextlib.suppress(Exception):
+                self._memory.repair()       # the parts decoded go again now; where it fails, later
+            raise
+        finally:
+            self._memory.cancel = None
+
+    def _ask(self, text: str, as_it_was: tuple[_ConversationState, list[int]]) -> int:
+        """:meth:`ask`'s work, ``as_it_was`` kept for :meth:`take_back_question`."""
         with self._action():
             _ensure_ready(self, "start a request", "generate into")
             room = self._max_prompt_tokens

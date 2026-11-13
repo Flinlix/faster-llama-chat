@@ -347,11 +347,12 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     w.begin("s")
     cancel = threading.Event()
     cancel.set()
+    before = w.conversation(), w.total_tokens
     reply = w.reply("hi", cancel=cancel).finish()
     assert reply.stop_reason == "interrupted"
     assert reply.n_generated_tokens == 0
-    # A reply with nothing in it is no reply: only the request stays.
-    assert rows(w)[-1]["role"] == "user"
+    # Cancelled before it started: the request changes nothing, its question included.
+    assert (w.conversation(), w.total_tokens) == before
 
 
 def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():

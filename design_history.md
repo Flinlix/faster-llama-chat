@@ -4487,3 +4487,26 @@ its generation starts. One that then failed before writing anything still
 changed them, so the next `reply()` of a turn its history opened handed a
 call over where it would otherwise have answered it. A reply that wrote
 nothing now leaves both as they were.
+
+### A request cancelled before it starts changes nothing (366.13A)
+
+366.13A (T6). The cancel was read only while the model wrote, once per token.
+A request whose cancel was set while it waited behind another reply, or
+while its question was decoded, still dropped older exchanges for good and
+decoded its whole question, and a reply to a question that got no word was
+then kept or taken back as an empty reply, by the decision of 270.3. The
+README's promise that a reply ends within one token did not hold for a long
+question's decode.
+
+Now a request whose cancel is set when it starts, or while its question is
+decoded, ends with `"interrupted"` and changes nothing: the question is not
+added and nothing is dropped. This replaces keeping such a question (the user
+chose it over keeping the question without dropping history, 366.13B, and
+over only correcting the promise, 366.13C). A question's decode watches the
+cancel between parts of at most 512 tokens, so it stops within one part; a
+decode is cut into parts only where a cancel is given. The rule holds for a
+request's first generation: a cancel set later, by a tool the reply runs
+say, ends the reply as before. A turn a call left open stays open where a
+request to go on with it is cancelled before it starts, and the next reply
+goes on with it. 512 tokens is a trade: a smaller part stops sooner on the
+processor, a larger one batches better on a graphics card.
