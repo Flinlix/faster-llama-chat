@@ -136,3 +136,19 @@ def test_a_cache_a_failed_decode_left_behind_is_brought_back_as_the_next_action_
         w.inject("lost on the way")
     assert fake.cache != held_tokens(w)
     assert_cache_reads_as_rendered(w, fake)
+
+
+def test_a_cache_holding_a_token_that_spells_the_renders_text_but_is_not_its_token_is_caught():
+    w, fake = begun_wrapper(gen_tokens=5, gen_text="Hallo")
+    w.reply("hi there").finish()
+    sound = list(fake.cache)
+    fake._tokens_spell_text = False             # what a generation hands out from here on
+    at = sound.index(ord("h"))
+    broken = sound[:at] + [fake._generated("h")] + sound[at + 1:]
+    assert fake.text_of(broken) == fake.text_of(sound)
+    fake.cache = broken
+    overwrite_held_tokens(w, broken)
+    with pytest.raises(AssertionError, match="does not read as the template renders"):
+        assert_cache_reads_as_rendered(w, fake)
+    fake.cache = sound
+    overwrite_held_tokens(w, sound)

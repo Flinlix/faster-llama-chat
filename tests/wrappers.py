@@ -79,12 +79,16 @@ def held_renders(context, messages, tools=None, reasoning=False,
 
 # What sets a tag apart in :func:`typed_text`: a character no render here holds.
 _TAG_MARK = "\x00"
+# Spells a token only a generation gives, which no tokenization of the same text gives.
+_GENERATED_MARK = "\u2061"
 
 
 def typed_text(context, tokens: list[int]) -> str:
-    """What ``tokens`` spell, each of the model's tags between two :data:`_TAG_MARK`, so that a tag reads otherwise than its characters."""
-    return "".join(_TAG_MARK + context.token_text(token) + _TAG_MARK
-                   if context.is_special(token) else context.token_text(token)
+    """What ``tokens`` spell, each of the model's tags between two :data:`_TAG_MARK` and each token only a generation gives between two :data:`_GENERATED_MARK`, so that neither reads as the characters a tokenization gives."""
+    generated_only = getattr(context, "is_generated_only", lambda token: False)
+    return "".join(_TAG_MARK + context.token_text(token) + _TAG_MARK if context.is_special(token)
+                   else _GENERATED_MARK + context.token_text(token) + _GENERATED_MARK
+                   if generated_only(token) else context.token_text(token)
                    for token in tokens)
 
 

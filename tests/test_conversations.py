@@ -73,7 +73,7 @@ class _Run:
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
-                 writes_tags=False, extra_tags=()):
+                 writes_tags=False, extra_tags=(), tokens_spell_text=True):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         text = self.fixture["chat_template"]
@@ -82,7 +82,7 @@ class _Run:
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                    can_shift=can_shift, writes_tags=writes_tags,
-                                   extra_tags=extra_tags)
+                                   extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
         self.system = "Be brief." if self.chat.can_take_system_prompt else ""
@@ -168,9 +168,10 @@ def _exchange_length(run, question, answer):
 
 
 # ----- every reply starts from the render ---------------------------------------
+@pytest.mark.parametrize("spells", [True, False], ids=["generated-as-tokenized", "generated-otherwise"])
 @pytest.mark.parametrize("stem", _EVERY)
-def test_every_reply_starts_from_the_templates_render_of_what_was_sent(stem):
-    run = _Run(stem)
+def test_every_reply_starts_from_the_templates_render_of_what_was_sent(stem, spells):
+    run = _Run(stem, tokens_spell_text=spells)
     run.begin()
     for question in QUESTIONS[:4]:
         run.chat.reply(question).finish()
@@ -916,10 +917,11 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
     _assert_begins_again_the_same(run.chat)
     run.chat.reply(QUESTIONS[0]).finish()
     _assert_begins_again_the_same(run.chat)
-    if calls and not reasoning:
+    if calls:
         _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
-        run.context.replies[:0] = [ScriptedCall(body)] + _as_generated(
-            run.template, ["Sunny in Bonn."], False)
+        thought, = _as_generated(run.template, [""], reasoning)     # a thought closed first
+        run.context.replies[:0] = [ScriptedCall(body, before=thought)] + _as_generated(
+            run.template, ["Sunny in Bonn."], reasoning)
         call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
                  if isinstance(e, ToolCall)]
         _assert_begins_again_the_same(run.chat)             # the call still owed its result

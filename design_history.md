@@ -4572,3 +4572,17 @@ starts its filter inside the thought, so the thought stays hidden and the
 answer after its closing is the answer. On the two templates that write a
 call after text, a call inside a thought is a mention (F2 of the review of
 366.2A), so the case does not arise there.
+
+### The cache check compares tokens, and the round trip drives a call with reasoning on (366.10)
+
+366.10 (V5, V6). The test check that the cache holds the template's render
+token for token compared what the tokens spell, so a token a generation
+hands out that spells the same text as the render's own token passed; and
+no conversation test ran with a stand-in model whose generated tokens differ
+from the tokenizer's. The check now spells a token only a generation gives
+apart from the tokenizer's, so such a token outside a kept turn fails it; a
+test shows it does; and the test that every reply starts from the render
+runs with generated tokens of both kinds. The test that beginning again from
+`conversation()` gives the same conversation now drives a live call with
+reasoning on too, the call after a closed thought. All pass without a change
+to the library.
