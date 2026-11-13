@@ -1185,3 +1185,15 @@ def test_the_readmes_quick_start_runs_on_every_template(stem):
     for _ in chat.reply():
         pass
     chat.reply("Summarize the plan.").finish()
+
+
+def test_closing_ends_the_reply_this_thread_reads_though_a_newer_stream_was_made_since():
+    fake, closed = FakeContext(PLAIN, gen_tokens=5), []
+    fake.close = lambda: closed.append(True)
+    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    chat.begin("persona")
+    reading = chat.reply("hallo")
+    next(reading)
+    chat.reply("noch was")
+    chat.close()
+    assert closed == [True]

@@ -367,8 +367,8 @@ that it writes inside its answer is left out of the stream. Stop strings are
 matched against the answer only. A finished reply is kept as the template
 writes a past reply, without its thought where the template leaves one out,
 and with it, handed over in the form the template reads one in, where the
-template keeps it. An answer that spells the thought tag's letters is kept
-as the part of it the template writes, and taken back with its question
+template keeps it. An answer that holds the thought tag's text is kept as
+the part of it the template writes as text, and as an answer with no text
 where that is nothing. Where that differs from what was generated, the cache is brought to that form
 right after the reply, while it is read. A turn that called tools keeps the
 tokens it was generated as. A thought the template keeps comes back from

@@ -27,7 +27,9 @@ class ReplyText:
             tag spells counts as the tag.
 
     Once answer text has passed, a thought opens only at the model's own tag,
-    not at its letters, and a tag the model writes in its answer is not shown.
+    not at its letters. A tag the model writes is never shown, except, before
+    answer text has passed, one that is part of a thought's tags or of the
+    answer's opening, which the filters read.
     """
 
     def __init__(self, reasoning: Reasoning | None, answer_opening: str,
@@ -35,7 +37,11 @@ class ReplyText:
                  tag_spans: list[tuple[int, int]] | None = None) -> None:
         self._reasoning = reasoning
         self._opens_in_thought = reasoning is not None and begins_in_thought(reasoning, prompt_text)
-        self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought, tag_spans)
+        framing = [text.strip() for text in (answer_opening, *(header or ()),
+                                             *((reasoning.thought_open, reasoning.thought_close)
+                                               if reasoning else ())) if text.strip()]
+        self._frames = lambda tag: any(tag.strip() in text for text in framing)
+        self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought, tag_spans, self._frames)
                          if reasoning is not None else None)
         self._opening = _AnswerOpening(answer_opening, header)
         self._stops = _AnswerStops(stops)
@@ -49,7 +55,7 @@ class ReplyText:
         if self._thought:
             text = self._thought.feed(piece)
         else:
-            text = without_tags(piece, at, self._tag_spans) if self._hides_tags else piece
+            text = without_tags(piece, at, self._tag_spans, None if self._hides_tags else self._frames)
         shown = self._stops.feed(self._opening.feed(text))
         if not self._hides_tags and self._tag_spans is not None and self.answer.strip():
             self._hides_tags = True
@@ -70,6 +76,11 @@ class ReplyText:
     def answer(self) -> str:
         """The answer passed on so far."""
         return self._stops.text
+
+    @property
+    def opens_in_thought(self) -> bool:
+        """Whether the text fed begins inside a thought, its opening written with the prompt."""
+        return self._opens_in_thought
 
     @property
     def thought(self) -> str:
@@ -133,17 +144,22 @@ class _ThoughtFilter:
         inside: Whether the text begins inside a thought, its opening tag
             having been decoded with the generation prompt.
         tag_spans: As :class:`ReplyText` takes them.
+        frames: Whether a tag's text is part of the tags that frame a thought
+            or an answer, kept in the answer until ``hides_tags``.
 
     Attributes:
         thought_pieces: How many of the pieces fed held thought.
-        hides_tags: Whether a tag of the model's in the answer is left out.
+        hides_tags: Whether every tag of the model's in the answer is left
+            out, a framing one too.
     """
 
     def __init__(self, reasoning: Reasoning, inside: bool = False,
-                 tag_spans: list[tuple[int, int]] | None = None) -> None:
+                 tag_spans: list[tuple[int, int]] | None = None,
+                 frames: Callable[[str], bool] = lambda tag: True) -> None:
         self._open = reasoning.thought_open.strip()
         self._close = reasoning.thought_close.strip()
         self._tag_spans = tag_spans
+        self._frames = frames
         self._held = ""             # text not yet known to be thought or answer
         self._held_at = 0           # where the held text starts in the text fed
         self._answered = False      # whether answer text has begun
@@ -233,8 +249,7 @@ class _ThoughtFilter:
         """The first ``n`` held characters as answer, with the whitespace rules of the reply's start."""
         at = self._held_at
         text = self._take(n)
-        if self.hides_tags:
-            text = without_tags(text, at, self._tag_spans)
+        text = without_tags(text, at, self._tag_spans, None if self.hides_tags else self._frames)
         if not self._started:
             if before_thought and not text.strip():
                 self._leading_space, self._started = "", True   # the tag's
@@ -336,8 +351,9 @@ def _outside_tags(text: str, at: int, tags: tuple[str, ...], backwards: bool) ->
     return at
 
 
-def without_tags(text: str, at: int, tag_spans: list[tuple[int, int]] | None) -> str:
-    """``text``, which starts at ``at`` in the text fed, without the model's tags ``tag_spans`` places in it."""
+def without_tags(text: str, at: int, tag_spans: list[tuple[int, int]] | None,
+                 keeps: Callable[[str], bool] | None = None) -> str:
+    """``text``, which starts at ``at`` in the text fed, without the model's tags ``tag_spans`` places in it, but those whose text ``keeps``."""
     if not tag_spans or not text:
         return text
     end = at + len(text)
@@ -345,7 +361,7 @@ def without_tags(text: str, at: int, tag_spans: list[tuple[int, int]] | None) ->
     for start, stop in tag_spans[max(0, bisect.bisect_left(tag_spans, (at,)) - 1):]:
         if start >= end:
             break
-        if stop <= at:
+        if stop <= at or keeps is not None and keeps(text[max(start, at) - at:min(stop, end) - at]):
             continue
         kept.append(text[cursor - at:max(start, cursor) - at])
         cursor = max(cursor, min(stop, end))

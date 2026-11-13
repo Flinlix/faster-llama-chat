@@ -91,7 +91,7 @@ def typed_text(context, tokens: list[int]) -> str:
 def rendered_pieces(context, messages, declarations=None, *, generation_prompt: bool,
                     reasoning: bool = False,
                     for_tools: bool | None = None) -> list[tuple[str, bool]] | None:
-    """The render of ``messages`` in pieces, each marked whether it is a text of the caller's own, worked out here on its own; ``None`` where the template refuses them.
+    """The render of ``messages`` in pieces, each marked whether it is a text of the caller's own, worked out here on its own; ``None`` where the template refuses them or writes them otherwise than their marked render.
 
     The caller's own texts are a message's content and thought, a call's name
     and its string arguments, and each description of a declaration.
@@ -137,7 +137,9 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
                             and real.startswith(form, at)
                             and real.startswith(following, at + len(form))), None)
             end = (at + len(written) if written is not None
-                   else real.index(following, at) if following else len(real))
+                   else real.find(following, at) if following else len(real))
+            if end < 0:
+                return None                 # the template writes these messages otherwise than marked
             pieces.append((real[at:end], True))
             at = end
     assert at == len(real), "the render does not match its marked render"

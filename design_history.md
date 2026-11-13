@@ -4171,18 +4171,30 @@ other point of recording did the same, and a call that could not be read was
 published as owed before it was withdrawn.
 
 Now an answer holding the template's thought opening or closing is kept as
-the part of it the template writes as a past reply: the text between what
-the template writes around a marker in its place, in the form (trimmed or
-not) that renders exactly as the whole answer does. Where that part is empty,
-or the template writes anything but a part of the answer, the reply is taken
-back with its question, as one the template does not write. Only an answer
-holding those tags pays the two renders this takes. The caller's stream and
-`Reply.text` keep what the model wrote; the conversation holds what the
-model will read.
+the answer itself where the template writes it as its text, given with the
+reply's thought, both as the newest reply and as a past one. Otherwise it is
+kept as a part of it the template does write as its text, trimmed at most: the
+text the template writes around a marker's place when given the whole answer
+as a past reply, or what follows the last thought tag in it, each trimmed or
+not, preferring the form that renders as the whole answer does. Where no part
+is written as text, it is recorded as an answer with no text, which the rules
+for an empty answer then take: left out where two questions may follow,
+otherwise kept or taken back as any empty reply. The review of this round
+(F1) found the first version, which took such a reply back with its question,
+doing so on 13 of the 31 templates that mark a thought, Qwen 3.5 among them,
+and raising on Qwen 3.5's first exchange: without the thought, some templates
+move the answer's start into a thought block; others trim a text that holds
+no tag, so no form rendered exactly as the whole answer. Only an answer
+holding those tags pays these renders. The caller's stream and `Reply.text`
+keep what the model wrote; the conversation holds what the model will read.
+Where the generation fails after such an answer, the reply is held as the
+render of what was recorded, or, where nothing of it was written as text,
+taken back with its question as one that said nothing (F4).
 
 Recording is one step: where adding the reply raises, the request is taken
-back whole where it asked a question, otherwise the conversation is left as
-it was before the reply, and the cache is brought back at once (or, where
+back whole where it asked a question, otherwise the conversation and the
+cache are left as they were before the generation began (F3: at first only
+the conversation was), and the cache is brought back at once (or, where
 that fails too, by the next action). A fault after the reply is recorded,
 while the cache is settled, keeps the reply, as a failed reply keeps what it
 produced. The conversation is published once, when recording ends, so a
@@ -4210,7 +4222,9 @@ as for any reply. A reply may still hold several thoughts where the model
 writes each opening as its tag. The test of the turn's end, which follows the
 thought on its own, reads the same tags from the tokens. The check costs one
 lookup of the token's kind per generated token, which the generation loop
-already made where a call may open as text.
+made before only where a call may open as text. A tag before any answer
+text is left out too, unless it is part of a thought's tags or of the
+answer's opening, which the filters read there (F6, from the review).
 
 ### A call after text where the template writes one there
 
@@ -4227,7 +4241,10 @@ the opening opens a call after any text as well, and the text before it is
 held back while it may begin one, as at a reply's start. Every other template
 keeps the rule as it was, and pays nothing for this check after load. On
 these two templates a sentence that quotes the opening is read as a call,
-which is how the template itself writes one. The property is the template's,
+which is how the template itself writes one; inside a thought it stays a
+mention, as before, since a model plans its calls there (F2, from the
+review: the first version ran a call quoted in a thought). The generation
+follows whether it is inside a thought for these templates alone. The property is the template's,
 so it is read from the template, not stated in an add-on file.
 
 ### A context collected unclosed frees its model
@@ -4252,7 +4269,10 @@ thread that holds the wrapper for an unfinished reply now ends that reply
 first, as closing its stream does, recording what it produced, and then
 closes; the caller's error comes through unchanged. From a tool the reply
 runs, where the reply is still executing, `close()` stays refused as every
-other action is, and the tool is answered as one that raised.
+other action is, and the tool is answered as one that raised. Every
+unfinished reply of the wrapper is ended, not only the newest, since the one
+being read may not be the newest made (F5, from the review), and the model is
+freed even where ending a reply raises.
 
 ### The quick start answers the message it injects
 

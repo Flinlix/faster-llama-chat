@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .messages import exchange_starts, system_part
+from .messages import THOUGHT_KEY, exchange_starts, system_part
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
@@ -172,23 +172,48 @@ class ConversationRendering:
         tokens += self.tokenize(split.pieces(at, end), add_special=not tokens and at == 0)
         return Target(tokens, kept_at)
 
-    def written_answer(self, messages: list[dict], answer: str) -> str | None:
-        """The part of ``answer`` the template writes of it as a past reply after ``messages``; ``None`` where it writes anything else."""
+    def written_answer(self, messages: list[dict], answer: str, thought: str = "",
+                       cuts: tuple[str, ...] = ()) -> str | None:
+        """What of ``answer``, a reply after ``messages`` with ``thought``, a conversation can hold; ``None`` where nothing.
+
+        The answer itself where the template writes it as its text. Else a
+        part of it the template does: the part it writes of the whole answer
+        as a past reply, or what follows the last of ``cuts``, texts a
+        template may cut a reply at, each trimmed or not; the form that
+        renders as the whole answer does is preferred.
+        """
         after = [{"role": "user", "content": STAND_IN}]
-        reply = {"role": "assistant", "content": answer}
-        as_is = self.render(messages + [reply] + after, True)
-        marked = self.render(messages + [{**reply, "content": _ANSWER_MARK}] + after, True)
-        if as_is is None or marked is None or marked.count(_ANSWER_MARK) != 1:
-            return None
-        head, tail = marked.split(_ANSWER_MARK)
-        if len(head) + len(tail) > len(as_is) or not (as_is.startswith(head) and as_is.endswith(tail)):
-            return None
-        written = as_is[len(head):len(as_is) - len(tail)]
-        # The form that renders as the whole answer does, where the template also trims a text.
-        return next((form for form in dict.fromkeys((written, written.strip(), written.lstrip(),
-                                                     written.rstrip()))
-                     if form in answer and self.render(
-                         messages + [{**reply, "content": form}] + after, True) == as_is), None)
+        reply = {"role": "assistant", "content": answer, **({THOUGHT_KEY: thought} if thought else {})}
+
+        def with_content(content: str) -> list[dict]:
+            return messages + [{**reply, "content": content}] + after
+
+        def written_as_text(content: str) -> bool:
+            """Whether the template writes ``content`` as its text, trimmed at most, as the newest reply and as a past one."""
+            forms = {content, content.strip(), content.lstrip(), content.rstrip()}
+            for conversation, prompt in ((with_content(content)[:-1], False), (with_content(content), True)):
+                try:
+                    split = self.split(conversation, prompt)
+                except ValueError:
+                    return False            # the template writes it otherwise than as its text
+                where = split.contents[len(messages)] if split is not None else None
+                if where is None or split.text[where[0]:where[1]] not in forms:
+                    return False
+            return True
+
+        if written_as_text(answer):
+            return answer
+        as_is, marked = self.render(with_content(answer), True), self.render(with_content(_ANSWER_MARK), True)
+        parts = [answer.rsplit(tag, 1)[1] for tag in cuts if tag and tag in answer]
+        if as_is is not None and marked is not None and marked.count(_ANSWER_MARK) == 1:
+            head, tail = marked.split(_ANSWER_MARK)
+            if len(head) + len(tail) <= len(as_is) and as_is.startswith(head) and as_is.endswith(tail):
+                parts.insert(0, as_is[len(head):len(as_is) - len(tail)])
+        forms = [form for form in dict.fromkeys(variant for part in parts for variant in (
+                     part, part.strip(), part.lstrip(), part.rstrip()))
+                 if form.strip() and form in answer and written_as_text(form)]
+        return next((form for form in forms if self.render(with_content(form), True) == as_is),
+                    forms[0] if forms else None)
 
     def length(self, messages: list[dict], generation_prompt: bool) -> int:
         """How many tokens the cache holds for ``messages``, each kept turn as it was generated.

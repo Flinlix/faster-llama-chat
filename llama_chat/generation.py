@@ -141,8 +141,13 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     # A call's texts are matched without the whitespace around them, as a thought's tags are.
     open_text, close_text = ((text.strip() for text in boundary.call_texts)
                              if boundary.call_texts else (None, None))
+    opens_as_text = boundary.opens_as_text and open_text is not None
+    # Where the template writes a call after text, one inside a thought is still a mention.
+    thought = (_ThoughtState(*boundary.thought_tags, boundary.starts_in_thought)
+               if opens_as_text and boundary.follows_text and len(boundary.thought_tags) == 2
+               else None)
     # An opening in plain text counts only after a tag, unless the template writes a call after text.
-    call_opens_as_text = boundary.opens_as_text and open_text is not None and not boundary.follows_text
+    call_opens_as_text = opens_as_text and not boundary.follows_text
     marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
     opening_owns_space = open_text is not None and boundary.call_texts[0][:1].isspace()
     starts = []            # where each token's text begins in ``visible``
@@ -204,6 +209,8 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             starts.append(len(visible))
             is_tag = context.is_special(tok)
             _append(visible, piece, is_tag, generated)
+            if thought is not None:
+                call_opens_as_text = thought.read(piece)
             if call_opens_as_text and is_tag \
                     and piece.strip() not in boundary.thought_tags:
                 held_tag = (starts[-1], len(visible))
@@ -282,6 +289,24 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         if delta:
             generated.text_pieces.append(delta)
             yield delta
+
+
+class _ThoughtState:
+    """Whether the text generated so far ends inside a thought, read piece by piece."""
+
+    def __init__(self, opening: str, closing: str, inside: bool) -> None:
+        self._opening, self._closing, self._inside = opening, closing, inside
+        self._tail = ""             # text a tag may still begin in
+
+    def read(self, piece: str) -> bool:
+        """Read ``piece``; whether the text now ends inside a thought."""
+        self._tail += piece
+        while (at := self._tail.find(self._closing if self._inside else self._opening)) >= 0:
+            self._tail = self._tail[at + len(self._closing if self._inside else self._opening):]
+            self._inside = not self._inside
+        keep = max(len(self._opening), len(self._closing)) - 1
+        self._tail = self._tail[len(self._tail) - keep:] if keep else ""
+        return self._inside
 
 
 def _append(visible: _TextBuffer, piece: str, is_tag: bool, generated: GenerationAccumulator) -> None:

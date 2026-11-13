@@ -105,8 +105,8 @@ class ChatWrapper:
         self._lock = threading.Lock()
         # The thread that holds it while one does: for a reply, the one that read it last.
         self._holder: threading.Thread | None = None
-        # The newest reply's steps, which close() ends first on the thread they hold it for.
-        self._newest_reply: Callable[[], Generator | None] = lambda: None
+        # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
+        self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
         # The policy the newest turn was started with, or for a turn the history opened the
         # first one a reply gave it, and the calls it may still run, which a reply going on
         # with it keeps.
@@ -355,7 +355,7 @@ class ChatWrapper:
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
         steps = self._noting_each_reader(self._replying(text, tool_call_policy, max_calls, **options))
-        self._newest_reply = weakref.ref(steps)
+        self._replies.add(steps)
         return ReplyStream(steps)
 
     def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
@@ -660,14 +660,16 @@ class ChatWrapper:
         :meth:`conversation` and the properties that say where it stands still
         answer.
         """
-        reply = self._newest_reply()
-        if self._holder is threading.current_thread() and reply is not None and not reply.gi_running:
-            reply.close()           # from a tool the reply runs, it is refused below instead
-        with self._held():
-            if self._closed:
-                return
-            self._closed = True
-            self._context.close()
+        try:
+            if self._holder is threading.current_thread():
+                # From a tool the reply runs, that reply is running, and close() is refused below.
+                for steps in [s for s in self._replies if not s.gi_running]:
+                    steps.close()
+        finally:
+            with self._held():
+                if not self._closed:
+                    self._closed = True
+                    self._context.close()
 
     def __enter__(self) -> ChatWrapper:
         return self
@@ -942,7 +944,8 @@ class ChatWrapper:
             max_generated_tokens, generated, cancel=cancel,
             sampling=sampling,
             ends_turn=self._turn_end_test(reply_text, generated),
-            boundary=self._template.call_boundary(recognizes_calls, withhold))
+            boundary=replace(self._template.call_boundary(recognizes_calls, withhold),
+                             starts_in_thought=reply_text.opens_in_thought))
         on_started()
         try:
             for piece in pieces:

@@ -1560,15 +1560,11 @@ def test_an_answer_holding_its_templates_thought_tags_is_kept_as_the_template_wr
     sent = [m for m in _sent(run.chat) if m["role"] != "system"]
     for question, answer in zip(questions, answers):
         at = next((i for i, m in enumerate(sent) if m == {"role": "user", "content": question}), None)
-        if at is None or sent[at + 1:at + 2] == [] or sent[at + 1]["role"] != "assistant":
-            continue                        # taken back, or left unanswered where nothing of it is written
-        # Kept as the part of it the template writes as a past reply, which is what the cache holds.
+        if answer.strip() == tags.thought_close.strip():
+            continue                        # nothing of it is text: kept empty, or taken back
+        # Kept as a part of it the template writes as text, never taken back.
         kept = sent[at + 1]["content"]
-        assert kept and kept in answer
-        written = run.render(sent[:at + 1] + [{"role": "assistant", "content": kept},
-                                              {"role": "user", "content": "Next?"}])
-        assert written == run.render(sent[:at + 1] + [{"role": "assistant", "content": answer},
-                                                      {"role": "user", "content": "Next?"}])
+        assert sent[at + 1]["role"] == "assistant" and kept.strip() and kept in answer
     assert {"role": "user", "content": questions[-1]} in sent
 
 
@@ -1576,7 +1572,7 @@ def test_an_answer_holding_its_templates_thought_tags_is_kept_as_the_template_wr
 def test_a_tag_the_model_writes_inside_its_answer_is_never_shown(stem):
     marker = "<|stray_marker|>"
     run = _Run(stem, writes_tags=True, extra_tags=(marker,),
-               replies=[f"Rain first.{marker} Then sun.", ANSWERS[1]])
+               replies=[f"{marker}Rain first.{marker} Then sun.", ANSWERS[1]])
     run.begin()
     shown = "".join(run.chat.reply(QUESTIONS[0]))
     assert shown == "Rain first. Then sun."
@@ -1631,3 +1627,16 @@ def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more
         renders[live] = counts
     if stays:
         assert renders[True] == renders[False]
+
+
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+def test_a_call_quoted_in_a_thought_stays_the_thoughts_where_the_template_writes_a_call_after_text(stem):
+    run = _Run(stem, reasoning=True)
+    if not run.template.call_boundary().follows_text:
+        pytest.skip("a call opening as text counts here only at the start or after a tag")
+    opener, body, closer = _call_body(run, {"city": "Bonn"})
+    reply, = _as_generated(run.template, ["It is sunny."], True)
+    run.context.replies = [reply.replace(_THOUGHT, f"I could write {opener}{body}{closer} but I know.")]
+    run.begin(tools=[WEATHER])
+    shown = list(run.chat.reply("Weather?", tool_call_policy="yield"))
+    assert "".join(shown) == "It is sunny." and not run.chat.pending_calls

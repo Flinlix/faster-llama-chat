@@ -151,7 +151,9 @@ class RenderedCache:
         # Left as they are by a failed action. The newest generation: where it began,
         # whether it resumed a turn, and the tokens before the question it answers where
         # its request asked one.
-        self._generation: tuple[int, bool, list[int] | None] = (0, False, None)
+        # Where the newest generation's turn starts in the cache, whether it went on with an open
+        # turn, the cache before the question it answers, and how long the cache was when it began.
+        self._generation: tuple[int, bool, list[int] | None, int] = (0, False, None, 0)
         self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
@@ -528,7 +530,7 @@ class RenderedCache:
         self._state.results_cut = []
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
-                            self.turn_open, before_question)
+                            self.turn_open, before_question, len(self._memory.tokens))
         room = (self._config.context_size - len(self._memory.tokens)
                 - self.template.n_closing_tokens)
         return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
@@ -548,9 +550,9 @@ class RenderedCache:
         template writes two questions in a row; and the cache is then brought
         to the template's render and decoded ahead for the next question.
 
-        An answer holding the template's own thought tags is kept as the part
-        of it the template writes, and taken back with its request where that
-        part is empty.
+        An answer holding the template's own thought tags is kept as a part
+        of it the template writes as text, and as an answer with no text where
+        it writes none, which the rules above then take.
 
         Where the generation failed, what it said is recorded, or, where it
         said nothing, the question its request asked is taken out again; the
@@ -571,7 +573,7 @@ class RenderedCache:
         Returns:
             How many history items were dropped.
         """
-        before_question = self._generation[2]
+        _start, _resumed, before_question, generated_from = self._generation
         try:
             if not self._memory.is_known and not answer and not called:
                 # It failed before it said anything: the request is taken back whole.
@@ -579,10 +581,9 @@ class RenderedCache:
                     self._state.messages.pop()
                     self._memory.replace(before_question)
                 return 0
-            saved, held = self._state.copied(), list(self._memory.tokens)
+            saved, held = self._state.copied(), list(self._memory.tokens[:generated_from])
             try:
-                answer, unplaced, unwritten = self._append_reply(answer, thought, calls, called,
-                                                                 stopped)
+                recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
             except BaseException:
                 self._state = saved
                 if before_question is not None:
@@ -593,26 +594,27 @@ class RenderedCache:
                 with contextlib.suppress(Exception):
                     self._memory.repair()       # where it fails, the next action decodes again
                 raise
-            return self._after_reply(answer, called, called and not calls, unplaced, unwritten,
-                                     unreadable_result)
+            return self._after_reply(recorded, called, called and not calls, unplaced,
+                                     recorded != answer, unreadable_result)
         finally:
             self._publish()
 
     def _append_reply(self, answer: str, thought: str, calls: list[ToolCall], called: bool,
-                      stopped: bool) -> tuple[str, bool, bool]:
+                      stopped: bool) -> tuple[str, bool]:
         """Add the newest generation's reply to the messages, its turn kept where it called tools.
 
         Returns:
-            The answer as recorded, whether a kept turn could no longer be
-            placed, and whether the template writes nothing of the answer.
+            The answer as recorded, and whether a kept turn could no longer be
+            placed.
         """
-        start, resumed, _before_question = self._generation
+        start, resumed, _before_question, _generated_from = self._generation
         unreadable = called and not calls
-        unwritten = False
         if answer and not calls and self._holds_thought_tags(answer):
-            written = self._rendering.written_answer(self._state.messages, answer)
-            unwritten = not (written and written.strip())
-            answer = written or ""
+            # Where the template writes none of it as text, it is recorded as an answer with no text.
+            tags = self.template.reasoning
+            answer = self._rendering.written_answer(
+                self._state.messages, answer, thought,
+                (tags.thought_close.strip(), tags.thought_open.strip())) or ""
         asked = calls or ([ToolCall(UNKNOWN_FUNCTION, {})] if unreadable else [])
         message = ({"role": "assistant", "content": answer} if not asked
                    else calling_message(answer, asked, self._state.n_calls))
@@ -635,14 +637,27 @@ class RenderedCache:
         self._state.messages.append(message)
         # A reply that leaves every turn that called tools as it was cannot move one.
         moves_kept = called or resumed or not self._state.tool_turns_stay
-        return answer, moves_kept and self._drop_unplaceable(), unwritten
+        return answer, moves_kept and self._drop_unplaceable()
 
     def _after_reply(self, answer: str, called: bool, unreadable: bool, unplaced: bool,
-                     unwritten: bool, unreadable_result: dict) -> int:
-        """Answer a call that could not be read, or close the turn and settle the cache; how many history items were dropped."""
-        resumed = self._generation[1]
+                     rewritten: bool, unreadable_result: dict) -> int:
+        """Answer a call that could not be read, or close the turn and settle the cache; how many history items were dropped.
+
+        Args:
+            rewritten: Whether ``answer`` was recorded otherwise than generated.
+        """
+        _start, resumed, before_question, _generated_from = self._generation
         if not self._memory.is_known:
-            return 0                # the generation failed: the next action decodes the cache again
+            # The generation failed: the next action decodes the cache again. One that left
+            # no answer it writes is taken back with its question, as one that said nothing;
+            # one recorded otherwise than generated is decoded again as it was recorded.
+            if not answer and not called and before_question is not None:
+                del self._state.messages[-2:]
+                self._memory.replace(before_question)
+            elif rewritten:
+                self._memory.replace(
+                    self._rendering.target(self._state.messages, generation_prompt=False).tokens)
+            return 0
         if unreadable:
             try:
                 written = self._write_unreadable(unreadable_result)
@@ -656,8 +671,8 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False)
             return 0
-        if unwritten or not called and not self._writes(self._state.messages if not answer
-                                                        else self._newest_exchange()):
+        if not called and not self._writes(self._state.messages if not answer
+                                           else self._newest_exchange()):
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
@@ -1239,12 +1254,10 @@ class RenderedCache:
         def length() -> int:
             return self._rendering.length(self._state.messages, generation_prompt)
 
-        def too_many(most: int | None) -> int:
-            limit = self._config.max_history_exchanges if most is None else most
-            return 0 if tokens_only or limit is None else max(
-                0, exchange_count(self._state.messages) - limit)
+        def too_many(most: int | None = None) -> int:
+            return 0 if tokens_only else self._exchanges_over(most)
 
-        if length() <= limit and not too_many(self._config.max_history_exchanges):
+        if length() <= limit and not too_many():
             return False
         bound, most = self._drop_bound(limit, beside_open_turn), self._exchanges_after_drop()
         return self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
@@ -1327,8 +1340,12 @@ class RenderedCache:
 
     def _too_many(self, most: int | None = None) -> bool:
         """Whether the history holds more exchanges than ``most``, by default ``max_history_exchanges``."""
+        return self._exchanges_over(most) > 0
+
+    def _exchanges_over(self, most: int | None = None) -> int:
+        """How many exchanges the history holds beyond ``most``, by default ``max_history_exchanges``."""
         limit = self._config.max_history_exchanges if most is None else most
-        return limit is not None and exchange_count(self._state.messages) > limit
+        return 0 if limit is None else max(0, exchange_count(self._state.messages) - limit)
 
     def _drop_oldest_exchange(self, newest_too: bool = False) -> bool:
         """Drop the oldest question and everything up to the next; ``False`` where none can go.

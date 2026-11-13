@@ -459,12 +459,17 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
 
 @pytest.mark.parametrize("fault", [RuntimeError, KeyboardInterrupt])
 @pytest.mark.parametrize("ending, step", [("answer", "_holds_thought_tags"),
-                                          ("call", "_drop_unplaceable")])
+                                          ("call", "_drop_unplaceable"),
+                                          ("going on after a result", "_drop_unplaceable")])
 def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending,
                                                                        step):
     w, fake = tool_wrapper()
     w.begin("persona", tools=weather_registry().specs())
     w.reply("eins").finish()
+    if ending == "going on after a result":
+        fake.call_script = ['fn:weather{"city": "Bonn"}']
+        list(w.reply("Wetter?", tool_call_policy="yield"))
+        w.inject_tool_result(w.pending_calls[0], "sonnig")
     before = _state(w)
     recorded = getattr(rendered_cache.RenderedCache, step)
     failing = iter([True])
@@ -477,10 +482,13 @@ def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypat
     monkeypatch.setattr(rendered_cache.RenderedCache, step, recording)
     fake.call_script = ['fn:weather{"city": "Bonn"}'] if ending == "call" else []
     with pytest.raises(fault, match="recording failed"):
-        w.reply("zwei", tool_call_policy="yield").finish()
+        w.reply(None if ending == "going on after a result" else "zwei",
+                tool_call_policy="yield").finish()
     assert _state(w) == before
     assert_cache_reads_as_rendered(w, fake)
     fake.call_script = []
+    if ending == "going on after a result":
+        w.reply(tool_call_policy="yield").finish()
     w.reply("drei").finish()
     assert w.conversation()["messages"][-2] == {"role": "user", "content": "drei"}
 
@@ -618,3 +626,35 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
         except RuntimeError:
             pass
         assert memory.tokens == tokens or memory.version != version, name
+
+
+@pytest.mark.parametrize("cut", ["right after the closing", "a word later"])
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if fixture(stem)["marks_thought"]])
+def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_leaves_no_empty_answer(
+        stem, cut):
+    fake = _Flaky(fixture(stem))
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin("")
+    closing = w._templates.for_conversation(False).reasoning.thought_close.strip()
+    said = f"Close it with {closing} and more words follow here."
+    fake.replies = [said, "Gern."]
+    sampled = fake.sampled_tokens
+
+    def failing_after_the_closing(*args, **kwargs):
+        text = ""
+        for token in sampled(*args, **kwargs):
+            yield token
+            text += fake.token_text(token)
+            if closing in text and text.endswith(closing if cut == "right after the closing" else " an"):
+                raise RuntimeError("generation failed")
+
+    fake.sampled_tokens = failing_after_the_closing
+    with pytest.raises(RuntimeError, match="generation failed"):
+        w.reply("Q?").finish()
+    fake.sampled_tokens = sampled
+    messages = w.conversation()["messages"]
+    # Kept with a part of what it wrote, or taken back whole with its question.
+    assert messages == [] or (messages[0] == {"role": "user", "content": "Q?"}
+                              and messages[1]["content"].strip()
+                              and messages[1]["content"] in said)
+    w.reply("Weiter?").finish()
