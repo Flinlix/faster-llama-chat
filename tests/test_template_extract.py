@@ -64,14 +64,11 @@ def _inconsistent_render(messages, **_options):
     return "".join(f"[{m['role']}]{m['content']}" for m in messages)
 
 
-def test_inconsistent_multi_message_render_falls_back_to_user_tags():
+def test_a_render_whose_reply_cannot_be_split_off_gives_no_fragments_rather_than_a_guess():
     # The user fragment recovered from the single-message probe does not occur
-    # in the two-message render; the extractor must fall back instead of
-    # crashing on the missing split point.
-    f = extract_fragments(_inconsistent_render)
-    assert f.user_prefix == "<u>"
-    assert f.assistant_prefix == f.user_prefix
-    assert f.assistant_suffix == f.user_suffix
+    # in the two-message render, so the assistant's tags cannot be read: the
+    # template is refused, not read with the user's tags.
+    assert extract_fragments(_inconsistent_render) is None
 
 
 def _prefix_only_render(messages, **_options):
@@ -318,15 +315,9 @@ def _dropped_assistant_render(messages, **_options):
     return "".join(out)
 
 
-def test_a_fallen_back_assistant_tag_is_not_used_to_locate_a_call():
-    """The user tags standing in for a missing assistant tag locate nothing.
-
-    Splitting on them lands in the middle of the conversation, and what came
-    back would open a call with a turn tag rather than with the call's own.
-    """
-    fragments = extract_fragments(_dropped_assistant_render)
-    assert fragments.assistant_prefix == fragments.user_prefix   # it fell back
-    assert extract_tool_fragments(_dropped_assistant_render, fragments) is None
+def test_a_template_that_drops_the_reply_it_is_given_is_refused_rather_than_read_with_the_user_tags():
+    """Read with the user tags, a call would be found in the middle of the conversation."""
+    assert extract_fragments(_dropped_assistant_render) is None
 
 
 def _degenerate_render(dropped, constant_body):

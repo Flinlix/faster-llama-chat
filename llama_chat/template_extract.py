@@ -152,6 +152,8 @@ def extract_fragments(render: Render, tags: tuple[str, ...] = ()) -> TemplateFra
     first_prefix, _, user_suffix = user.partition(USER_SENTINEL)
     found = (_past_exchange(render, first_prefix, user_suffix, tags)
              or _newest_exchange(render, first_prefix, user_suffix))
+    if found is None:
+        return None
     user_prefix, assistant_prefix, assistant_suffix = found
     return TemplateFragments(
         user_prefix=user_prefix, user_suffix=user_suffix,
@@ -326,16 +328,14 @@ def _longest_shared_end(text: str, other: str, tags: tuple[str, ...]) -> str:
 
 
 def _newest_exchange(render: Render, user_prefix: str,
-                     user_suffix: str) -> tuple[str, str, str]:
-    """The tags read from one user turn and its reply, or the user tags reused."""
+                     user_suffix: str) -> tuple[str, str, str] | None:
+    """The tags read from one user turn and its reply, ``None`` where the reply cannot be split off."""
     both = render([
         {"role": "user", "content": USER_SENTINEL},
         {"role": "assistant", "content": ASSISTANT_SENTINEL},
     ], reasoning=False)
     if both is None or ASSISTANT_SENTINEL not in both or USER_SENTINEL + user_suffix not in both:
-        # No assistant turn to split off; the user tags still give generation
-        # an open and close pair.
-        return user_prefix, user_prefix, user_suffix
+        return None
     tail = both.split(USER_SENTINEL + user_suffix, 1)[1]
     assistant_prefix, _, assistant_suffix = tail.partition(ASSISTANT_SENTINEL)
     return user_prefix, assistant_prefix, assistant_suffix

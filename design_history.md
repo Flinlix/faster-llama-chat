@@ -3888,3 +3888,14 @@ characters, as a real tokenizer reads it. `FakeContext(extra_tags=...)` adds
 tags of a vocabulary that the template never writes, which one test needs. A
 template a single test writes for itself lists none, and is still read by the
 pattern. The name check (`tests/test_neutral.py`) reads the listed tags.
+
+### A template whose reply cannot be split off is refused
+
+345.17, review finding A8. Where neither a past reply nor a newest one could
+be split off a render, the turn tags were guessed: the user's tags were
+reused as the assistant's, "so generation still has an open and close pair".
+None of the 52 test templates took that path, and a guess is what principle
+2 rules out, so such a template now yields no fragments and is refused at
+load as one without a usable template. The guard in `extract_tool_fragments`
+against an assistant tag equal to the user's stays: a template may write the
+two alike on its own.
