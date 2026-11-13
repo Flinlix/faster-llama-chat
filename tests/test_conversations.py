@@ -1640,3 +1640,14 @@ def test_a_call_quoted_in_a_thought_stays_the_thoughts_where_the_template_writes
     run.begin(tools=[WEATHER])
     shown = list(run.chat.reply("Weather?", tool_call_policy="yield"))
     assert "".join(shown) == "It is sunny." and not run.chat.pending_calls
+
+
+def test_the_tokenizer_memory_holds_no_more_text_than_its_bound_however_long_a_result():
+    from llama_chat.tokenizing import MemoTokenizer
+
+    memo = MemoTokenizer(FakeContext(_FALLBACK))
+    for n in range(3):
+        memo.tokenize("y" * 2_500_000 + str(n))
+        memo.tokenize("z" * 5_000_000)
+    held = sum(len(text) for text, _special, _parse in memo._known)
+    assert held <= MemoTokenizer._BOUND_CHARS

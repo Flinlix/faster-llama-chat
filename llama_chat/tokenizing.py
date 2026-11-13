@@ -110,22 +110,29 @@ def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
 
 
 class MemoTokenizer:
-    """A model's tokenizer that remembers, up to a bound, what it tokenized."""
+    """A model's tokenizer that remembers, up to a bound in entries and in characters, what it tokenized."""
 
     _BOUND = 20000                  # entries kept before the memory starts over
+    _BOUND_CHARS = 4_000_000        # characters of text kept, with their tokens, before it does
 
     def __init__(self, reader: ModelReader) -> None:
         self._reader = reader
         self._known: dict = {}
+        self._chars = 0
 
     def tokenize(self, text, add_special=False, parse_special=True):
         key = (text, add_special, parse_special)
-        if key not in self._known:
-            if len(self._known) > self._BOUND:
-                self._known.clear()
-            self._known[key] = self._reader.tokenize(text, add_special=add_special,
-                                                     parse_special=parse_special)
-        return self._known[key]
+        if key in self._known:
+            return self._known[key]
+        tokens = self._reader.tokenize(text, add_special=add_special, parse_special=parse_special)
+        if len(text) > self._BOUND_CHARS:
+            return tokens                   # longer than all it may keep: not kept
+        if len(self._known) > self._BOUND or self._chars + len(text) > self._BOUND_CHARS:
+            self._known.clear()
+            self._chars = 0
+        self._known[key] = tokens
+        self._chars += len(text)
+        return tokens
 
     def token_text(self, token):
         return self._reader.token_text(token)

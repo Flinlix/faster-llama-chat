@@ -4381,3 +4381,14 @@ or a number, was silently dropped from the history, and a call whose
 arguments were a list reached the template, which refused the whole
 conversation without saying why. `ToolTurn` now refuses both when it is made,
 naming the step.
+
+### The tokenizer memory is bounded by characters too (366.22)
+
+366.22 (K5). The memory of what was tokenized started over only after 20,000
+entries, however long each was: a 2 MB tool result left about 36 MB behind,
+renders of the conversation around it included (measured by the review). It
+now also starts over before it would hold more than 4,000,000 characters of
+text, about 40 MB with their tokens, and a text longer than that is tokenized
+without being kept. The bound is about 30 times the text of a 32,000-token
+conversation, so the memory starts over rarely enough that the renders
+around a reply still find their pieces in it.
