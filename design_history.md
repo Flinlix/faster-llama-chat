@@ -4229,3 +4229,14 @@ keeps the rule as it was, and pays nothing for this check after load. On
 these two templates a sentence that quotes the opening is read as a call,
 which is how the template itself writes one. The property is the template's,
 so it is read from the template, not stated in an add-on file.
+
+### A context collected unclosed frees its model
+
+366.4 (T2). Nothing freed the engine of a wrapper that was dropped without
+`close()`: each dropped wrapper of a 1B model on the processor kept about
+0.9 GB until the program ended (measured by the review). The context now
+registers a finalizer when it loads, which frees the engine context and then
+the model when the context is collected, and which `close()` runs at once.
+Either way the engine is freed exactly once. A finalizer was chosen over
+`__del__` because it holds no reference to the context and runs at most once,
+also at interpreter exit.

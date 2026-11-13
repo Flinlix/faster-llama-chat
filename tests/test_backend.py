@@ -9,6 +9,7 @@ design_history.md, "How a call's format is recovered".
 """
 
 import ctypes
+import gc
 import inspect
 import logging
 import os
@@ -495,6 +496,7 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
         tmp_path, monkeypatch, max_batch_tokens, context_size):
     performed = []
     backend = SimpleNamespace(
+        free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
@@ -529,6 +531,7 @@ def test_a_full_batch_warms_up_first_only_where_layers_run_on_a_gpu(
         tmp_path, monkeypatch, gpu_layers, offload, max_batch_tokens, context_size, full_batch):
     performed = []
     backend = SimpleNamespace(
+        free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
@@ -560,7 +563,7 @@ def test_a_full_batch_warms_up_first_only_where_layers_run_on_a_gpu(
 
 def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
     """What a model loaded under ``settings`` asks of the engine's context, by keyword."""
-    asked = {}
+    asked, closes = {}, settings.pop("close", True)
     backend = SimpleNamespace(
         load_model=lambda path, layers, progress: "model",
         metadata_value=lambda model, key: None,
@@ -569,12 +572,23 @@ def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
         vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
         can_shift=lambda ctx: True,
         kv_seq_rm=lambda ctx, seq, p0, p1: True, kv_seq_add=lambda *args: None,
-        decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: True)
+        decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: True,
+        free_context=lambda ctx: asked.setdefault("freed", []).append(ctx),
+        free_model=lambda model: asked.setdefault("freed", []).append(model))
     monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
-    KVContext(Config(model_path=str(model), **settings))
+    context = KVContext(Config(model_path=str(model), **settings))
+    if closes:
+        context.close()
+    del context
+    gc.collect()
     return asked
+
+
+@pytest.mark.parametrize("closed", [True, False])
+def test_a_context_frees_its_engine_once_whether_closed_or_only_collected(tmp_path, monkeypatch, closed):
+    assert _context_settings(tmp_path, monkeypatch, close=closed)["freed"] == ["ctx", "model"]
 
 
 @pytest.mark.parametrize("gpu_layers", [0, 10, -1])
@@ -705,6 +719,7 @@ def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, mon
     stored = {"tokenizer.chat_template": "default:{{ messages[0].content }}",
               "tokenizer.chat_template.tool_use": "tools:{{ messages[0].content }}"}
     backend = SimpleNamespace(
+        free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
         metadata_value=lambda model, key: stored.get(key),
         kv_cache_type_id=lambda name: 0, new_context=lambda *args, **kwargs: "ctx",

@@ -9,6 +9,7 @@ is decided by the caller, and how a generation goes on by
 from __future__ import annotations
 
 import os
+import weakref
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -92,6 +93,9 @@ class KVContext:
             self._backend.free_model(self._model)
             raise
         self._closed = False
+        # Frees the engine when the context is collected unclosed, and at most once.
+        self._free = weakref.finalize(self, _free_engine, self._backend, self._engine_context,
+                                      self._model)
 
     @property
     def context_size(self) -> int:
@@ -257,12 +261,11 @@ class KVContext:
 
     # ----- lifecycle -----------------------------------------------------
     def close(self) -> None:
-        """Free the context and model. Safe to call more than once."""
+        """Free the context and model. Safe to call more than once; a context collected unclosed frees them too."""
         if self._closed:
             return
         self._closed = True
-        self._backend.free_context(self._engine_context)
-        self._backend.free_model(self._model)
+        self._free()
 
     # ----- internals -----------------------------------------------------
     def _settle_cache_edits(self) -> None:
@@ -393,3 +396,9 @@ def _flash_attention(config: Config) -> bool | None:
     if config.flash_attention is None and config.kv_cache_type != UNQUANTIZED_KV_CACHE_TYPE:
         return True
     return config.flash_attention
+
+
+def _free_engine(backend: Backend, engine_context, model) -> None:
+    """Free ``engine_context``, then the ``model`` it was made from."""
+    backend.free_context(engine_context)
+    backend.free_model(model)
