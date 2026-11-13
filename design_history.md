@@ -4392,3 +4392,13 @@ text, about 40 MB with their tokens, and a text longer than that is tokenized
 without being kept. The bound is about 30 times the text of a 32,000-token
 conversation, so the memory starts over rarely enough that the renders
 around a reply still find their pieces in it.
+
+### A tool stopped mid-round keeps the results before it (366.24)
+
+366.24 (T7). Where a tool raised `KeyboardInterrupt` (Ctrl+C) during the
+second call of a round run by a registry, the first call's result, though
+that tool had run, was thrown away and both calls stayed owed. The round now
+writes the results of the calls that ran for anything raised while a call
+runs, as it already did where the stream was closed at a call, and the rest
+stay owed. `ToolRegistry.call` still turns only an `Exception` into a result,
+so a stop is never told to the model as a tool failure.

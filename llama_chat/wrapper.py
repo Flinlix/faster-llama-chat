@@ -863,8 +863,9 @@ class ChatWrapper:
         model to do next depends on the budget the last call leaves. In the
         order asked, which the template renders in. A call handed over counts
         against ``budget`` from then on. Where the stream is closed at a call
-        handed over, the results of the calls that ran before it are written,
-        and it and the rest of the round stay owed.
+        handed over, or anything is raised while it runs, a ``KeyboardInterrupt``
+        included, the results of the calls that ran before it are written, and
+        it and the rest of the round stay owed.
 
         Returns:
             The ``(call, result)`` pairs.
@@ -880,13 +881,14 @@ class ChatWrapper:
                 budget.calls_left -= 1
                 try:
                     yield call
-                except GeneratorExit:
-                    # Where no room is left, the calls stay owed, as the caller's own
-                    # result would find no room either.
+                    result = registry.call(call)
+                except BaseException:
+                    # Closed at the call, or stopped while it ran (Ctrl+C): the calls that ran
+                    # keep their results. Where no room is left, they stay owed, as the
+                    # caller's own result would find no room either.
                     with contextlib.suppress(ContextOverflowError):
                         self._write_results(settled, budget.calls_left > 0)
                     raise
-                result = registry.call(call)
             else:
                 result = {"error": "tool_limit_reached",
                           "message": "no tool calls left in this turn; "

@@ -2157,3 +2157,24 @@ def test_a_stream_closed_at_a_later_call_of_a_round_writes_the_results_of_those_
     wrapper.inject_tool_result(second, "12:01")
     assert wrapper.reply().finish().text == "reply" and ran == [1]
     assert_consistent(wrapper, fake)
+
+
+def test_stopping_the_second_call_of_a_round_keeps_the_first_calls_result():
+    ran = []
+    registry = ToolRegistry()
+
+    @registry.tool("Die Zeit.")
+    def clock() -> str:
+        ran.append(1)
+        if len(ran) == 2:
+            raise KeyboardInterrupt
+        return "12:00"
+
+    wrapper, fake = tool_wrapper(context_size=1024, template=JSON_TOOLS)
+    wrapper.begin("persona", tools=registry)
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    with pytest.raises(KeyboardInterrupt):
+        wrapper.reply("wie spät?", tool_call_policy=registry).finish()
+    # The first call ran and keeps its result; the second is owed.
+    assert [call.id for call in wrapper.pending_calls] == ["call00001"]
+    assert wrapper.wait_idle(0)
