@@ -4534,3 +4534,15 @@ is no text, and `conversation()` gives it back; the template is handed the
 message without it, so what the model reads is unchanged. A result cut to fit
 is no longer the value given, so it comes back as the cut text the model was
 given, which is what beginning again from it must write.
+
+### A history that fits is tried whole once its size says so (366.23)
+
+366.23 (P4). `begin` finds the newest history that fits in half the context
+by rendering twice as many exchanges each time. A history that fits anyway
+was rendered at 2, 4, 8 and so on exchanges before it was rendered whole:
+1.4 s for 200 exchanges on Gemma 4 (measured by the review). Each try now
+reads the length it measured: where the whole history would fit at the rate
+measured so far, the whole is tried next. On the review's stand-in, beginning
+with 50 or 200 short exchanges takes 22 renders, the load's own checks
+included, instead of 30 and 34; a history far longer than the context costs
+what it cost before.

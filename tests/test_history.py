@@ -368,3 +368,15 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
 def test_a_tool_turn_with_a_step_it_cannot_hold_is_refused_naming_it(steps, named):
     with pytest.raises(ValueError, match=named):
         ToolTurn(steps)
+
+
+def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is():
+    def renders(n):
+        fake = FakeContext(TOOLS)
+        w = ChatWrapper(Config(context_size=32768), context=fake)
+        before = len(fake.rendered)
+        kept = w.begin("sys", [m for i in range(n) for m in (("user", f"q{i}"), ("assistant", f"a{i}"))])
+        assert kept == 2 * n
+        return len(fake.rendered) - before
+
+    assert renders(200) == renders(50)

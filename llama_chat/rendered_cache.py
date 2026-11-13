@@ -341,7 +341,8 @@ class RenderedCache:
         Only the newest messages are rendered: twice as many exchanges each
         time until they no longer fit, then the count between is halved, so a
         history far longer than the context costs a few renders of about
-        ``bound`` each.
+        ``bound`` each; where the lengths measured so far say the whole
+        history fits, it is tried at once.
 
         Raises:
             ValueError: If the template refuses to write what would be kept.
@@ -351,19 +352,23 @@ class RenderedCache:
             return
         opens = [first] + [i for i in exchange_starts(self._state.messages) if i > first]
 
-        def fits(count: int) -> bool:
+        def length(count: int) -> int:
             kept = self._state.messages[:first] + self._state.messages[opens[-count]:]
             if self._rendering.split(kept, kept[-1]["role"] == "tool") is None:
                 raise self._refused_history(kept)
-            return self._rendering.length(kept, generation_prompt=False) <= bound
+            return self._rendering.length(kept, generation_prompt=False)
 
-        kept, more = 1, 2
-        while more < len(opens) and fits(more):
-            kept, more = more, more * 2
-        if more >= len(opens):
-            if fits(len(opens)):
+        def fits(count: int) -> bool:
+            return length(count) <= bound
+
+        everything = len(opens)
+        kept, more = 1, min(2, everything)
+        while (measured := length(more)) <= bound:
+            if more == everything:
                 return
-            more = len(opens)
+            # Where the rest would fit at the rate measured, the whole history is tried next.
+            kept, more = more, (everything if measured * everything <= bound * more
+                                else min(more * 2, everything))
         while kept < more - 1:
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
