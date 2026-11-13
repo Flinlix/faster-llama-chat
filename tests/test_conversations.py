@@ -1711,3 +1711,25 @@ def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_rend
     for question in QUESTIONS[:3]:
         run.chat.reply(question).finish()
     assert not set(measured) & set(QUESTIONS[:3])
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_result_given_as_a_value_comes_back_as_that_value(stem):
+    run = _Run(stem)
+    given = {"celsius": 18, "sky": ["light", "rain"]}
+    history = [("user", "Weather?"), ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}),
+                                               ToolResult(WEATHER.name, given), "18 degrees."))]
+    _opener, body, _closer = _call_body(run, {"city": "Köln"})
+    run.context.replies = [ScriptedCall(body), "Rain too."]
+    run.begin(history, tools=[WEATHER])
+    call, = [e for e in run.chat.reply("And Köln?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    run.chat.inject_tool_result(call, dict(given))
+    run.chat.reply().finish()
+    turns = [item for item in run.chat.conversation()["messages"] if isinstance(item, ToolTurn)]
+    assert [step.result for turn in turns for step in turn.steps if isinstance(step, ToolResult)] \
+        == [given, given]
+    saved = run.chat.conversation()
+    run.chat.begin(**saved)
+    # The newest part a begin keeps, its results still the values given.
+    kept = run.chat.conversation()["messages"]
+    assert kept and kept == saved["messages"][-len(kept):]

@@ -4523,3 +4523,14 @@ where the template's renders are checked (at `begin`, a declaration and a
 clock change), and a question is counted alone beside it. Only a question
 whose count comes within 64 tokens of the room is measured in the system
 turn's render as before, so the check refuses exactly what it refused.
+
+### A result given as a value comes back as that value (366.19A)
+
+366.19A (D3). A tool result given as a dictionary, say, was written as the
+JSON text the model reads and came back from `conversation()` as that text,
+though the README says the conversation comes back as it was given. A result
+message now keeps the value its caller gave beside the text, where that value
+is no text, and `conversation()` gives it back; the template is handed the
+message without it, so what the model reads is unchanged. A result cut to fit
+is no longer the value given, so it comes back as the cut text the model was
+given, which is what beginning again from it must write.

@@ -28,7 +28,8 @@ from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
-                       kept_items, next_call_number, result_message, system_part)
+                       kept_items, next_call_number, result_message, system_part,
+                       with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact, writes_two_user_turns)
@@ -828,7 +829,7 @@ class RenderedCache:
                     f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
-            message = result_message(owed.name, owed_id, text)
+            message = result_message(owed.name, owed_id, text, result)
             if not self._renders_result(message):
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
@@ -863,7 +864,7 @@ class RenderedCache:
                         middle = (low + high + 1) // 2
                         low, high = (middle, high) if self._fits(at, _cut(text, middle), room) \
                             else (low, middle - 1)
-                    self._state.messages[at] = {**message, "content": _cut(text, low)}
+                    self._state.messages[at] = with_result_text(message, _cut(text, low))
                     self._state.results_cut.append(owed)
             del self._state.messages[at + 1:]
             if not self.pending_calls:
@@ -885,16 +886,16 @@ class RenderedCache:
             if earlier["role"] != "tool" or earlier["tool_call_id"] in cut_ids:
                 continue
             whole = earlier["content"]
-            self._state.messages[j] = {**earlier, "content": _cut(whole, 0)}
+            self._state.messages[j] = with_result_text(earlier, _cut(whole, 0))
             if not self._fits(at, content, room):
                 self._state.messages[j] = earlier
                 continue
             low, high = 0, len(whole)
             while low < high:
                 middle = (low + high + 1) // 2
-                self._state.messages[j] = {**earlier, "content": _cut(whole, middle)}
+                self._state.messages[j] = with_result_text(earlier, _cut(whole, middle))
                 low, high = (middle, high) if self._fits(at, content, room) else (low, middle - 1)
-            self._state.messages[j] = {**earlier, "content": _cut(whole, low)}
+            self._state.messages[j] = with_result_text(earlier, _cut(whole, low))
             call, = [c for c in self._state.messages[calling]["tool_calls"]
                      if c["id"] == earlier["tool_call_id"]]
             self._state.results_cut.append(ToolCall(call["function"]["name"],

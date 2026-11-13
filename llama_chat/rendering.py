@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .messages import THOUGHT_KEY, exchange_starts, system_part
+from .messages import RESULT_AS_GIVEN, THOUGHT_KEY, exchange_starts, system_part
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
@@ -105,6 +105,10 @@ class ConversationRendering:
             last = next((i for i, m in enumerate(messages) if m is kept.last), None)
             if first is not None and last is not None:
                 inside.update(range(first, last + 1))
+        if any(RESULT_AS_GIVEN in m for m in messages):
+            # What a caller gave is the conversation's to give back, not the template's to write.
+            messages = [{key: value for key, value in m.items() if key != RESULT_AS_GIVEN}
+                        if RESULT_AS_GIVEN in m else m for m in messages]
         if not any(messages[i].get("tool_calls") and messages[i]["content"] for i in inside):
             return messages
         return [{**m, "content": ""} if i in inside and m.get("tool_calls") else m

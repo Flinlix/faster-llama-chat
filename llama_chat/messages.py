@@ -62,7 +62,8 @@ def as_messages(history, min_call_number: int = 0) -> list[dict]:
                     owed += [call.id for call in calls]
                     text, thought, calls = "", "", []
                 # A ToolTurn holds no result before the call it answers.
-                messages.append(result_message(step.name, owed.pop(0), result_text(step.result)))
+                messages.append(result_message(step.name, owed.pop(0), result_text(step.result),
+                                               step.result))
         if calls:                       # called, and not answered yet
             messages.append(_with_thought(calling_message(text, calls), thought))
         elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
@@ -178,9 +179,23 @@ def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict
         for call in calls]}
 
 
-def result_message(name: str, tool_call_id: str, text: str) -> dict:
-    """A tool message answering the call ``tool_call_id`` to ``name`` with ``text``."""
-    return {"role": "tool", "name": name, "tool_call_id": tool_call_id, "content": text}
+# Where a result message keeps the value its caller gave, where that was no text, to give it back.
+RESULT_AS_GIVEN = "result_as_given"
+_NOT_GIVEN = object()
+
+
+def result_message(name: str, tool_call_id: str, text: str, given=_NOT_GIVEN) -> dict:
+    """A tool message answering the call ``tool_call_id`` to ``name`` with ``text``, the value ``given`` beside it where that is no text."""
+    message = {"role": "tool", "name": name, "tool_call_id": tool_call_id, "content": text}
+    if given is not _NOT_GIVEN and not isinstance(given, str):
+        message[RESULT_AS_GIVEN] = copy.deepcopy(given)
+    return message
+
+
+def with_result_text(message: dict, text: str) -> dict:
+    """The result ``message`` holding ``text`` instead, which it gives back as it is."""
+    return {**{key: value for key, value in message.items() if key != RESULT_AS_GIVEN},
+            "content": text}
 
 
 # The forms chat templates read a reply's thought in: a field of its own under
@@ -222,7 +237,8 @@ def as_history(messages: list[dict]) -> list:
                                       copy.deepcopy(c["function"]["arguments"]), c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":
-            steps.append(ToolResult(message["name"], message["content"]))
+            steps.append(ToolResult(message["name"], copy.deepcopy(
+                message.get(RESULT_AS_GIVEN, message["content"]))))
         elif role == "assistant" and steps:
             history.append(ToolTurn(tuple(steps + thought + [message["content"]])))
             steps = []
