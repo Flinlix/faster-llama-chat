@@ -40,6 +40,9 @@ from .template import common_prefix_length
 from .tokenizing import split_at_tags
 from .tools import ToolCall, ToolSpec, result_text
 
+# How far the count of a question alone may fall short of its length in the system turn's render.
+_NEAR_THE_ROOM_TOKENS = 64
+
 # The name a result carries where no real one is to be had: answering a call
 # that could not be read that far. Which name is used does not change what a
 # template renders around it.
@@ -96,6 +99,8 @@ class _ConversationState:
     repeats_alike: bool = True            # whether a repeated question is written as any other
     # Whether a past turn that called tools is written as before once another exchange follows.
     tool_turns_stay: bool = False
+    # What the system turn and a one-character question take, with the generation prompt.
+    with_a_short_question: int = 0
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
     prompt_start: int = 0                 # where in the cache the generation prompt begins
@@ -415,7 +420,13 @@ class RenderedCache:
             _ensure_ready(self, "start a request", "generate into")
             room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
-            alone = self._rendering.length(self._system_part() + [question], generation_prompt=True)
+            # Counted alone first, beside the system turn measured once: only a question near the
+            # room is measured in the system turn's render.
+            alone = self._state.with_a_short_question + len(
+                self._context.tokenize(text, add_special=False, parse_special=False))
+            if alone + _NEAR_THE_ROOM_TOKENS > room:
+                alone = self._rendering.length(self._system_part() + [question],
+                                               generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
                     f"request needs {alone} tokens but only {room} fit beside room for the reply; "
@@ -985,6 +996,7 @@ class RenderedCache:
                                                      self._rendering.tag_from))
         self._state.splice_probe = splice_probe(self._rendering.render, system)
         self._state.repeats_alike = repeated_question_written_alike(self._rendering.render, system)
+        self._state.with_a_short_question = self._with_a_short_question()
         # Without the steps tool calling needs, no turn keeps a call, and the template is not asked.
         self._state.tool_turns_stay = self.template.can_call_tools and tool_turns_stay_written(
             self._rendering.render, system, self._state.tools[0].name if self._state.tools else "probe",

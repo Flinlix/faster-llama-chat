@@ -1689,3 +1689,25 @@ def test_a_first_reply_that_produces_nothing_leaves_what_begin_decoded_in_the_ca
     chat.reply("hello").finish()
     # Taken back, or left unanswered: what begin decoded ahead, such as a default system prompt, stays.
     assert chat.total_tokens >= begun
+
+
+def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_render(monkeypatch):
+    from llama_chat.rendering import ConversationRendering
+
+    stem = next(stem for stem in _TOOL_TEMPLATES)
+    tools = [ToolSpec(name=f"tool_{n}", description=f"Does thing {n}.",
+                      parameters={"type": "object", "properties": {}}) for n in range(50)]
+    run = _Run(stem, context_size=32768)
+    run.begin(tools=tools)
+    measured = []
+    length = ConversationRendering.length
+
+    def counting(self, messages, generation_prompt):
+        if len(messages) <= 2 and messages[-1]["role"] == "user" and generation_prompt:
+            measured.append(messages[-1]["content"])
+        return length(self, messages, generation_prompt)
+
+    monkeypatch.setattr(ConversationRendering, "length", counting)
+    for question in QUESTIONS[:3]:
+        run.chat.reply(question).finish()
+    assert not set(measured) & set(QUESTIONS[:3])

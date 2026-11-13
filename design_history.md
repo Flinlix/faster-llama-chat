@@ -4510,3 +4510,16 @@ say, ends the reply as before. A turn a call left open stays open where a
 request to go on with it is cancelled before it starts, and the next reply
 goes on with it. 512 tokens is a trade: a smaller part stops sooner on the
 processor, a larger one batches better on a graphics card.
+
+### A question is measured beside the system turn only near the room (366.17A)
+
+366.17A (P3). Before each question's first token, the library rendered and
+tokenized the system turn, every declared tool included, with the question,
+to check that the question fits beside room for its reply: 1 to 8 ms per
+question with 50 tools (measured by the review). This writes nothing to the
+model; the tools stay where the template wrote them when the conversation
+began. The system turn with a one-character question is now measured once,
+where the template's renders are checked (at `begin`, a declaration and a
+clock change), and a question is counted alone beside it. Only a question
+whose count comes within 64 tokens of the room is measured in the system
+turn's render as before, so the check refuses exactly what it refused.
