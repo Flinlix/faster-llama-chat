@@ -1,4 +1,5 @@
 {
+ "tags": ["</think>", "</tool_call>", "</tool_response>", "</tools>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|im_end|>", "<|im_start|>", "<|image_pad|>", "<|video_pad|>", "<|vision_end|>", "<|vision_start|>"],
  "source": "Hansda/Mage-VL-Cowork-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

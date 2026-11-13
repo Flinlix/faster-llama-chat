@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key:opensource>", "</arg_value:opensource>", "</think:opensource>", "</tool_call:opensource>", "</tool_calls:opensource>", "</tool_response:opensource>", "</tool_responses:opensource>", "</tools>", "<arg_key:opensource>", "<arg_value:opensource>", "<think:opensource>", "<tool_call:opensource>", "<tool_calls:opensource>", "<tool_response:opensource>", "<tool_responses:opensource>", "<tool_sep:opensource>", "<tools>", "<｜hy_Assistant:opensource｜>", "<｜hy_Assistant{}｜>", "<｜hy_User:opensource｜>", "<｜hy_User{}｜>", "<｜hy_begin_of_sentence:opensource｜>", "<｜hy_begin_of_sentence{}｜>", "<｜hy_eos:opensource｜>", "<｜hy_eos{}｜>", "<｜hy_pad{}｜>", "<｜reasoning_mode:opensource｜>", "<｜reasoning_mode{}｜>"],
  "source": "AngelSlim/Hy3-GGUF",
  "eos_token": "<｜hy_eos:opensource｜>",
  "marks_thought": true,

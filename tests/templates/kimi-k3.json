@@ -1,4 +1,5 @@
 {
+ "tags": ["<|close|>", "<|end_of_msg|>", "<|kimi_image_placeholder|>", "<|open|>", "<|sep|>"],
  "source": "unsloth/Kimi-K3-GGUF",
  "eos_token": "<|end_of_msg|>",
  "marks_thought": true,

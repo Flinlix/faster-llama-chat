@@ -1,4 +1,5 @@
 {
+ "tags": ["</think>", "<image>", "<think>", "<|im_end|>", "<|im_start|>", "<|tool_call_end|>", "<|tool_call_start|>"],
  "source": "AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

@@ -1,4 +1,5 @@
 {
+ "tags": ["</effort>", "</invoke>", "</item>", "</key>", "</mm:think>", "</model_id>", "</response>", "</thinking_instructions>", "</tool>", "</tool_call>", "</tools>", "<effort>", "<invoke>", "<item>", "<key>", "<mm:think>", "<model_id>", "<response>", "<thinking_instructions>", "<tool>", "<tool_call>", "<tools>", "[e~[", "]~!b[", "]~b]"],
  "source": "orcarouter/MiniMax-M3.1-Flash-abliterated-GGUF",
  "eos_token": "[e~[",
  "marks_thought": true,

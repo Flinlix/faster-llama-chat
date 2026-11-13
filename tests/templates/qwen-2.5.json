@@ -1,4 +1,5 @@
 {
+ "tags": ["</tool_call>", "</tool_response>", "</tools>", "<tool_call>", "<tool_response>", "<tools>", "<|im_end|>", "<|im_start|>"],
  "source": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": false,

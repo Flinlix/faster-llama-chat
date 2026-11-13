@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</think>", "</tool_call>", "</tool_calls>", "</tool_response>", "</tool_responses>", "</tools>", "<arg_key>", "<arg_value>", "<eos:6124c78e>", "<think>", "<tool_call>", "<tool_calls>", "<tool_response>", "<tool_responses>", "<tool_sep>", "<tools>", "<｜hy_Assistant｜>", "<｜hy_User｜>", "<｜hy_begin▁of▁sentence｜>", "<｜hy_▁pad▁｜>", "<｜reasoning_mode｜>", "<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>", "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>", "<｜tool▁output▁begin｜>", "<｜tool▁output▁end｜>", "<｜tool▁sep｜>"],
  "source": "rapatsky/Hy-Memory-30B-A3B-GGUF",
  "eos_token": "<eos:6124c78e>",
  "marks_thought": true,

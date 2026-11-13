@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<arg_key>", "<arg_value>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|Bot|>", "<|System|>", "<|Tool|>", "<|User|>", "<｜end▁of▁sentence｜>", "<｜start▁of▁sentence｜>", "[TOOL_REQUEST]"],
  "source": "peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF",
  "eos_token": "<｜end▁of▁sentence｜>",
  "marks_thought": true,

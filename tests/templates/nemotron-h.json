@@ -1,4 +1,5 @@
 {
+ "tags": ["</description>", "</enum>", "</function>", "</name>", "</parameter>", "</parameters>", "</required>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "</type>", "<description>", "<enum>", "<function>", "<name>", "<parameter>", "<parameters>", "<required>", "<text>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<type>", "<|audio|>", "<|im_end|>", "<|im_start|>"],
  "source": "AtomicChat/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

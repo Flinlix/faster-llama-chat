@@ -1,4 +1,5 @@
 {
+ "tags": ["</additional_tools>", "</function>", "</parameter>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<additional_tools>", "<function>", "<parameter>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|audio_out|>", "<|audio|>", "<|im_end|>", "<|im_start|>", "<|image|>", "<|video|>", "<|vision_end|>", "<|vision_start|>"],
  "source": "LiquidAI/LFM3-Omni-2B-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

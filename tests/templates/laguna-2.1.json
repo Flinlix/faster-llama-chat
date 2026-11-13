@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</assistant>", "</available_tools>", "</system>", "</think>", "</tool_call>", "</tool_response>", "</user>", "<arg_key>", "<arg_value>", "<assistant>", "<available_tools>", "<system>", "<think>", "<tool_call>", "<tool_response>", "<user>", "〈|EOS|〉"],
  "source": "mudler/Laguna-XS-2.1-APEX-GGUF",
  "eos_token": "〈|EOS|〉",
  "marks_thought": true,

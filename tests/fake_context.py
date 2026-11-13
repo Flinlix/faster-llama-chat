@@ -63,7 +63,8 @@ def _compiled(text: str, eos_text: str) -> _Renders:
     return _Renders(text, eos_text)
 
 
-# Every tag-shaped text of a test template, the invented ones' turn tags included.
+# The tag-shaped texts of a template a test writes for itself, which lists no tags of its
+# own; a test template's file and an invented one list theirs.
 TAG = re.compile(r"<\|[^<>\s]*?\|?>|<[^<>\s|]+\|>|<[/a-z_]+(?::[a-z0-9_]+)?>|\[/?[A-Z_]+\]"
                  r"|<｜[^｜]+｜>|◁[^◁▷\s]+▷|〈\|[^〈〉\s]+\|〉|<[A-Z][A-Z_]+>"
                  r"|\]~!?[a-z][\[\]]|\[[a-z]~\[|<\[[a-z]+>|<[a-z]+\]>")
@@ -162,11 +163,13 @@ class FakeContext:
             text tokenizes into.
         writes_tags: Whether a scripted reply's tags are generated as their
             tokens, as a model writes its own tags; otherwise as characters.
+        extra_tags: Tags of the model's vocabulary its template never writes.
     """
 
     def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
-                 tokens_spell_text: bool = True, writes_tags: bool = False) -> None:
+                 tokens_spell_text: bool = True, writes_tags: bool = False,
+                 extra_tags: tuple[str, ...] = ()) -> None:
         self._fixture = fixture
         self._template = fixture["chat_template"]
         # The default template under None, and the one for tools under its name, where given.
@@ -179,9 +182,14 @@ class FakeContext:
         self._adds_bos = fixture.get("adds_bos", False)
         self._tag_ids: dict[str, int] = {}
         self._tag_texts: dict[int, str] = {}
-        found = set(TAG.findall("".join(self._texts.values()))) | self._rendered_tags()
-        self._listed = tuple(self._tag_token(tag) for tag in sorted(
-            found | {tag.replace("/", "", 1) for tag in found if "/" in tag}))
+        if "tags" in fixture:
+            found = set(fixture["tags"]) | set(extra_tags)
+        else:
+            found = set(TAG.findall("".join(self._texts.values()))) | self._rendered_tags()
+            found |= {tag.replace("/", "", 1) for tag in found if "/" in tag}
+        self._listed = tuple(self._tag_token(tag) for tag in sorted(found))
+        self._tag_pattern = re.compile("|".join(map(re.escape, sorted(found, key=len, reverse=True)))
+                                       or r"(?!)")
         self._ending_tags = {fixture["eos_token"], *expected(fixture, "ends_generation")}
         self._call_mark_tokens = None
         self.cache: list[int] = []
@@ -221,7 +229,7 @@ class FakeContext:
         if not parse_special:
             return [ord(c) for c in text]
         tokens, at = [], 0
-        for found in TAG.finditer(text):
+        for found in self._tag_pattern.finditer(text):
             tokens += [ord(c) for c in text[at:found.start()]]
             tokens.append(self._tag_token(found.group()))
             at = found.end()
@@ -396,7 +404,7 @@ class FakeContext:
         if not self._writes_tags:
             return [self._generated(ch) for ch in text]
         tokens, at = [], 0
-        for found in TAG.finditer(text):
+        for found in self._tag_pattern.finditer(text):
             tokens += [self._generated(ch) for ch in text[at:found.start()]]
             tokens.append(self._tag_token(found.group()))
             at = found.end()

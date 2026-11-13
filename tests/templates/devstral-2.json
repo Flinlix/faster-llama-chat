@@ -1,4 +1,5 @@
 {
+ "tags": ["</s>", "<s>", "[/AVAILABLE_TOOLS]", "[/INST]", "[/SYSTEM_PROMPT]", "[/TOOL_RESULTS]", "[ARGS]", "[AVAILABLE_TOOLS]", "[IMG]", "[INST]", "[SYSTEM_PROMPT]", "[TOOL_CALLS]", "[TOOL_RESULTS]"],
  "source": "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
  "eos_token": "</s>",
  "marks_thought": false,

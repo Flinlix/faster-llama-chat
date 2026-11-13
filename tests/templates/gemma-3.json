@@ -1,4 +1,5 @@
 {
+ "tags": ["<end_of_turn>", "<eos>", "<start_of_image>", "<start_of_turn>"],
  "source": "ggml-org/gemma-3-1b-it-GGUF",
  "eos_token": "<eos>",
  "marks_thought": false,

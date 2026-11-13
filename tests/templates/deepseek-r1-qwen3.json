@@ -1,4 +1,5 @@
 {
+ "tags": ["</think>", "<think>", "<｜Assistant｜>", "<｜User｜>", "<｜end▁of▁sentence｜>", "<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>", "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>", "<｜tool▁outputs▁begin｜>", "<｜tool▁outputs▁end｜>", "<｜tool▁output▁begin｜>", "<｜tool▁output▁end｜>", "<｜tool▁sep｜>"],
  "source": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
  "eos_token": "<｜end▁of▁sentence｜>",
  "marks_thought": true,

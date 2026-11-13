@@ -1,4 +1,5 @@
 {
+ "tags": ["<|/tool|>", "<|assistant|>", "<|endoftext|>", "<|end|>", "<|system|>", "<|tool|>", "<|user|>"],
  "source": "bartowski/microsoft_Phi-4-mini-instruct-GGUF",
  "eos_token": "<|endoftext|>",
  "marks_thought": false,

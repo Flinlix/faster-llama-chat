@@ -1,4 +1,5 @@
 {
+ "tags": ["<|endofturn|>", "<|im_end|>", "<|im_start|>"],
  "source": "rippertnt/HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M-GGUF",
  "eos_token": "<|endofturn|>",
  "marks_thought": false,

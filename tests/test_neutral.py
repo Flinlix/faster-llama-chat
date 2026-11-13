@@ -16,7 +16,6 @@ import pytest
 from llama_chat.addon_files import template_fingerprint
 
 from .chat_templates import STEMS, expected, fixture
-from .fake_context import TAG
 
 _ROOT = Path(__file__).parent.parent
 _PACKAGE = _ROOT / "llama_chat"
@@ -215,13 +214,12 @@ def _stated_tags(known: dict) -> set[str]:
 
 
 def _template_tags() -> set[str]:
-    return {tag for stem in STEMS for tag in (TAG.findall(fixture(stem)["chat_template"])
-                                              + sorted(_stated_tags(fixture(stem))))}
+    return {tag for stem in STEMS for tag in (*fixture(stem)["tags"], *_stated_tags(fixture(stem)))}
 
 
 @pytest.mark.parametrize("stem", STEMS)
-def test_every_tag_a_test_templates_file_states_has_a_shape_the_check_reads(stem):
-    assert not [tag for tag in _stated_tags(fixture(stem)) if not TAG.fullmatch(tag)]
+def test_every_tag_a_test_templates_file_states_is_among_the_tags_it_lists(stem):
+    assert not sorted(_stated_tags(fixture(stem)) - set(fixture(stem)["tags"]))
 
 
 @pytest.mark.parametrize("path", _checked_files(), ids=lambda path: str(path.relative_to(_ROOT)))
@@ -232,6 +230,5 @@ def test_a_file_writes_no_tag_of_a_real_template(path):
 
 def test_the_invented_templates_tags_are_no_real_templates():
     from .invented_templates import INVENTED
-    invented = {tag for template in INVENTED.values()
-                for tag in TAG.findall(template["chat_template"])}
+    invented = {tag for template in INVENTED.values() for tag in template["tags"]}
     assert invented and not invented & _template_tags()

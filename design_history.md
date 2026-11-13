@@ -3871,3 +3871,20 @@ such a model may write the header in another order than its template, which
 is guessing; with the rule it stays refused, naming the add-on file as the
 remedy, as principle 2 asks. The rule now runs only where no add-on call is
 given, so it costs a model with one nothing.
+
+### Each test template lists its own tags
+
+345.15, review finding D7. The tests' stand-in tokenizer read every text of a
+tag's shape as a tag, by one pattern with twelve alternatives, one per tag
+shape of a family. It thus took `<IMPORTANT>`, plain text in the tool
+instructions of eight test templates, for a tag that no real vocabulary holds
+(the real Qwen and Nemotron tokenizers split it into three to five ordinary
+tokens). Now each test template's file states `tags`, the model's own tags as
+the stand-in reads them: those its template writes, the opening forms of its
+closing tags, and the tokens its file names besides (its end token, the tokens
+that end a generation). The invented templates list theirs, and the stand-in
+reads only listed tags, so a tag-shaped text the model does not know is
+characters, as a real tokenizer reads it. `FakeContext(extra_tags=...)` adds
+tags of a vocabulary that the template never writes, which one test needs. A
+template a single test writes for itself lists none, and is still read by the
+pattern. The name check (`tests/test_neutral.py`) reads the listed tags.

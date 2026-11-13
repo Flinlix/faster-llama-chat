@@ -1,4 +1,5 @@
 {
+ "tags": ["<|im_end|>", "<|im_start|>"],
  "source": "RavichandranJ/Dolphin3-Cyber-8B-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": false,

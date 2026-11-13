@@ -42,7 +42,7 @@ _UNSTATED = {
 
 # What every test template's file states.
 REQUIRED_KEYS = {"source", "chat_template", "eos_token", "render_variables", "marks_thought",
-                 "can_reason", "calls_tools"}
+                 "can_reason", "calls_tools", "tags"}
 # What a file may state besides: what the stand-in context reads, a template for tools and
 # whether the tokenizer adds a sequence opener, and every key a file may leave out.
 KNOWN_KEYS = REQUIRED_KEYS | {"tool_use_template", "adds_bos"} | set(_UNSTATED)

@@ -97,6 +97,11 @@ _SWITCHES = {
 }
 
 
+# Every tag the invented templates write, as a test template's file lists its own.
+_TAGS = ("<[turn>", "<turn]>", "<call>", "</call>", "<decl>", "</decl>", "<result>", "</result>",
+         "<done>", "<think_on>", "<thought>", "</thought>", "<sep>")
+
+
 def _jinja(value) -> str:
     """``value`` as a Jinja literal."""
     if value is None:
@@ -119,6 +124,7 @@ def _invented(**switches) -> dict:
         "render_variables": ({"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}
                              if can_reason else {"off": {}}),
         "chat_template": header + _TEXT.lstrip("\n"),
+        "tags": list(_TAGS),
     }
 
 
@@ -145,7 +151,7 @@ TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN = {
     **TOOLS, "calls_tools": True,
     "chat_template": "{%- for m in messages -%}<[say>{{ m.role }}\n{{ m.content }}<said]>\n"
                      "{%- endfor -%}{%- if add_generation_prompt -%}<[say>assistant\n{%- endif -%}",
-    "tool_use_template": TOOLS["chat_template"]}
+    "tool_use_template": TOOLS["chat_template"], "tags": [*TOOLS["tags"], "<[say>", "<said]>"]}
 
 # Every invented template, by the name it goes by here.
 INVENTED = {name: value for name, value in globals().items()

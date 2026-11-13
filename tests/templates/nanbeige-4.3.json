@@ -1,4 +1,5 @@
 {
+ "tags": ["</function>", "</parameter>", "</reminder>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<function>", "<parameter>", "<reminder>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|im_end|>", "<|im_start|>"],
  "source": "bartowski/Nanbeige_Nanbeige4.3-33B-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

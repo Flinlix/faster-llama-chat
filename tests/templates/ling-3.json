@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</role>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<arg_key>", "<arg_value>", "<role>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|role_end|>"],
  "source": "bartowski/Ling-3.0-tiny-GGUF",
  "eos_token": "<|role_end|>",
  "marks_thought": true,

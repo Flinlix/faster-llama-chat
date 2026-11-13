@@ -1,4 +1,5 @@
 {
+ "tags": ["</function>", "</parameter>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<function>", "<parameter>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|im_end|>", "<|im_start|>"],
  "source": "webAI-Official/TwIL-8B",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

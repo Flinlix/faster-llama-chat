@@ -72,7 +72,7 @@ class _Run:
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
-                 writes_tags=False):
+                 writes_tags=False, extra_tags=()):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         text = self.fixture["chat_template"]
@@ -80,7 +80,8 @@ class _Run:
                                          reasoning_on=shipped_addon_reasoning_on(text))
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
-                                           can_shift=can_shift, writes_tags=writes_tags)
+                                   can_shift=can_shift, writes_tags=writes_tags,
+                                   extra_tags=extra_tags)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
         self.system = "Be brief." if self.chat.can_take_system_prompt else ""
@@ -1424,7 +1425,7 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
     # A call that opens with plain text follows the tag the model writes first.
     _opener, body, closer = _call_body(_Run(stem), {"city": "Bonn"})
     opener = expected(_FIXTURES[stem], "call_opening_text")
-    run = _Run(stem, replies=["x"])
+    run = _Run(stem, replies=["x"], extra_tags=("<|lead|>",))
     before = "Once more. <|lead|>"
     run.context.replies = [ScriptedCall(body), ScriptedCall(body, before=before),
                             "Sunny twice.", "Bye."]

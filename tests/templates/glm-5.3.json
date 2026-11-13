@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<arg_key>", "<arg_value>", "<sop>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|assistant|>", "<|begin_of_audio|>", "<|begin_of_image|>", "<|begin_of_video|>", "<|end_of_audio|>", "<|end_of_image|>", "<|end_of_video|>", "<|endoftext|>", "<|image|>", "<|observation|>", "<|system|>", "<|user|>", "<|video|>"],
  "source": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
  "eos_token": "<|endoftext|>",
  "marks_thought": true,

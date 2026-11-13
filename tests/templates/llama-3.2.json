@@ -1,4 +1,5 @@
 {
+ "tags": ["<|end_header_id|>", "<|eot_id|>", "<|start_header_id|>"],
  "source": "lex-au/Orpheus-3b-German-FT-Q8_0.gguf",
  "eos_token": "<|eot_id|>",
  "marks_thought": false,

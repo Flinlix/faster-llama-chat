@@ -1,4 +1,5 @@
 {
+ "tags": ["</atem:function_calls>", "</atem:invoke>", "</atem:parameter>", "</tool_output>", "<atem:function_calls>", "<atem:invoke>", "<atem:parameter>", "<tool_output>", "<|end_of_text|>", "<|eom|>", "<|eot|>", "<|message|>", "<|patch|>", "<|start|>", "<|video|>"],
  "source": "unsloth/Muse-Glimmer-30B-GGUF",
  "eos_token": "<|end_of_text|>",
  "marks_thought": true,

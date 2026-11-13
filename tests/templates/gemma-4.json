@@ -1,4 +1,5 @@
 {
+ "tags": ["<channel|>", "<tool_call|>", "<tool_response|>", "<tool|>", "<turn|>", "<|\"|>", "<|audio|>", "<|channel>", "<|image|>", "<|think|>", "<|tool>", "<|tool_call>", "<|tool_response>", "<|turn>", "<|video|>"],
  "source": "unsloth/gemma-4-26B-A4B-it-GGUF",
  "eos_token": "<turn|>",
  "marks_thought": true,

@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key:6124c78e>", "</arg_value:6124c78e>", "</think:6124c78e>", "</tool_call:6124c78e>", "</tool_calls:6124c78e>", "</tool_response:6124c78e>", "</tools>", "<arg_key:6124c78e>", "<arg_value:6124c78e>", "<think:6124c78e>", "<tool_call:6124c78e>", "<tool_calls:6124c78e>", "<tool_response:6124c78e>", "<tools>", "<｜hy_end:6124c78e｜>", "<｜hy_end{}｜>", "<｜hy_image▁end{}｜>", "<｜hy_image▁pad{}｜>", "<｜hy_image▁start{}｜>", "<｜hy_middle:6124c78e｜>", "<｜hy_middle{}｜>", "<｜hy_start:6124c78e｜>", "<｜hy_start{}｜>", "<｜hy_video▁end{}｜>", "<｜hy_video▁pad{}｜>", "<｜hy_video▁start{}｜>", "<｜reasoning_mode:6124c78e｜>", "<｜reasoning_mode{}｜>"],
  "source": "AngelSlim/Hy4-preview-GGUF",
  "eos_token": "<｜hy_end:6124c78e｜>",
  "marks_thought": true,

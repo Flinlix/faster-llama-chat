@@ -1,4 +1,5 @@
 {
+ "tags": ["<EOS_TOKEN>", "<|CHATBOT_TOKEN|>", "<|END_OF_TURN_TOKEN|>", "<|END_RESPONSE|>", "<|START_OF_TURN_TOKEN|>", "<|START_RESPONSE|>", "<|SYSTEM_TOKEN|>", "<|USER_TOKEN|>"],
  "source": "CohereLabs/tiny-aya-global-GGUF",
  "eos_token": "<EOS_TOKEN>",
  "marks_thought": false,

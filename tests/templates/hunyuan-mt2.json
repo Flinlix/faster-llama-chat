@@ -1,4 +1,5 @@
 {
+ "tags": ["<｜hy_Assistant｜>", "<｜hy_User｜>", "<｜hy_begin▁of▁sentence｜>", "<｜hy_place▁holder▁no▁2｜>", "<｜hy_place▁holder▁no▁3｜>", "<｜hy_place▁holder▁no▁8｜>"],
  "source": "tencent/Hy-MT2-1.8B-GGUF",
  "eos_token": "<｜hy_place▁holder▁no▁2｜>",
  "marks_thought": false,

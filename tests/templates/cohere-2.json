@@ -1,4 +1,5 @@
 {
+ "tags": ["</co>", "<co>", "<|CHATBOT_TOKEN|>", "<|END_ACTION|>", "<|END_OF_TURN_TOKEN|>", "<|END_TEXT|>", "<|END_THINKING|>", "<|END_TOOL_RESULT|>", "<|IMG_PATCH|>", "<|START_ACTION|>", "<|START_OF_TURN_TOKEN|>", "<|START_TEXT|>", "<|START_THINKING|>", "<|START_TOOL_RESULT|>", "<|SYSTEM_TOKEN|>", "<|USER_TOKEN|>"],
  "source": "unsloth/North-Mini-Code-1.0-GGUF",
  "eos_token": "<|END_OF_TURN_TOKEN|>",
  "marks_thought": true,

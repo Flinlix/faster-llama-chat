@@ -1,4 +1,5 @@
 {
+ "tags": ["</think>", "</tool_result>", "<think>", "<tool_result>", "<｜Assistant｜>", "<｜System｜>", "<｜User｜>", "<｜action｜>", "<｜authority｜>", "<｜begin▁of▁sentence｜>", "<｜deepseek_image｜>", "<｜domain｜>", "<｜end▁of▁sentence｜>", "<｜latest_reminder｜>", "<｜query｜>", "<｜read_url｜>", "<｜title｜>", "[IMG]"],
  "source": "unsloth/DeepSeek-V4.1-Flash-1017-GGUF",
  "eos_token": "<｜end▁of▁sentence｜>",
  "marks_thought": true,

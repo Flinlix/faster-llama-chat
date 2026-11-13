@@ -1,4 +1,5 @@
 {
+ "tags": ["</arg_key>", "</arg_value>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<arg_key>", "<arg_value>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|assistant|>", "<|begin_of_text|>", "<|developer|>", "<|end_of_text|>", "<|observation|>", "<|system|>", "<|user|>"],
  "source": "orcarouter/Flint-abliterated-GGUF",
  "eos_token": "<|end_of_text|>",
  "marks_thought": true,

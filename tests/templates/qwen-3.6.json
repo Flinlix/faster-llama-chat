@@ -1,4 +1,5 @@
 {
+ "tags": ["</function>", "</parameter>", "</think>", "</tool_call>", "</tool_response>", "</tools>", "<function>", "<parameter>", "<think>", "<tool_call>", "<tool_response>", "<tools>", "<|im_end|>", "<|im_start|>", "<|image_pad|>", "<|video_pad|>", "<|vision_end|>", "<|vision_start|>"],
  "source": "unsloth/Qwen3.6-27B-GGUF",
  "eos_token": "<|im_end|>",
  "marks_thought": true,

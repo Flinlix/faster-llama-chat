@@ -1,4 +1,5 @@
 {
+ "tags": ["<|audio_end|>", "<|audio|>", "<|content_audio_input|>", "<|content_image|>", "<|content_invoke_tool_json|>", "<|content_model_end_sampling|>", "<|content_text|>", "<|content_thinking|>", "<|content_xml|>", "<|end_message|>", "<|image|>", "<|message_model|>", "<|message_system|>", "<|message_tool|>", "<|message_user|>"],
  "source": "unsloth/Inkling-Small-GGUF",
  "eos_token": "<|content_model_end_sampling|>",
  "marks_thought": true,

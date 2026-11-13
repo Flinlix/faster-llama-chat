@@ -1,4 +1,5 @@
 {
+ "tags": ["</s>", "<s>", "[/AVAILABLE_TOOLS]", "[/INST]", "[/TOOL_RESULTS]", "[AVAILABLE_TOOLS]", "[INST]", "[TOOL_CALLS]", "[TOOL_RESULTS]"],
  "source": "bartowski/Ministral-8B-Instruct-2410-GGUF",
  "eos_token": "</s>",
  "marks_thought": false,
