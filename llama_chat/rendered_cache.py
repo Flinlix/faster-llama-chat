@@ -26,7 +26,8 @@ from .config import Config
 from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
                        kept_items, next_call_number, result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
-                            windows_are_exact, writes_two_user_turns)
+                            repeated_question_written_alike, splice_probe, windows_are_exact,
+                            writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .reply import ContextOverflowError
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
@@ -87,6 +88,8 @@ class _ConversationState:
     n_calls: int = 0
     results_cut: list[ToolCall] = field(default_factory=list)   # since the newest generation
     windows: bool = False                 # whether windows of the conversation stand for its render
+    splice_probe: str | None = None       # what a question's render after one exchange is compared with
+    repeats_alike: bool = True            # whether a repeated question is written as any other
     ahead: _Ahead | None = None
     prompt_text: str = ""                 # the template text the next generation follows
     prompt_start: int = 0                 # where in the cache the generation prompt begins
@@ -417,8 +420,10 @@ class RenderedCache:
         # only a render of the whole conversation shows.
         if (ahead is None or not self._is_current(ahead.made_for)
                 or not _is_plain(text, self._context)
-                or any(m["content"] == text for m in self._state.messages)
-                or not question_splices(self._rendering.render, self._system_part(), text)):
+                or (not self._state.repeats_alike
+                    and any(m["content"] == text for m in self._state.messages))
+                or not question_splices(self._rendering.render, self._system_part(), text,
+                                        self._state.splice_probe)):
             return False
         rest = [(text if own and piece == STAND_IN else piece, own) for piece, own in ahead.rest]
         tokens = self._rendering.tokenize(rest)
@@ -833,8 +838,12 @@ class RenderedCache:
         """
         system = self._system_part()
         ensure_history_stays_written(self._rendering.render, system)
-        self._state.windows = windows_are_exact(self._rendering.render, system,
-                                                self._rendering.tag_from)
+        # Declarations that move with the newest question leave no window as the whole render writes it.
+        self._state.windows = (not self._moves_declarations()
+                               and windows_are_exact(self._rendering.render, system,
+                                                     self._rendering.tag_from))
+        self._state.splice_probe = splice_probe(self._rendering.render, system)
+        self._state.repeats_alike = repeated_question_written_alike(self._rendering.render, system)
 
     def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.

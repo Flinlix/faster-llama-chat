@@ -21,13 +21,27 @@ _WINDOW_PROBES = tuple(
 _SPLICE_BASE = [{"role": "user", "content": "Hello."}, {"role": "assistant", "content": "Hi."}]
 
 
-def question_splices(render: Render, system: list[dict], question: str) -> bool:
-    """Whether the template writes ``question`` exactly where it writes the stand-in, after one exchange."""
+def splice_probe(render: Render, system: list[dict]) -> str | None:
+    """The render, after one exchange, of a question the stand-in holds, which :func:`question_splices` compares with; ``None`` where the stand-in is not written once."""
     ahead = render(system + _SPLICE_BASE + [{"role": "user", "content": STAND_IN}], True)
-    if ahead is None or ahead.count(STAND_IN) != 1:
+    return ahead if ahead is not None and ahead.count(STAND_IN) == 1 else None
+
+
+def question_splices(render: Render, system: list[dict], question: str,
+                     probe: str | None) -> bool:
+    """Whether the template writes ``question`` exactly where it writes the stand-in in ``probe``, after one exchange."""
+    if probe is None:
         return False
     return render(system + _SPLICE_BASE + [{"role": "user", "content": question}],
-                  True) == ahead.replace(STAND_IN, question)
+                  True) == probe.replace(STAND_IN, question)
+
+
+def repeated_question_written_alike(render: Render, system: list[dict]) -> bool:
+    """Whether the template writes a question that repeats an earlier one as it writes any other question."""
+    asked = _SPLICE_BASE[0]["content"]
+    ahead = render(system + _SPLICE_BASE + [{"role": "user", "content": STAND_IN}], True)
+    again = render(system + _SPLICE_BASE + [{"role": "user", "content": asked}], True)
+    return ahead is not None and again == ahead.replace(STAND_IN, asked)
 
 
 def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:

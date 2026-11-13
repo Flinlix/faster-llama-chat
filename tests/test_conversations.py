@@ -247,6 +247,34 @@ def test_a_question_asked_again_is_written_as_the_template_writes_it_or_refused_
     assert run.seen[-1] == run.render(asked, tools)
 
 
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_question_asked_again_is_placed_as_any_question_where_the_template_writes_it_alike(stem):
+    run = _Run(stem)
+    tools = [WEATHER] if run.fixture["calls_tools"] else None
+    run.begin(tools=tools)
+    run.chat.reply("Same?").finish()
+    run.chat.reply("Other?").finish()
+    asked = [{"role": "user", "content": "Same?"}, {"role": "assistant", "content": ANSWERS[0]},
+             {"role": "user", "content": "Other?"}, {"role": "assistant", "content": ANSWERS[1]}]
+    stand_in = run.render(asked + [{"role": "user", "content": "QQOTHERQQ"}], tools)
+    alike = run.render(asked + [{"role": "user", "content": "Same?"}], tools) == stand_in.replace(
+        "QQOTHERQQ", "Same?")
+    try:
+        run.chat.reply("Same?").finish()
+    except ValueError:
+        assert not alike
+        return
+    assert (internals.last_spliced_question(run.chat) == "Same?") == alike
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_conversation_whose_declarations_move_with_each_question_renders_no_windows(stem):
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    moving = run.chat._conversation.template.declares_before_newest_turn
+    assert not (moving and internals.renders_in_windows(run.chat))
+
+
 def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_as_it_comes():
     # The template escapes a quote, so a question holding one cannot be put in the stand-in's place.
     escaping = dict(_FALLBACK, chat_template=(
@@ -960,10 +988,12 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
     both = ["ensure_history_stays_written", "windows_are_exact"]
     assert checked == both
     run.chat.declare_tools([WEATHER])
-    assert checked == both * 2
+    # Declarations that move with each question leave no windows to check.
+    declared = both[:1] if run.chat._conversation.template.declares_before_newest_turn else both
+    assert checked == both + declared
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.chat.reply(QUESTIONS[1]).finish()
-    assert checked == both * 3
+    assert checked == both + declared * 2
 
 
 # ----- reasoning ---------------------------------------------------------------------
