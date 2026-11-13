@@ -4431,8 +4431,9 @@ cache decoded ahead of the next question, as after any other reply.
 `llama_chat`, as the README's title was. It now installs as
 `faster-llama-chat` and is still imported as `llama_chat`, the usual split of
 a distribution's name from its module's. The inference server installs the
-library by its path, so it is unaffected; an environment that installed the
-old name keeps its editable link until it is installed again.
+library by its path, so it is unaffected. An environment that installed the
+old name keeps it beside a new install, both claiming `llama_chat`, so it is
+uninstalled first (`pip uninstall llama_chat`).
 
 366.18A (D2). One count had two names: "messages" in `n_evicted_messages`,
 `inject` and `declare_tools`, "history items" elsewhere, a tool turn counting
@@ -4586,3 +4587,38 @@ runs with generated tokens of both kinds. The test that beginning again from
 `conversation()` gives the same conversation now drives a live call with
 reasoning on too, the call after a closed thought. All pass without a change
 to the library.
+
+### The review of this round's changes (366, second round)
+
+One fresh review of the 18 changes above found twelve problems; each was
+rerun and fixed:
+
+- A result owed to a history with no question was refused on four
+  templates: the turn the result goes in is the whole conversation there,
+  and is read whole (366.16).
+- An unreadable call inside a thought left the thought shown after its error
+  result, and the note that a call was made inside a thought outlived a new
+  `begin`; the note now follows every call, read or not, and `begin` clears
+  it (366.8).
+- A cancel set during a question's last part, or on a cache that defers its
+  decode to the generation, went unseen, and older exchanges stayed dropped.
+  Where a cancel is given, the question is now decoded within the request,
+  in the parts the cancel is read between, and a cancel set by its end takes
+  the request back. Restoring exchanges dropped for it decodes them again,
+  which the reply now counts in `n_prefilled_tokens` (366.13A).
+- `begin` jumped to the whole history from a measure of its newest exchanges,
+  so a history of long old exchanges and short new ones was rendered whole,
+  ten times what it cost before. The jump now scales the measure by the
+  characters of the history, is made once, and doubling goes on where the
+  whole does not fit (366.23).
+- Every action deep-copied every result value as it published the
+  conversation; values are copied once, where `conversation()` hands them out
+  (366.19A).
+- A finite timeout longer than the lock can wait raised Python's own
+  overflow error; it now waits indefinitely, as infinity does (366.30).
+- The question's state before the request is dropped by every other action
+  and kept until the generation has started, not only until it was asked for
+  (366.11A).
+- The note on the old distribution name said a new install replaces it; it
+  has to be uninstalled (366.34A). The split timing test takes the shortest
+  of three runs, so one pause of the machine cannot fail it (366.25).

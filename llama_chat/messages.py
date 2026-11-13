@@ -237,8 +237,7 @@ def as_history(messages: list[dict]) -> list:
                                       copy.deepcopy(c["function"]["arguments"]), c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":
-            steps.append(ToolResult(message["name"], copy.deepcopy(
-                message.get(RESULT_AS_GIVEN, message["content"]))))
+            steps.append(ToolResult(message["name"], message.get(RESULT_AS_GIVEN, message["content"])))
         elif role == "assistant" and steps:
             history.append(ToolTurn(tuple(steps + thought + [message["content"]])))
             steps = []

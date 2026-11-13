@@ -733,3 +733,43 @@ def test_a_long_question_stops_decoding_within_a_part_once_cancelled():
     del fake.prefill
     assert reply.stop_reason == "interrupted" and len(decoded) == 1 and decoded[0] <= 512
     assert _state(w) == before
+
+
+@pytest.mark.parametrize("cache", sorted(_CACHES))
+def test_a_cancel_set_while_the_question_is_decoded_changes_nothing_and_counts_what_was_decoded(cache):
+    fake = FakeContext(PLAIN, gen_tokens=5, **_CACHES[cache])
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=0.75), context=fake)
+    w.begin("s")
+    for n in range(40):
+        w.reply(f"frage {n} " + "x" * 120).finish()
+    before, cancel = _state(w), threading.Event()
+    prefill = fake.prefill
+
+    def cancelling(token_ids, start_pos, want_logits):
+        prefill(token_ids, start_pos, want_logits)
+        cancel.set()
+
+    fake.prefill = cancelling
+    reply = w.reply("z" * 3000, cancel=cancel).finish()
+    del fake.prefill
+    assert reply.stop_reason == "interrupted" and _state(w) == before
+    assert reply.n_prefilled_tokens > 0
+
+
+def test_a_cancel_set_during_a_short_questions_decode_changes_nothing():
+    fake = FakeContext(PLAIN, gen_tokens=5)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, min_reply_tokens=20), context=fake)
+    w.begin("s")
+    for n in range(8):
+        w.reply(f"frage {n} " + "x" * 20).finish()
+    before, cancel = _state(w), threading.Event()
+    prefill = fake.prefill
+
+    def cancelling(token_ids, start_pos, want_logits):
+        prefill(token_ids, start_pos, want_logits)
+        cancel.set()
+
+    fake.prefill = cancelling
+    reply = w.reply("eine neue frage " + "y" * 60, cancel=cancel).finish()
+    del fake.prefill
+    assert (reply.stop_reason, reply.n_evicted_messages) == ("interrupted", 0) and _state(w) == before

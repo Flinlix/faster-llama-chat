@@ -43,12 +43,16 @@ def test_a_split_render_takes_time_in_proportion_to_the_messages():
         return "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages)
 
     def timed(n):
+        """The shortest of three splits of ``n`` messages, so that a pause of the machine counts once at most."""
         messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"text {i}"}
                     for i in range(n)]
-        started = time.perf_counter()
-        split = split_render(render, messages, lambda text: text, reads_clock=False)
+        times = []
+        for _ in range(3):
+            started = time.perf_counter()
+            split = split_render(render, messages, lambda text: text, reads_clock=False)
+            times.append(time.perf_counter() - started)
         assert len(split.own) == n
-        return time.perf_counter() - started
+        return min(times)
 
     timed(2000)                                 # warmed up
     # Twice the messages take about twice as long, not four times.

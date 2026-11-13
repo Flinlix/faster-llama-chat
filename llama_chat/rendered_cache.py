@@ -27,9 +27,9 @@ from dataclasses import dataclass, field, fields, replace
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
-from .messages import (as_history, as_messages, calling_message, exchange_count, exchange_starts,
-                       kept_items, next_call_number, result_message, system_part,
-                       with_result_text)
+from .messages import (THOUGHT_KEY, as_history, as_messages, calling_message, exchange_count,
+                       exchange_starts, kept_items, next_call_number, result_message,
+                       system_part, with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact, writes_two_user_turns)
@@ -293,6 +293,7 @@ class RenderedCache:
             self._state.n_calls = max(self._state.n_calls, next_call_number(
                 c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()))
             self._state.kept, self._state.kept_at = [], {}
+            self._state.called_in_thought = False
             self._state.results_cut = []
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
@@ -369,13 +370,26 @@ class RenderedCache:
             return length(count) <= bound
 
         everything = len(opens)
-        kept, more = 1, min(2, everything)
-        while (measured := length(more)) <= bound:
-            if more == everything:
-                return
-            # Where the rest would fit at the rate measured, the whole history is tried next.
-            kept, more = more, (everything if measured * everything <= bound * more
-                                else min(more * 2, everything))
+        # The characters of the newest exchanges, which the lengths measured are scaled by.
+        sizes = [len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or ""))
+                 + len(str(m.get(THOUGHT_KEY) or "")) for m in self._state.messages]
+        chars = lambda count: sum(sizes[opens[-count]:]) or 1         # noqa: E731
+        kept, more, jumped = 1, min(2, everything), False
+        while True:
+            measured = length(more)
+            if measured <= bound:
+                if more == everything:
+                    return
+                kept = more
+                # Where the whole would fit at the rate measured per character, it is tried
+                # next, once; where it does not, doubling goes on.
+                jumped, more = (True, everything) if not jumped and \
+                    measured * chars(everything) <= bound * chars(more) \
+                    else (jumped, min(more * 2, everything))
+            elif jumped and more == everything and kept * 2 < everything:
+                more = kept * 2             # the whole did not fit: doubling goes on from what fits
+            else:
+                break
         while kept < more - 1:
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
@@ -459,9 +473,19 @@ class RenderedCache:
                     f"only {free} tokens free for the reply "
                     f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
                     "the request or lower evict_above_fraction")
+            if self._memory.cancel is not None:
+                # Decoded now, in the parts a cancel is read between, not deferred to the
+                # generation; one set by the end takes the whole question back.
+                self._memory.repair()
+                if self._memory.cancel.is_set():
+                    raise Cancelled("cancelled while the question was decoded")
             self._state.asked = before, self._made_for_now()
             self._before_ask = as_it_was
             return n_before + 1 - len(as_history(self._state.messages))
+
+    def keep_question(self) -> None:
+        """Keep the newest question for good, once its generation has started."""
+        self._before_ask = None
 
     def take_back_question(self) -> None:
         """Leave the conversation and the cache as they were before the newest question, where no generation has followed it; else change nothing."""
@@ -581,7 +605,6 @@ class RenderedCache:
         """
         _ensure_can_reply(self, asks_question=False)
         asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
-        self._before_ask = None
         self._state.results_cut = []
         before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
@@ -642,7 +665,7 @@ class RenderedCache:
             saved, held = self._state.copied(), list(self._memory.tokens[:generated_from])
             try:
                 recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
-                self._state.called_in_thought = bool(calls) and in_thought
+                self._state.called_in_thought = called and in_thought
             except BaseException:
                 self._state = saved
                 if before_question is not None:
@@ -772,7 +795,9 @@ class RenderedCache:
         Read from the newest exchange, the turn the result goes in, as a
         question's refusal is, not from a render of the whole conversation.
         """
-        newest = self._newest_exchange()
+        # A history with no question has no exchange to stand for it: it is read whole.
+        newest = (self._newest_exchange() if exchange_starts(self._state.messages)
+                  else self._state.messages)
         return self._rendering.render(newest + [message], False) not in (
             None, self._rendering.render(newest, False))
 
@@ -1467,6 +1492,7 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
+        self._before_ask = None             # a question can be taken back only before any other action
         self._rendering.forget_renders()
         self._memory.repair()
         if self._state.begun and self.template.reads_clock:

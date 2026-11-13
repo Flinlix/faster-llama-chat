@@ -559,8 +559,8 @@ class ChatWrapper:
         """Block until no generation holds the wrapper; advisory, since one may start right after.
 
         Args:
-            timeout_s: Seconds to wait, at least 0; ``None`` or infinity waits
-                indefinitely.
+            timeout_s: Seconds to wait, at least 0; ``None``, infinity or more
+                than the platform's lock can wait waits indefinitely.
 
         Returns:
             ``True`` if the wrapper went idle, ``False`` on timeout.
@@ -572,11 +572,13 @@ class ChatWrapper:
         """
         if timeout_s is not None and (isinstance(timeout_s, bool)
                                       or not isinstance(timeout_s, (int, float))
-                                      or math.isnan(timeout_s) or timeout_s < 0):
+                                      or isinstance(timeout_s, float) and math.isnan(timeout_s)
+                                      or timeout_s < 0):
             raise ValueError(f"timeout_s must be None or a number of seconds of at least 0, "
                              f"not {timeout_s!r}")
         self._ensure_not_holding()
-        waits = timeout_s is None or math.isinf(timeout_s)
+        # Longer than the lock can wait is waiting indefinitely, infinity included.
+        waits = timeout_s is None or timeout_s > threading.TIMEOUT_MAX
         if not self._lock.acquire(timeout=-1 if waits else timeout_s):
             return False
         self._lock.release()
@@ -950,7 +952,8 @@ class ChatWrapper:
                 conversation.prompt()
         except Cancelled:
             # Cancelled before its first word was drawn: the request changes nothing.
-            return Reply(text="", n_prefilled_tokens=0, n_prompt_tokens=conversation.total_tokens,
+            return Reply(text="", n_prefilled_tokens=conversation.decoded - decoded_from,
+                         n_prompt_tokens=conversation.total_tokens,
                          n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
         max_generated_tokens = self._reply_cap(max_reply_tokens)
         n_prompt_tokens = conversation.total_tokens
@@ -973,6 +976,7 @@ class ChatWrapper:
                                  starts_in_thought=reply_text.opens_in_thought))
             if on_started is not None:
                 on_started()
+            conversation.keep_question()
         except BaseException:
             # Failed before it generated: taken back with its question, as a failed request.
             self._turn_policy, self._turn_budget = noted

@@ -1752,3 +1752,44 @@ def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
     run.context.replies = ["it is sunny" + tags.thought_close + "Sunny."]
     reply = run.chat.reply().finish()
     assert reply.text.strip() == "Sunny." and run.chat.conversation()["messages"]
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_result_owed_to_a_history_with_no_question_is_written(stem):
+    run = _Run(stem)
+    try:
+        run.begin([ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}),))], tools=[WEATHER])
+    except ValueError:
+        pytest.skip("the template writes no history without a question")
+    run.chat.inject_tool_result(run.chat.pending_calls[0], "sunny")
+    assert not run.chat.pending_calls
+
+
+@pytest.mark.parametrize("readable", [True, False], ids=["read", "unreadable"])
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_starts_outside_it(
+        stem, readable):
+    run = _Run(stem, reasoning=True)
+    tags = run.template.reasoning
+    if run.template.call_boundary().follows_text:
+        pytest.skip("a call inside a thought is a mention on this template")
+    opens = begins_in_thought(tags, run.template.generation_prompt(True))
+    body = _call_body(run, {"city": "Bonn"})[1] if readable else "@@@ not a call @@@"
+    run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I check "),
+                           "still thinking" + tags.thought_close + "Sunny."]
+    run.begin(tools=[WEATHER])
+    events = list(run.chat.reply("Weather?", tool_call_policy="yield"))
+    if readable:
+        call, = [e for e in events if isinstance(e, ToolCall)]
+        run.chat.inject_tool_result(call, "sunny")
+        shown = run.chat.reply().finish().text
+    else:
+        shown = "".join(e for e in events if isinstance(e, str))
+    if run.chat.pending_calls or (not readable and not shown):
+        pytest.skip("the model's text does not read as this template's call here")
+    assert shown.strip().endswith("Sunny.") and tags.thought_close.strip() not in shown
+    # A history whose turn a result left open starts outside any thought.
+    run.chat.begin(run.system, [("user", "Köln?"), ToolTurn((ToolCall(WEATHER.name, {"city": "Köln"}),
+                                                             ToolResult(WEATHER.name, "rainy")))],
+                   tools=[WEATHER], reasoning=True)
+    assert not run.chat._conversation.called_in_thought

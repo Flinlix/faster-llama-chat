@@ -380,3 +380,13 @@ def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is(
         return len(fake.rendered) - before
 
     assert renders(200) == renders(50)
+
+
+def test_a_history_whose_older_exchanges_are_long_is_not_rendered_whole_at_begin():
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=32768), context=fake)
+    history = [m for i in range(300) for m in (("user", f"q{i} " + "x" * 2000), ("assistant", f"a{i}"))]
+    history += [("user", "thanks"), ("assistant", "you are welcome"), ("user", "bye"), ("assistant", "bye")]
+    before = len(fake.rendered)
+    w.begin("sys", history)
+    assert max(fake.rendered[before:]) < 100     # never near the 604 messages of the whole

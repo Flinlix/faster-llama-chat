@@ -1197,6 +1197,7 @@ def test_closing_ends_the_reply_this_thread_reads_though_a_newer_stream_was_made
 
 
 @pytest.mark.parametrize("timeout_s, refused", [(float("inf"), False), (0, False), (0.01, False),
+                                                (1e300, False), (2**63, False), (10**400, False),
                                                 (float("nan"), True), (-1, True), ("1", True),
                                                 (True, True)])
 def test_waiting_for_idle_takes_infinity_as_no_timeout_and_refuses_what_is_no_time(timeout_s, refused):
