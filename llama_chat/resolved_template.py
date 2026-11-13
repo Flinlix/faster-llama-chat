@@ -24,6 +24,7 @@ from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
                                extract_fragments, extract_reasoning, extract_removed_thought,
                                refusing)
+from .reply_text import reply_header
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
 
@@ -85,6 +86,7 @@ class ResolvedTemplate:
         self._variables: dict = {}      # template variables every render passes
         self._read_as_probes_for: tuple | None = None   # the variables it was made for
         self._declares_in_system_turn_for: dict[tuple, bool] = {}
+        self._reply_headers: dict[bool, tuple[str, str] | None] = {}
         self._tag_texts = tag_texts(context)
         text = context.chat_template_text(template_name)
         self._reads_clock = text is None or _CLOCK in text
@@ -224,6 +226,13 @@ class ResolvedTemplate:
             return self._fragments.generation_prompt_without_reasoning
         self.ensure_can_reason()
         return self._reasoning.generation_prompt
+
+    def reply_header(self, reasoning: bool = False) -> tuple[str, str] | None:
+        """The start and end of a header naming a reply's reader, as :func:`~llama_chat.reply_text.reply_header` reads them, worked out once for each reasoning mode."""
+        if reasoning not in self._reply_headers:
+            self._reply_headers[reasoning] = reply_header(self.answer_opening(reasoning),
+                                                          self._reasoning, self._tag_texts)
+        return self._reply_headers[reasoning]
 
     def answer_opening(self, reasoning: bool = False) -> str:
         """What a past reply's tag holds that the generation prompt leaves to the model.

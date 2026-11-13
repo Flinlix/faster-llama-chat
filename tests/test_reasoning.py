@@ -240,12 +240,13 @@ def test_a_header_naming_another_reader_is_never_shown():
     tags = Reasoning(thought_open=" to=self<|body|>", thought_close="<|call_ends|>",
                      generation_prompt="")
     assert reply_header(" to=user<|body|>", tags) == ("to=", "<|body|>")
-    reply = ReplyText(tags, " to=user<|body|>", "", [])
+    header = reply_header(" to=user<|body|>", tags)
+    reply = ReplyText(tags, " to=user<|body|>", header, "", [])
     assert reply.feed(" to=get_wea") + reply.feed("ther") == ""
     assert reply.finish("tool_call") == ""                # held at a call: never shown
-    reply = ReplyText(tags, " to=user<|body|>", "", [])
+    reply = ReplyText(tags, " to=user<|body|>", header, "", [])
     assert reply.feed(" to=user<|body|>Hallo") + reply.finish("end_of_turn") == "Hallo"
-    reply = ReplyText(tags, " to=user<|body|>", "", [])
+    reply = ReplyText(tags, " to=user<|body|>", header, "", [])
     assert reply.feed(" to=notes<|body|>Text") + reply.finish("end_of_turn") == "Text"
 
 
@@ -257,6 +258,16 @@ def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_sha
     assert reply_header("<|a|>user<|a|>", tags("<|a|>")) is None
     assert reply_header("<|a|>", tags("<|a|>self<|a|>")) is None
     assert reply_header("<|a|>user<|b|>", tags("<|a|>self<|b|>")) == ("<|a|>", "<|b|>")
+
+
+def test_a_header_never_divides_one_of_the_models_tags():
+    from llama_chat.reply_text import reply_header
+    from llama_chat.template import Reasoning
+    thought = Reasoning(thought_open="<|OPEN_THOUGHT|>", thought_close="<|SHUT_THOUGHT|>",
+                        generation_prompt="")
+    assert reply_header("<|OPEN_TEXT|>", thought) == ("<|OPEN_T", "T|>")
+    assert reply_header("<|OPEN_TEXT|>", thought,
+                        ("<|OPEN_TEXT|>", "<|OPEN_THOUGHT|>", "<|SHUT_THOUGHT|>")) is None
 
 
 # ----- reasoning turned on as the add-on file says -------------------------

@@ -16,18 +16,20 @@ class ReplyText:
         reasoning: The model's thought tags; ``None`` for a model that has none.
         answer_opening: What a past reply's tag holds that the generation
             prompt leaves to the model.
+        header: The start and end of a header naming the reply's reader, as
+            :func:`reply_header` reads them; ``None`` where there is none.
         prompt_text: The template text the generation follows, which says
             whether it opens in a thought.
         stops: Stop strings, matched against the answer only.
     """
 
-    def __init__(self, reasoning: Reasoning | None, answer_opening: str, prompt_text: str,
-                 stops: list[str]) -> None:
+    def __init__(self, reasoning: Reasoning | None, answer_opening: str,
+                 header: tuple[str, str] | None, prompt_text: str, stops: list[str]) -> None:
         self._reasoning = reasoning
         self._opens_in_thought = reasoning is not None and begins_in_thought(reasoning, prompt_text)
         self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought)
                          if reasoning is not None else None)
-        self._opening = _AnswerOpening(answer_opening, reply_header(answer_opening, reasoning))
+        self._opening = _AnswerOpening(answer_opening, header)
         self._stops = _AnswerStops(stops)
 
     def feed(self, piece: str) -> str:
@@ -247,18 +249,34 @@ class _AnswerOpening:
         return text
 
 
-def reply_header(answer_opening: str, reasoning: Reasoning | None) -> tuple[str, str] | None:
+def reply_header(answer_opening: str, reasoning: Reasoning | None,
+                 tags: tuple[str, ...] = ()) -> tuple[str, str] | None:
     """The start and end a reply's header shares, where the answer and a thought each have one.
 
-    ``None`` where a template routes no reply through a header naming its reader.
+    Neither end divides one of the model's ``tags``: an end that would is
+    narrowed to the tags whole. ``None`` where a template routes no reply
+    through a header naming its reader.
     """
     if reasoning is None or not answer_opening.strip():
         return None
     answer, thought = answer_opening.strip(), reasoning.thought_open.strip()
     start, end = common_prefix_length(answer, thought), common_suffix_length(answer, thought)
+    start = _outside_tags(answer, start, tags, backwards=True)
+    end = len(answer) - _outside_tags(answer, len(answer) - end, tags, backwards=False)
     if not start or not end or start + end >= min(len(answer), len(thought)):
         return None     # either opening leaves no reader between the two
     return answer[:start], answer[len(answer) - end:]
+
+
+def _outside_tags(text: str, at: int, tags: tuple[str, ...], backwards: bool) -> int:
+    """``at``, moved to the start (``backwards``) or the end of a tag of ``tags`` that it falls inside in ``text``."""
+    for tag in tags:
+        found = text.find(tag)
+        while found >= 0:
+            if found < at < found + len(tag):
+                return found if backwards else found + len(tag)
+            found = text.find(tag, found + 1)
+    return at
 
 
 def begins_in_thought(reasoning: Reasoning, decoded: str) -> bool:

@@ -52,7 +52,7 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
 
 
 @pytest.mark.parametrize("stem", STEMS)
-def test_a_template_is_known_to_read_the_clock_where_it_names_it_and_every_one_writing_a_date_does(stem):
+def test_a_template_reads_the_clock_where_it_names_it_and_every_one_writing_a_date_does(stem):
     _context, template = _load(stem)
     assert template.reads_clock == ("strftime_now" in fixture(stem)["chat_template"])
     assert template.reads_clock or not expected(fixture(stem), "date_format")
@@ -131,7 +131,8 @@ def test_a_reply_that_reasons_streams_only_its_answer(stem):
     inside = begins_in_thought(tags, prompt)
     generated = ("" if inside else tags.thought_open) + "Denken" \
         + tags.thought_close + "Antwort."
-    reply = ReplyText(tags, template.answer_opening(True), prompt, [])
+    reply = ReplyText(tags, template.answer_opening(True), template.reply_header(True),
+                      prompt, [])
     shown = "".join(reply.feed(piece) for piece in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
     assert reply.thought == "Denken" and reply.thought_pieces > 0
@@ -152,7 +153,8 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     tags, turn_end = template.reasoning, template.turn_end_token
     prompt = template.generation_prompt(True)
     inside = begins_in_thought(tags, prompt)
-    reply_text = ReplyText(tags, template.answer_opening(True), prompt, [])
+    reply_text = ReplyText(tags, template.answer_opening(True), template.reply_header(True),
+                           prompt, [])
     # A reply that ends at a text rather than a tag is ended by the generation loop.
     generated = []
     ends = (reply_text.turn_end_test(turn_end, context.token_text(turn_end), generated,
@@ -219,7 +221,8 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
     _context, template = _load(stem)
     opening = template.answer_opening()
     generated = opening + "Antwort."
-    reply = ReplyText(template.reasoning, opening, template.generation_prompt(), [])
+    reply = ReplyText(template.reasoning, opening, template.reply_header(),
+                      template.generation_prompt(), [])
     shown = "".join(reply.feed(c) for c in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
 

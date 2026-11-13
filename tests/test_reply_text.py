@@ -29,7 +29,7 @@ def test_the_thought_count_never_exceeds_the_pieces_fed():
     for _ in range(2000):
         cuts = sorted(rng.sample(range(1, len(text)), rng.randint(1, 12)))
         pieces = [text[i:j] for i, j in zip([0, *cuts], [*cuts, len(text)])]
-        reply = ReplyText(tags, "", "", [])
+        reply = ReplyText(tags, "", None, "", [])
         shown = "".join(reply.feed(p) for p in pieces) + reply.finish("end_of_turn")
         assert shown == reply.answer == "abc<tho"
         assert reply.thought == "xy"
@@ -40,7 +40,8 @@ def test_the_turns_end_closes_a_thought_the_generated_text_is_in_though_none_of_
     tags = Reasoning("<|ch|>think<|msg|>", "<|stop|><|ch|>final<|msg|>", "")
     texts = {1: b"<|ch|>think<|msg|>", 2: b"Kurz.", 3: b"<|stop|>", 4: b"<|ch|>final<|msg|>"}
     generated = [1, 2]
-    ends = ReplyText(tags, "", "", []).turn_end_test(3, "<|stop|>", generated, texts.__getitem__)
+    ends = ReplyText(tags, "", None, "", []).turn_end_test(3, "<|stop|>", generated,
+                                                     texts.__getitem__)
     assert not ends(3)
     generated += [3, 4, 2]
     assert ends(3)
@@ -48,20 +49,20 @@ def test_the_turns_end_closes_a_thought_the_generated_text_is_in_though_none_of_
 
 # ----- a channel's header --------------------------------------------------
 def test_a_channel_header_cut_short_is_not_answer():
-    reply = ReplyText(None, "<|route|>final<|body|>", "", [])
+    reply = ReplyText(None, "<|route|>final<|body|>", None, "", [])
     assert reply.feed("<|route|>final") == "" and reply.finish("token_limit") == ""
 
 
 @pytest.mark.parametrize("opening", ["</reason>", "</xx:reason>"])
 def test_whitespace_after_a_channel_header_is_not_answer(opening):
-    reply = ReplyText(None, opening, "", [])
+    reply = ReplyText(None, opening, None, "", [])
     assert reply.feed(opening) + reply.feed("\n\n") + reply.feed("Antwort.") == "Antwort."
 
 
 def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
     tags = Reasoning("<thought>", "</thought>", "", "")
-    f = ReplyText(tags, "", "", [])
+    f = ReplyText(tags, "", None, "", [])
     assert f.feed(" ") + f.feed(" x") + f.finish("end_of_turn") == "  x"
-    g = ReplyText(tags, "", "", [])
+    g = ReplyText(tags, "", None, "", [])
     assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") \
         + g.finish("end_of_turn") == "b"

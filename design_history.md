@@ -3794,3 +3794,19 @@ names itself": a model that writes JSON where its template does not, or under
 other keys, is now answered that its call could not be read, instead of being
 understood. The tests' JSON batches run on an invented template that writes a
 turn's calls as one JSON array (`JSON_TOOLS`).
+
+### A reply's header is read once at load, at tag edges
+
+345.8, review findings C5 and C6. The header a channel template writes before
+a reply's answer, naming its reader, was worked out for every generation from
+the answer's and the thought's openings, and it could end inside a tag: on
+cohere-2 the shared start of `<|START_TEXT|>` and the thought's opening was
+`<|START_T`, on inkling `<|content_t`, so any reply opening with another tag
+of that shape lost the tag from its answer. Now `ResolvedTemplate.reply_header`
+works it out once for each reasoning mode, and neither of its ends may divide
+one of the model's tags: an end that would is narrowed to the tags whole, so
+cohere-2 and inkling read no header at all, while gpt-oss keeps
+`<|channel|>`...`<|message|>` and muse-glimmer `to=`...`<|message|>`. The
+other check C5 named, whether a thought closes with the token that ends a
+turn, is one string comparison per reply; it is left where it is, since
+moving it saves nothing measurable.

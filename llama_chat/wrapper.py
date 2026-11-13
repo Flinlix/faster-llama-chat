@@ -923,6 +923,7 @@ class ChatWrapper:
         results_cut = conversation.results_cut
         reply_text = ReplyText(self._template.reasoning,
                                self._template.answer_opening(conversation.reasoning),
+                               self._template.reply_header(conversation.reasoning),
                                conversation.prompt_text, list(stop))
         pieces = conversation.generate(
             max_generated_tokens, generated, cancel=cancel,
