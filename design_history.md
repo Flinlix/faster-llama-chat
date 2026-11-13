@@ -4447,3 +4447,12 @@ prompt with reasoning on leaves that thought open.
 366.35B (D15). The install file claimed 3.11 as the oldest Python the package
 is tested on, which no record shows. The claim is gone; 3.11 stays the
 version it requires.
+
+### Add-on files spelled as their test templates (366.33A)
+
+366.33A (D9). Four add-on files spelled a model's name otherwise than the
+test template of the same model: `qwen3`, `qwen3.5`, `qwen3-coder` and
+`ministral-3-reasoning` against `qwen-3`, `qwen-3.5`, `qwen-3-coder` and
+`mistral-3-reasoning`. They are renamed to the test templates' spelling. A
+shipped add-on file is found by its template's fingerprint, never by its
+name, so nothing a caller does changes.
