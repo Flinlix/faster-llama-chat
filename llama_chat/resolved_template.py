@@ -353,10 +353,15 @@ class ResolvedTemplate:
         """Recover the template fragments from the model's own chat template, which a context that reports no template text ships none of."""
         has_text = self._context.chat_template_text(self._template_name) is not None
         fragments = extract_fragments(self._model_render, self._tag_texts) if has_text else None
-        if fragments is None:
+        if not has_text:
             raise ValueError(
                 "the model ships no chat template, which this library writes every "
                 "conversation with"
+            )
+        if fragments is None:
+            raise ValueError(
+                "this model's chat template writes no turn whose reply can be told from the "
+                "question, so a conversation cannot be written with it"
             )
         rewrites = extract_content_rewrites(self._model_render, (*self._tag_texts, *ESCAPABLE))
         return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments

@@ -58,13 +58,23 @@ def test_every_token_id_the_stand_in_hands_out_lies_where_a_context_may_have_one
     assert spelled or any(fake.is_generated_only(token) for token in drawn)
 
 
-def test_a_model_that_ships_no_chat_template_is_refused_at_load():
-    class _NoTemplate(FakeContext):
+def test_a_model_whose_template_renders_nothing_is_refused_at_load_naming_why():
+    class _RendersNothing(FakeContext):
         def render_with_model_template(self, messages, tools=None, **options):
             return None
 
-    with pytest.raises(ValueError, match="no chat template"):
-        ChatWrapper(Config(context_size=500), context=_NoTemplate(PLAIN))
+    with pytest.raises(ValueError, match="reply can be told from the question"):
+        ChatWrapper(Config(context_size=500), context=_RendersNothing(PLAIN))
+
+
+def test_a_model_whose_template_drops_every_reply_is_refused_at_load_naming_why():
+    drops = dict(PLAIN, tags=["<|user_says|>", "<|assistant_says|>", "<|said|>"],
+                 eos_token="<|said|>",
+                 chat_template="{%- for m in messages if m.role != 'assistant' -%}"
+                               "<|{{ m.role }}_says|>{{ m.content }}<|said|>{%- endfor -%}"
+                               "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}")
+    with pytest.raises(ValueError, match="reply can be told from the question"):
+        ChatWrapper(Config(context_size=500), context=FakeContext(drops))
 
 
 def test_a_context_of_your_own_that_reports_no_template_text_is_refused_at_load():

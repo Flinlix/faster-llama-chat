@@ -4004,3 +4004,12 @@ that spends the reply cap is not run"), yet `Reply.tool_calls` reported it as
 complete, with its name and id, while the conversation no longer held it; a
 caller could not tell that it never ran. It is now reported `"unfinished"`,
 as a call the cap cuts short inside it is, and the test checks the report.
+
+### A template whose reply cannot be told is refused with that cause
+
+Review finding H4. Since a template whose reply cannot be split off yields no
+fragments (see "A template whose reply cannot be split off is refused"), it
+was refused as "the model ships no chat template", which is untrue where the
+template exists. The load now says that cause only where there is no
+template text, and otherwise that the template writes no turn whose reply can
+be told from the question.
