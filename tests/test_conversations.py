@@ -271,6 +271,24 @@ def test_a_question_asked_again_is_placed_as_any_question_where_the_template_wri
     assert (internals.last_spliced_question(run.chat) == "Same?") == alike
 
 
+def test_a_question_that_repeats_an_earlier_reply_is_refused_before_its_reply_where_the_template_marks_it():
+    marking = dict(_FALLBACK, chat_template=(
+        "{%- set replies = messages | selectattr('role', 'equalto', 'assistant')"
+        " | map(attribute='content') | list -%}"
+        "{%- for m in messages -%}{%- if m.role == 'user' and m.content in replies -%}<|again|>"
+        "{%- endif -%}<|{{ m.role }}_says|>{{ m.content }}<|said|>{%- endfor -%}"
+        "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}"))
+    context = FakeContext(marking, ["Fine.", "Fine.", "Fine."])
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
+    chat.begin("")
+    chat.reply("Hello?").finish()
+    before = chat.conversation()
+    with pytest.raises(ValueError, match="text in its place"):
+        chat.reply("Fine.").finish()
+    assert chat.conversation() == before
+    assert chat.reply("Something else?").finish().text == "Fine."
+
+
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_a_conversation_whose_declarations_move_with_each_question_renders_no_windows(stem):
     run = _Run(stem)

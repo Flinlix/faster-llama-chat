@@ -4024,3 +4024,16 @@ the count as well. Only ids of exactly five base-36 digits are counted now.
 Where one past the highest would leave fewer than 1,000 numbers below 36**5,
 the conversation numbers from the lowest run of 1,000 numbers that no id of
 the history holds, so every id stays nine characters long and new.
+
+### A question equal to an earlier reply or the system prompt is checked too
+
+Review finding H6. The probe made when a conversation begins asked only
+whether a question repeating an earlier question is written as any other.
+The guard it replaced had compared a question with every earlier message, so a
+template that compares the newest question with an earlier reply, or with the
+system prompt, was placed the fast way and left the cache otherwise than the
+template writes it. The probe now repeats each of them, the probe's question,
+its reply and the conversation's system prompt; where any is written
+otherwise, a question repeating an earlier message is rendered whole, and such
+a template, whose text depends on another message's, is refused before the
+reply, the conversation left as it was.

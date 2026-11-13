@@ -37,11 +37,14 @@ def question_splices(render: Render, system: list[dict], question: str,
 
 
 def repeated_question_written_alike(render: Render, system: list[dict]) -> bool:
-    """Whether the template writes a question that repeats an earlier one as it writes any other question."""
-    asked = _SPLICE_BASE[0]["content"]
+    """Whether the template writes a question that repeats an earlier message, a question, a reply or the system prompt, as it writes any other question."""
     ahead = render(system + _SPLICE_BASE + [{"role": "user", "content": STAND_IN}], True)
-    again = render(system + _SPLICE_BASE + [{"role": "user", "content": asked}], True)
-    return ahead is not None and again == ahead.replace(STAND_IN, asked)
+    if ahead is None:
+        return False
+    earlier = [m["content"] for m in system + _SPLICE_BASE
+               if isinstance(m.get("content"), str) and m["content"]]
+    return all(render(system + _SPLICE_BASE + [{"role": "user", "content": text}], True)
+               == ahead.replace(STAND_IN, text) for text in earlier)
 
 
 def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
