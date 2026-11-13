@@ -211,7 +211,8 @@ class ChatWrapper:
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
 
         Returns:
-            The number of messages evicted to make room.
+            The number of history items evicted to make room, a tool turn
+            counting as one.
 
         Raises:
             TypeError: If ``text`` is not a ``str``.
@@ -503,7 +504,8 @@ class ChatWrapper:
                 neither does a tool the conversation already declares.
 
         Returns:
-            How many messages were evicted to make room.
+            How many history items were evicted to make room, a tool turn
+            counting as one.
 
         Raises:
             ValueError: If ``tools`` names one tool twice, if no conversation

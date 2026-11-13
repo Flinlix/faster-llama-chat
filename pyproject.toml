@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "llama_chat"
+name = "faster-llama-chat"
 version = "2.0.0"
 description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict the oldest exchanges."
 readme = "README.md"
@@ -14,7 +14,6 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# 3.11 is the oldest version the package is tested on.
 requires-python = ">=3.11"
 dependencies = [
     # Build llama-cpp-python from source per machine (see install.sh):

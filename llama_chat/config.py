@@ -60,7 +60,7 @@ class Config:
             starts from. ``None`` draws a fresh one per generation.
         context_size: The hard limit in tokens; generation never crosses it.
         evict_above_fraction: Fraction of ``context_size`` above which the
-            oldest messages are evicted. Must be in ``(0, 1]`` and must come
+            oldest exchanges are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
         max_history_exchanges: The most exchanges to keep, a second eviction
             trigger OR'd with ``evict_above_fraction``. An exchange is one

@@ -42,8 +42,9 @@ class Reply:
             its first token: everything it was generated from, its generation
             prompt included.
         n_generated_tokens: Tokens sampled.
-        n_evicted_messages: Messages evicted to bring the cache back inside both
-            eviction limits.
+        n_evicted_messages: History items evicted to bring the cache back
+            inside both eviction limits: a message, or a whole tool turn,
+            counts as one.
         stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
             a stop string was met, the reply cap was reached, ``cancel`` was
             set, a call was made, or a call was made that could not be read

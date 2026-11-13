@@ -50,9 +50,9 @@ CMAKE_ARGS="$CMAKE_ARGS" \
 CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
     "$PIP" install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
 
-# Install llama_chat itself (editable) so `import llama_chat` and the demo work
+# Install faster-llama-chat itself (editable) so `import llama_chat` and the demo work
 # without setting PYTHONPATH. Pass --dev to also install test dependencies.
-echo "Installing llama_chat (editable)..."
+echo "Installing faster-llama-chat (editable)..."
 if [ "$DEV" = 1 ]; then
     "$PIP" install -e ".[test]"
 else

@@ -4424,3 +4424,26 @@ Mistral 3 family, Devstral 2, Mistral Large 4), that render of an empty
 conversation is empty, so the cache lost the 2,400 tokens `begin` had decoded,
 and the next question decoded them again. A reply taken back now leaves the
 cache decoded ahead of the next question, as after any other reply.
+
+### The package's name, what a message count counts, and two claims (366.18A, 366.20, 366.34A, 366.35B)
+
+366.34A (D10). The project is faster-llama-chat; the distribution was named
+`llama_chat`, as the README's title was. It now installs as
+`faster-llama-chat` and is still imported as `llama_chat`, the usual split of
+a distribution's name from its module's. The inference server installs the
+library by its path, so it is unaffected; an environment that installed the
+old name keeps its editable link until it is installed again.
+
+366.18A (D2). One count had two names: "messages" in `n_evicted_messages`,
+`inject` and `declare_tools`, "history items" elsewhere, a tool turn counting
+as one item. The field names stay; the README and the docstrings now say that
+such a count counts history items, a whole tool turn as one, and the
+configuration says the oldest exchanges are evicted, as the README does.
+
+366.20 (D4). The README's reasoning section named one condition for
+`reasoning=True`; the load needs two: the template marks a thought, and its
+prompt with reasoning on leaves that thought open.
+
+366.35B (D15). The install file claimed 3.11 as the oldest Python the package
+is tested on, which no record shows. The claim is gone; 3.11 stays the
+version it requires.

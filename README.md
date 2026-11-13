@@ -1,4 +1,4 @@
-# llama_chat: a KV-cache manager for llama.cpp
+# faster-llama-chat: a KV-cache manager for llama.cpp
 
 A Python chat engine over llama.cpp whose goal is to **prefill as little as
 possible**. It keeps the KV cache alive across turns, decodes only what is new,
@@ -49,7 +49,7 @@ positions down, so kept messages are never processed again.
 
 Both use the same cache operations; the policy differs.
 
-| | llama.cpp's server | llama_chat |
+| | llama.cpp's server | faster-llama-chat |
 |------|------|------|
 | what is removed | a fixed token count from `n_keep`, which can cut inside a message or a tag | whole exchanges, from a user turn to the next one, so the cache always holds turns the template writes |
 | the system prompt | `--keep N`, a hand-counted offset | pinned, never evicted |
@@ -76,6 +76,8 @@ CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cp
 CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.23"     # Nvidia GPU
 pip install -e ".[test]"
 ```
+
+It installs as `faster-llama-chat` and is imported as `llama_chat`.
 
 ## Quick start
 
@@ -153,6 +155,11 @@ is all that generation was conditioned on), `n_generated_tokens`,
 `n_reasoning_tokens` and `thought`, the thought's text, empty where the model
 thought nothing. A stream closed early has no `Reply`; what it generated
 is recorded all the same.
+
+A count of messages, as in `n_evicted_messages` or what `begin`, `inject` and
+`inject_tool_result` return, counts history items, the items
+`conversation()["messages"]` holds: a user or an assistant message is one,
+and so is a whole `ToolTurn`, however many calls and results it holds.
 
 **What fails at startup.** Whatever can be settled once is settled while the
 wrapper is built, so a deployment that could never work says so then: every
@@ -352,7 +359,8 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 
 Reasoning is chosen per conversation, at `begin`, because a template may switch
 it in the system turn. `can_reason` says whether `begin` accepts
-`reasoning=True`, which it does where the template marks a thought. Reasoning
+`reasoning=True`, which it does where the template marks a thought and its
+prompt with reasoning on leaves that thought open. Reasoning
 off is the template's own off: `can_turn_off_reasoning` says whether the
 template has one. Where it has none, as on a template that always reasons, a
 conversation begun without reasoning is written as the template writes it,
