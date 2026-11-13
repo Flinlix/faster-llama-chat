@@ -191,7 +191,7 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
         return ways_from[k, at]
 
     def matched_from(k: int, at: int) -> tuple[int, tuple | None]:
-        placed = ()
+        placed = []                 # a list, as a tuple grown one at a time costs its length each time
         while k < len(parts):
             part = parts[k]
             if k % 2 == 0:
@@ -208,7 +208,7 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
                          and rendered.startswith(following, at + len(form))), None)
             if text is not None:
                 span = (at, at + len(text))
-                placed += ((value, span, span),)
+                placed.append((value, span, span))
                 at, k = at + len(text), k + 1
                 continue
             if not following:
@@ -221,14 +221,13 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
                 n, after = rest(k + 1, end)
                 if n:
                     ways += n
-                    found = placed + ((value, (at, end), own),) + (after or ())
+                    found = (*placed, (value, (at, end), own), *(after or ()))
                 start = end + 1
             return min(ways, 2), found if ways == 1 else None
-        return (1, placed) if at == len(rendered) else (0, None)
+        return (1, tuple(placed)) if at == len(rendered) else (0, None)
 
     ways, placed = rest(0, 0)
     return placed if ways == 1 else None
-    return placed if at == len(rendered) else None
 
 
 def _forms(value: _Value, written) -> list[str]:

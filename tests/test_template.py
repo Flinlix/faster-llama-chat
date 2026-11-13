@@ -32,3 +32,24 @@ def test_a_template_that_is_not_valid_template_code_is_refused_at_load_naming_th
 def test_a_tag_in_a_content_stays_in_it():
     fragments = ResolvedTemplate(FakeContext(PLAIN)).fragments
     assert fragments.content("hi <turn]> there") == "hi <turn]> there"
+
+
+def test_a_split_render_takes_time_in_proportion_to_the_messages():
+    import time
+
+    from llama_chat.split_render import split_render
+
+    def render(messages, declarations):
+        return "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages)
+
+    def timed(n):
+        messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"text {i}"}
+                    for i in range(n)]
+        started = time.perf_counter()
+        split = split_render(render, messages, lambda text: text, reads_clock=False)
+        assert len(split.own) == n
+        return time.perf_counter() - started
+
+    timed(2000)                                 # warmed up
+    # Twice the messages take about twice as long, not four times.
+    assert timed(40000) < 3 * timed(20000)

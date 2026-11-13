@@ -4355,3 +4355,13 @@ than `MAX_UNREADABLE_CALLS_IN_A_ROW` times in a row. The answer to a failed
 call names the failure and ends in the one instruction not already implied,
 whether another call is worth making; what to do instead is left unsaid, as
 there is nothing to do but answer.
+
+### A split render grows its placements as a list (366.25)
+
+366.25 (K6). Splitting a render into the template's text and the caller's
+grew its tuple of placements one entry at a time, which copies the tuple each
+time: quadratic in the messages. 10,000 messages took 0.4 s and 80,000 took
+15 s; a history of 100,000 replies and no question took 27 s to be refused
+(measured by the review). The placements are now a list, made a tuple once;
+the refusal of 100,000 replies takes 5.9 s, most of it the template's own
+render. A second `return` after the first, which could never run, is gone.
