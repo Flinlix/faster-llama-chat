@@ -705,7 +705,7 @@ def test_the_package_exports_the_one_protocol_a_wrapper_takes():
 def test_a_negative_wait_is_refused_naming_its_setting(timeout_s):
     """Threading reads -1 as waiting for ever and other negatives as an error of its own."""
     w = ChatWrapper(Config(context_size=800), context=FakeContext(PLAIN))
-    with pytest.raises(ValueError, match="timeout_s must be None or at least 0"):
+    with pytest.raises(ValueError, match="timeout_s must be None or a number of seconds of at least 0"):
         w.wait_idle(timeout_s)
     assert w.wait_idle(0) is True
 
@@ -1193,3 +1193,15 @@ def test_closing_ends_the_reply_this_thread_reads_though_a_newer_stream_was_made
     chat.reply("noch was")
     chat.close()
     assert closed == [True]
+
+
+@pytest.mark.parametrize("timeout_s, refused", [(float("inf"), False), (0, False), (0.01, False),
+                                                (float("nan"), True), (-1, True), ("1", True),
+                                                (True, True)])
+def test_waiting_for_idle_takes_infinity_as_no_timeout_and_refuses_what_is_no_time(timeout_s, refused):
+    chat = ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
+    if refused:
+        with pytest.raises(ValueError, match="timeout_s"):
+            chat.wait_idle(timeout_s)
+    else:
+        assert chat.wait_idle(timeout_s) is True

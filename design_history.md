@@ -4365,3 +4365,11 @@ time: quadratic in the messages. 10,000 messages took 0.4 s and 80,000 took
 (measured by the review). The placements are now a list, made a tuple once;
 the refusal of 100,000 replies takes 5.9 s, most of it the template's own
 render. A second `return` after the first, which could never run, is gone.
+
+### An infinite wait for idle waits, and a timeout that is no time is refused (366.30)
+
+366.30 (T8). `wait_idle(float("inf"))` raised Python's own `OverflowError`
+and a NaN a `ValueError` from the lock, neither naming the argument. Infinity
+now waits as `None` does, and a value that is not a number of seconds of at
+least 0 (NaN, a negative number, a string, a bool) is refused naming
+`timeout_s`.
