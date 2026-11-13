@@ -1031,6 +1031,7 @@ def test_a_call_that_spends_the_reply_cap_is_not_run_and_its_turn_closes():
 
     assert ran == [] and handed == []
     assert reply.stop_reason == "token_limit" and not wrapper.turn_open
+    assert [call.status for call in reply.tool_calls] == ["unfinished"]
     wrapper.reply("und?").finish()
 
 

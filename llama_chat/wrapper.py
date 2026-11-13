@@ -748,6 +748,9 @@ class ChatWrapper:
                     dropped = self._conversation.close_unanswered()
                     generations[-1] = replace(
                         generations[-1], stop_reason="token_limit",
+                        tool_calls=[call if call.status != "complete"
+                                    else ToolCall("", {}, status="unfinished")
+                                    for call in generations[-1].tool_calls],
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
                 settled = yield from self._settle_calls(

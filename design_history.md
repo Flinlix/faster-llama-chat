@@ -3996,3 +3996,11 @@ in the round is cut to make room for it, its call then listed as cut. Measured
 over every first result from 200 to 299 characters: the turn stays open at
 each length, where before it closed at four lengths, and at one after the
 first part of this fix.
+
+### A call the reply cap leaves unrun is reported as unfinished
+
+Review finding H3. A call that spent the reply cap is not run (see "A call
+that spends the reply cap is not run"), yet `Reply.tool_calls` reported it as
+complete, with its name and id, while the conversation no longer held it; a
+caller could not tell that it never ran. It is now reported `"unfinished"`,
+as a call the cap cuts short inside it is, and the test checks the report.
