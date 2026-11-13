@@ -2178,3 +2178,15 @@ def test_stopping_the_second_call_of_a_round_keeps_the_first_calls_result():
     # The first call ran and keeps its result; the second is owed.
     assert [call.id for call in wrapper.pending_calls] == ["call00001"]
     assert wrapper.wait_idle(0)
+
+
+def test_writing_a_result_renders_the_whole_conversation_only_to_measure_it():
+    wrapper, fake = tool_wrapper(context_size=32768)
+    history = [m for i in range(300) for m in (("user", f"question {i}"), ("assistant", f"answer {i}"))]
+    wrapper.begin("persona", history, tools=weather_registry().specs())
+    fake.call_script = ['fn:weather{"city": "Bonn"}']
+    call, = [e for e in wrapper.reply("Wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    before = len(fake.rendered)
+    wrapper.inject_tool_result(call, "sonnig")
+    # One split of the whole conversation, two renders, to see the result fits; the rest is the newest turn's.
+    assert sum(1 for messages in fake.rendered[before:] if messages > 100) <= 2

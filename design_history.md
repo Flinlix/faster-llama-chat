@@ -4546,3 +4546,15 @@ measured so far, the whole is tried next. On the review's stand-in, beginning
 with 50 or 200 short exchanges takes 22 renders, the load's own checks
 included, instead of 30 and 34; a history far longer than the context costs
 what it cost before.
+
+### Whether a result is written is read from its turn (366.16)
+
+366.16 (P2). Between a call's closing and the first word of its answer, the
+conversation was rendered whole several times: about 1 s with Gemma 4 at
+30,000 tokens, 0.1 s at 8,000 (measured by the review). Two of those renders
+only asked whether the template writes a result at all, rendering the whole
+conversation with the result and without it. That is now read from the
+newest exchange, the turn the result goes in, as a question's refusal
+already is. Writing a result on a 300-exchange stand-in now renders the
+whole conversation twice instead of four times; the two left measure whether
+the result fits, which needs the whole.

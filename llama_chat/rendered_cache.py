@@ -756,9 +756,14 @@ class RenderedCache:
             return False
 
     def _renders_result(self, message: dict) -> bool:
-        """Whether the template writes ``message``, a result, after the conversation."""
-        return self._rendering.render(self._state.messages + [message], False) not in (
-            None, self._rendering.render(self._state.messages, False))
+        """Whether the template writes ``message``, a result, after the conversation.
+
+        Read from the newest exchange, the turn the result goes in, as a
+        question's refusal is, not from a render of the whole conversation.
+        """
+        newest = self._newest_exchange()
+        return self._rendering.render(newest + [message], False) not in (
+            None, self._rendering.render(newest, False))
 
     def _forget_calls(self) -> None:
         """Record the newest reply without the call it made, which could be told nothing; its tokens stay as generated."""
