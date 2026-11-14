@@ -1354,3 +1354,20 @@ def test_a_stream_closed_early_still_reports_its_generation():
     next(stream)
     stream.close()
     assert stream.reply is not None and stream.reply.n_generated_tokens >= 1
+
+
+def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the_limit_is_measured():
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.5), context=fake)
+    w.begin("s", [("user", "hi")])
+    seen = []
+    measure = w._conversation._rendering.length
+    w._conversation._rendering.length = lambda messages, *a, **k: (
+        seen.append([m["content"] for m in messages]), measure(messages, *a, **k))[1]
+    w.inject("short", role="assistant")
+    assert ["s", "short"] not in seen
+    limit = w._config.evict_above_tokens
+    with pytest.raises(ContextOverflowError) as refused:
+        w.inject("x " * limit, role="assistant")
+    assert ["s", "x " * limit] in seen
+    assert refused.value.available_tokens == limit and refused.value.needed_tokens > limit

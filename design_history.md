@@ -5076,3 +5076,15 @@ The conversation keeps the order of an action: the lock, the attempt and its
 rollback, the cache sync, and logging what the caller did not ask for. The
 parts are reached only through it. Rejected: giving each part its own copy of
 the state, which would need a second rollback path.
+
+### An injected message is counted before it is rendered (405.2A)
+
+`inject` rendered the system turn with the new message on every call, only to
+check that the message fits beside the system prompt alone. A question to
+`reply` already counted its tokens first and rendered only near the limit.
+Both now share one step: the message's own tokens are added to the length of
+the system turn with a short question, measured once per system prompt, and
+the render is made only where that count comes within 64 tokens of the
+limit. A count that misses a template's own text further from the limit is
+still caught by the checks after the message is placed, inside the same
+action, which is then put back as a whole.

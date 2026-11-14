@@ -51,7 +51,7 @@ from .tools import ToolCall, ToolSpec, result_text
 
 _log = logging.getLogger(__name__)
 
-# How far the count of a question alone may fall short of its length in the system turn's render.
+# How far the count of a message alone may fall short of its length in the system turn's render.
 _NEAR_THE_ROOM_TOKENS = 64
 
 
@@ -427,13 +427,7 @@ class RenderedCache:
             _ensure_begun(self, "generate into")
             room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
-            # Counted alone first, beside the system turn measured once: only a question near the
-            # room is measured in the system turn's render.
-            alone = self._state.with_a_short_question + len(
-                self._context.tokenize(text, add_special=False, parse_special=False))
-            if alone + _NEAR_THE_ROOM_TOKENS > room:
-                alone = self._rendering.length(self._system_part() + [question],
-                                               generation_prompt=True)
+            alone = self._length_alone(question, room, generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
                     f"the request needs {alone} tokens but {room} fit beside room for the "
@@ -613,7 +607,7 @@ class RenderedCache:
                 _ensure_ready(self, "inject", "inject into")
             message = {"role": role, "content": text}
             limit = self._config.evict_above_tokens
-            alone = self._rendering.length(self._system_part() + [message], generation_prompt=False)
+            alone = self._length_alone(message, limit, generation_prompt=False)
             if alone > limit:
                 raise ContextOverflowError(
                     f"the injected message needs {alone} tokens but {limit} fit beside the "
@@ -634,6 +628,14 @@ class RenderedCache:
                            logits=False, dropped=dropped)
             self._memory.rest()
             return n_before + 1 - history_count(self._state.messages)
+
+    def _length_alone(self, message: dict, limit: int, generation_prompt: bool) -> int:
+        """How many tokens ``message`` takes beside the system turn alone, measured in their render only where its count comes within :data:`_NEAR_THE_ROOM_TOKENS` of ``limit``."""
+        counted = self._state.with_a_short_question + len(
+            self._context.tokenize(message["content"], add_special=False, parse_special=False))
+        if counted + _NEAR_THE_ROOM_TOKENS <= limit:
+            return counted
+        return self._rendering.length(self._system_part() + [message], generation_prompt)
 
     def prompt(self) -> int:
         """Decode the generation prompt after the newest message, a user message, for a reply to it; how many history items were dropped to leave room for the reply.
