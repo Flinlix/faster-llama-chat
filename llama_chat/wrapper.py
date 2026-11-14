@@ -120,7 +120,7 @@ class ChatWrapper:
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
-              reasoning: bool = False) -> int:
+              reasoning: bool = False, generated_turns: dict | None = None) -> int:
         """Reset the conversation: prefill the system prompt and recent history.
 
         Every other action refuses until this has run, because only this
@@ -156,6 +156,15 @@ class ChatWrapper:
                 whether it has an off. It belongs to the conversation, so it
                 changes only here. Every reply's thought is kept out of what
                 it yields, either way.
+            generated_turns: What :meth:`conversation` gave beside the
+                messages: each turn the model generated with a call, as its
+                tokens. On the
+                model it came from, each such turn whose messages are kept
+                unchanged is restored as generated, token for token; on
+                another model, or without it, every turn is written as this
+                model's template writes it, and a call the model wrote
+                unreadably is left out with its error result. See
+                design_history.md, "Exact restore with model handover".
 
         Returns:
             How many items of ``messages`` were kept.
@@ -212,7 +221,8 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
-            kept = self._conversation.start(system_prompt, messages, specs, reasoning)
+            kept = self._conversation.start(system_prompt, messages, specs, reasoning,
+                                            generated_turns)
             # A turn the history leaves open was started by no reply.
             self._turn_policy, self._turn_budget = None, _CallBudget(None)
             return kept
@@ -653,20 +663,34 @@ class ChatWrapper:
     def conversation(self) -> dict:
         """Everything :meth:`begin` takes to begin the conversation the cache holds again, by its parameter names.
 
-        ``system_prompt``, ``messages``, ``tools`` and ``reasoning``, so that
-        ``begin(**chat.conversation())`` begins again as it was, a call still
-        owed a result owed again. ``messages`` is every message after the
+        ``system_prompt``, ``messages``, ``tools``, ``reasoning`` and
+        ``generated_turns``, so that ``begin(**chat.conversation())`` begins again as
+        it was, a call still owed a result owed again and, on the same model,
+        each turn that called tools as the tokens it was generated as.
+        ``generated_turns`` is ``None`` where no turn is kept as generated; it is a
+        JSON-ready dictionary, only meaningful to this model, and the
+        messages alone begin any model again. ``messages`` is every message after the
         system prompt, oldest first: each message a ``{"role", "content"}``
         dictionary, with ``"reasoning_content"`` where the template keeps a
         reply's thought, and a :class:`~llama_chat.tools.ToolTurn` for
         an assistant turn that called tools, with its thoughts, calls and
-        results. ``tools`` is every declaration, those of
+        results; a call the model wrote unreadably is a call with the status
+        ``"unreadable"`` and no text. ``tools`` is every declaration, those of
         :meth:`declare_tools` included, and ``None`` where the conversation
         was begun without tools and declares none. Safe from any thread, including while
         another is mid-generation: all of it is read as the newest finished
         change left it.
         """
         return self._conversation.conversation()
+
+    def generated_turns(self) -> dict | None:
+        """What :meth:`conversation` gives as ``generated_turns``, without copying the messages; ``None`` where no turn is kept as generated.
+
+        Each turn is found again by its messages wherever they stand, so a
+        reading taken now still serves messages a caller adds to or drops from
+        later. Safe from any thread, as :meth:`conversation` is.
+        """
+        return self._conversation.generated_turns()
 
     def capabilities(self, *, tools: bool) -> Capabilities:
         """What :meth:`begin` accepts for a conversation begun with ``tools`` given, even empty, or without.

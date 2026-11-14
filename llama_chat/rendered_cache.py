@@ -27,9 +27,10 @@ from dataclasses import dataclass, field, fields, replace
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
-from .messages import (THOUGHT_KEY, as_history, as_messages, calling_message, exchange_count,
-                       exchange_starts, history_count, kept_items, next_call_number,
-                       result_message, system_part, with_result_text)
+from .messages import (CALL_AS_WRITTEN, THOUGHT_KEY, as_history, as_messages, calling_message,
+                       exchange_count, exchange_starts, history_count, kept_items,
+                       next_call_number, portable_digest, result_message, system_part,
+                       with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact, writes_two_user_turns)
@@ -139,6 +140,8 @@ class _Published:
     turn_open: bool = False
     newest_role: str | None = None
     total_tokens: int = 0
+    # Each kept turn's tokens, how many messages it covers, and their portable digest.
+    kept: tuple = ()
 
 
 class RenderedCache:
@@ -184,7 +187,16 @@ class RenderedCache:
         return {"system_prompt": published.system_prompt,
                 "messages": copy.deepcopy(list(published.history)),
                 "tools": None if published.tools is None else copy.deepcopy(list(published.tools)),
-                "reasoning": published.reasoning}
+                "reasoning": published.reasoning, "generated_turns": self.generated_turns()}
+
+    def generated_turns(self) -> dict | None:
+        """Each turn kept as generated, from one publication, as :meth:`start` takes them back; ``None`` where none is; safe to read unlocked."""
+        kept = self._published.kept
+        if not kept:
+            return None
+        return {"model": self._context.model_fingerprint(), "turns": [
+            {"tokens": list(tokens), "message_count": count, "digest": digest}
+            for tokens, count, digest in kept]}
 
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
@@ -268,13 +280,17 @@ class RenderedCache:
 
     # ----- beginning ------------------------------------------------------------------
     def start(self, system_prompt: str, history, tools: list[ToolSpec] | None,
-              reasoning: bool) -> int:
+              reasoning: bool, generated_turns: dict | None = None) -> int:
         """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context; how many items were kept.
 
         A history that ends on a call keeps it owed a result, and the cache
         holds the render only as far as the results cannot change it.
         ``tools`` other than ``None``, even empty, writes the conversation with
-        the model's template for tools.
+        the model's template for tools. Each turn of ``generated_turns``, as
+        :meth:`conversation` gives one, whose messages are kept unchanged is
+        held as the tokens it was generated as, where they are this
+        model's; a call the model wrote unreadably that no such turn covers
+        is left out, with its error result.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations leave
@@ -300,6 +316,7 @@ class RenderedCache:
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
             self._keep_newest_history(min(limit, self._config.context_size // 2))
+            self._restore_generated(generated_turns)
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
@@ -313,6 +330,8 @@ class RenderedCache:
                     f"{_RAISE_THE_ROOM}", needed, limit)
             self._drop_while_over(limit, generation_prompt=False)
             self._ensure_within(limit, "shorten the history")
+            n_kept = len(self._state.messages) - len(system)
+            self._leave_out_unreadable()
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -335,7 +354,52 @@ class RenderedCache:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
-            return kept_items(history, len(self._state.messages) - len(self._system_part()))
+            return kept_items(history, n_kept)
+
+    def _restore_generated(self, generated_turns: dict | None) -> None:
+        """Hold each of ``generated_turns`` whose messages stand unchanged as the tokens it was generated as, where they are this model's."""
+        if not generated_turns or generated_turns.get("model") != self._context.model_fingerprint():
+            return
+        messages = self._state.messages
+        # A kept turn opens on a reply that calls, so only spans that start on one are tried.
+        starts = [i for i, m in enumerate(messages) if m["role"] == "assistant" and m.get("tool_calls")]
+        taken = set()
+        for turn in generated_turns.get("turns", ()):
+            count = turn["message_count"]
+            first = next((i for i in reversed(starts) if i not in taken and i + count <= len(messages)
+                          and portable_digest(messages[i:i + count]) == turn["digest"]), None)
+            if first is None:
+                continue                # dropped with the oldest, or changed: written anew
+            taken.add(first)
+            last = first + count - 1
+            self._state.kept.append(KeptTurn(tuple(turn["tokens"]), messages[first],
+                                             messages[last], bool(messages[last].get("tool_calls"))))
+        self._state.kept.sort(key=lambda k: next(i for i, m in enumerate(messages) if m is k.first))
+        self._drop_unplaceable()
+
+    def _leave_out_unreadable(self) -> None:
+        """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result, joining the replies on either side of it."""
+        held = {id(m) for k in self._state.kept for m in (k.first, k.last)}
+        kept, gone, joins = [], set(), False
+        for message in self._state.messages:
+            calls = message.get("tool_calls") or ()
+            if id(message) not in held and any(CALL_AS_WRITTEN in c for c in calls):
+                gone |= {c["id"] for c in calls if CALL_AS_WRITTEN in c}
+                left = [c for c in calls if CALL_AS_WRITTEN not in c]
+                message = ({**message, "tool_calls": left} if left
+                           else {k: v for k, v in message.items() if k != "tool_calls"})
+                joins = not left            # the reply after the call goes on with this one
+            elif message["role"] == "tool" and message["tool_call_id"] in gone:
+                continue
+            elif joins and message["role"] == "assistant" and not calls:
+                before = kept.pop()
+                message = {**message, "content": "\n\n".join(
+                    text for text in (before["content"], message["content"]) if text)}
+                joins = False
+            else:
+                joins = False
+            kept.append(message)
+        self._state.messages = kept
 
     def _settled_while_owed(self) -> Target:
         """The render of the conversation as far as the results still owed cannot change it: what the cache holds until they are in."""
@@ -1583,7 +1647,20 @@ class RenderedCache:
             tools=tuple(self._state.tools) if self._state.uses_tool_template else None,
             reasoning=self._state.reasoning, pending_calls=tuple(self.pending_calls),
             begun=self._state.begun, turn_open=self.turn_open, newest_role=self.newest_role,
-            total_tokens=len(self._memory.tokens))
+            total_tokens=len(self._memory.tokens), kept=self._recorded())
+
+    def _recorded(self) -> tuple:
+        """Each kept turn as :meth:`generated_turns` holds it: its tokens, how many messages it covers, and their digest."""
+        messages = self._state.messages
+        index = {id(m): i for i, m in enumerate(messages)}
+        turns = []
+        for turn in self._state.kept:
+            if id(turn.first) not in index or id(turn.last) not in index:
+                continue
+            first, last = index[id(turn.first)], index[id(turn.last)]
+            turns.append((turn.tokens, last - first + 1,
+                          portable_digest(messages[first:last + 1])))
+        return tuple(turns)
 
 
 # ----- what an action may start from -------------------------------------------------

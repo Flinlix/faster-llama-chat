@@ -4901,3 +4901,51 @@ it now keeps its name, marked `"unfinished"`. A tool's error result was
 reworded as a failure ("the tool call failed: ..., try again") where the
 library ran the tool, but written as given where the caller handed it over;
 both are now told the same way.
+
+### Exact restore with model handover (393.2)
+
+A turn that called tools stays in the cache as the tokens the model generated,
+which no template writes back exactly: a call's spelling, its spacing, an
+unreadable call's text. Beginning again from `conversation()` therefore wrote
+those turns the template's way, and a server that begins again after a
+restart or a settings change lost them; 366.9 tried to carry an unreadable
+call's text back as text, which needed a search for the call's frame in each
+template and failed on two.
+
+The user's design: `conversation()` gives portable messages, in no model's
+format, plus a record of each turn the model generated with a call, with a
+fingerprint of the model. `begin` on the same model rebuilds each recorded
+turn as generated; on another model, or without the record, the messages are
+written the new template's way, an unreadable call left out with its error
+result, since its text is in the old model's format only; settings tied to a
+model come from the loaded one, and only reasoning on or off and the tools
+carry over.
+
+Built as decided: `generated_turns` holds token ids, not text and tag positions
+(398.7A), since only ids are token for token where a model splits a word
+otherwise than its tokenizer would; the fingerprint is a digest of the GGUF's
+description (architecture, file type, parameter count, tokenizer model),
+its chat templates, its vocabulary and its file size, worked out once when
+the generated turns are first read (398.8A; two files alike in all of these but their
+weights count as one model, whose tokens the other reads). An unreadable
+call without matching generated turns is left out on the same model too (398.9A),
+and the portable messages hold no text of it (398.10A). Only turns kept as
+generated are recorded: a plain reply is settled to the template's render
+live, so writing it the template's way is already exact.
+
+The user's word for it was "record"; it is named `generated_turns`, since the
+server already calls the conversation it stores its record. Each turn is found
+again by a digest of the messages it covers, as the caller keeps them,
+wherever they stand, not by its position: a server keeps its own list of
+messages and appends to it and drops from it, and generated turns read once
+still serve that list. The search tries only spans that start on a reply that
+calls. `generated_turns()` reads them without copying the messages, for a
+caller that stores them after every reply.
+
+`tests/test_conversations.py` begins again from `conversation()` on every
+tool template, with a read and an unreadable call, and finds the cache token
+for token as it was; begins another model, and the same model without the
+generated turns, and finds each turn written the template's way with the
+unreadable call left out; and gives generated turns read earlier messages
+added to and dropped from since. The unreadable-call tests no longer skip on seven templates: each
+template is given a call body it truly cannot read (399.5).

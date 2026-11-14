@@ -8,6 +8,7 @@ is decided by the caller, and how a generation goes on by
 
 from __future__ import annotations
 
+import hashlib
 import os
 import weakref
 from collections.abc import Callable, Mapping
@@ -22,6 +23,10 @@ from .model_template import ModelTemplate
 
 SEQ = 0  # the one sequence id, there being one conversation
 # The GGUF keys that state the sampling a model recommends, by Sampling's names.
+# The GGUF entries that describe the weights, for the model's fingerprint.
+_FINGERPRINT_KEYS = ("general.architecture", "general.file_type", "general.parameter_count",
+                     "tokenizer.ggml.model", "tokenizer.ggml.pre")
+
 _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general.sampling.top_k",
                        "top_p": "general.sampling.top_p", "min_p": "general.sampling.min_p",
                        "repetition_penalty": "general.sampling.penalty_repeat",
@@ -88,6 +93,7 @@ class KVContext:
             self._model_templates = {name: ModelTemplate(text, self._backend.eos_text(self._vocab))
                                      for name, text in texts.items() if text}
             self._special_tokens = None
+            self._fingerprint: str | None = None
         except BaseException:
             # Free whatever was created before the failure.
             if self._engine_context is not None:
@@ -179,6 +185,20 @@ class KVContext:
             stated[name] = (int(number) if name in _WHOLE_NUMBER_FIELDS and number.is_integer()
                             else number)
         return stated
+
+    def model_fingerprint(self) -> str:
+        """A digest of the model's description, its chat templates, its vocabulary and its file's size, worked out once."""
+        if self._fingerprint is None:
+            digest = hashlib.sha256()
+            for key in _FINGERPRINT_KEYS:
+                digest.update(f"{key}={self._backend.metadata_value(self._model, key)}\n".encode())
+            for name in (None, TOOL_USE_TEMPLATE):
+                digest.update(f"{name}={self.chat_template_text(name)}\n".encode())
+            digest.update(f"size={os.path.getsize(self._config.model_path)}\n".encode())
+            for piece in self._backend.vocabulary_pieces(self._vocab):
+                digest.update(len(piece).to_bytes(4, "little") + piece)
+            self._fingerprint = digest.hexdigest()
+        return self._fingerprint
 
     def chat_template_text(self, template_name: str | None = None) -> str | None:
         """The source of the model's own chat template of that name, or ``None`` where it ships none."""

@@ -9,6 +9,7 @@ model is a script.
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import re
 import sys
@@ -312,6 +313,11 @@ class FakeContext:
 
     def recommended_sampling(self) -> dict:
         return dict(self.recommended)
+
+    def model_fingerprint(self) -> str:
+        return hashlib.sha256(json.dumps(
+            [self._texts.get(None), self._texts.get(TOOL_USE_TEMPLATE), list(self._listed),
+             self._fixture["eos_token"]]).encode()).hexdigest()
 
     # ----- the cache ---------------------------------------------------------------
     def reset(self) -> None:

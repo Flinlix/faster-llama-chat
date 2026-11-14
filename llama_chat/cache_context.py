@@ -100,6 +100,9 @@ class ModelReader(Protocol):
     def chat_template_text(self, template_name: str | None = None) -> str | None:
         """The source of the model's template of that name, ``None`` where it ships none."""
 
+    def model_fingerprint(self) -> str:
+        """What tells this model's tokens apart from another model's: the same on every load of the same model, and different where its vocabulary, its chat templates or its weights' description differ."""
+
     def recommended_sampling(self) -> Mapping[str, float]:
         """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none.
 

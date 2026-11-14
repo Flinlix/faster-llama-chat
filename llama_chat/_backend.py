@@ -328,6 +328,11 @@ class Backend:
         """The end-of-sequence token id, negative where the model has none."""
         return self._token_eos(vocab)
 
+    def vocabulary_pieces(self, vocab):
+        """Each token's text, in token order, as the engine spells it."""
+        return (self.token_to_piece_bytes(vocab, token)
+                for token in range(self._vocab_n_tokens(vocab)))
+
     def special_tokens(self, vocab) -> tuple[int, ...]:
         """Every token :meth:`is_special` marks, in one pass over the vocabulary."""
         get_attr, tag_attrs = self._get_attr, self._TAG_ATTRS

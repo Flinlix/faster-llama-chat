@@ -230,7 +230,7 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     assert w.conversation() == {"system_prompt": "eins",
                                 "messages": [{"role": "user", "content": "a"},
                                              {"role": "assistant", "content": "b"}],
-                                "tools": None, "reasoning": False}
+                                "tools": None, "reasoning": False, "generated_turns": None}
     again, _ = tool_wrapper()
     again.begin(**w.conversation())
     assert again.conversation() == w.conversation()

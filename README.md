@@ -136,8 +136,8 @@ on, so the refusal follows it there.
 | answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
 | telling the model about more tools | `declare_tools(tools)`. Where the model ships a [template of its own for tools](#tool-calling), only into a conversation begun with `tools` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
-| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
-| where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `capabilities(tools=False)` and `capabilities(tools=True)` each give a `Capabilities` record of what `begin` accepts for a conversation begun without tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt`. Both are settled when the model loads, never change, and are safe from any thread. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
+| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared), `reasoning` and `generated_turns` (each turn the model generated with a call, as its tokens, for the same model; see [Keeping a conversation](#keeping-a-conversation)), so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
+| where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `generated_turns()`, `wait_idle(timeout_s)`. `capabilities(tools=False)` and `capabilities(tools=True)` each give a `Capabilities` record of what `begin` accepts for a conversation begun without tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt`. Both are settled when the model loads, never change, and are safe from any thread. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
@@ -439,6 +439,20 @@ chat.begin(**saved)
 
 A tool declared there is declared again, not registered: a request whose calls
 are to run is still handed its `ToolRegistry`.
+
+**Exact restore, and another model.** The messages are in no model's own
+format: a call is its name and arguments, a thought plain text. A turn the
+model generated with a call is kept in the cache as the tokens it generated,
+which no template writes back exactly, so `conversation()` also gives those
+tokens as `generated_turns`, and `generated_turns()` gives them alone. Given
+back to `begin` on the same model, each such turn whose messages arrive
+unchanged is restored token for token, wherever it now stands among them, so
+generated turns kept beside messages you add to or drop from still serve them.
+On another model, or without them, every turn is written as that model's
+template writes it, and a call the old model wrote unreadably is left out with
+its error result. `generated_turns` is JSON-ready and only meaningful to the
+model that wrote it; reasoning on or off and the declared tools carry over to
+another model, its other settings come from it.
 
 To keep everything, older turns included, keep each message as you send it
 and each reply as you read it. A request whose generation fails before it says

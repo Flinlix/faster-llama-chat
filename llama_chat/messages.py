@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import collections
 import copy
+import hashlib
 import itertools
+import json
 import re
 from dataclasses import replace
 
@@ -198,6 +200,23 @@ def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict
         for call in calls]}
 
 
+def portable_digest(messages: list[dict]) -> str:
+    """A digest of ``messages`` as a caller keeps them, the same after any number of round trips through :func:`as_history` and :func:`as_messages`."""
+    def portable(message: dict) -> dict:
+        kept = {"role": message["role"], "content": message.get("content"),
+                THOUGHT_KEY: message.get(THOUGHT_KEY)}
+        if message.get("tool_calls"):
+            kept["calls"] = [{"id": c["id"], "unreadable": True} if CALL_AS_WRITTEN in c else
+                             {"id": c["id"], "name": c["function"]["name"],
+                              "arguments": c["function"]["arguments"]}
+                             for c in message["tool_calls"]]
+        if message["role"] == "tool":
+            kept["answers"] = message["tool_call_id"]
+        return kept
+    return hashlib.sha256(json.dumps([portable(m) for m in messages], sort_keys=True,
+                                     ensure_ascii=False, default=repr).encode()).hexdigest()
+
+
 # Where a result message keeps the value its caller gave, where that was no text, to give it back.
 RESULT_AS_GIVEN = "result_as_given"
 _NOT_GIVEN = object()
@@ -252,7 +271,7 @@ def as_history(messages: list[dict]) -> list:
         thought = [Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []
         said = thought + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
-            steps += said + [ToolCall("", {}, c["id"], "unreadable", c[CALL_AS_WRITTEN])
+            steps += said + [ToolCall("", {}, c["id"], "unreadable")
                              if CALL_AS_WRITTEN in c else
                              ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
                              for c in message["tool_calls"]]
