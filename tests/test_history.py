@@ -390,3 +390,20 @@ def test_a_history_whose_older_exchanges_are_long_is_not_rendered_whole_at_begin
     before = len(fake.rendered)
     w.begin("sys", history)
     assert max(fake.rendered[before:]) < 100     # never near the 604 messages of the whole
+
+
+@pytest.mark.parametrize("steps", [
+    (ToolCall("weather", {"city": "Bonn"}, status="unreadable", text="t"), ToolResult("unknown", "e")),
+    (ToolCall("weather", {}), ToolCall("", {}, status="unreadable", text="t"),
+     ToolResult("weather", "r"), ToolResult("unknown", "e")),
+    (ToolCall("", {}, status="unreadable", text="t"), ToolCall("weather", {}), ToolResult("unknown", "e")),
+], ids=["named", "after-a-call", "before-a-call"])
+def test_an_unreadable_call_that_does_not_stand_alone_is_refused(steps):
+    with pytest.raises(ValueError, match="stands alone"):
+        ToolTurn(steps)
+
+
+def test_a_history_cannot_leave_an_unreadable_call_owed():
+    w, _fake = tool_wrapper(context_size=2048)
+    with pytest.raises(ValueError, match="cannot leave one owed"):
+        w.begin("persona", [("user", "x"), ToolTurn((ToolCall("", {}, status="unreadable", text="t"),))])

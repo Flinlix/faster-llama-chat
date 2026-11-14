@@ -1113,7 +1113,7 @@ class _CallBudget:
 def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
     """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
     if generated.stop_reason == "unreadable_tool_call":
-        return [ToolCall("", {}, status="unreadable", text=generated.tool_call)]
+        return [ToolCall("", {}, status="unreadable", text=generated.call_written)]
     if generated.cut_inside_call:
         return [ToolCall("", {}, status="unfinished")]
     return pending

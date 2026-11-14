@@ -136,7 +136,11 @@ class ConversationRendering:
         return self._memo[key]
 
     def _calls_as_written(self, split: SplitRender, written: dict[int, str]) -> SplitRender:
-        """``split`` with each call that could not be read, of the message its index names, written as the model wrote it between the call's opening and closing."""
+        """``split`` with each call that could not be read, of the message its index names, written as the model wrote it between the call's opening and closing.
+
+        The text is the caller's own, as every text a conversation is given
+        is, so that a tag's letters in it stay letters.
+        """
         boundary = self._template.call_boundary()
         if boundary.tool_tokens:
             opening, closing = (self._reader.token_text(tag) for tag in boundary.tool_tokens)
@@ -150,15 +154,16 @@ class ConversationRendering:
             if name_start is None or split.text[name_start:name_end] != UNKNOWN_FUNCTION:
                 continue
             start = split.text.rfind(opening, 0, name_start)
-            if start < 0:
-                # Named in the turn's header first: the call's own frame follows it.
+            if start < 0 or split.text.find(closing, start + len(opening), name_start) >= 0:
+                # No frame of its own around the name, which the turn's header holds, say:
+                # the call's own frame follows the name.
                 start = split.text.find(opening, name_end)
                 if start < 0 or UNKNOWN_FUNCTION not in split.text[start:split.text.find(
                         closing, start + len(opening))]:
                     continue
             end = split.text.find(closing, max(start + len(opening), name_end))
             if end >= 0:
-                split = _with_text(split, start + len(opening), end, written[index])
+                split = _with_text(split, start + len(opening), end, written[index], index)
         return split
 
     def opening_render(self, system: list[dict]) -> str | None:
@@ -403,15 +408,17 @@ def _without_kept_texts(message: dict) -> dict:
     return message
 
 
-def _with_text(split: SplitRender, start: int, end: int, text: str) -> SplitRender:
-    """``split`` with its text from ``start`` to ``end`` replaced by ``text``, the template's own, every place after it moved."""
+def _with_text(split: SplitRender, start: int, end: int, text: str, index: int) -> SplitRender:
+    """``split`` with its text from ``start`` to ``end`` replaced by ``text``, the caller's own, every place after it moved; the call of message ``index`` ends after it."""
     moved = len(text) - (end - start)
 
     def place(at: int) -> int:
-        return at + moved if at >= end else min(at, start + len(text)) if at > start else at
+        return at + moved if at >= end else at
 
-    own = tuple((place(a), place(b)) for a, b in split.own if b <= start or a >= end)
+    own = tuple(sorted([(place(a), place(b)) for a, b in split.own if b <= start or a >= end]
+                       + [(start, start + len(text))]))
     contents = tuple(None if span is None or span[0] < end and span[1] > start
                      else (place(span[0]), place(span[1])) for span in split.contents)
-    call_ends = tuple(None if at is None else place(at) for at in split.call_ends)
+    call_ends = tuple(start + len(text) if i == index else None if at is None else place(at)
+                      for i, at in enumerate(split.call_ends))
     return SplitRender(split.text[:start] + text + split.text[end:], own, contents, call_ends)

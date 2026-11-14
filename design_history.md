@@ -4674,3 +4674,24 @@ the model writes one, where no opening of the model's surrounds the name
 (gpt-oss), the call is written as the template writes any past call there,
 as a call that was read would be. The test check applies the same rule,
 worked out on its own from the fake model's call marks.
+
+The review of this change found four faults, all fixed. The search for the
+call's opening went back past a closing to an earlier call's opening, on a
+template that names a call in its header first, and replaced everything in
+between, in the live cache too; an opening is now taken only where no
+closing lies between it and the name, else the frame after the name is used.
+The call's end stayed at the old name, so a text holding the closing's letters
+had its tail written twice; it now ends after the text. The text was written
+as template text, so a tag's letters in it became the tag, and a caller could
+forge a turn through `begin`: it is now the caller's own text, as every text a
+conversation is given is, so the letters of a tag the model wrote inside the
+call come back as letters (a model cannot write the call's closing or a
+turn's end there as the tag, since either ends the call). A `ToolTurn` now
+refuses an unreadable call that does not stand alone, with no name or
+arguments and nothing but its result after it, and `begin` one left owed,
+which no conversation keeps. The reply's report of the call now carries the
+same text, whitespace included, as the conversation does, and the history
+no longer deep-copies every call's arguments at every action. On two
+templates a restored call is still written under `unknown`, where the
+template writes every past call in its own frame or names it in the turn's
+header; that is put to the user (393).

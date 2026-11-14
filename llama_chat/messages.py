@@ -65,6 +65,9 @@ def as_messages(history, min_call_number: int = 0) -> list[dict]:
                 messages.append(result_message(step.name, owed.pop(0), result_text(step.result),
                                                step.result))
         if calls:                       # called, and not answered yet
+            if any(call.status == "unreadable" for call in calls):
+                raise ValueError("a call that could not be read was answered when it was "
+                                 "written; a history cannot leave one owed a result")
             messages.append(_with_thought(calling_message(text, calls), thought))
         elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
             messages.append(_with_thought({"role": "assistant", "content": text},  # a result ends it open
@@ -248,8 +251,7 @@ def as_history(messages: list[dict]) -> list:
         if role == "assistant" and message.get("tool_calls"):
             steps += said + [ToolCall("", {}, c["id"], "unreadable", c[CALL_AS_WRITTEN])
                              if CALL_AS_WRITTEN in c else
-                             ToolCall(c["function"]["name"],
-                                      copy.deepcopy(c["function"]["arguments"]), c["id"])
+                             ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":
             steps.append(ToolResult(message["name"], message.get(RESULT_AS_GIVEN, message["content"])))

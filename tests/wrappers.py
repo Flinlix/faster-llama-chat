@@ -185,13 +185,13 @@ def _written_calls(context, pieces, written_calls):
 
 
 def _written_in(pieces, start, end, written):
-    """``pieces`` with their text from ``start`` to ``end`` replaced by ``written``, the template's own."""
+    """``pieces`` with their text from ``start`` to ``end`` replaced by ``written``, the caller's own."""
     rebuilt, at = [], 0
     for piece, own in pieces:
         before, after = piece[:max(0, start - at)], piece[max(0, end - at):]
         rebuilt += [(before, own)] if at < start else []
         if at <= start < at + len(piece):
-            rebuilt.append((written, False))
+            rebuilt.append((written, True))
         rebuilt += [(after, own)] if at + len(piece) > end else []
         at += len(piece)
     return rebuilt
