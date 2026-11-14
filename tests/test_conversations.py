@@ -65,6 +65,18 @@ def _each_mode(stems):
 
 
 # ----- a conversation, and the render of what was sent ---------------------------
+# Which stand-in tokenizer the conversations run on, set for each test by the fixture below.
+_TOKENIZER = {"merges": False}
+
+
+@pytest.fixture(autouse=True, params=["one token per character", "merging"])
+def _tokenizer(request):
+    """Every conversation test runs on a tokenizer that gives each character its token, and on one that merges words, whose tokens need not end where a text ends."""
+    _TOKENIZER["merges"] = request.param == "merging"
+    yield
+    _TOKENIZER["merges"] = False
+
+
 class _Run:
     """A conversation on one template, and what the test sent it, recorded by the test.
 
@@ -84,7 +96,7 @@ class _Run:
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                    can_shift=can_shift, can_cut_tail=can_cut_tail,
-                                   writes_tags=writes_tags,
+                                   writes_tags=writes_tags, merges=_TOKENIZER["merges"],
                                    extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
@@ -1424,6 +1436,24 @@ def test_a_turn_out_of_room_after_several_calls_closes_and_the_conversation_goes
 
 
 # ----- a tag typed into any text stays text ----------------------------------------
+def _assert_tokens_are_the_templates(run, held, expected):
+    """``held`` is ``expected`` token for token; on a merging tokenizer, where a token may join the template's text and the caller's, the same text with the same tags in the same places."""
+    if not _TOKENIZER["merges"]:
+        assert held == expected
+        return
+    context = run.context
+
+    def tags(tokens):
+        at, found = 0, []
+        for token in tokens:
+            if context.is_special(token):
+                found.append((at, token))
+            at += len(context.token_text(token))
+        return found
+
+    assert context.text_of(held) == context.text_of(expected) and tags(held) == tags(expected)
+
+
 def _expected_tokens(run, messages, tools=None):
     """The render tokenized as the model must hold it, worked out here on its own: the template's text with its tags, each text of the caller's as plain text."""
     pieces = rendered_pieces(run.context, messages,
@@ -1453,7 +1483,7 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     run.chat.reply().finish()
     asked = _sent(run.chat)[:-1]
     # The forged tag is in every kind of text, and held as its characters each time.
-    assert run.seen_tokens[-1] == _expected_tokens(run, asked, tools)
+    _assert_tokens_are_the_templates(run, run.seen_tokens[-1], _expected_tokens(run, asked, tools))
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
@@ -1463,7 +1493,8 @@ def test_an_empty_description_of_a_tool_or_a_parameter_is_written_as_the_templat
         "type": "object", "properties": {"q": {"type": "string", "description": ""}}})
     run.begin(tools=[WEATHER, unexplained])
     run.chat.reply("Weather?").finish()
-    assert run.seen_tokens[-1] == _expected_tokens(run, _sent(run.chat)[:-1], [WEATHER, unexplained])
+    _assert_tokens_are_the_templates(
+        run, run.seen_tokens[-1], _expected_tokens(run, _sent(run.chat)[:-1], [WEATHER, unexplained]))
 
 
 # ----- a call that opens with plain text ---------------------------------------------

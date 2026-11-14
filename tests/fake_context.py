@@ -99,6 +99,10 @@ _FIRST_TAG = -3
 # Where the ids of generated tokens that spell no character's own start: the
 # lowest id a context may hand out, counting up towards the tags.
 _FIRST_GENERATED = -0x10000
+# Where the ids of merged pieces start, counting up: characters no test text holds.
+_FIRST_MERGED = 0xF0000
+# A merged piece: a letter or digit with the space before it; any other character is its own.
+_MERGED_PIECE = re.compile(r" [A-Za-z0-9]|.", re.S)
 
 
 class ScriptedCall:
@@ -182,13 +186,17 @@ class FakeContext:
             text tokenizes into.
         writes_tags: Whether a scripted reply's tags are generated as their
             tokens, as a model writes its own tags; otherwise as characters.
+        merges: Whether the tokenizer merges a space with the letter or digit
+            after it, as a real tokenizer joins characters, so that a token's
+            end need not fall where a text of the template's or the caller's
+            ends; otherwise one token per character.
         extra_tags: Tags of the model's vocabulary its template never writes.
     """
 
     def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
                  tokens_spell_text: bool = True, writes_tags: bool = False,
-                 extra_tags: tuple[str, ...] = ()) -> None:
+                 extra_tags: tuple[str, ...] = (), merges: bool = False) -> None:
         self._fixture = fixture
         self._template = fixture["chat_template"]
         # The default template under None, and the one for tools under its name, where given.
@@ -222,6 +230,9 @@ class FakeContext:
         self.gen_text = gen_text
         self.before_reply = None
         self._tokens_spell_text = tokens_spell_text
+        self._merges = merges
+        self._merged_ids: dict[str, int] = {}       # each merged piece's token, by its text
+        self._merged_texts: dict[int, str] = {}
         self._writes_tags = writes_tags
         self._next_generated = _FIRST_GENERATED
         self._generated_chars: dict[int, str] = {}   # what each generated token spells
@@ -245,13 +256,27 @@ class FakeContext:
     def _tokens(self, text: str, parse_special: bool) -> list[int]:
         """``text`` tokenized, unrecorded."""
         if not parse_special:
-            return [ord(c) for c in text]
+            return self._plain(text)
         tokens, at = [], 0
         for found in self._tag_pattern.finditer(text):
-            tokens += [ord(c) for c in text[at:found.start()]]
+            tokens += self._plain(text[at:found.start()])
             tokens.append(self._tag_token(found.group()))
             at = found.end()
-        return tokens + [ord(c) for c in text[at:]]
+        return tokens + self._plain(text[at:])
+
+    def _plain(self, text: str) -> list[int]:
+        """Text without tags tokenized: a token per character, or merged pieces where the tokenizer merges."""
+        if not self._merges:
+            return [ord(c) for c in text]
+        return [ord(piece) if len(piece) == 1 else self._merged(piece)
+                for piece in _MERGED_PIECE.findall(text)]
+
+    def _merged(self, piece: str) -> int:
+        """The one token ``piece``, several characters, is, given an id of its own the first time it is met."""
+        if piece not in self._merged_ids:
+            token = _FIRST_MERGED + len(self._merged_ids)
+            self._merged_ids[piece], self._merged_texts[token] = token, piece
+        return self._merged_ids[piece]
 
     def _rendered_tags(self) -> set[str]:
         """The tag-shaped texts the template writes, those it builds from parts as well, in a conversation that holds every kind of turn."""
@@ -295,6 +320,8 @@ class FakeContext:
             return self._tag_texts[token]
         if token in self._generated_chars:
             return self._generated_chars[token]
+        if token in self._merged_texts:
+            return self._merged_texts[token]
         return chr(token) if 0 < token <= sys.maxunicode else ""
 
     def text_of(self, tokens: list[int]) -> str:
@@ -417,15 +444,21 @@ class FakeContext:
         return self._call_mark_tokens
 
     def _written(self, text: str) -> list[int]:
-        """``text`` as this model generates it: each character its token, and with ``writes_tags`` each tag its own."""
+        """``text`` as this model generates it: each character its token, or each piece the tokenizer merges, and with ``writes_tags`` each tag its own."""
         if not self._writes_tags:
-            return [self._generated(ch) for ch in text]
+            return self._generated_run(text)
         tokens, at = [], 0
         for found in self._tag_pattern.finditer(text):
-            tokens += [self._generated(ch) for ch in text[at:found.start()]]
+            tokens += self._generated_run(text[at:found.start()])
             tokens.append(self._tag_token(found.group()))
             at = found.end()
-        return tokens + [self._generated(ch) for ch in text[at:]]
+        return tokens + self._generated_run(text[at:])
+
+    def _generated_run(self, text: str) -> list[int]:
+        """``text``, holding no tag, as this model generates it."""
+        if self._merges and self._tokens_spell_text:
+            return self._plain(text)
+        return [self._generated(ch) for ch in text]
 
     def _generated(self, ch: str) -> int:
         """The token this model generates ``ch`` as."""
