@@ -161,6 +161,8 @@ def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
     while at < len(text):
         key_end = text.find(call_body.key_close, at)
         if key_end < 0:
+            if text[at:].strip():
+                raise ValueError(f"text after the last argument: {text[at:]!r}")
             break
         key, at = text[at:key_end], key_end + len(call_body.key_close)
         separator = call_body.pair_sep.replace("{key}", key)
@@ -173,9 +175,12 @@ def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
             closing = call_body.body_close.replace("{key}", key).rstrip()
             following = text.find(separator, at)
             end = following if following >= 0 else text.find(closing, at)
+            if following < 0 and end >= 0 and text[end + len(closing):].strip():
+                raise ValueError(f"text after the last argument: {text[end + len(closing):]!r}")
         if end < 0:
             raise ValueError(f"an argument that never closes: {text[at:]!r}")
-        parsed[_unquote(key.strip(), call_body)] = _parse_typed_value(text[at:end], call_body)
+        _add_once(parsed, _unquote(key.strip(), call_body),
+                  _parse_typed_value(text[at:end], call_body))
         if following < 0:
             break
         at = following + len(separator)
@@ -203,8 +208,20 @@ def _parse_pairs(text: str, call_body: CallBody) -> dict:
         key, found, value = chunk.partition(call_body.key_close)
         if not found:
             raise ValueError(f"an argument with no value: {chunk!r}")
-        parsed[_unquote(key.strip(), call_body)] = _parse_typed_value(value, call_body)
+        _add_once(parsed, _unquote(key.strip(), call_body), _parse_typed_value(value, call_body))
     return parsed
+
+
+def _add_once(arguments: dict, key: str, value) -> None:
+    """Add ``value`` under ``key``, which ``arguments`` must not hold yet.
+
+    Raises:
+        ValueError: If the model wrote ``key`` twice, so that the value it
+            meant cannot be told.
+    """
+    if key in arguments:
+        raise ValueError(f"the argument {key!r} written twice")
+    arguments[key] = value
 
 
 def _parse_typed_value(text: str, call_body: CallBody) -> Any:
@@ -261,9 +278,18 @@ class _Unmarked(str):
     """A value a call format wrote without marking its type, read by :func:`_typed`."""
 
 
+def _object_once(pairs: list[tuple[str, Any]]) -> dict:
+    """A JSON object from its ``pairs``, none of whose keys the model wrote twice."""
+    found: dict = {}
+    for key, value in pairs:
+        _add_once(found, key, value)
+    return found
+
+
 # Reads JSON with each number kept as the text the model wrote, read by its tool's
 # schema afterwards: a number where text is asked is that text, as written.
-_SPELLED = json.JSONDecoder(parse_int=_Unmarked, parse_float=_Unmarked)
+_SPELLED = json.JSONDecoder(parse_int=_Unmarked, parse_float=_Unmarked,
+                            object_pairs_hook=_object_once)
 
 
 def _typed(value, schema, root) -> Any:
@@ -460,4 +486,8 @@ def _split_on(text: str, separator: str, call_body: CallBody) -> list[str]:
             depth = max(0, depth - 1)
         at += 1
     parts.append(text[start:])
-    return [part for part in parts if part.strip()]
+    if not any(part.strip() for part in parts):
+        return []
+    if not all(part.strip() for part in parts):
+        raise ValueError(f"an empty argument between separators: {text!r}")
+    return parts

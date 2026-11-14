@@ -307,3 +307,34 @@ def test_a_number_too_long_to_read_makes_the_call_unreadable_instead_of_infinite
     with pytest.raises(ValueError, match="too long"):
         parse_calls('{"name": "f", "arguments": {"n": 1' + "0" * 5000 + "}}", None,
                     json_keys=_JSON_KEYS, parameters=schema)
+
+
+# ----- a call is readable only where all of its text is read -----------------------
+_KEYED = CallBody(name_close='">', key_open="<", key_close=">", pair_sep="</{key}><",
+                  body_close="</{key}>", empty_close="", key_in_close=True)
+
+
+@pytest.mark.parametrize("body", ['clock"><zone>CET</zone><n>3</n>trailing junk',
+                                  'clock"><zone>CET</zone><n>3</n><unclosed',
+                                  'clock"><zone>CET</zone><zone>UTC</zone>'],
+                         ids=["text-after", "unclosed-after", "key-twice"])
+def test_a_call_with_text_left_over_or_a_key_twice_is_unreadable(body):
+    with pytest.raises(ValueError):
+        parse_calls(body, _KEYED)
+    assert parse_calls('clock"><zone>CET</zone><n>3</n>  ', _KEYED) == [
+        ToolCall("clock", {"zone": "CET", "n": 3})]          # whitespace after it is no text
+
+
+@pytest.mark.parametrize("body", ["fn:f{a:1,,b:2}", "fn:f{a:1,a:2}", "fn:f{a:1,}"],
+                         ids=["blank-pair", "key-twice", "trailing-separator"])
+def test_a_delimited_call_with_a_blank_pair_or_a_key_twice_is_unreadable(body):
+    with pytest.raises(ValueError):
+        parse_calls(body, CALL_BODY, "fn:")
+
+
+@pytest.mark.parametrize("body", ['{"name": "f", "arguments": {"a": 1, "a": 2}}',
+                                  '{"name": "f", "arguments": {"a": {"b": 1, "b": 2}}}'],
+                         ids=["key-twice", "nested-key-twice"])
+def test_a_json_call_with_a_key_twice_is_unreadable(body):
+    with pytest.raises(ValueError):
+        parse_calls(body, None, json_keys=("name", "arguments"))

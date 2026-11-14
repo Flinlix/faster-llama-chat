@@ -4775,3 +4775,20 @@ test thread's own processor time where they measure growth, so a busy machine
 no longer fails them. Where a conversation holds no thought, the check no
 longer renders it three times in three identical forms, which saved about a
 tenth of the suite's time.
+
+### A call is readable only where all of its text is read (415.11A, first half)
+
+The parser read what it could of a call and dropped the rest without a word:
+text after the last argument, an unclosed argument after it, a blank pair
+between two separators, and a key written twice, whose last value won. A
+misread argument then reached the tool unnoticed. Each of these now makes the
+call unreadable, so the model is told and can write it again; whitespace after
+the call stays allowed. A key written twice is refused in a JSON object too,
+nested ones included. Not covered: a nested value that a template writes as a
+Python literal, read by `ast.literal_eval`, still takes the last of two equal
+keys.
+
+The second half of the rule, judging each call of a batch on its own instead
+of refusing the whole batch for one bad entry, waits for the removal of the
+call-as-written code (403.3A): until then an unreadable call must stand alone
+in its turn.
