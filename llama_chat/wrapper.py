@@ -18,17 +18,14 @@ from dataclasses import dataclass, field, replace
 
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
-from .cache_sync import Cancelled
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
-from .generation import GenerationAccumulator
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_saved_turns
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
                      UnsupportedError)
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
-from .reply_text import ReplyText
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tool_registry import ToolRegistry
 from .tools import ToolCall, ToolSpec, ensure_declarable, unwritable_failure
@@ -986,175 +983,32 @@ class ChatWrapper:
                   cancel: threading.Event | None, sampling: Sampling,
                   withhold: bool = False,
                   on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
-        """Generate one reply from the cache's end and record what it left, as a Reply.
-
-        Without ``text``, it goes on with the open turn, adding no message of
-        its own, or else answers the newest message, which must be a user
-        message already written. A call it stops on leaves the turn open for a
-        result. The lock must be held.
-
-        Every exit before the generation's first token, by a cancel or a
-        failure, leaves the conversation and the cache as this call found
-        them, the history its question evicted included; so does a failure
-        while the reply is recorded. See design_history.md, "One undo path".
+        """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it, its Reply kept for a stream closed before it returns; the lock must be held.
 
         Args:
             text, stop, cancel: As :meth:`reply`.
             max_reply_tokens: The cap on this generation's tokens, ``None``
                 for the config's.
-            sampling: Every value the generation draws with.
-            recognizes_calls: ``False`` leaves a call the model writes as text,
-                so this generation cannot end on a call.
             may_call_again: Whether a call is read again after a call this
                 generation writes that cannot be read, which the answer to
                 that call tells the model.
-            withhold: Also keep a call's opening token from ever being drawn.
-            on_started: Called once the request is written and the generation
-                starts, before anything it produces is recorded; given to a
-                request's first generation alone.
         """
         self._ensure_open()
-        conversation = self._conversation
-        decoded_from = conversation.decoded
-        evicted_before = conversation.changes_so_far().n_evicted
-        conversation.open_attempt(starts_request=on_started is not None, asks=text is not None)
-        # Put back with the conversation, the turn's policy and budget included.
-        roll_back = conversation.roll_back
+        generation = self._conversation.generation(
+            text, recognizes_calls=recognizes_calls, withhold=withhold,
+            max_generated_tokens=self._reply_cap(max_reply_tokens), stop=stop, cancel=cancel,
+            sampling=sampling, unreadable_result=_explain_failure(_UNREADABLE, may_call_again),
+            on_started=on_started, on_reply=self._keep_newest_reply)
+        return (yield from generation)
 
-        def interrupted() -> Reply:
-            return Reply(text="", n_prefilled_tokens=conversation.decoded - decoded_from,
-                         n_prompt_tokens=conversation.total_tokens,
-                         n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
-        try:
-            if cancel is not None and cancel.is_set():
-                raise Cancelled("cancelled before the request was written")
-            if text is not None:
-                conversation.ask(text, cancel)
-            elif not conversation.turn_open:
-                conversation.prompt()
-        except Cancelled:
-            roll_back()
-            return interrupted()
-        except BaseException:
-            roll_back()
-            raise
-        max_generated_tokens = self._reply_cap(max_reply_tokens)
-        n_prompt_tokens = conversation.total_tokens
-
-        generated = GenerationAccumulator()
-        results_cut = conversation.results_cut
-        try:
-            goes_on = text is None and conversation.turn_open
-            reply_text = ReplyText(self._template.properties.reasoning,
-                                   self._template.answer_opening(conversation.reasoning),
-                                   self._template.reply_header(conversation.reasoning),
-                                   conversation.prompt_text, list(stop), generated.tag_spans,
-                                   inside=goes_on and conversation.called_in_thought)
-            pieces = conversation.generate(
-                max_generated_tokens, generated, cancel=cancel,
-                sampling=sampling,
-                ends_turn=self._turn_end_test(reply_text, generated),
-                boundary=replace(self._template.call_boundary(recognizes_calls, withhold),
-                                 starts_in_thought=reply_text.opens_in_thought))
-            if on_started is not None:
-                on_started()
-        except BaseException:
-            roll_back()
-            raise
-        failed = False
-        try:
-            for piece in pieces:
-                shown = reply_text.feed(piece)
-                if shown:
-                    yield shown
-                if reply_text.met_stop_string:
-                    pieces.close()
-                    generated.stop_reason = "stop_string"
-                    break
-            else:
-                if shown := reply_text.finish(generated.stop_reason):
-                    yield shown
-        except BaseException:
-            failed = True
-            raise
-        finally:
-            pieces.close()
-            if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
-                roll_back()                 # nothing was produced, so nothing changes
-            else:
-                try:
-                    # Runs on normal completion and on early close alike.
-                    self._record_reply(generated, reply_text, may_call_again)
-                except BaseException:
-                    roll_back()
-                    raise
-            changes = conversation.changes_so_far()
-            # A generation put back puts back what it evicted too.
-            n_evicted_messages = changes.n_evicted - evicted_before
-            # Kept for a stream closed before it returns, which reads it as its reply.
-            self._newest_reply = Reply(
-                evicted_for=changes.evicted_for if n_evicted_messages else None,
-                taken_back=changes.taken_back, kept_text=changes.kept_text,
-                text=reply_text.answer,
-                n_prefilled_tokens=conversation.decoded - decoded_from,
-                n_prompt_tokens=n_prompt_tokens,
-                n_generated_tokens=len(generated.token_ids),
-                n_evicted_messages=n_evicted_messages,
-                stop_reason=generated.stop_reason,
-                tool_calls=_reported_calls(generated, conversation.pending_calls),
-                tool_results_cut=results_cut,
-                n_reasoning_tokens=reply_text.thought_pieces,
-                thought=reply_text.thought,
-            )
-        return self._newest_reply
+    def _keep_newest_reply(self, reply: Reply) -> None:
+        """Keep ``reply`` for a stream closed before it returns, which reads it as its reply."""
+        self._newest_reply = reply
 
     def _reply_cap(self, max_reply_tokens: int | None) -> int:
         """The cap on a reply's tokens: ``max_reply_tokens``, else the config's, else the context's size."""
         return next((c for c in (max_reply_tokens, self._config.max_reply_tokens) if c is not None),
                     self._config.context_size)
-
-    def _turn_end_test(self, reply_text: ReplyText,
-                       generated: GenerationAccumulator) -> Callable[[int], bool] | None:
-        """Whether a sampled token ends the reply ``generated`` collects, besides the end-of-generation tokens."""
-        turn_end = self._template.properties.turn_end_token
-        if turn_end is None:
-            return None
-        return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end),
-                                        generated.token_ids, self._context.token_bytes,
-                                        self._context.is_special)
-
-    def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
-                      may_call_again: bool) -> None:
-        """Record what one generation left and settle the cache after it.
-
-        A call that could not be read ends the generation as
-        ``"unreadable_tool_call"``, and is answered with a failure that says
-        whether to try again.
-        """
-        calls = self._read_calls(generated)
-        called = generated.stop_reason == "tool_call"
-        if called and not calls:
-            generated.stop_reason = "unreadable_tool_call"
-        tags, answer = self._template.properties.reasoning, reply_text.answer
-        # Given to a template that writes a past reply's thought; another is written without it.
-        kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
-        self._conversation.record_reply(
-            answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again),
-            stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
-
-    def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
-        """The calls ``generated`` stopped on, empty where it produced no readable call.
-
-        A call the parser cannot read counts as no call; any other fault is raised.
-        """
-        if generated.stop_reason != "tool_call":
-            return []
-        try:
-            return self._template.read_calls(
-                generated.tool_call,
-                {spec.name: spec.parameters for spec in self._conversation.tools})
-        except ValueError:
-            return []
 
     @property
     def _template(self) -> ResolvedTemplate:
@@ -1200,15 +1054,6 @@ class _CallBudget:
 
     def __post_init__(self) -> None:
         self.calls_left = math.inf if self.max_calls is None else self.max_calls
-
-
-def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
-    """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
-    if generated.stop_reason == "unreadable_tool_call":
-        return [ToolCall("", {}, status="unreadable", text=generated.tool_call)]
-    if generated.cut_inside_call:
-        return [ToolCall("", {}, status="unfinished")]
-    return pending
 
 
 def _stop_texts(stop) -> tuple[str, ...]:

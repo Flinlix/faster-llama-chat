@@ -1433,3 +1433,16 @@ def test_every_action_reports_no_eviction_where_nothing_went():
     reports.append(w.inject("Danke.", role="user"))
     reports.append(w.begin(**{**w.conversation(), "reasoning": False}))
     assert [(r.n_evicted_messages, r.evicted_for) for r in reports] == [(0, None)] * len(reports)
+
+
+def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_is_read(monkeypatch):
+    from llama_chat import publishing, rendered_cache
+    w, _fake = begun_wrapper()
+    w.reply("eins").finish()
+    made, built = [], []
+    monkeypatch.setattr(rendered_cache, "published",
+                        lambda *a, **k: made.append(1) or publishing.published(*a, **k))
+    monkeypatch.setattr(publishing, "completions_messages",
+                        lambda *a, **k: built.append(1) or [])
+    w.reply("zwei").finish()
+    assert len(made) <= 2 and not built        # the question, then the recorded reply

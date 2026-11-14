@@ -9,6 +9,7 @@ import pytest
 
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
+from llama_chat.rendered_cache import RenderedCache
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
@@ -714,7 +715,7 @@ def test_a_reply_failing_before_it_generates_is_taken_back_with_its_question(mon
     def failing(*args, **kwargs):
         raise RuntimeError("set-up failed")
 
-    monkeypatch.setattr(ChatWrapper, "_turn_end_test", failing)
+    monkeypatch.setattr(RenderedCache, "_turn_end_test", failing)
     with pytest.raises(RuntimeError, match="set-up failed"):
         w.reply("zwei").finish()
     monkeypatch.undo()

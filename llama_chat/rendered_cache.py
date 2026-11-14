@@ -20,6 +20,7 @@ import contextlib
 import copy
 import logging
 import threading
+from collections.abc import Callable, Generator
 from dataclasses import replace
 
 from .generation import GenerationAccumulator
@@ -46,7 +47,8 @@ from .errors import (RAISE_THE_ROOM, ContextOverflowError, InvalidArgumentError,
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .sequences import common_prefix_length
-from .reply import Report
+from .reply import Reply, Report
+from .reply_text import ReplyText
 from .tools import ToolCall, ToolSpec, result_text
 
 _log = logging.getLogger(__name__)
@@ -89,6 +91,8 @@ class RenderedCache:
         self._request: Snapshot | None = None
         self._rolled_back = False
         self._published = Published()
+        # How many actions, one inside another, run now; the outermost publishes once it ends.
+        self._depth = 0
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -693,6 +697,163 @@ class RenderedCache:
                 - self.template.properties.n_closing_tokens)
         return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
 
+    def generation(self, text: str | None, *, recognizes_calls: bool, withhold: bool,
+                   max_generated_tokens: int, stop: tuple[str, ...],
+                   cancel: threading.Event | None, sampling, unreadable_result: dict,
+                   on_started: Callable[[], None] | None,
+                   on_reply: Callable[[Reply], None]) -> Generator[str, None, Reply]:
+        """Generate one reply from the cache's end, stream what it shows, and record what it left, as a Reply.
+
+        Without ``text``, it goes on with the open turn, adding no message of
+        its own, or else answers the newest message, which must be a user
+        message already written. A call it stops on leaves the turn open for a
+        result.
+
+        Every exit before the generation's first token, by a cancel or a
+        failure, leaves the conversation and the cache as this call found
+        them, the history its question evicted included; so does a failure
+        while the reply is recorded. See design_history.md, "One undo path".
+
+        Args:
+            text, stop, cancel: As :meth:`~llama_chat.wrapper.ChatWrapper.reply`.
+            max_generated_tokens: The cap on this generation's tokens.
+            sampling: Every value the generation draws with.
+            recognizes_calls: ``False`` leaves a call the model writes as text,
+                so this generation cannot end on a call.
+            withhold: Also keep a call's opening token from ever being drawn.
+            unreadable_result: What a call this generation writes that cannot
+                be read is answered with.
+            on_started: Called once the request is written and the generation
+                starts, before anything it produces is recorded; given to a
+                request's first generation alone.
+            on_reply: Given the Reply once the generation ends, early or not.
+        """
+        decoded_from = self.decoded
+        evicted_before = self._state.changes.n_evicted
+        self.open_attempt(starts_request=on_started is not None, asks=text is not None)
+        try:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled("cancelled before the request was written")
+            if text is not None:
+                self.ask(text, cancel)
+            elif not self.turn_open:
+                self.prompt()
+        except Cancelled:
+            self.roll_back()
+            return Reply(text="", n_prefilled_tokens=self.decoded - decoded_from,
+                         n_prompt_tokens=self.total_tokens, n_generated_tokens=0,
+                         n_evicted_messages=0, stop_reason="interrupted")
+        except BaseException:
+            self.roll_back()
+            raise
+        n_prompt_tokens = self.total_tokens
+        generated = GenerationAccumulator()
+        results_cut = self.results_cut
+        template = self.template
+        try:
+            goes_on = text is None and self.turn_open
+            reply_text = ReplyText(template.properties.reasoning,
+                                   template.answer_opening(self.reasoning),
+                                   template.reply_header(self.reasoning),
+                                   self.prompt_text, list(stop), generated.tag_spans,
+                                   inside=goes_on and self.called_in_thought)
+            pieces = self.generate(
+                max_generated_tokens, generated, cancel=cancel, sampling=sampling,
+                ends_turn=self._turn_end_test(reply_text, generated),
+                boundary=replace(template.call_boundary(recognizes_calls, withhold),
+                                 starts_in_thought=reply_text.opens_in_thought))
+            if on_started is not None:
+                on_started()
+        except BaseException:
+            self.roll_back()
+            raise
+        failed = False
+        try:
+            for piece in pieces:
+                shown = reply_text.feed(piece)
+                if shown:
+                    yield shown
+                if reply_text.met_stop_string:
+                    pieces.close()
+                    generated.stop_reason = "stop_string"
+                    break
+            else:
+                if shown := reply_text.finish(generated.stop_reason):
+                    yield shown
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            pieces.close()
+            if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
+                self.roll_back()            # nothing was produced, so nothing changes
+            else:
+                try:
+                    # Runs on normal completion and on early close alike.
+                    self._record_generated(generated, reply_text, unreadable_result)
+                except BaseException:
+                    self.roll_back()
+                    raise
+            changes = self._state.changes
+            # A generation put back puts back what it evicted too.
+            n_evicted_messages = changes.n_evicted - evicted_before
+            reply = Reply(
+                evicted_for=changes.evicted_for if n_evicted_messages else None,
+                taken_back=changes.taken_back, kept_text=changes.kept_text,
+                text=reply_text.answer,
+                n_prefilled_tokens=self.decoded - decoded_from,
+                n_prompt_tokens=n_prompt_tokens,
+                n_generated_tokens=len(generated.token_ids),
+                n_evicted_messages=n_evicted_messages,
+                stop_reason=generated.stop_reason,
+                tool_calls=_reported_calls(generated, self.pending_calls),
+                tool_results_cut=results_cut,
+                n_reasoning_tokens=reply_text.thought_pieces,
+                thought=reply_text.thought,
+            )
+            on_reply(reply)
+        return reply
+
+    def _turn_end_test(self, reply_text: ReplyText,
+                       generated: GenerationAccumulator) -> Callable[[int], bool] | None:
+        """Whether a sampled token ends the reply ``generated`` collects, besides the end-of-generation tokens."""
+        turn_end = self.template.properties.turn_end_token
+        if turn_end is None:
+            return None
+        return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end),
+                                        generated.token_ids, self._context.token_bytes,
+                                        self._context.is_special)
+
+    def _record_generated(self, generated: GenerationAccumulator, reply_text: ReplyText,
+                          unreadable_result: dict) -> None:
+        """Record what one generation left and settle the cache after it.
+
+        A call that could not be read ends the generation as
+        ``"unreadable_tool_call"``, and is answered with ``unreadable_result``.
+        """
+        calls = self._read_calls(generated)
+        called = generated.stop_reason == "tool_call"
+        if called and not calls:
+            generated.stop_reason = "unreadable_tool_call"
+        tags = self.template.properties.reasoning
+        # Given to a template that writes a past reply's thought; another is written without it.
+        kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
+        self.record_reply(reply_text.answer, kept_thought, calls, called, unreadable_result,
+                          stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
+
+    def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
+        """The calls ``generated`` stopped on, empty where it produced no readable call.
+
+        A call the parser cannot read counts as no call; any other fault is raised.
+        """
+        if generated.stop_reason != "tool_call":
+            return []
+        try:
+            return self.template.read_calls(
+                generated.tool_call, {spec.name: spec.parameters for spec in self._state.tools})
+        except ValueError:
+            return []
+
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False,
                      in_thought: bool = False) -> None:
@@ -723,7 +884,7 @@ class RenderedCache:
             # It failed before it said anything the template writes: nothing changes.
             self.roll_back()
             return
-        try:
+        with self._publishing():
             recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
             self._state.called_in_thought = called and in_thought
             if recorded != answer:
@@ -735,8 +896,6 @@ class RenderedCache:
                                   recorded != answer, unreadable_result)
             finally:
                 self._attempt = None        # recorded: a fault after it keeps the reply
-        finally:
-            self._publish()
 
     def _append_reply(self, answer: str, thought: str, calls: list[ToolCall], called: bool,
                       stopped: bool) -> tuple[str, bool]:
@@ -1254,17 +1413,28 @@ class RenderedCache:
                 self._pin_opening()
         saved = self._state.copied()
         held = list(self._memory.tokens)
+        with self._publishing():
+            try:
+                yield
+            except BaseException:
+                self._state.put_back(saved)
+                self._memory.replace(held)
+                raise
+
+    @contextlib.contextmanager
+    def _publishing(self):
+        """Run a change, published once the outermost change running ends, whether or not it raised."""
+        self._depth += 1
         try:
             yield
-        except BaseException:
-            self._state.put_back(saved)
-            self._memory.replace(held)
-            raise
         finally:
+            self._depth -= 1
             self._publish()
 
     def _publish(self) -> None:
-        """Publish the conversation for readers that hold no lock."""
+        """Publish the conversation for readers that hold no lock, unless a change running publishes it once it ends."""
+        if self._depth:
+            return
         self._published = published(self._state, self.pending_calls, self.turn_open,
                                     len(self._memory.tokens), self._joins_questions,
                                     self._context.model_fingerprint)
@@ -1317,6 +1487,15 @@ _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked
 
 
 # ----- helpers ---------------------------------------------------------------------
+def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
+    """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
+    if generated.stop_reason == "unreadable_tool_call":
+        return [ToolCall("", {}, status="unreadable", text=generated.tool_call)]
+    if generated.cut_inside_call:
+        return [ToolCall("", {}, status="unfinished")]
+    return pending
+
+
 def _without_turn(message: dict) -> dict:
     """``message`` without the kept turn it may end, for comparing what it says."""
     return {key: value for key, value in message.items() if key != KEPT_TURN}
