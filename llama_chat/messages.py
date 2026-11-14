@@ -20,6 +20,8 @@ THOUGHT_KEY = "reasoning_content"
 # The name a call that could not be read is written under, and its result answered with.
 # Which name is used does not change what a template renders around it.
 UNKNOWN_FUNCTION = "unknown"
+# Where the message that ends a turn kept as the tokens it was generated as holds that turn.
+KEPT_TURN = "kept_turn"
 # The mark of a call that could not be read: written only as a kept turn's tokens hold it,
 # else left out at a begin.
 UNREADABLE_CALL = "unreadable"

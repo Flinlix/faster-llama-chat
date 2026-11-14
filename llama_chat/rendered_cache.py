@@ -27,13 +27,14 @@ from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
-from .messages import (THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages, calling_message,
+from .messages import (KEPT_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages,
+                       calling_message,
                        exchange_count, exchange_starts, next_call_number, portable_digest,
                        result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact)
-from .rendering import ConversationRendering, KeptTurn, Target
+from .rendering import ConversationRendering, KeptTurn, Target, kept_turns, with_kept
 from .eviction import Eviction
 from .result_cutting import ResultCutting
 from .windows import WHOLE, Windows
@@ -236,7 +237,7 @@ class RenderedCache:
             # takes the id of one dropped, or of one this conversation held before.
             self._state.n_calls = max(self._state.n_calls, next_call_number(
                 c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()))
-            self._state.kept, self._state.kept_at = [], {}
+            self._state.kept_at = {}
             self._state.called_in_thought = False
             self._state.results_cut = []
             limit = self._config.evict_above_tokens
@@ -244,14 +245,10 @@ class RenderedCache:
             asks = any(m["role"] == "user" for m in self._state.messages)
             self._restore_generated(generated_turns)
             self._leave_out_unreadable()
-            given = len(self._state.messages)
             self._eviction.keep_newest_history(min(limit, self._config.context_size // 2),
                                                self._refused_history)
-            if len(self._state.messages) < given:
-                held = {id(m) for m in self._state.messages}
-                self._state.kept = [k for k in self._state.kept if id(k.first) in held]
             self._drop_unplaceable()
-            self._state.changes.n_turns_restored = len(self._state.kept)
+            self._state.changes.n_turns_restored = len(kept_turns(self._state.messages))
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
@@ -308,9 +305,8 @@ class RenderedCache:
                 continue                # dropped with the oldest, or changed: written anew
             taken.add(first)
             last = first + count - 1
-            self._state.kept.append(KeptTurn(tuple(turn["tokens"]), messages[first],
-                                             messages[last], bool(messages[last].get("tool_calls"))))
-        self._state.kept.sort(key=lambda k: next(i for i, m in enumerate(messages) if m is k.first))
+            messages[last] = with_kept(messages[last], KeptTurn(
+                tuple(turn["tokens"]), count, bool(messages[last].get("tool_calls"))))
 
     def _log_begin(self, n_given: int, generated_turns: dict | None) -> None:
         """Say once what ``begin`` left out of a history of ``n_given`` messages beyond the oldest, which the eviction says, and of the generated turns it was given; nothing where it kept them all as given. See design_history.md, "One report of what an action changed"."""
@@ -338,7 +334,8 @@ class RenderedCache:
         row are joined where the template writes no two in a row, as a question
         after an unanswered one is.
         """
-        held = {id(m) for k in self._state.kept for m in (k.first, k.last)}
+        held = {id(self._state.messages[i]) for first, last, _ in kept_turns(self._state.messages)
+                for i in range(first, last + 1)}
         kept, gone, emptied = [], set(), None
         for message in self._state.messages:
             calls = message.get("tool_calls") or ()
@@ -517,12 +514,7 @@ class RenderedCache:
                   "its results nor an empty reply")
         # Neither is written: the turn goes, from its first message after the newest question.
         asked = max(i for i, m in enumerate(self._state.messages) if m["role"] == "user")
-        gone = self._state.messages[asked + 1:]
         del self._state.messages[asked + 1:]
-        self._state.kept = [k for k in self._state.kept
-                            if not any(k.last is m or k.first is m for m in gone)]
-        self._state.kept_at = {k: at for k, at in self._state.kept_at.items()
-                               if k in self._state.kept}
 
     def _writes_after(self, question: dict) -> bool:
         """Whether the template writes ``question`` after the newest exchange as it stands."""
@@ -765,14 +757,16 @@ class RenderedCache:
         # string ended holds what was generated after it: a turn kept so far stays kept up to
         # its call, and the rest is the template's.
         if (called or resumed) and (answer or asked) and not stopped:
-            first, open_turn = message, self._open_kept() if resumed else None
+            messages, span = self._state.messages, 1
+            open_turn = self._open_kept() if resumed else None
             if open_turn is not None:
                 # The whole turn is kept, its results and their prompt included.
-                self._state.kept.remove(open_turn)
-                start, first = min(start, self._state.kept_at.pop(open_turn)), open_turn.first
-            self._state.kept.append(KeptTurn(tuple(self._memory.tokens[start:]), first, message,
-                                             bool(asked)))
-            self._state.kept_at[self._state.kept[-1]] = start
+                at, turn = open_turn
+                messages[at] = with_kept(messages[at], None)
+                start = min(start, self._state.kept_at.pop(turn))
+                span = len(messages) - (at - turn.span + 1) + 1
+            message[KEPT_TURN] = KeptTurn(tuple(self._memory.tokens[start:]), span, bool(asked))
+            self._state.kept_at[message[KEPT_TURN]] = start
         self._state.messages.append(message)
         # A reply that leaves every turn that called tools as it was cannot move one.
         moves_kept = called or resumed or not self._state.checks.tool_turns_stay
@@ -842,11 +836,15 @@ class RenderedCache:
         return tags is not None and any(tag.strip() and tag.strip() in text
                                         for tag in (tags.thought_open, tags.thought_close))
 
-    def _open_kept(self) -> KeptTurn | None:
-        """The kept turn the open reply goes on with: the one ending on its newest call, placed in the cache."""
-        calling = next((m for m in reversed(self._state.messages) if m.get("tool_calls")), None)
-        return next((k for k in self._state.kept if k.last is calling and k.on_call
-                     and k in self._state.kept_at), None)
+    def _open_kept(self) -> tuple[int, KeptTurn] | None:
+        """The kept turn the open reply goes on with, and where its last message stands: the one ending on its newest call, placed in the cache."""
+        messages = self._state.messages
+        at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("tool_calls")),
+                  None)
+        turn = messages[at].get(KEPT_TURN) if at is not None else None
+        if turn is None or not turn.on_call or turn not in self._state.kept_at:
+            return None
+        return at, turn
 
     def _write_unreadable(self, result: dict) -> bool:
         """Answer a call that could not be read with ``result``, where the template writes a result and the context has room; whether it was."""
@@ -878,26 +876,29 @@ class RenderedCache:
     def _forget_calls(self) -> None:
         """Record the newest reply without the call it made, which could be told nothing; its tokens stay as generated."""
         newest = {k: v for k, v in self._state.messages[-1].items() if k != "tool_calls"}
-        old = self._state.messages[-1]
+        turn = newest.get(KEPT_TURN)
+        if turn is not None:
+            newest[KEPT_TURN] = KeptTurn(turn.tokens, turn.span, False)
         self._state.messages[-1] = newest
-        self._state.kept = [KeptTurn(k.tokens, newest if k.first is old else k.first, newest, False)
-                            if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
         self._drop_unplaceable()
 
     def _drop_unplaceable(self) -> bool:
         """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was."""
-        messages, kept = self._state.messages, self._state.kept
-        if not kept:
+        messages = self._state.messages
+        if not kept_turns(messages):
             return False
+        unplaced = set()
         for generation_prompt in (False, True):
             split = self._rendering.split(messages, generation_prompt)
             if split is not None:
-                kept = [k for k in kept if self._rendering.place(k, messages, split) is not None]
-        dropped = len(kept) < len(self._state.kept)
-        self._state.kept = kept
-        self._state.kept_at = {k: at for k, at in self._state.kept_at.items() if k in kept}
-        return dropped
+                unplaced |= {last for first, last, turn in kept_turns(messages)
+                             if self._rendering.place(first, last, turn.on_call, split) is None}
+        for last in unplaced:
+            messages[last] = with_kept(messages[last], None)
+        held = {turn for _, _, turn in kept_turns(messages)}
+        self._state.kept_at = {k: at for k, at in self._state.kept_at.items() if k in held}
+        return bool(unplaced)
 
     def close_unanswered(self) -> None:
         """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one.
@@ -994,7 +995,7 @@ class RenderedCache:
             if newest is None or newest["role"] != "assistant":
                 raise OutOfOrderError(None, "the newest message is not an assistant reply")
             if any(m["role"] == "tool" or m.get("tool_calls") for m in self._state.messages[-2:]) \
-                    or any(k.last is newest for k in self._state.kept):
+                    or KEPT_TURN in newest:
                 raise OutOfOrderError(None, "the newest reply holds a tool call, which would "
                                             "be separated from its result")
             if not newest["content"].startswith(keep_text):
@@ -1124,10 +1125,7 @@ class RenderedCache:
     def _remove_from(self, first: int) -> None:
         """Take the messages from ``first`` on out again, then drop what is over the limits."""
         with self._action():
-            gone = self._state.messages[first:]
             del self._state.messages[first:]
-            self._state.kept = [k for k in self._state.kept
-                                if not any(k.first is m or k.last is m for m in gone)]
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
             # As after any reply, so that what the template writes ahead of the next

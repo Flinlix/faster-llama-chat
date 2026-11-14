@@ -8,6 +8,7 @@ import dataclasses
 import sys
 
 from llama_chat.cache_sync import _TOKEN_OFFSET
+from llama_chat import rendering
 from llama_chat.template_reading import TemplateReader
 
 
@@ -75,16 +76,14 @@ def reasons(wrapper) -> bool:
 
 def kept_turns(wrapper) -> list[tuple[list[int], str, bool]]:
     """Each turn kept as generated: its tokens, the text of the message it ends with, and whether it ends on a call."""
-    return [(list(kept.tokens), (kept.last.get("content") or "").strip(), kept.on_call)
-            for kept in wrapper._conversation._state.kept]
+    messages = wrapper._conversation.messages
+    return [(list(kept.tokens), (messages[last].get("content") or "").strip(), kept.on_call)
+            for _first, last, kept in rendering.kept_turns(messages)]
 
 
 def kept_turn_spans(wrapper) -> list[tuple[int, int]]:
     """Each turn kept as generated, as the indexes of its first and its last message among the rendered messages."""
-    messages = wrapper._conversation.messages
-    index = {id(message): i for i, message in enumerate(messages)}
-    return [(index[id(kept.first)], index[id(kept.last)])
-            for kept in wrapper._conversation._state.kept]
+    return [(first, last) for first, last, _kept in rendering.kept_turns(wrapper._conversation.messages)]
 
 
 def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
@@ -95,8 +94,8 @@ def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
     for generation_prompt in (False, True):
         split = conversation._rendering.split(messages, generation_prompt)
         if split is not None:
-            places += [conversation._rendering.place(kept, messages, split)
-                       for kept in conversation._state.kept]
+            places += [conversation._rendering.place(first, last, kept.on_call, split)
+                       for first, last, kept in rendering.kept_turns(messages)]
     return places
 
 

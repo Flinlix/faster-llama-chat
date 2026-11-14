@@ -132,11 +132,11 @@ class Eviction:
     def _drop_oldest_exchanges(self, length: Callable[[], int],
                                bound: int, at_least: int, newest_too: bool) -> bool:
         """Drop the fewest oldest exchanges, ``at_least`` of them, after which ``length()`` is within ``bound``, or every one that can go; whether any went."""
-        messages, kept = list(self._state.messages), self._state.kept
+        messages = list(self._state.messages)
 
         def dropping(count: int) -> int:
             """Drop ``count`` exchanges from the conversation as it was; how many could go."""
-            self._state.messages[:], self._state.kept = messages, kept
+            self._state.messages[:] = messages
             return sum(1 for _ in itertools.takewhile(
                 bool, (self.drop_oldest_exchange(newest_too) for _ in range(count))))
 
@@ -220,9 +220,6 @@ class Eviction:
                 newest_too and len(self._state.messages) > first
                 and self._state.messages[-1]["role"] == "assistant"):
             return False
-        gone = self._state.messages[first:following]
         del self._state.messages[first:following]
-        self._state.kept = [k for k in self._state.kept
-                            if not any(k.first is m or k.last is m for m in gone)]
         return True
 

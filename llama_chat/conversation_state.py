@@ -70,7 +70,6 @@ class ConversationState:
     # declaring some. True wherever ``tools`` holds any.
     uses_tool_template: bool = False
     reasoning: bool = False
-    kept: list[KeptTurn] = field(default_factory=list)
     # Where each placed kept turn starts in the cache.
     kept_at: dict[KeptTurn, int] = field(default_factory=dict)
     n_calls: int = 0

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from .conversation_state import ConversationState, Published
 from .errors import InvalidArgumentError
 from .messages import as_history, portable_digest, system_part
+from .rendering import kept_turns
 from .tools import ToolCall
 
 
@@ -30,14 +31,8 @@ def published(state: ConversationState, pending_calls: list[ToolCall], turn_open
 def generated_turns(state: ConversationState) -> tuple:
     """Each turn ``state`` keeps as generated: its tokens, how many messages it covers, and their digest."""
     messages = state.messages
-    index = {id(m): i for i, m in enumerate(messages)}
-    turns = []
-    for turn in state.kept:
-        if id(turn.first) not in index or id(turn.last) not in index:
-            continue
-        first, last = index[id(turn.first)], index[id(turn.last)]
-        turns.append((turn.tokens, last - first + 1, portable_digest(messages[first:last + 1])))
-    return tuple(turns)
+    return tuple((turn.tokens, turn.span, portable_digest(messages[first:last + 1]))
+                 for first, last, turn in kept_turns(messages))
 
 
 def ensure_generated_turns(given) -> None:

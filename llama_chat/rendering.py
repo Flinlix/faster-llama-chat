@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .errors import TemplateRefusedError, with_template_reason
-from .messages import (RESULT_AS_GIVEN, THOUGHT_KEY, UNREADABLE_CALL,
+from .messages import (KEPT_TURN, RESULT_AS_GIVEN, THOUGHT_KEY, UNREADABLE_CALL,
                        exchange_starts, system_part)
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
@@ -27,12 +27,23 @@ _ANSWER_MARK = "QQANSWERMARKQQ"
 
 @dataclass(frozen=True, eq=False)
 class KeptTurn:
-    """A turn held as the tokens it was generated as, in place of the template's version of it."""
+    """A turn held as the tokens it was generated as, in place of the template's version of it; the message it ends with holds it under :data:`~llama_chat.messages.KEPT_TURN`."""
 
     tokens: tuple[int, ...]
-    first: dict                           # its first message
-    last: dict                            # the message it ends with
+    span: int                             # how many messages it covers, the one holding it the last
     on_call: bool                         # whether it ends on a call, else on a reply's text
+
+
+def kept_turns(messages: list[dict]) -> list[tuple[int, int, KeptTurn]]:
+    """Each turn ``messages`` keep as generated, oldest first: the indexes of its first and last message, and the turn."""
+    return [(i - message[KEPT_TURN].span + 1, i, message[KEPT_TURN])
+            for i, message in enumerate(messages) if KEPT_TURN in message]
+
+
+def with_kept(message: dict, turn: KeptTurn | None) -> dict:
+    """``message``, as a copy, ending ``turn``, or ending none where it is ``None``."""
+    rest = {key: value for key, value in message.items() if key != KEPT_TURN}
+    return rest if turn is None else {**rest, KEPT_TURN: turn}
 
 
 @dataclass(frozen=True)
@@ -48,7 +59,6 @@ class RenderInputs(Protocol):
 
     tools: list[ToolSpec]
     reasoning: bool
-    kept: list[KeptTurn]
 
 
 class ConversationRendering:
@@ -119,14 +129,10 @@ class ConversationRendering:
 
     def _as_given(self, messages: list[dict]) -> list[dict]:
         """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
-        inside = set()
-        for kept in self._inputs.kept:
-            first = next((i for i, m in enumerate(messages) if m is kept.first), None)
-            last = next((i for i, m in enumerate(messages) if m is kept.last), None)
-            if first is not None and last is not None:
-                inside.update(range(first, last + 1))
-        if any(RESULT_AS_GIVEN in m or any(UNREADABLE_CALL in c for c in m.get("tool_calls") or ())
-               for m in messages):
+        inside = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
+        if inside or any(RESULT_AS_GIVEN in m
+                         or any(UNREADABLE_CALL in c for c in m.get("tool_calls") or ())
+                         for m in messages):
             # What a caller gave is the conversation's to give back: not the template's to write.
             messages = [_without_kept_texts(m) for m in messages]
         if not any(messages[i].get("tool_calls") and messages[i]["content"] for i in inside):
@@ -177,25 +183,21 @@ class ConversationRendering:
                 "the template refuses to write this conversation",
                 self.refusal_reason(messages, generation_prompt)))
         end = len(split.text) if upto is None else upto
-        turns = self._inputs.kept
         placed = []
-        for kept in turns:
-            if not all(any(m is end for m in messages) for end in (kept.first, kept.last)):
-                continue            # a turn these messages do not hold
-            found = self.place(kept, messages, split)
+        for first, last, kept in kept_turns(messages):
+            found = self.place(first, last, kept.on_call, split)
             if found is None:
                 raise TemplateRefusedError("messages", "this model's template writes a turn that called tools where "
                                  "it cannot be told apart, so the turn could not keep the tokens "
                                  "it was generated as")
             if found[1] <= end:
-                placed.append(found)
-        placed.sort()
+                placed.append((*found, kept))
         tokens, at, kept_at = [], 0, {}
-        for start, stop, n in placed:
+        for start, stop, kept in placed:
             assert start >= at, "two kept turns overlap"
             tokens += self.tokenize(split.pieces(at, start), add_special=not tokens and at == 0)
-            kept_at[turns[n]] = len(tokens)
-            tokens += turns[n].tokens
+            kept_at[kept] = len(tokens)
+            tokens += kept.tokens
             at = stop
         tokens += self.tokenize(split.pieces(at, end), add_special=not tokens and at == 0)
         return Target(tokens, kept_at)
@@ -310,14 +312,13 @@ class ConversationRendering:
         return self._tag_tokens[template]
 
     # ----- kept turns -----------------------------------------------------------------
-    def place(self, kept: KeptTurn, messages: list[dict], split: SplitRender):
-        """Where the template writes ``kept``'s turn in ``split``: from the first tag after the question's text to the end of its call or reply; ``None`` where it cannot be placed."""
-        first = next((i for i, m in enumerate(messages) if m is kept.first), None)
-        last = next((i for i, m in enumerate(messages) if m is kept.last), None)
-        if not first or last is None:
+    def place(self, first: int, last: int, on_call: bool,
+              split: SplitRender) -> tuple[int, int] | None:
+        """Where the template writes the kept turn of messages ``first`` to ``last`` in ``split``: from the first tag after the question's text to the end of its call, where it ends ``on_call``, or of its reply; ``None`` where it cannot be placed."""
+        if not first:
             return None
         start = self.tag_after_content(split, first - 1)
-        if kept.on_call:
+        if on_call:
             called = split.call_ends[last]
             closing = self._template.properties.call_close_text
             found = split.text.find(closing, called) if called is not None and closing else -1
@@ -338,12 +339,11 @@ class ConversationRendering:
             end = found if found >= 0 else None
         if start is None or end is None or end <= start:
             return None
-        return start, end, self._inputs.kept.index(kept)
+        return start, end
 
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
-        kept = {id(m) for k in self._inputs.kept for m in (k.first, k.last)}
-        return not any(m["role"] == "tool" or m.get("tool_calls") or id(m) in kept
+        return not any(m["role"] == "tool" or m.get("tool_calls") or KEPT_TURN in m
                        for m in messages)
 
     # ----- tags ---------------------------------------------------------------------
@@ -385,11 +385,13 @@ class ConversationRendering:
 
 
 def _without_kept_texts(message: dict) -> dict:
-    """``message`` without what the conversation keeps beside it for itself: a result as given, and the mark of a call that could not be read."""
+    """``message`` without what the conversation keeps beside it for itself: a result as given, a kept turn, and the mark of a call that could not be read."""
     calls = message.get("tool_calls") or ()
-    if RESULT_AS_GIVEN not in message and not any(UNREADABLE_CALL in c for c in calls):
+    if RESULT_AS_GIVEN not in message and KEPT_TURN not in message \
+            and not any(UNREADABLE_CALL in c for c in calls):
         return message
-    message = {key: value for key, value in message.items() if key != RESULT_AS_GIVEN}
+    message = {key: value for key, value in message.items()
+               if key not in (RESULT_AS_GIVEN, KEPT_TURN)}
     if calls:
         message["tool_calls"] = [{key: value for key, value in call.items() if key != UNREADABLE_CALL}
                                  for call in calls]
