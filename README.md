@@ -90,7 +90,8 @@ chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192
 # begin: reset, and prefill the system prompt and as much recent history as fits.
 # A template that writes a system prompt where later questions move it refuses
 # one (capabilities(tools=False).can_take_system_prompt is False); pass "" there.
-chat.begin("You are a helpful assistant.", [("user", "Hi"), ("assistant", "Hello!")])
+chat.begin("You are a helpful assistant.", [{"role": "user", "content": "Hi"},
+                                           {"role": "assistant", "content": "Hello!"}])
 
 # inject: prefill one message as context, without generating
 chat.inject("Reference: the deadline is Friday. What's the deadline?")
@@ -146,8 +147,7 @@ at least the newest exchange and no more than `max_history_exchanges`
 exchanges, and returns a `Report` of what it kept and left out. A history
 message is a chat message: a question, a reply with its thought under
 `"reasoning_content"` and its calls under `"tool_calls"` where it has them, or
-a call's result with the role `"tool"`; a `(role, text)` pair stands for a
-question or a reply without calls (see [Tool calling](#tool-calling)). Any
+a call's result with the role `"tool"` (see [Tool calling](#tool-calling)). Any
 other form or role is refused, naming it. Older history is dropped without
 being rendered. A history that ends on a call keeps it owed a result. Refused
 where the system prompt and its declarations leave no room for a short
@@ -288,7 +288,7 @@ def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
 
 chat = ChatWrapper(Config(model_path="model.gguf"))
-chat.begin("You are a terse assistant.", tools=registry)
+chat.begin("You are a terse assistant.", tools=registry.specs())
 print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).finish().text)
 ```
 

@@ -65,7 +65,8 @@ def main() -> None:
     print(file=sys.stderr)  # ... then terminate the bar's line
 
     begin(w, "You are a concise, helpful assistant.",
-          [("user", "Remember my name is Sam."), ("assistant", "Got it, Sam.")])
+          [{"role": "user", "content": "Remember my name is Sam."},
+           {"role": "assistant", "content": "Got it, Sam."}])
     print(f"begin: the cache holds {w.total_tokens} tokens (system + history)")
     show(w)
 

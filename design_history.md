@@ -5320,3 +5320,14 @@ A fresh review of this round's changes found these, each fixed and tested:
 Left open as a decision: the server's messages hold no thought and no mark
 of an unreadable call, so turns holding either are not restored through the
 server.
+
+### The `(role, text)` pair goes as well
+
+The step form of tool turns went with "One message form: chat messages in
+and out"; the short `(role, text)` pair for a plain question or reply had
+stayed, since the estimate behind that decision counted only tool turns. At
+the user's choice it goes too: `begin` takes chat message dictionaries
+alone, and a pair is a `TypeError` that names the form to use. The tests
+write their histories as dictionaries. The README's quick start and its
+tool example were corrected with it; the latter still passed a registry
+itself as `tools`, which the cleanups had made a `TypeError`.

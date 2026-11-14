@@ -28,16 +28,16 @@ UNREADABLE_CALL = "unreadable"
 def as_messages(history, min_call_number: int = 0) -> list[dict]:
     """``begin``'s history as the messages a template is given.
 
-    Each item is a ``(role, text)`` pair or a chat message: a question, a
-    reply with its thought under :data:`THOUGHT_KEY` and its calls under
-    ``tool_calls``, or a call's result. A call keeps the id it carries; one
+    Each item is a chat message: a question, a reply with its thought under
+    :data:`THOUGHT_KEY` and its calls under ``tool_calls``, or a call's
+    result. A call keeps the id it carries; one
     without takes the next id this library writes after every id of the
     history, and numbered from ``min_call_number`` at least, so no two calls
     share one. A result answers the oldest call still owed one since the
     newest question, in the order the calls were made.
 
     Raises:
-        TypeError: If an item is neither a pair nor a dictionary, or a text,
+        TypeError: If an item is no dictionary, or a text,
             a thought or a call's arguments are of another type.
         ValueError: If a message holds keys its role does not take, if a role
             is not ``user``, ``assistant`` or ``tool``, if two calls carry one
@@ -114,21 +114,17 @@ _CALL_KEYS = {"id", "type", "function", UNREADABLE_CALL}
 
 
 def _history_message(item) -> dict:
-    """A history message from a ``(role, text)`` pair or a chat message, validated and copied.
+    """A history message from a chat message, validated and copied.
 
     Raises:
-        TypeError: If ``item`` is neither, or a text is not a ``str``.
+        TypeError: If ``item`` is no dictionary, or a text is not a ``str``.
         ValueError: If its role is not one of ``user``, ``assistant`` and
             ``tool``, or it holds keys its role does not take.
     """
-    if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[0], str):
-        role, text = item
-        ensure_role(role)
-        ensure_text(text, "a history message's text")
-        return {"role": role, "content": text}
     if not isinstance(item, dict):
-        raise TypeError(f"a history message is a (role, text) pair or a chat message "
-                        f"dictionary, not the {type(item).__name__} {item!r}")
+        raise TypeError(f"a history message is a chat message dictionary, such as "
+                        f"{{'role': 'user', 'content': text}}, not the "
+                        f"{type(item).__name__} {item!r}")
     role = item.get("role")
     if role != "tool":
         ensure_role(role)

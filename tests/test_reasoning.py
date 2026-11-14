@@ -31,7 +31,7 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
                     context=FakeContext(PLAIN))
-    w.begin("s", [("user", "hi")])
+    w.begin("s", [{"role": "user", "content": "hi"}])
     assert not w.capabilities(tools=False).can_reason
     with pytest.raises(ValueError, match="reasoning"):
         w.begin("t", reasoning=True)
@@ -313,7 +313,7 @@ def test_a_wrapper_takes_reasoning_on_from_the_add_on_file_next_to_the_model(tmp
     fake = FakeContext(_DEFAULT_WITHOUT_THOUGHT)
     w = ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
                            evict_above_fraction=1.0), context=fake)
-    w.begin("s", [("user", "hi")], reasoning=True)
+    w.begin("s", [{"role": "user", "content": "hi"}], reasoning=True)
     assert held_text(fake).endswith("<|assistant_says|><reason>")
 
 

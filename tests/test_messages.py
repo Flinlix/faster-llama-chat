@@ -53,7 +53,7 @@ def test_every_history_comes_back_as_it_went_in():
 
 
 def test_a_message_given_as_a_pair_comes_back_as_its_dictionary():
-    pairs = [("user", "q"), ("assistant", "a")]
+    pairs = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
     assert as_history(as_messages(pairs)) == [_QUESTION, {"role": "assistant", "content": "a"}]
     assert all(isinstance(item, dict) for item in as_history(as_messages(pairs)))
 
@@ -71,7 +71,7 @@ def _without_ids(message):
 def test_each_result_of_a_batch_answers_its_own_call():
     turn = tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
                      Result("b", "2"), "ok")
-    messages = as_messages([("user", "q"), *turn])
+    messages = as_messages([{"role": "user", "content": "q"}, *turn])
     calls = [call["id"] for m in messages for call in m.get("tool_calls", [])]
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == calls
 

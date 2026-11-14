@@ -36,7 +36,7 @@ def _with_a_kept_turn():
 
 def _owed_from_a_history():
     w, fake = tool_wrapper()
-    w.begin("persona", [("user", "wie spät?"), *tool_turn(ToolCall("clock", {}))])
+    w.begin("persona", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("clock", {}))])
     assert w.pending_calls
     return w, fake
 

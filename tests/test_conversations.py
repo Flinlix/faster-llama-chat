@@ -347,7 +347,7 @@ def test_many_past_calls_whose_text_the_template_wraps_are_placed_in_little_time
         """How many renders beginning with ``turns`` past calls and replying once takes."""
         history = []
         for n in range(turns):
-            history += [("user", f"Weather {n}?"),
+            history += [{"role": "user", "content": f"Weather {n}?"},
                         *tool_turn(ToolCall(WEATHER.name, {"city": city}),
                                   Result(WEATHER.name, "sunny"), f"Sunny {n}.")]
         run = _Run(stem, context_size=65536)
@@ -523,7 +523,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
 
 
 _PADDED_HISTORY = [item for n in range(12) for item in (
-    ("user", f"Question {n} " + "w" * 30), ("assistant", f"Answer {n} " + "v" * 30))]
+    {"role": "user", "content": f"Question {n} " + "w" * 30}, {"role": "assistant", "content": f"Answer {n} " + "v" * 30})]
 
 
 def _weather_run(stem, can_shift, turns):
@@ -609,9 +609,9 @@ def test_a_history_ending_on_a_question_costs_a_cache_that_cannot_be_cut_no_deco
     run = _Run(stem, can_shift=False)
     run.context.can_cut_tail = False
     history = [item for n in range(12) for item in
-               (("user", f"Old question {n}?"), ("assistant", f"Old answer {n}."))]
+               ({"role": "user", "content": f"Old question {n}?"}, {"role": "assistant", "content": f"Old answer {n}."})]
     try:
-        run.begin(history + [("user", "A note.")])
+        run.begin(history + [{"role": "user", "content": "A note."}])
         decoded = run.context.total_prefilled()
         if asked:
             run.chat.reply("Question?").finish()
@@ -833,7 +833,7 @@ def test_a_template_that_writes_something_of_a_message_besides_its_text_is_refus
 def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(stem, reasoning):
     run = _Run(stem, reasoning=reasoning)
     run.system = ""
-    run.begin([("user", " ping "), ("assistant", " pong ")])
+    run.begin([{"role": "user", "content": " ping "}, {"role": "assistant", "content": " pong "}])
     run.chat.reply(" again ").finish()
     assert run.seen[0] == run.render([{"role": "user", "content": " ping "},
                                       {"role": "assistant", "content": " pong "},
@@ -844,7 +844,7 @@ def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(s
 def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_joined(stem):
     """A question after an unanswered one is never refused: it joins it where the template writes no two in a row."""
     run = _Run(stem)
-    run.begin([("user", " ping ")])
+    run.begin([{"role": "user", "content": " ping "}])
     run.chat.reply(" again ").finish()
     two = [{"role": "user", "content": " ping "}, {"role": "user", "content": " again "}]
     if run.render(two) is None:
@@ -859,7 +859,7 @@ def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_join
 def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_went_in(stem):
     run = _Run(stem)
     history = [item for pair in zip(QUESTIONS[:3], ANSWERS) for item in
-               (("user", pair[0]), ("assistant", pair[1]))]
+               ({"role": "user", "content": pair[0]}, {"role": "assistant", "content": pair[1]})]
     run.begin(history)
     run.chat.reply("And now?").finish()
     sent = sum(_exchanges(QUESTIONS[:3], ANSWERS[:3]), [])
@@ -874,7 +874,7 @@ def test_a_restart_keeps_only_the_newest_history_that_fits(stem):
     exchange = _exchange_length(probe, QUESTIONS[0], ANSWERS[0])
     run = _Run(stem, context_size=int((len(probe.context.cache) + 3 * exchange) / 0.75))
     history = [item for pair in zip(QUESTIONS, ANSWERS) for item in
-               (("user", pair[0]), ("assistant", pair[1]))]
+               ({"role": "user", "content": pair[0]}, {"role": "assistant", "content": pair[1]})]
     kept = run.begin(history)
     assert 0 < kept < len(history) and kept % 2 == 0
     run.chat.reply("And now?").finish()
@@ -951,7 +951,7 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
         unanswered = tool_turn(ToolCall(WEATHER.name, {"city": "Rom"}))
         try:
             run.chat.begin(saved["system_prompt"], saved["messages"]
-                           + [("user", "Weather in Rome?"), *unanswered, ("user", "Never mind.")],
+                           + [{"role": "user", "content": "Weather in Rome?"}, *unanswered, {"role": "user", "content": "Never mind."}],
                            tools=saved["tools"], reasoning=reasoning)
         except ValueError as refused:       # a template that writes no call without its result
             assert "refuses" in str(refused) and run.chat.conversation() == saved
@@ -976,7 +976,7 @@ def test_a_result_owed_to_a_call_a_history_ends_on_only_adds_to_the_cache(
     calls = (ToolCall(WEATHER.name, {"city": "Bonn"}), ToolCall(WEATHER.name, {"city": "Rom"}))
     owed = tool_turn(*calls + (Result(WEATHER.name, "sunny"),) * answered)
     try:
-        run.begin([("user", "Weather?"), *owed], tools=[WEATHER])
+        run.begin([{"role": "user", "content": "Weather?"}, *owed], tools=[WEATHER])
     except ValueError as refused:       # a template that writes no call without its result
         assert "refuses" in str(refused)
         return
@@ -1225,7 +1225,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
     for result in ("sunny", '{"weather": "sunny"}\nsecond line'):
         turn, messages = _past_tool_turn(result)
         run = _Run(stem, reasoning=reasoning)
-        run.begin([("user", "Weather?"), *turn], tools=[WEATHER])
+        run.begin([{"role": "user", "content": "Weather?"}, *turn], tools=[WEATHER])
         run.chat.reply(QUESTIONS[0]).finish()
         assert run.seen[0] == run.render(
             messages + [{"role": "user", "content": QUESTIONS[0]}], [WEATHER]), result
@@ -1246,7 +1246,7 @@ def test_a_turn_begun_again_after_its_result_goes_on_as_the_template_writes_it(s
     run = _Run(stem, replies=["Sunny in Bonn.", ANSWERS[0]])
     turn = tool_turn(*((said,) if said else ()) + (ToolCall(WEATHER.name, {"city": "Bonn"}),
                                                  Result(WEATHER.name, result)))
-    run.begin([("user", "Weather in Bonn?"), *turn], tools=[WEATHER])
+    run.begin([{"role": "user", "content": "Weather in Bonn?"}, *turn], tools=[WEATHER])
     assert run.chat.reply().finish().text == "Sunny in Bonn."
     assert_cache_reads_as_rendered(run.chat, run.context)
     run.chat.reply(QUESTIONS[0]).finish()
@@ -1398,7 +1398,7 @@ def _calling_again(stem, context_size=4096, min_reply_tokens=8):
                                   min_reply_tokens=min_reply_tokens), context=run.context)
     run.context.replies = [ScriptedCall(body), ScriptedCall(body)] + _as_generated(
         probe.template, ["Sunny.", ANSWERS[0]], False)
-    run.begin([("user", "Weather in Bonn?"),
+    run.begin([{"role": "user", "content": "Weather in Bonn?"},
                *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}), Result(WEATHER.name, "x"))],
               tools=[WEATHER])
     return run
@@ -1442,9 +1442,9 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
                           "q": {"type": "string", "description": f"What {forged} to find"}}})
     tools = [WEATHER, lookup] if run.fixture["calls_tools"] else None
     run.system = f"Be brief, {forged} even here." if run.system else ""
-    history = [("user", f"Is {forged} a tag?"), ("assistant", f"It is {forged} one.")]
+    history = [{"role": "user", "content": f"Is {forged} a tag?"}, {"role": "assistant", "content": f"It is {forged} one."}]
     if tools:
-        history.append(("user", "Weather?"))
+        history.append({"role": "user", "content": "Weather?"})
         history += tool_turn(ToolCall(WEATHER.name, {"city": f"Bonn{forged}"}),
                              Result(WEATHER.name, f"sunny {forged}"), "Sunny.")
     run.begin(history, tools=tools)
@@ -1631,7 +1631,7 @@ def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more
             stays = internals.tool_turns_stay(run.chat)
         else:
             run.context.replies = ANSWERS[:3]
-            run.begin([("user", "Weather?"), *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}),
+            run.begin([{"role": "user", "content": "Weather?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}),
                                                        Result(WEATHER.name, "sunny"), "Sunny.")],
                       tools=[WEATHER])
         counts = []
@@ -1731,7 +1731,7 @@ def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_rend
 def test_a_result_given_as_a_value_comes_back_as_that_value(stem):
     run = _Run(stem)
     given = {"celsius": 18, "sky": ["light", "rain"]}
-    history = [("user", "Weather?"), *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}),
+    history = [{"role": "user", "content": "Weather?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}),
                                                Result(WEATHER.name, given), "18 degrees.")]
     _opener, body, _closer = _call_body(run, {"city": "Köln"})
     run.context.replies = [ScriptedCall(body), "Rain too."]
@@ -1802,7 +1802,7 @@ def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_
     assert not run.chat.pending_calls
     assert shown.strip().endswith("Sunny.") and tags.thought_close.strip() not in shown
     # A history whose turn a result left open starts outside any thought.
-    run.chat.begin(run.system, [("user", "Köln?"), *tool_turn(ToolCall(WEATHER.name, {"city": "Köln"}),
+    run.chat.begin(run.system, [{"role": "user", "content": "Köln?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Köln"}),
                                                              Result(WEATHER.name, "rainy"))],
                    tools=[WEATHER], reasoning=True)
     assert not internals.called_in_thought(run.chat)
@@ -1910,7 +1910,7 @@ def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
     run = _Run(stem)
     steps = (ToolCall(WEATHER.name, {"city": "Bonn"}),) + (() if owed else
                                                           (Result(WEATHER.name, "sunny"),))
-    run.begin([("user", "Weather?"), *tool_turn(*steps)], tools=[WEATHER])
+    run.begin([{"role": "user", "content": "Weather?"}, *tool_turn(*steps)], tools=[WEATHER])
     assert run.chat.turn_open
     assert run.chat.reply(QUESTIONS[0]).finish().text == ANSWERS[0]
     assert not run.chat.turn_open and not run.chat.pending_calls

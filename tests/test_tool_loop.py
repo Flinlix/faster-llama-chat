@@ -290,7 +290,7 @@ def test_a_reply_going_on_after_results_keeps_the_policy_its_turn_was_started_wi
 
 def test_a_turn_a_history_left_open_goes_on_under_the_default_policy():
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", [("user", "los"), *tool_turn(ToolCall("clock", {}),
+    wrapper.begin("persona", [{"role": "user", "content": "los"}, *tool_turn(ToolCall("clock", {}),
                                                          Result("clock", "09:00"))])
     fake.call_script = ["fn:other{}"]
     reply = wrapper.reply().finish()
@@ -326,7 +326,7 @@ def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
     fake = FakeContext(TOOLS)
     wrapper = ChatWrapper(Config(context_size=4000, max_history_exchanges=1),
                           context=fake)
-    wrapper.begin("persona", [("user", "alt"), ("assistant", "älter")])
+    wrapper.begin("persona", [{"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"}])
     fake.call_script = ["fn:first{}"]
     assert without_ids(wrapper.reply("los", tool_call_policy="yield")) == [ToolCall("first", {})]
     assert len(rows(wrapper)) - 1 == 4     # two exchanges, over the limit, turn still open
@@ -551,7 +551,7 @@ def test_a_turn_closed_for_want_of_room_lists_no_result_it_dropped_as_cut():
 def test_a_result_too_long_for_the_room_left_evicts_the_oldest_exchanges_first(can_shift):
     wrapper, fake = tool_wrapper(context_size=600, can_shift=can_shift)
     wrapper.begin("persona", [item for n in range(6) for item in
-                              (("user", f"Frage {n}?"), ("assistant", f"Antwort {n}."))])
+                              ({"role": "user", "content": f"Frage {n}?"}, {"role": "assistant", "content": f"Antwort {n}."})])
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in wrapper.reply("wie spät?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
@@ -1354,9 +1354,9 @@ def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
 def test_a_history_owes_the_calls_of_its_newest_turn_that_no_result_answers():
     wrapper, _ = tool_wrapper()
     clock, other = ToolCall("clock", {}), ToolCall("other", {})
-    wrapper.begin("persona", [("user", "los"), *tool_turn(clock, other)])
+    wrapper.begin("persona", [{"role": "user", "content": "los"}, *tool_turn(clock, other)])
     assert without_ids(wrapper.pending_calls) == [clock, other]
-    wrapper.begin("persona", [("user", "los"), *tool_turn(clock, other, Result("clock", "a"))])
+    wrapper.begin("persona", [{"role": "user", "content": "los"}, *tool_turn(clock, other, Result("clock", "a"))])
     assert without_ids(wrapper.pending_calls) == [other]
 
 
@@ -1832,8 +1832,8 @@ def test_declarations_move_on_with_the_newest_user_turn(can_shift):
 def test_a_history_carries_its_declarations_on_its_last_user_turn():
     w, fake = _moving()
     specs = [ToolSpec("uhr", "", {})]
-    w.begin("s", [("user", "eins"), ("assistant", "zwei"), ("user", "drei"),
-                  ("assistant", "vier")], tools=specs)
+    w.begin("s", [{"role": "user", "content": "eins"}, {"role": "assistant", "content": "zwei"}, {"role": "user", "content": "drei"},
+                  {"role": "assistant", "content": "vier"}], tools=specs)
     assert_cache_reads_as_rendered(w, fake)
     w.reply("fünf").finish()
     assert_cache_reads_as_rendered(w, fake)
@@ -1966,7 +1966,7 @@ def test_a_model_whose_template_for_tools_calls_them_can_call_tools_though_its_d
 def test_a_tool_turn_in_a_history_begun_without_tools_is_refused_saying_to_pass_tools():
     chat, _fake = _with_a_template_for_tools()
     turn = tool_turn(ToolCall("clock", {}), Result("clock", "12:00"))
-    history = [("user", "Wie spät?"), *turn, ("user", "Danke")]
+    history = [{"role": "user", "content": "Wie spät?"}, *turn, {"role": "user", "content": "Danke"}]
     with pytest.raises(UnsupportedError, match="pass tools") as refused:
         chat.begin("persona", history)
     assert refused.value.field == "messages"
@@ -2086,7 +2086,7 @@ def test_a_reply_given_no_policy_takes_the_policy_of_the_turn_open_when_it_runs(
 
 def test_a_turn_a_history_left_open_keeps_the_policy_of_the_first_reply_that_gives_one():
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", [("user", "los"), *tool_turn(ToolCall("clock", {}))],
+    wrapper.begin("persona", [{"role": "user", "content": "los"}, *tool_turn(ToolCall("clock", {}))],
                   tools=[ToolSpec(name="clock", description="Die Zeit.",
                                        parameters={"type": "object", "properties": {}})])
     wrapper.inject_tool_result(wrapper.pending_calls[0], "12:00")
@@ -2163,7 +2163,7 @@ def test_stopping_the_second_call_of_a_round_keeps_the_first_calls_result():
 
 def test_writing_a_result_renders_the_whole_conversation_only_to_measure_it():
     wrapper, fake = tool_wrapper(context_size=32768)
-    history = [m for i in range(300) for m in (("user", f"question {i}"), ("assistant", f"answer {i}"))]
+    history = [m for i in range(300) for m in ({"role": "user", "content": f"question {i}"}, {"role": "assistant", "content": f"answer {i}"})]
     wrapper.begin("persona", history, tools=weather_registry().specs())
     fake.call_script = ['fn:weather{"city": "Bonn"}']
     call, = [e for e in wrapper.reply("Wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]

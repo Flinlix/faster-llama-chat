@@ -145,8 +145,7 @@ class ChatWrapper:
                 "arguments": dict}}``; and a call's result,
                 ``{"role": "tool", "tool_call_id": id, "content": result}``,
                 the result text or anything JSON writes, given in the order
-                of the calls. A ``(role, text)`` pair stands for a question
-                or a reply without calls. A call without an id is given one.
+                of the calls. A call without an id is given one.
                 A history that ends on a call or a result leaves that turn
                 open, as a live turn is left, for :meth:`reply` to go on
                 with. Only the most recent are kept,
