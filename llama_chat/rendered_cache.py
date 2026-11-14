@@ -28,8 +28,8 @@ from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .messages import (THOUGHT_KEY, as_history, as_messages, calling_message, exchange_count,
-                       exchange_starts, kept_items, next_call_number, result_message,
-                       system_part, with_result_text)
+                       exchange_starts, history_count, kept_items, next_call_number,
+                       result_message, system_part, with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact, writes_two_user_turns)
@@ -461,7 +461,7 @@ class RenderedCache:
                     "min_reply_tokens")
             self._ensure_writes("user", text, generation_prompt=True)
             before = list(self._memory.tokens)
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             if not self._splice(question, room):
                 self._state.messages.append(question)
                 # As a spliced one, the question may open one exchange more until its reply settles.
@@ -481,7 +481,7 @@ class RenderedCache:
                     raise Cancelled("cancelled while the question was decoded")
             self._state.asked = before, self._made_for_now()
             self._before_ask = as_it_was
-            return n_before + 1 - len(as_history(self._state.messages))
+            return n_before + 1 - history_count(self._state.messages)
 
     def keep_question(self) -> None:
         """Keep the newest question for good, once its generation has started."""
@@ -546,7 +546,7 @@ class RenderedCache:
                     "system prompt; shorten the message or the system prompt, or raise "
                     "context_size/evict_above_fraction")
             self._ensure_writes(role, text, generation_prompt=False)
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             room = self._max_prompt_tokens
             fits = (self._config.max_history_exchanges is None
                     or exchange_count(self._state.messages) < self._config.max_history_exchanges)
@@ -557,7 +557,7 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
-            return n_before + 1 - len(as_history(self._state.messages))
+            return n_before + 1 - history_count(self._state.messages)
 
     def prompt(self) -> None:
         """Decode the generation prompt after the newest message, a user message, for a reply to it.
@@ -880,7 +880,7 @@ class RenderedCache:
                 raise ValueError("this model's template renders no tool result, so a call's "
                                  "result cannot be written")
             room = self._max_prompt_tokens
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             # Each result still owed after this one is held empty, so that this one is
             # written whole only where those still fit after it.
             self._state.messages += [message] + [result_message(later.name, later_id, "")
@@ -921,7 +921,7 @@ class RenderedCache:
             if dropped:
                 self._memory.repair()           # with the logits the reply needs, then saved
                 self._memory.rest()
-            return n_before - len(as_history(self._state.messages))
+            return n_before - history_count(self._state.messages)
 
     def _cut_an_earlier_result(self, at: int, content: str, room: int) -> None:
         """Cut a result written whole earlier in this round, the newest one that makes room for the one at ``at`` holding ``content``."""
@@ -1017,11 +1017,11 @@ class RenderedCache:
             self._check_renders()
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._pin_opening()
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - len(as_history(self._state.messages))
+            return n_before - history_count(self._state.messages)
 
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
@@ -1110,20 +1110,20 @@ class RenderedCache:
             del self._state.messages[first:]
             self._state.kept = [k for k in self._state.kept
                                 if not any(k.first is m or k.last is m for m in gone)]
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
             # As after any reply, so that what the template writes ahead of the next
             # question, a default system prompt say, stays in the cache.
             self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - len(as_history(self._state.messages))
+            return n_before - history_count(self._state.messages)
 
     # ----- after a reply ----------------------------------------------------------
     def _settle(self) -> int:
         """Drop what is over the limits, then render and decode ahead for the next question; how many history items were dropped."""
         with self._action():
-            n_before = len(as_history(self._state.messages))
+            n_before = history_count(self._state.messages)
             limit = self._config.evict_above_tokens
             plan = self._window_ahead() if self._state.windows else _WHOLE
             if plan is not _WHOLE:
@@ -1147,7 +1147,7 @@ class RenderedCache:
                 dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
                 self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - len(as_history(self._state.messages))
+            return n_before - history_count(self._state.messages)
 
     def _render_ahead(self, dropped: bool = False) -> None:
         """Decode the render for the next question up to where the question goes."""
@@ -1566,9 +1566,14 @@ def _copied(value):
 
 def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     """The calls of the newest turn that no result after them answers yet."""
-    calling = next((i for i in range(len(messages) - 1, -1, -1)
-                    if messages[i].get("tool_calls")), None)
-    if calling is None or any(m["role"] not in ("tool",) for m in messages[calling + 1:]):
+    calling = None
+    for i in range(len(messages) - 1, -1, -1):          # back to the newest call, at most
+        if messages[i].get("tool_calls"):
+            calling = i
+            break
+        if messages[i]["role"] != "tool":
+            return []                   # a message after the newest call: nothing is owed
+    if calling is None:
         return []
     answered = len(messages) - calling - 1
     return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),

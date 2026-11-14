@@ -87,3 +87,22 @@ def test_ids_from_a_history_never_push_the_next_one_past_nine_characters():
     assert all(len(call_id(n)) == 9 for n in range(start, start + 1000))
     assert not {call_id(n) for n in range(start, start + 1000)} & {"callzzzzz", "call00000",
                                                                   "callbacks"}
+
+
+def test_the_count_of_history_items_is_what_reading_the_history_back_gives():
+    import itertools
+
+    from llama_chat.messages import as_history, history_count
+
+    calling = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "call00000", "type": "function", "function": {"name": "f", "arguments": {}}}]}
+    kinds = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}, calling,
+             {"role": "tool", "name": "f", "tool_call_id": "call00000", "content": "r"},
+             {"role": "system", "content": "s"}]
+    for length in range(6):
+        for messages in itertools.product(kinds, repeat=length):
+            try:
+                history = as_history(list(messages))
+            except ValueError:
+                continue                # a result before its call is no history
+            assert history_count(list(messages)) == len(history)

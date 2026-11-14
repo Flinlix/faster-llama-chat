@@ -249,6 +249,24 @@ def as_history(messages: list[dict]) -> list:
     return history
 
 
+def history_count(messages: list[dict]) -> int:
+    """How many items :func:`as_history` gives back for ``messages``, without building them."""
+    count, in_turn = 0, False
+    for message in messages:
+        role = message["role"]
+        if role == "system":
+            continue
+        if role == "user" and in_turn:
+            count, in_turn = count + 1, False
+        if role == "assistant" and message.get("tool_calls") or role == "tool":
+            in_turn = True
+        elif role == "assistant" and in_turn:
+            count, in_turn = count + 1, False
+        else:
+            count += 1
+    return count + in_turn
+
+
 def exchange_starts(messages: list[dict]) -> list[int]:
     """Where each exchange begins: every user message, where kept history may open.
 

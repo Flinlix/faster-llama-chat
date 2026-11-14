@@ -4622,3 +4622,30 @@ rerun and fixed:
 - The note on the old distribution name said a new install replaces it; it
   has to be uninstalled (366.34A). The split timing test takes the shortest
   of three runs, so one pause of the machine cannot fail it (366.25).
+
+## 2026-11-13: The last findings of the review (390)
+
+### Two steps no longer grow with the conversation (366.28)
+
+366.28 (P5). A few steps of every reply went over the whole conversation:
+the history items were counted by building the history as `conversation()`
+gives it back, several times per reply, and the calls still owed were found
+by looking for the newest call, through every message where none was owed.
+From the first turn to 33,000 tokens the work after a reply grew from about
+1 to 4 ms (measured by the review). The count now walks the messages without
+building anything, a test holds it equal to the history's length for every
+short sequence of message kinds, and the search for owed calls stops at the
+first message after the newest call that is no result.
+
+### Saving a state after the question was measured and not built (366.29)
+
+366.29 (P6). On a cache that can neither shift nor cut, such as Qwen 3.5 to
+3.8, each reply goes back to the state saved before its question and decodes
+the question and the reply again after the answer, as the template writes
+them. Measured on the card in the benchmark of 2026-11-13: Qwen 3.5 9B
+decodes 74 to 84 tokens per turn where Llama 3.2 3B decodes 19 to 23. The
+review proposed saving a state after the question, as `begin` does, so that
+only the reply is decoded again. That save would come before the first word:
+23 ms per question on Qwen 3.5 9B and about 65 ms on the 27B models, measured
+in the same run, to spare a decode that runs after the answer. Not built:
+it would make every first word later to save work nobody waits for.
