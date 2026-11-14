@@ -24,15 +24,15 @@ the reasons:
 | Tool calls | A call is read in the one shape its template writes, answered by the caller or a registry, and every call is reported. | "Tools and tool calls", "Calls are read in the one shape their template writes", "What a failed call is told" |
 | Add-on call formats | Where a template does not show a call, the add-on file says how it is written, and its format wins over the template's. | "How a call's format is recovered", "An add-on file's call format wins over the template's", "Settings, add-on files and logging" |
 | A template for tools | A model's further template for tools writes every conversation begun with tools, given a list of tools always. | "A real model with a template for tools of its own" |
-| Kept turns | A turn that called tools keeps the tokens it was generated as, and a begin on the same model restores them. | "The target, built without the cache", "Exact restore with model handover" |
+| Kept turns | A turn that called tools keeps the tokens it was generated as, held on the message it ends with, and a begin on the same model restores them with their own messages. | "The target, built without the cache", "A kept turn on its last message", "Two history forms" |
 | The next question | Prepared after each reply, so a question decodes only its own tokens; windows keep that work from growing. | "Rendering windows", "An injected question waits only for itself" |
 | Eviction | Whole exchanges go, never the system turn; a cache that cannot shift drops far enough that it is rebuilt only every few turns. | "How eviction works", "Structure review: what changed and why", "Where an eviction stops on a cache that cannot shift" |
 | Failures and refusals | One snapshot per action puts everything back; every refusal is one family, raised before anything changes. | "One undo path", "One family of refusals" |
 | Nothing blocks a question | A question closes an open turn first and joins an unanswered one. | "Nothing blocks a question" |
 | What changed unasked | Every action reports and logs what it changed beyond what was asked. | "One report of what an action changed" |
-| The message form | A history goes in and comes out as chat messages. | "One message form: chat messages in and out" |
+| The message form | A history goes in and comes out as Chat Completions messages, the saved turns beside them. | "Two history forms" |
 | Threads | Actions take turns under one lock, readers see a published copy, and closing on a reply's own thread ends that reply. | "One read of the system prompt and the history", "Closing on the thread that reads a reply ends that reply first", "Load time and thread defaults" |
-| State and its parts | The conversation owns its state; eviction, result cutting, publishing and windows are parts without state of their own. | "One owner of the turn, of the tokens, and of a failed action", "The conversation split into parts without state" |
+| State and its parts | The conversation owns one state object, filled in place by a rollback; eviction, result cutting, publishing and windows are parts made with it. | "One owner of the turn, of the tokens, and of a failed action", "One state object, and evictions recorded where they happen" |
 | The public interface | One way to do each thing. | "One way to do each thing in the public interface" |
 
 ## 2026-11-07: The mechanism, moved here from the README
@@ -4896,6 +4896,9 @@ both are now told the same way.
 
 ### Exact restore with model handover
 
+Revised by "Two history forms": a saved turn carries its own messages and
+is found by its Chat Completions messages and the question before them.
+
 A turn that called tools stays in the cache as the tokens the model generated,
 which no template writes back exactly: a call's spelling, its spacing, an
 unreadable call's text. Beginning again from `conversation()` therefore wrote
@@ -5046,6 +5049,9 @@ its load facts and its per-generation options, which only moves code.
 
 ### The conversation split into parts without state
 
+Revised by "One state object, and evictions recorded where they happen":
+the parts are made with the one state object.
+
 The conversation's module had grown to about 1900 lines, holding its state
 types, beginning, questions, replies, results, eviction, result cutting,
 publishing and windows in one class. It is now split into parts that hold no
@@ -5079,6 +5085,9 @@ still caught by the checks after the message is placed, inside the same
 action, which is then put back as a whole.
 
 ### One message form: chat messages in and out
+
+Revised by "Two history forms": the history is now the Chat Completions
+messages, without this library's extras.
 
 A history went into `begin` in three forms, `(role, text)` pairs, message
 dictionaries, and a `ToolTurn` of steps (`str`, `Thought`, `ToolCall`,
@@ -5344,3 +5353,168 @@ warning, `capabilities(tools=True).can_call_tools` is false, and every
 declaration of tools, through `begin`, `change_settings` or a registry
 policy, is refused with an `UnsupportedError` naming that cause. The default
 template must still pass the check, as before.
+
+## 2026-11-14: Two history forms, and the restructuring the rethink proposed
+
+### Two history forms
+
+Revises "One message form: chat messages in and out", "Exact restore with
+model handover" and the user's earlier choice to have the server leave
+unreadable calls out itself (previous entry).
+
+The one mixed form, chat messages plus this library's extras (a thought, a
+mark on an unreadable call, arguments as an object, a result as any value),
+made every caller convert both ways; the server kept a copy of the rule for
+unreadable calls that had already drifted from the library's, and a saved turn
+with a thought was never found through it, since its fingerprint covered the
+thought. At the user's proposal there are now two forms. `begin` takes, and
+`conversation()` gives, the Chat Completions messages: the system message
+first (an empty one is kept, distinct from none, since some templates write a
+default prompt only where none is given); `user`, `assistant` with text or
+`null` where it only calls, and `tool` with its `tool_call_id`; every call
+with an id, its arguments a JSON string. The smallest part of that form is
+taken: a list of content parts, the `developer` role, `name`, `refusal`,
+`audio` and a `custom` call are refused, naming where they stand, since the
+server reduces its requests to this part already, and so that whatever
+`begin` takes `conversation()` gives back unchanged, but for the arguments'
+spelling (compact JSON in their own order, the server's own spelling) and an
+empty reply text (`null` where the reply calls, `""` otherwise).
+`reasoning_content` is the one field beyond the official form, the name other
+compatible servers use. A result is text only; a value from tool code is
+written as JSON at once and given back as that text, so the stored value and
+its special case went.
+
+A call whose arguments are no JSON object (`""` is none) could not be read: it
+is marked so, left out with its result by the one rule, said at `INFO`, and a
+later result for it is refused with that cause. Refusing it instead would
+block a conversation, against "nothing blocks a question".
+
+The exact form is the second: beside the messages, each turn kept as
+generated carries its tokens and its own messages as the conversation held
+them through the end of its turn, a thought, an unreadable call and the
+library's own answer to it included. It is found by a digest of its Chat
+Completions messages together with the question before them (an empty span
+alone has nothing to be found by, as an open turn whose only call was
+unreadable has), the thought and the difference between `null` and `""`
+left out of the digest, and the arguments compared as objects in their own
+order. Found, its messages take the place of their Chat Completions ones.
+Rejected: one sealed record of the whole conversation, which any edit by a
+client (a regenerate, a deleted message, a trimmed history) would lose.
+
+Measured or read while building it, each fixed with a test:
+
+- A resume while a batch with an unreadable entry was still owed was refused
+  (invariant 3), and lifting the refusal alone left the restored turn stuck:
+  what answers an unreadable call, and the turn's policy and call budget,
+  lived outside the saved state. They are in the state now, so a rollback
+  puts them back with the rest, and a begin answers an unreadable entry owed
+  next itself, as "do not call again", one behind a readable call waiting.
+- A call made inside an unclosed thought lost that fact at a begin, and the
+  next reply showed the rest of the thought as its answer (8 of 31 calling
+  test templates). A begin now reads it from the kept tokens.
+- A begin refused a conversation the library itself held after a long result
+  was cut, since a begin allowed the newest exchange only the eviction
+  threshold. It now allows the room a reply leaves, and cuts an over-long
+  result of the newest exchange as a running conversation cuts one.
+- Call numbering counts the ids of put-back turns and of left-out calls, so a
+  later call never takes one of their ids.
+
+Turns that still fall back to the template's render, accepted: a turn whose
+saved messages differ from what a client sends back (a cut result, the "not
+run" answers a question writes, joined questions, an answer cleaned of
+thought tags, a separator the server adds between streamed parts).
+
+The form is named after its API, "Chat Completions", not its vendor, since
+`tests/test_neutral.py` refuses the vendor's name as that of a test
+template's publisher.
+
+### One state object, and evictions recorded where they happen
+
+Revises "The conversation split into parts without state". The parts were
+handed the state on every call and also read it through the rendering; a
+rollback replaced the object, so the two agreed only because the state handed
+in was always the live one. Now the conversation has one state object that a
+rollback fills in place, and each part is made with it. The change record
+lives in the state too, so a rollback puts back what it recorded.
+
+The count of evicted messages was worked out by subtraction in nine places,
+and a written result reported -1. Eviction now records how many went and why
+where it drops them, logs it once at `INFO` (which also makes a question with
+many calls that empties the history visible on the server, the user having
+chosen to keep the rule that whole exchanges go), and every report reads only
+that record. A result's whole cutting step, with one search for how much to
+keep, is in the cutting file.
+
+### A kept turn on its last message
+
+Revises "The target, built without the cache" in part. A turn kept as
+generated was tracked by which message objects it started and ended on, and
+filtered by hand in four files; three earlier fixes came from that. It is now
+held on the message it ends with, with how many messages it spans, as a
+result and an unreadable mark already were; dropping messages drops it.
+
+### A begin compares with the cache; one action for settings
+
+Revises "One action changes the tools and the reasoning" and the choice of
+half the context for every begin. A begin emptied the cache and decoded
+everything again: 85 of 85 tokens on a short conversation, all 14,019 at 64k
+(measured), on every regenerate, resume or settings fallback. It now compares
+its render with the cache and decodes only from the first difference. Where
+the cache already holds the oldest part of what it keeps, it keeps up to the
+eviction threshold instead of half the context. With that, `change_settings`
+went: beginning again with the conversation and other tools or reasoning
+costs what it cost, and is the one way to do it.
+
+### One generation inside the conversation; one publication per action
+
+One generation was driven across the wrapper and the conversation, 36 names
+crossing between them and the rollback decided in eight places. It now runs
+inside the conversation; the wrapper keeps the lock, the policy, the tool
+loop and the streams. The copy for other threads was built three times per
+reply, once before the first word; it is now published once per outermost
+action, and the history copy is built only when it is read.
+
+### Saved states where the newest exchanges begin
+
+On a cache that can only save states (as a hybrid model's), an injected or
+shortened reply after a begin decoded the whole conversation: 704 tokens at
+24 exchanges against 190 at 6 (measured on the stand-in). The cache now keeps
+a state where each of the two newest exchanges begins, the older one for
+templates that write the exchange before otherwise once a question follows;
+the places come only from renders the action made, so no render is added. A
+test sweeps every action on every template and kind of cache and fails where
+an action decodes more as the conversation grows.
+
+### Refusals of a question, and a withheld call
+
+Invariant 4 said a question is refused only where it cannot fit; some
+templates refuse one asked twice or an empty one, and one writes an empty
+question otherwise than as its text. The rule now names both refusals, and a
+test checks on every template that a question is refused only where the
+template's own render refuses it or writes it otherwise than as its text.
+Under `"withhold"`, a call whose plain-text opening ended the reply was
+reported nowhere (principle 6); it is now reported `"unfinished"`.
+
+### Template properties in a file of their own, read only from the record
+
+Revises "One record of what a load reads from a template" (not done then: only
+moves code). The record was read for one field while thirteen readers kept
+their own copies. Load-time reading is now its own file, the runtime template
+reads every property from the record, the six values a conversation derives
+from its template are one record worked out in one function, and what a
+conversation accepts is one check derived from `capabilities()`, with a test
+that `begin` refuses exactly where it says no.
+
+### Tests as rules
+
+The stand-in tokenizer, one token per character, could not show where real
+tokens split; every conversation test now runs on a merging one as well,
+which joins a space with the letter after it, as real tokenizers do. Two
+checks compared tokens exactly where a token may join the template's text and
+the caller's; on that tokenizer they compare the text and where each tag
+stands. The thread rules and the eviction limits have test files of their
+own. The failure sweep covers three more actions and a reasoning template.
+The trace test of invariant 2 lists the code a plain reply may run, so code
+new to it is flagged, where it listed the code that must not run. After every
+test, what `conversation()` gives is taken by `begin`, and the conversation
+is its Chat Completions messages with each saved turn put back.

@@ -377,8 +377,11 @@ class ChatWrapper:
         still owed told it was not run and an empty reply added where the
         template needs one (or, where the template writes neither, the turn
         taken out), and a question no reply follows is joined to it where the
-        template writes no two in a row. See design_history.md, "Nothing
-        blocks a question".
+        template writes no two in a row. It is refused only where it cannot
+        fit beside the system prompt alone, or where the template does not
+        write that question as its text, such as one asked twice or an empty
+        one on some templates; either refusal leaves the next question free.
+        See design_history.md, "Nothing blocks a question".
 
         Raises:
             OutOfOrderError: At once, if no conversation has been begun; or,

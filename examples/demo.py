@@ -101,10 +101,11 @@ def main() -> None:
     begin(sw, "You are a terse assistant. Keep replies under 10 words.")
     for i in range(10):
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
-        saved = sw.conversation()
-        system, history = saved["system_prompt"], saved["messages"]
+        messages = sw.conversation()["messages"]
+        has_system = bool(messages) and messages[0]["role"] == "system"
+        history = messages[has_system:]
         takes_system = sw.capabilities(tools=False).can_take_system_prompt
-        assert system or not takes_system, "system message was evicted"
+        assert has_system or not takes_system, "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
