@@ -158,6 +158,12 @@ class ConversationRendering:
             memo[key] = split
         return memo[key]
 
+    def split_made(self, messages, generation_prompt: bool) -> SplitRender | None:
+        """:meth:`split` of ``messages`` where this action made it already, ``None`` where it did not."""
+        given = self._as_given(messages)
+        key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
+        return self._current_memo().get(key)
+
     def opening_render(self, system: list[dict]) -> str | None:
         """How the template opens a conversation on ``system``, which changes where it writes the date, say."""
         return self.render(system + [{"role": "user", "content": STAND_IN}], True)

@@ -619,7 +619,7 @@ def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_
     from llama_chat.cache_sync import CacheSync
     fake = _Flaky(PLAIN, can_shift=False, can_cut_tail=False)
     memory = CacheSync(fake)
-    memory.pin(3)
+    memory.pin([3], "opening")
     fake.fail = "decode"            # the first half, up to the pin
     with pytest.raises(RuntimeError):
         memory.decode(list(range(1, 11)))
@@ -658,7 +658,8 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
             draw.choice([memory.tokens, memory.tokens[:-1] + some_tokens()])),
         "generate": lambda: memory.tokens and generate(closed_early=False),
         "generate closed early": lambda: memory.tokens and generate(closed_early=True),
-        "pin": lambda: memory.pin(draw.randrange(len(memory.tokens) + 2)),
+        "pin": lambda: memory.pin(draw.sample(range(len(memory.tokens) + 2), k=2),
+                                  draw.choice(["opening", "exchanges"])),
         "reset": memory.reset, "rest": memory.rest, "repair": memory.repair,
     }
     for _ in range(3000):

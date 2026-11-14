@@ -20,7 +20,7 @@ import time
 import pytest
 
 import llama_chat
-from llama_chat import ChatWrapper, Config, ContextOverflowError
+from llama_chat import ChatWrapper, Config, ContextOverflowError, TemplateRefusedError
 from llama_chat.history_forms import answer_in_order, read_messages
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
@@ -75,7 +75,7 @@ class _Run:
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
-                 writes_tags=False, extra_tags=(), tokens_spell_text=True):
+                 writes_tags=False, extra_tags=(), tokens_spell_text=True, can_cut_tail=False):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         text = self.fixture["chat_template"]
@@ -83,7 +83,8 @@ class _Run:
                                          reasoning_on=shipped_addon_reasoning_on(text))
         self.answers = list(ANSWERS if replies is None else replies)
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
-                                   can_shift=can_shift, writes_tags=writes_tags,
+                                   can_shift=can_shift, can_cut_tail=can_cut_tail,
+                                   writes_tags=writes_tags,
                                    extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
@@ -2016,3 +2017,52 @@ def test_a_call_inside_a_thought_begun_again_from_the_conversation_goes_on_insid
     run.chat.begin(**run.chat.conversation())
     run.chat.inject_tool_result(run.chat.pending_calls[0].id, "sunny")
     assert run.chat.reply().finish().text == "Sunny."
+
+
+_COST_CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
+                "saves states": dict(can_shift=False)}
+
+
+def _costs(stem, cache, n_exchanges):
+    """What each action decodes, by its name, after a begin from ``n_exchanges`` exchanges."""
+    run = _Run(stem, context_size=16384, replies=[f"Answer {i}." for i in range(40)],
+               **_COST_CACHES[cache])
+    calls = run.fixture["calls_tools"]
+    run.begin([m for i in range(n_exchanges) for m in (
+        {"role": "user", "content": f"Question {i}?"}, {"role": "assistant", "content": f"Answer {i}."})],
+        tools=[WEATHER] if calls else None)
+    chat, decoded = run.chat, {}
+
+    def measured(name, action):
+        before = run.context.total_prefilled()
+        try:
+            action()
+        except TemplateRefusedError:
+            return                      # a template that writes no two replies in a row
+        decoded[name] = run.context.total_prefilled() - before
+
+    measured("injected reply", lambda: chat.inject("Said too.", role="assistant"))
+    measured("question", lambda: chat.reply("Again?").finish())
+    measured("shortened reply", lambda: chat.truncate_last_reply(
+        chat.conversation()["messages"][-1]["content"][:3]))
+    measured("injected question", lambda: chat.inject("A note."))
+    measured("reply to it", lambda: chat.reply().finish())
+    if calls:
+        body = _call_body(run, {"city": "Bonn"})[1]
+        run.context.replies[:0] = [ScriptedCall(body)]
+        measured("call", lambda: list(chat.reply("Weather?", tool_call_policy="yield")))
+        measured("result", lambda: chat.inject_tool_result(chat.pending_calls[0].id, "sunny"))
+        measured("reply after the result", lambda: chat.reply().finish())
+    measured("begin again", lambda: chat.begin(**chat.conversation()))
+    measured("question after it", lambda: chat.reply("Last?").finish())
+    return decoded
+
+
+@pytest.mark.parametrize("cache", sorted(_COST_CACHES))
+@pytest.mark.parametrize("stem", _EVERY)
+def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cache):
+    """Principle 4 on every action and every kind of cache: what an action decodes does not grow with what came before it."""
+    short, long = _costs(stem, cache, 6), _costs(stem, cache, 24)
+    assert short.keys() == long.keys()
+    assert {name: (short[name], long[name]) for name in short
+            if long[name] > short[name] + 8} == {}

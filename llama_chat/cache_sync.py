@@ -44,8 +44,10 @@ class CacheSync:
         self.cancel: threading.Event | None = None
         # (tokens held, state): at most the two newest a cache rested in.
         self._rest_states: list[tuple[int, object]] = []
-        self._pin: int | None = None    # where a state is kept, besides those
-        self._pinned: tuple[int, object] | None = None
+        # Where states are kept besides those, by what they are kept for, and the states kept,
+        # by how many tokens they hold.
+        self._pins: dict[str, frozenset[int]] = {}
+        self._pinned: dict[int, object] = {}
         # The state rested in where the cache was last cut for a rest, besides those.
         self._at_cut: tuple[int, object] | None = None
 
@@ -70,12 +72,24 @@ class CacheSync:
         self._tokens, self._valid, self._end = [], 0, 0
         self.version += 1
         self._rest_states, self._logits = [], False
-        self._pin, self._pinned, self._at_cut = None, None, None
+        self._pins, self._pinned, self._at_cut = {}, {}, None
 
-    def pin(self, pos: int | None) -> None:
-        """Keep a state saved where the first ``pos`` tokens end, for as long as they stay, where the cache needs saved states; ``None`` keeps none."""
-        if pos != self._pin:
-            self._pin, self._pinned = pos, None
+    def pin(self, positions, kept_for: str) -> None:
+        """Keep a state saved where the first ``pos`` tokens end, for each ``pos`` of ``positions``, for as long as they stay, where the cache needs saved states.
+
+        Args:
+            kept_for: What the states are kept for; those kept for something
+                else are kept beside them, and these replace the ones it kept.
+        """
+        self._pins[kept_for] = frozenset(positions)
+        kept = frozenset().union(*self._pins.values())
+        self._pinned = {pos: state for pos, state in self._pinned.items() if pos in kept}
+        if self.is_current:
+            self._save_pinned_state()
+
+    def pinned(self, kept_for: str) -> frozenset[int]:
+        """Where states are kept for ``kept_for``."""
+        return self._pins.get(kept_for, frozenset())
 
     def decode(self, tokens: list[int], want_logits: bool = False) -> None:
         """Append ``tokens``, decoded at once where the cache holds everything before them."""
@@ -274,12 +288,14 @@ class CacheSync:
                     self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
                                         appended)
                 return
-        if self._needs_pinned_state() and self._end < self._pin < self._end + len(tokens):
+        pin = min((p for p in self._pins_to_save() if self._end < p < self._end + len(tokens)),
+                  default=None)
+        if pin is not None:
             # Decoded in two, so that the state where the pin is can be saved; all of
             # them held first, so that a failure in either leaves none out.
             if not appended:
                 self._tokens += tokens
-            split = self._pin - self._end
+            split = pin - self._end
             self._decode_at_end(tokens[:split], False, appended=True)
             self._decode_at_end(tokens[split:], want_logits, appended=True)
             return
@@ -296,14 +312,22 @@ class CacheSync:
         self._valid = self._end
         self._logits = want_logits
         self.decoded += len(tokens)
-        if self._needs_pinned_state() and self._end == self._pin:
-            try:
-                self._pinned = (self._end, self._context.save_state())
-            except RuntimeError:
-                pass                    # decoding again stands in where none is saved
+        self._save_pinned_state()
 
-    def _needs_pinned_state(self) -> bool:
-        return self._pin is not None and self._pinned is None and not self._can_cut
+    def _save_pinned_state(self) -> None:
+        """Save the state the cache holds now, where one is to be kept here."""
+        if self._end in self._pins_to_save():
+            try:
+                state = self._context.save_state()
+            except RuntimeError:
+                return                  # decoding again stands in where none is saved
+            self._pinned[self._end] = state
+
+    def _pins_to_save(self) -> set[int]:
+        """Where a state is to be kept and none is saved yet, on a cache that needs saved states."""
+        if self._can_cut:
+            return set()
+        return set().union(*self._pins.values()) - set(self._pinned)
 
     def _decode_again_with_logits(self) -> None:
         """Decode the last token again, so that the next token can be drawn after it."""
@@ -314,19 +338,19 @@ class CacheSync:
 
     def _reset_to_nothing(self) -> None:
         self._context.reset()
-        self._valid, self._end, self._rest_states, self._pinned, self._at_cut = 0, 0, [], None, None
+        self._valid, self._end, self._rest_states, self._pinned, self._at_cut = 0, 0, [], {}, None
 
     def _restore_to(self, pos: int) -> bool:
         """Go back to the newest state saved at or before ``pos``; whether one could be."""
         self._forget_states_after(pos)
-        saved = self._rest_states + [s for s in (self._pinned, self._at_cut) if s]
+        saved = self._rest_states + list(self._pinned.items()) + ([self._at_cut] if self._at_cut else [])
         if not saved:
             return False
         rested, state = max(saved, key=lambda s: s[0])
         try:
             self._context.restore_state(state, rested)
         except RuntimeError:
-            self._rest_states, self._pinned, self._at_cut = [], None, None
+            self._rest_states, self._pinned, self._at_cut = [], {}, None
             return False
         self._valid = self._end = rested
         return True
@@ -334,8 +358,7 @@ class CacheSync:
     def _forget_states_after(self, pos: int) -> None:
         """Drop the saved states that hold more than the first ``pos`` tokens, which changed."""
         self._rest_states = [s for s in self._rest_states if s[0] <= pos]
-        if self._pinned is not None and self._pinned[0] > pos:
-            self._pinned = None
+        self._pinned = {kept: state for kept, state in self._pinned.items() if kept <= pos}
         if self._at_cut is not None and self._at_cut[0] > pos:
             self._at_cut = None
 

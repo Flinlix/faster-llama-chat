@@ -588,6 +588,10 @@ class RenderedCache:
         tokens = self._rendering.tokenize(rest)
         if len(self._memory.tokens) + len(tokens) > room:
             return False
+        if self._memory.keeps_saved_states:
+            newest = max(self._memory.pinned(_NEWEST_EXCHANGES), default=None)
+            self._memory.pin([at for at in (newest, len(self._memory.tokens)) if at is not None],
+                             _NEWEST_EXCHANGES)
         self._state.messages.append(question)
         self._memory.decode(tokens, want_logits=True)
         self._state.spliced_at = (len(self._memory.tokens) - len(tokens), tokens,
@@ -1187,8 +1191,8 @@ class RenderedCache:
 
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
-        self._memory.pin(self._rendering.opening_length(self._system_part())
-                         if self._memory.keeps_saved_states else None)
+        self._memory.pin([self._rendering.opening_length(self._system_part())]
+                         if self._memory.keeps_saved_states else [], "opening")
 
     def _render_checks(self) -> RenderChecks:
         """What the template's renders allow, as the system turn, the declarations and the clock now leave them.
@@ -1331,12 +1335,31 @@ class RenderedCache:
             dropped: Exchanges were dropped, so that the target may go on as
                 the cache does after a stretch.
         """
+        if self._memory.keeps_saved_states:
+            # States there let a change to the newest exchanges decode only those exchanges.
+            places = self._newest_exchanges_at()
+            if places is not None:
+                self._memory.pin(places, _NEWEST_EXCHANGES)
         # Declarations that move with the newest question leave a stretch behind, and the
         # next question's move back to where this cut is made, or past it.
         moves = self._moves_declarations()
         self._memory.hold(target.tokens, want_logits=logits,
                           find_dropped_stretch=dropped or moves, rest_at_cut=moves)
         self._state.kept_at = target.kept_at
+
+    def _newest_exchanges_at(self) -> list[int] | None:
+        """Where in the cache each of the two newest exchanges begins, the tag that opens its question, those that cannot be told left out; ``None`` where this action rendered the conversation whole in neither form, which it is not rendered again for."""
+        messages = self._state.messages
+        starts = [at for at in exchange_starts(messages)[-2:] if at]
+        for prompted in (False, True):
+            split = self._rendering.split_made(messages, prompted)
+            if split is not None:
+                break
+        else:
+            return None
+        tags = [self._rendering.tag_after_content(split, at - 1) for at in starts]
+        return [len(self._rendering.target(messages, prompted, upto=tag).tokens)
+                for tag in tags if tag is not None]
 
     def _moves_declarations(self) -> bool:
         """Whether the declarations move with the newest question, leaving a stretch behind."""
@@ -1480,6 +1503,9 @@ def _ensure_can_reply(conversation, asks_question: bool) -> None:
         raise OutOfOrderError(None, f"{len(conversation.pending_calls)} call(s) still owe a "
                                     "result; answer each with inject_tool_result()")
 
+
+# What the states a cache that cannot be cut keeps where the newest exchanges begin are kept for.
+_NEWEST_EXCHANGES = "newest exchanges"
 
 # What a call still owed is told when a question closes its turn.
 _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}
