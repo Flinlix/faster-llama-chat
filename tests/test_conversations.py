@@ -85,7 +85,8 @@ class _Run:
                                    extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
                                        min_reply_tokens=8), context=self.context)
-        self.system = "Be brief." if self.chat.can_take_system_prompt else ""
+        takes_system = self.chat.capabilities(tools=False).can_take_system_prompt
+        self.system = "Be brief." if takes_system else ""
         self.reasoning = reasoning
         self.seen, self.seen_tokens, self.decoded, self.renders = [], [], [], []
         self.context.before_reply = self._before_reply
@@ -443,7 +444,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_goes_back_to_before_the_oldest
 def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_where_one_does(stem):
     run = _Run(stem)
     takes = expected(run.fixture, "can_take_system_prompt")
-    assert run.chat.can_take_system_prompt == takes
+    assert run.chat.capabilities(tools=False).can_take_system_prompt == takes
     if not takes:
         with pytest.raises(ValueError, match="does not keep a system prompt in place"):
             run.chat.begin("persona")
@@ -453,7 +454,8 @@ def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_wh
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     run = _Run(stem, context_size=600)
-    refusal = ContextOverflowError if run.chat.can_take_system_prompt else ValueError
+    takes_system = run.chat.capabilities(tools=False).can_take_system_prompt
+    refusal = ContextOverflowError if takes_system else ValueError
     with pytest.raises(refusal):
         run.chat.begin("Keep it short. " * 80)
     with pytest.raises(ValueError, match="call begin"):
@@ -1173,7 +1175,7 @@ def test_the_answers_opening_a_model_writes_itself_stays_out_of_answer_and_histo
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_tools_declared_mid_conversation_are_written_where_the_template_writes_them(stem):
     run = _Run(stem)
-    assert run.chat.can_call_tools
+    assert run.chat.capabilities(tools=True).can_call_tools
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     run.chat.declare_tools([WEATHER])

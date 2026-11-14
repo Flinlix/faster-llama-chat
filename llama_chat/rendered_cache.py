@@ -137,8 +137,8 @@ class RenderedCache:
 
     Every method expects the caller to hold the conversation's lock, except
     :meth:`conversation`, :meth:`published_pending_calls`,
-    :meth:`published_total_tokens`, :meth:`published_turn_open`,
-    :meth:`published_template` and :meth:`ensure_can_reply`, which read a
+    :meth:`published_total_tokens`, :meth:`published_turn_open` and
+    :meth:`ensure_can_reply`, which read a
     copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
@@ -188,10 +188,6 @@ class RenderedCache:
     def published_turn_open(self) -> bool:
         """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
         return self._published.turn_open
-
-    def published_template(self) -> ResolvedTemplate:
-        """The template the conversation is written with, from the newest publication; safe to read unlocked."""
-        return self._templates.for_conversation(self._published.tools is not None)
 
     def ensure_can_reply(self, asks_question: bool) -> None:
         """Refuse a reply the conversation, as the newest publication left it, cannot take; safe to call unlocked.

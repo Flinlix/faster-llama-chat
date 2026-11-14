@@ -89,7 +89,7 @@ chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192
 
 # begin: reset, and prefill the system prompt and as much recent history as fits.
 # A template that writes a system prompt where later questions move it refuses
-# one (can_take_system_prompt is False); pass "" there.
+# one (capabilities(tools=False).can_take_system_prompt is False); pass "" there.
 chat.begin("You are a helpful assistant.", [("user", "Hi"), ("assistant", "Hello!")])
 
 # inject: prefill one message as context, without generating
@@ -135,7 +135,7 @@ on, so the refusal follows it there.
 | telling the model about more tools | `declare_tools(tools)`. Where the model ships a [template of its own for tools](#tool-calling), only into a conversation begun with `tools` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
 | reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared) and `reasoning`, so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
-| where it stands | `total_tokens`, `config`, `can_shift`, `can_call_tools`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `total_tokens`, `can_reason`, `can_turn_off_reasoning`, `can_take_system_prompt`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
+| where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `wait_idle(timeout_s)`. `capabilities(tools=False)` and `capabilities(tools=True)` each give a `Capabilities` record of what `begin` accepts for a conversation begun without tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt`. Both are settled when the model loads, never change, and are safe from any thread. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
@@ -173,8 +173,11 @@ state, that the chat template is valid template code (a
 `ValueError` naming the line and the cause where it is not), that the
 generation prompt and the closing after a reply are where the template writes them and the closing begins with one of the
 model's tags, or, where the template writes nothing after a reply, that the
-tag opening the next turn ends a generation for the model, and whether tool calling works (`can_call_tools`). A setting
+tag opening the next turn ends a generation for the model, and whether tool calling works (`capabilities(tools=True).can_call_tools`). A setting
 refused is an `InvalidSettingError`, a `ValueError` whose `field` names it.
+What the model cannot do (call tools, reason, keep a system prompt in place)
+is refused where it is asked for with an `UnsupportedError`, a `ValueError`
+whose `field` names the parameter that asked for it.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
 or reply that does not), whether the model calls a tool that exists, and what
@@ -253,8 +256,10 @@ out.
 **Tools a model could not use are refused where you hand them over**, by
 `begin(tools=...)`, `declare_tools` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
-readable argument spelling, and a block for the result. `can_call_tools`
-answers the same question up front. A declaration that names one tool twice is
+readable argument spelling, and a block for the result, with an
+`UnsupportedError` whose `field` names the parameter the tools came in.
+`capabilities(tools=True).can_call_tools` answers the same question up
+front. A declaration that names one tool twice is
 refused there too, since the model could reach only one of them.
 
 **Registering.** `@registry.tool` makes a function runnable and describes it:
@@ -289,7 +294,8 @@ calls are to run is handed one.
 **A template of its own for tools.** A GGUF may ship, beside its default chat
 template, one for a conversation that declares tools
 (`tokenizer.chat_template.tool_use`). Where it does, both pass the check a
-model meets at load, `can_call_tools` answers for that one, and a conversation
+model meets at load, `capabilities(tools=True)` answers for that one and
+`capabilities(tools=False)` for the default, and a conversation
 is written with it when `begin` is given `tools`, a registry or a list, even
 an empty one, so that `declare_tools` can add tools later; with `tools=None`
 it is written with the default template. A `declare_tools` that would move a
@@ -372,10 +378,10 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 ```
 
 Reasoning is chosen per conversation, at `begin`, because a template may switch
-it in the system turn. `can_reason` says whether `begin` accepts
+it in the system turn. `capabilities(tools=...).can_reason` says whether `begin` accepts
 `reasoning=True`, which it does where the template marks a thought and its
 prompt with reasoning on leaves that thought open. Reasoning
-off is the template's own off: `can_turn_off_reasoning` says whether the
+off is the template's own off: `can_turn_off_reasoning` in the same record says whether the
 template has one. Where it has none, as on a template that always reasons, a
 conversation begun without reasoning is written as the template writes it,
 and the model may reason in every reply all the same. Where a template's

@@ -24,9 +24,10 @@ from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
-from .reply import TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy
+from .reply import (TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy,
+                    UnsupportedError)
 from .reply_text import ReplyText
-from .resolved_template import ResolvedTemplate, ResolvedTemplates
+from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique,
                     unwritable_failure)
 
@@ -149,8 +150,8 @@ class ChatWrapper:
                 that :meth:`declare_tools` can add tools later; ``None``
                 writes it with the default template.
             reasoning: Whether the model reasons before each answer, as its
-                template turns that on or off; :attr:`can_turn_off_reasoning`
-                says whether it has an off. It belongs to the conversation, so it
+                template turns that on or off; :meth:`capabilities` says
+                whether it has an off. It belongs to the conversation, so it
                 changes only here. Every reply's thought is kept out of what
                 it yields, either way.
 
@@ -165,14 +166,19 @@ class ChatWrapper:
                 message and cannot fit beside them either.
             TypeError: If the system prompt or a history message's text is
                 not a ``str``, or a history item is of another form.
+            UnsupportedError: If ``tools`` names anything, or the history
+                holds a tool turn, and the template this conversation is
+                written with cannot call tools; if ``reasoning`` is asked and
+                that template cannot reason; or if a system prompt is given and
+                it has no system turn.
+                Its ``field`` names the parameter: ``tools``, ``messages``,
+                ``reasoning`` or ``system_prompt``. :meth:`capabilities` says
+                beforehand what is accepted.
             ValueError: If a history message has another role, or a
                 dictionary other keys; if ``tools`` names one tool twice; if
-                ``tools`` names anything or the history holds a tool turn and
-                this model cannot call tools; if ``reasoning`` is asked of a
-                model that cannot reason; if the template has no system turn
-                and a system prompt is given; if two calls of the history carry
-                one id; or if the template refuses to write the conversation.
-                The previous conversation is left intact either way.
+                two calls of the history carry one id; or if the template
+                refuses to write the conversation. The previous conversation
+                is left intact either way, as on every refusal here.
         """
         ensure_text(system_prompt, "the system prompt")
         messages = messages or []
@@ -184,11 +190,17 @@ class ChatWrapper:
             ensure_names_unique(specs or [])
             template = self._templates.for_conversation(specs is not None)
             if specs or any(isinstance(item, ToolTurn) for item in messages):
-                template.ensure_tools_usable()
+                if specs is None and not template.can_call_tools \
+                        and self._templates.capabilities(True).can_call_tools:
+                    raise UnsupportedError(
+                        "messages", "this model reads a turn that called tools only in a "
+                        "conversation begun with tools; pass tools, an empty list included")
+                template.ensure_tools_usable("tools" if specs else "messages")
             if reasoning:
                 template.ensure_can_reason()
             if system_prompt and not template.has_system_turn:
-                raise ValueError(
+                raise UnsupportedError(
+                    "system_prompt",
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
@@ -322,9 +334,11 @@ class ChatWrapper:
                 :data:`~llama_chat.reply.TOOL_CALL_POLICIES`, ``None`` nor a
                 registry; or if ``max_calls`` is given without a registry or
                 is not a whole number of at least 0. At the first
-                iteration, if a registry holding tools is given to a model
-                that could never call one, or if ``max_calls`` is given and
-                the turn the reply goes on with by then runs no call.
+                iteration, if ``max_calls`` is given and the turn the reply
+                goes on with by then runs no call.
+            UnsupportedError: At the first iteration, if a registry holding
+                tools is given to a model that could never call one, naming
+                ``tool_call_policy``.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
                 ``stop`` is neither a ``str`` nor an iterable of ``str``, ``cancel``
                 has no ``is_set``, or ``sampling`` is neither ``None`` nor a
@@ -509,12 +523,14 @@ class ChatWrapper:
             counting as one.
 
         Raises:
+            UnsupportedError: If this model cannot call tools at all, naming
+                ``tools``.
             ValueError: If ``tools`` names one tool twice, if no conversation
-                has been begun, if a tool call has left a reply open, if this
-                model cannot call tools at all
-                (see :meth:`begin`), if the model ships a template for tools
-                and the conversation was begun without ``tools``, or if the template with the declarations
-                writes an older exchange otherwise once another follows.
+                has been begun, if a tool call has left a reply open, if the
+                model ships a template for tools and the conversation was
+                begun without ``tools``, or if the template with the
+                declarations writes an older exchange otherwise once another
+                follows.
             ContextOverflowError: If the system turn with the declarations
                 would leave no room under ``evict_above_tokens`` for a short
                 question.
@@ -528,7 +544,8 @@ class ChatWrapper:
             if not specs:
                 return 0
             return self._conversation.declare(
-                specs, accept=self._templates.for_conversation(True).ensure_tools_usable)
+                specs, accept=lambda: self._templates.for_conversation(True).ensure_tools_usable(
+                    "tools"))
 
     # ----- introspection -------------------------------------------------------
     @property
@@ -602,42 +619,15 @@ class ChatWrapper:
         """
         return self._conversation.conversation()
 
-    @property
-    def can_call_tools(self) -> bool:
-        """Whether tools can be used with this model, every step of the way.
+    def capabilities(self, *, tools: bool) -> Capabilities:
+        """What :meth:`begin` accepts for a conversation begun with ``tools`` given, even empty, or without.
 
-        Four things have to hold of the template a conversation that declares
-        tools is written with, its template for tools where the model ships
-        one, and all are settled at construction: the template describes a call, it renders the declarations that tell the
-        model a tool exists, the argument spelling was recovered, and it renders
-        a block to answer a call in. True here is exactly what :meth:`begin`
-        accepts ``tools`` for. Where only the spelling is missing a call is
-        still detected, so :attr:`Reply.stop_reason` can still be
-        ``"unreadable_tool_call"``, but nothing runnable comes out of it.
+        A model may ship a template of its own for a conversation that
+        declares tools; ``tools=True`` answers for that one and
+        ``tools=False`` for the default, each settled when the model loaded
+        and the same before and after any :meth:`begin`. Safe from any thread.
         """
-        return self._templates.for_conversation(True).can_call_tools
-
-    @property
-    def can_reason(self) -> bool:
-        """Whether :meth:`begin` may be asked to have the model reason; safe from any thread, as the newest finished change left it."""
-        return self._conversation.published_template().can_reason
-
-    @property
-    def can_turn_off_reasoning(self) -> bool:
-        """Whether :meth:`begin` without reasoning has the model answer without it.
-
-        Reasoning off is the template's own off. Where the template has none,
-        a model that reasons does so in every reply, ``reasoning`` or not,
-        and its thought is kept out of the answer either way. True where the
-        template marks no thought. Safe from any thread, as the newest
-        finished change left it.
-        """
-        return self._conversation.published_template().can_turn_off_reasoning
-
-    @property
-    def can_take_system_prompt(self) -> bool:
-        """Whether :meth:`begin` accepts a system prompt: the template writes one where no later question moves it; safe from any thread, as the newest finished change left it."""
-        return self._conversation.published_template().has_system_turn
+        return self._templates.capabilities(tools)
 
     @property
     def turn_open(self) -> bool:
@@ -711,14 +701,14 @@ class ChatWrapper:
             text, max_reply_tokens, **kwargs: As :meth:`reply`.
 
         Raises:
-            ValueError: If ``policy`` is a registry holding tools this model
-                could never call, which is what
+            UnsupportedError: If ``policy`` is a registry holding tools this
+                model could never call, which is what
                 :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
                 decides.
         """
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
-            self._template.ensure_tools_usable()
+            self._template.ensure_tools_usable("tool_call_policy")
         any_call_asked = self._conversation.turn_open      # a turn going on has called
         open_turn_text = self._open_turn_text()
         reply_cap = self._reply_cap(max_reply_tokens)

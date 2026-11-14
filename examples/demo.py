@@ -106,7 +106,8 @@ def main() -> None:
         reply = sw.reply(f"Give me fact number {i} about the planet Mars, briefly.").finish()
         saved = sw.conversation()
         system, history = saved["system_prompt"], saved["messages"]
-        assert system or not sw.can_take_system_prompt, "system message was evicted"
+        takes_system = sw.capabilities(tools=False).can_take_system_prompt
+        assert system or not takes_system, "system message was evicted"
         assert sw.total_tokens <= small.context_size, "context overflow"
         print(
             f"turn {i:>2}: total={sw.total_tokens:>4}/{small.context_size} "
@@ -119,7 +120,8 @@ def main() -> None:
 
 def begin(chat, system_prompt, history=None):
     """Begin with ``system_prompt``, or without one where the model's template has no system turn."""
-    return chat.begin(system_prompt if chat.can_take_system_prompt else "", history)
+    takes_system = chat.capabilities(tools=False).can_take_system_prompt
+    return chat.begin(system_prompt if takes_system else "", history)
 
 
 if __name__ == "__main__":

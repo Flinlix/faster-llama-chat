@@ -4695,3 +4695,41 @@ no longer deep-copies every call's arguments at every action. On two
 templates a restored call is still written under `unknown`, where the
 template writes every past call in its own frame or names it in the turn's
 header; that is put to the user (393).
+
+## 2026-11-14: What a model can do, asked per kind of conversation (420A, 405.4A)
+
+### What begin accepts is one record per kind of conversation (420A)
+
+A model may ship a template of its own for a conversation that declares
+tools. Four properties said what the model can do, and they answered for
+different templates: `can_call_tools` for the template for tools, while
+`can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt` answered
+for the template of the conversation as the newest finished change left it.
+So the last three could change after a `begin` with tools, and a caller that
+checked them before a `begin` could read the wrong template.
+
+`capabilities(tools=...)` now returns one `Capabilities` record for a
+conversation begun with tools (an empty list included) or without. Both
+records are settled when the model loads and never change. The four
+properties are gone, so there is one way to ask. `tools` has no default: on a
+model with two templates the two answers differ, and a default would hide
+which one a caller gets.
+
+Rejected: one argument per property (four calls for one question, 405.4B),
+and one answer for both templates at once, which would report a model whose
+template for tools reasons and whose default does not as unable (405.4C).
+
+### What the model cannot do is refused naming the parameter (405.4A)
+
+`begin`, `declare_tools` and a reply given a registry refused tools,
+reasoning and a system prompt the model cannot take with a plain
+`ValueError`. A caller that has to say which of its own fields was wrong,
+such as a server, therefore checked each one beforehand. They now raise
+`UnsupportedError`, a `ValueError` whose `field` names the parameter that
+asked for it: `tools`, `messages` (a tool turn in the history), `reasoning`,
+`system_prompt` or `tool_call_policy`. Code that catches `ValueError` still
+catches it. On a model that ships a template for tools, a history holding a
+tool turn and begun without tools was refused with "this model's template
+describes no tool call", though the model calls tools; it now says to pass
+tools, an empty list included (found by the review of this change). This is the first kind of the family of refusals planned under
+415.7A; the other kinds follow with that step.

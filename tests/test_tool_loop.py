@@ -11,7 +11,7 @@ from llama_chat.config import Config
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from llama_chat import ChatWrapper, ContextOverflowError
+from llama_chat import ChatWrapper, ContextOverflowError, UnsupportedError
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import FakeContext, ScriptedCall, written_call
@@ -454,8 +454,8 @@ def test_tags_without_a_readable_grammar_cannot_call_tools():
     template = ResolvedTemplate(FakeContext(KEYLESS_CALLS))
     assert template.call_boundary().tool_tokens is not None  # the tags resolved
     with pytest.raises(ValueError, match="call format could not be recovered"):
-        template.ensure_tools_usable()                        # the probes recovered nothing
-    assert not wrapper.can_call_tools
+        template.ensure_tools_usable("tools")                # the probes recovered nothing
+    assert not wrapper.capabilities(tools=True).can_call_tools
 
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
@@ -1485,7 +1485,7 @@ def test_an_add_on_files_call_format_gives_no_calls_to_a_template_that_writes_no
          "call": {"opening": "OPEN:", "name_close": "(", "closing": ":CLOSE"}}))
     wrapper = ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=512),
                           context=fake)
-    assert not wrapper.can_call_tools
+    assert not wrapper.capabilities(tools=True).can_call_tools
 
 
 def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
@@ -1545,7 +1545,7 @@ def test_can_call_tools_is_exactly_what_declaring_will_accept(build, can_call):
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
     wrapper = build()
 
-    assert wrapper.can_call_tools is can_call
+    assert wrapper.capabilities(tools=True).can_call_tools is can_call
     if can_call:
         wrapper.begin("persona", tools=registry.specs())
     else:
@@ -1571,7 +1571,7 @@ def test_a_context_that_throws_while_probing_still_loads(throws_on):
     wrapper = ChatWrapper(Config(context_size=1024),
                           context=Throws(TOOLS))
 
-    assert not wrapper.can_call_tools
+    assert not wrapper.capabilities(tools=True).can_call_tools
     wrapper.begin("persona")
     assert wrapper.reply("hallo").finish().text == "reply"
 
@@ -1582,7 +1582,7 @@ def test_the_result_block_is_probed_once_not_per_result():
     wrapper = ChatWrapper(Config(context_size=1024), context=fake)
     after_construction = len(fake.rendered)
     for _ in range(5):
-        assert wrapper.can_call_tools
+        assert wrapper.capabilities(tools=True).can_call_tools
     assert len(fake.rendered) == after_construction
 
 
@@ -1841,7 +1841,7 @@ def test_declarations_move_on_with_the_newest_user_turn(can_shift):
     w, fake = _moving(can_shift=can_shift)
     specs = [ToolSpec("uhr", "", {})]
     assert ResolvedTemplate(FakeContext(TOOLS_DECLARED_IN_THE_NEWEST_TURN)).declares_before_newest_turn
-    assert w.can_call_tools
+    assert w.capabilities(tools=True).can_call_tools
     w.begin("s", tools=specs)
     _as_rendered_with(w, fake, specs)
     for text in ("eins", "zwei", "drei"):
@@ -1980,9 +1980,21 @@ def _with_a_template_for_tools(fixture=TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN):
 
 
 def test_a_model_whose_template_for_tools_calls_them_can_call_tools_though_its_default_cannot():
-    assert _with_a_template_for_tools()[0].can_call_tools
+    chat = _with_a_template_for_tools()[0]
+    assert chat.capabilities(tools=True).can_call_tools
+    assert not chat.capabilities(tools=False).can_call_tools
     without = {**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, "tool_use_template": None}
-    assert not _with_a_template_for_tools(without)[0].can_call_tools
+    assert not _with_a_template_for_tools(without)[0].capabilities(tools=True).can_call_tools
+
+
+def test_a_tool_turn_in_a_history_begun_without_tools_is_refused_saying_to_pass_tools():
+    chat, _fake = _with_a_template_for_tools()
+    turn = ToolTurn([ToolCall("clock", {}), ToolResult("clock", "12:00")])
+    history = [("user", "Wie spät?"), turn, ("user", "Danke")]
+    with pytest.raises(UnsupportedError, match="pass tools") as refused:
+        chat.begin("persona", history)
+    assert refused.value.field == "messages"
+    chat.begin("persona", history, tools=[])
 
 
 def test_a_declaration_that_would_change_the_template_is_refused_and_leaves_the_conversation():

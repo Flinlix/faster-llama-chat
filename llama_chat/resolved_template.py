@@ -24,6 +24,7 @@ from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
                                extract_fragments, extract_reasoning, extract_removed_thought,
                                refusing)
+from .reply import UnsupportedError
 from .reply_text import reply_header
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
@@ -224,13 +225,14 @@ class ResolvedTemplate:
         """Refuse to have this model reason where its template marks no thought.
 
         Raises:
-            ValueError: If this model cannot reason.
+            UnsupportedError: If this model cannot reason, naming ``reasoning``.
         """
         if not self.can_reason:
-            raise ValueError("this model's template marks no thought that could be told "
-                             "from the answer, or its prompt with reasoning on closes the "
-                             "thought at once, so it cannot be asked for reasoning; an "
-                             "add-on file's reasoning_on can name what turns it on")
+            raise UnsupportedError("reasoning",
+                                   "this model's template marks no thought that could be told "
+                                   "from the answer, or its prompt with reasoning on closes the "
+                                   "thought at once, so it cannot be asked for reasoning; an "
+                                   "add-on file's reasoning_on can name what turns it on")
 
     def generation_prompt(self, reasoning: bool = False) -> str:
         """The generation prompt a reply is sampled after, in the reasoning mode given.
@@ -322,7 +324,7 @@ class ResolvedTemplate:
         """Whether the template writes tool declarations right before the newest user turn, so that they move with each question."""
         return self._declares_before_newest_turn
 
-    def ensure_tools_usable(self) -> None:
+    def ensure_tools_usable(self, field: str) -> None:
         """Refuse to declare tools this model could never use.
 
         Declaring tools, and handing over a registry to run them, are the same
@@ -332,29 +334,37 @@ class ResolvedTemplate:
         at construction, which is what :attr:`can_call_tools` reports; this only
         says which one is missing.
 
+        Args:
+            field: The parameter the tools were given in, which a refusal names.
+
         Raises:
-            ValueError: If the call tags, the declarations, the argument
+            UnsupportedError: If the call tags, the declarations, the argument
                 spelling or the result block cannot be had from this model.
         """
         if not self._calls_marked and self._tool_calls is not None:
-            raise ValueError(
+            raise UnsupportedError(
+                field,
                 "this model writes a tool call as plain text, without a tag "
                 "token of its own, so a call could not be told from a reply; "
                 "its add-on file can say how it writes one")
         if not self._calls_marked:
-            raise ValueError(
+            raise UnsupportedError(
+                field,
                 "this model's template describes no tool call, so a tool "
                 "could never be reached")
         if not self._can_declare_tools:
-            raise ValueError(
+            raise UnsupportedError(
+                field,
                 "this model's template declares no tools, so the model would "
                 "never be told the tool exists")
         if self._call_body is None:
-            raise ValueError(
+            raise UnsupportedError(
+                field,
                 "this model's call format could not be recovered from its "
                 "template, so a call would be detected but never read")
         if not self._can_write_results:
-            raise ValueError(
+            raise UnsupportedError(
+                field,
                 "this model's template renders no tool result, so a call could "
                 "be made but never answered")
 
@@ -781,6 +791,34 @@ def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
     return rendered
 
 
+@dataclasses.dataclass(frozen=True)
+class Capabilities:
+    """What :meth:`~llama_chat.wrapper.ChatWrapper.begin` accepts for one kind of conversation, settled when the model loads.
+
+    Attributes:
+        can_call_tools: Tools can be used every step of the way: the template
+            describes a call, renders the declarations that tell the model a
+            tool exists, has a readable argument spelling, and renders a block
+            to answer a call in. Where only the spelling is missing, a call is
+            still detected, so a reply can still end with
+            ``"unreadable_tool_call"``, but nothing runnable comes out of it.
+        can_reason: ``reasoning=True`` is accepted: the template marks a
+            thought, and its prompt with reasoning on leaves the thought open.
+        can_turn_off_reasoning: A conversation begun without reasoning is
+            answered without it, as the template's own off writes it; true
+            where the template marks no thought. Where a template that marks
+            one has no off, the model reasons in every reply, and the thought
+            is kept out of the answer either way.
+        can_take_system_prompt: A system prompt is accepted: the template
+            writes it where no later question moves it.
+    """
+
+    can_call_tools: bool
+    can_reason: bool
+    can_turn_off_reasoning: bool
+    can_take_system_prompt: bool
+
+
 class ResolvedTemplates:
     """This model's default chat template and, where it ships one, its template for a conversation that declares tools, each recovered and proven usable.
 
@@ -813,3 +851,9 @@ class ResolvedTemplates:
     def for_conversation(self, uses_tools: bool) -> ResolvedTemplate:
         """The template a conversation is written with: the one for tools where it is begun with tools."""
         return self._for_tools if uses_tools else self._default
+
+    def capabilities(self, uses_tools: bool) -> Capabilities:
+        """What a conversation written with :meth:`for_conversation` of ``uses_tools`` accepts."""
+        template = self.for_conversation(uses_tools)
+        return Capabilities(template.can_call_tools, template.can_reason,
+                            template.can_turn_off_reasoning, template.has_system_turn)

@@ -14,8 +14,9 @@ import typing
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
-from llama_chat.tools import ToolCall, ToolRegistry
-from llama_chat import TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolTurn
+from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy,
+                        UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from llama_chat.generation import generate
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
@@ -918,27 +919,55 @@ def test_every_generation_is_handed_every_sampling_value():
                for f in dataclasses.fields(Sampling) if f.name != "seed")
 
 
-def test_what_the_model_can_do_is_read_from_the_conversation_as_the_newest_finished_change_left_it():
+def test_what_the_model_can_do_is_answered_per_kind_of_conversation_and_never_changes():
     from tests.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
 
     # The template for tools can reason, the default template cannot.
     fake = FakeContext({**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN,
-                        "tool_use_template": REASONING["chat_template"]})
+                        "tool_use_template": REASONING["chat_template"],
+                        "render_variables": REASONING["render_variables"]})
     w = ChatWrapper(Config(context_size=512), context=fake)
-    w.begin("s")
-    seen = []
-    prefill = fake.prefill
+    without, with_tools = w.capabilities(tools=False), w.capabilities(tools=True)
+    assert not without.can_reason and with_tools.can_reason
+    with pytest.raises(UnsupportedError) as refused:
+        w.begin("s", reasoning=True)
+    assert refused.value.field == "reasoning"
+    w.begin("s", tools=[], reasoning=True)      # what the record says is accepted, is
+    assert (w.capabilities(tools=False), w.capabilities(tools=True)) == (without, with_tools)
+    with pytest.raises(TypeError):
+        w.capabilities(True)                    # the kind is always named
 
-    def read_while_beginning(*args, **kwargs):
-        seen.append((w.can_reason, w.can_turn_off_reasoning, w.can_take_system_prompt))
-        raise RuntimeError("the cache refused the batch")
 
-    fake.prefill = read_while_beginning
-    with pytest.raises(RuntimeError, match="refused the batch"):
-        w.begin("s", tools=[])
-    fake.prefill = prefill
-    assert seen and seen[0] == (w.can_reason, w.can_turn_off_reasoning, w.can_take_system_prompt)
-    assert w.can_reason is False
+def test_what_the_model_cannot_do_is_refused_naming_the_parameter_that_asked_for_it():
+    plain = ChatWrapper(Config(context_size=512), context=FakeContext(PLAIN))
+    assert plain.capabilities(tools=False) == plain.capabilities(tools=True)
+    assert not plain.capabilities(tools=True).can_call_tools
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    turn = ToolTurn([ToolCall("clock", {}), ToolResult("clock", "12:00")])
+    refusals = [
+        ("tools", lambda: plain.begin("s", tools=registry.specs())),
+        ("messages", lambda: plain.begin("s", [("user", "hi"), turn])),
+        ("reasoning", lambda: plain.begin("s", reasoning=True)),
+    ]
+    plain.begin("s")
+    refusals += [
+        ("tools", lambda: plain.declare_tools(registry.specs())),
+        ("tool_call_policy", lambda: plain.reply("hi", tool_call_policy=registry).finish()),
+    ]
+    for field, refused_action in refusals:
+        with pytest.raises(UnsupportedError) as refused:
+            refused_action()
+        assert refused.value.field == field
+        assert isinstance(refused.value, ValueError)
+    assert [m["text"] for m in rows(plain)] == ["s"]
+
+    stem = next(stem for stem in STEMS if not expected(fixture(stem), "can_take_system_prompt"))
+    no_system = ChatWrapper(Config(context_size=4096), context=FakeContext(fixture(stem)))
+    assert not no_system.capabilities(tools=False).can_take_system_prompt
+    with pytest.raises(UnsupportedError) as refused:
+        no_system.begin("persona")
+    assert refused.value.field == "system_prompt"
 
 
 # ----- what an action is given, refused where it enters ---------------------
@@ -1176,7 +1205,8 @@ def test_closing_on_the_thread_that_reads_an_unfinished_reply_ends_it_and_keeps_
 @pytest.mark.parametrize("stem", STEMS)
 def test_the_readmes_quick_start_runs_on_every_template(stem):
     chat = ChatWrapper(Config(context_size=8192), context=FakeContext(fixture(stem)))
-    chat.begin("You are a helpful assistant." if chat.can_take_system_prompt else "",
+    takes_system = chat.capabilities(tools=False).can_take_system_prompt
+    chat.begin("You are a helpful assistant." if takes_system else "",
                [("user", "Hi"), ("assistant", "Hello!")])
     chat.inject("Reference: the deadline is Friday. What's the deadline?")
     for _ in chat.reply():

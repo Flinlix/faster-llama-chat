@@ -127,14 +127,15 @@ def test_a_template_with_or_without_an_off_says_so_and_still_begins_without_reas
     _context, template = _load(stem)
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
                        context=FakeContext(fixture(stem)))
-    assert chat.can_reason and chat.can_turn_off_reasoning == template.can_turn_off_reasoning
+    assert chat.capabilities(tools=False).can_reason
+    assert chat.capabilities(tools=False).can_turn_off_reasoning == template.can_turn_off_reasoning
     chat.begin("", reasoning=False)             # nothing that works today is refused
 
 
 def _describes_a_call(template):
     """Whether the template writes a call at all, whatever else tool calling lacks."""
     try:
-        template.ensure_tools_usable()
+        template.ensure_tools_usable("tools")
     except ValueError as missing:
         return "describes no tool call" not in str(missing)
     return True
@@ -190,7 +191,7 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
 @pytest.mark.parametrize("stem", _TOOL_STEMS)
 def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
     context, template = _load(stem)
-    template.ensure_tools_usable()
+    template.ensure_tools_usable("tools")
     call = shipped_addon_call(fixture(stem)["chat_template"])
     if call:
         # The add-on file says how the model writes a call, where the template
@@ -265,13 +266,13 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
     without = FakeContext(known, ["Fine."])
     chat = ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=4096,
                               min_reply_tokens=8), context=without)
-    assert not chat.can_call_tools
+    assert not chat.capabilities(tools=True).can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
         chat.begin("", tools=registry.specs())
 
     context = FakeContext(known, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    assert chat.can_call_tools
+    assert chat.capabilities(tools=True).can_call_tools
     chat.begin("", tools=registry.specs())      # the whole chain is checked, and passes
     # Read with the spelling the file gives.
     call = shipped_addon_call(known["chat_template"])

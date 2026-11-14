@@ -24,7 +24,8 @@ from .cache_context import TOOL_USE_TEMPLATE, CacheContext
 from .config import Config, InvalidSettingError, Sampling
 from .tools import Thought, ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
-                    StopReason, ToolCallPolicy)
+                    StopReason, ToolCallPolicy, UnsupportedError)
+from .resolved_template import Capabilities
 from .wrapper import ChatWrapper
 
 __all__ = [
@@ -33,6 +34,8 @@ __all__ = [
     "Sampling",
     "ChatWrapper",
     "ContextOverflowError",
+    "UnsupportedError",
+    "Capabilities",
     "Reply",
     "ReplyStream",
     "StopReason",
