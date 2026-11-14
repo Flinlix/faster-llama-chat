@@ -223,22 +223,16 @@ class ChatWrapper:
             # conversation it was about to replace.
             specs = None if tools is None else list(tools)
             ensure_declarable(specs or [])
-            template = self._templates.for_conversation(specs is not None)
-            if specs or any(_calls_tools(item) for item in messages):
-                if specs is None and not template.can_call_tools \
-                        and self._templates.capabilities(True).can_call_tools:
-                    raise UnsupportedError(
-                        "messages", "this model reads a turn that called tools only in a "
-                        "conversation begun with tools; pass tools, an empty list included")
-                self._templates.ensure_tools_usable(template, "tools" if specs else "messages")
-            if reasoning:
-                template.ensure_can_reason()
-            if system_prompt and not template.has_system_turn:
+            uses_tools = specs is not None
+            calls = any(_calls_tools(item) for item in messages)
+            if calls and not uses_tools and not self._templates.capabilities(False).can_call_tools \
+                    and self._templates.capabilities(True).can_call_tools:
                 raise UnsupportedError(
-                    "system_prompt",
-                    "this model's template does not keep a system prompt in place: it "
-                    "writes one where the questions after it change it, so a system "
-                    "prompt kept for the whole conversation cannot be")
+                    "messages", "this model reads a turn that called tools only in a "
+                    "conversation begun with tools; pass tools, an empty list included")
+            self._templates.ensure_accepts(
+                uses_tools, tools_field="tools" if specs else "messages" if calls else None,
+                reasoning=reasoning, system_prompt_field="system_prompt" if system_prompt else None)
             self._conversation.report(0)        # changes of earlier actions are told already
             kept = self._conversation.start(system_prompt, messages, specs, reasoning,
                                             generated_turns)
@@ -649,17 +643,11 @@ class ChatWrapper:
                 specs = conversation.tools if conversation.tools_declared else None
             if reasoning is _UNCHANGED:
                 reasoning = conversation.reasoning
-            template = self._templates.for_conversation(specs is not None)
 
             def accept() -> None:
-                if specs:
-                    self._templates.ensure_tools_usable(template, "tools")
-                if reasoning:
-                    template.ensure_can_reason()
-                if conversation.has_system_prompt and not template.has_system_turn:
-                    raise UnsupportedError(
-                        "tools", "this model's template for a conversation with tools does "
-                        "not keep a system prompt in place; begin again without one")
+                self._templates.ensure_accepts(
+                    specs is not None, tools_field="tools" if specs else None, reasoning=reasoning,
+                    system_prompt_field="tools" if conversation.has_system_prompt else None)
             conversation.report(0)
             return conversation.report(conversation.change_settings(specs, reasoning, accept))
 
@@ -842,7 +830,8 @@ class ChatWrapper:
         """
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
-            self._templates.ensure_tools_usable(self._template, "tool_call_policy")
+            self._templates.ensure_accepts(self._conversation.tools_declared,
+                                           tools_field="tool_call_policy")
         # A turn going on has called; a question closes it first.
         any_call_asked = text is None and self._conversation.turn_open
         open_turn_text = self._open_turn_text() if text is None else ""
@@ -861,7 +850,7 @@ class ChatWrapper:
             return max(0, reply_cap - sum(g.n_generated_tokens for g in generations))
 
         # A call no result could answer is not read, so it cannot leave its turn open for good.
-        deltas = self._generate(text, recognizes_calls=self._template.can_write_results,
+        deltas = self._generate(text, recognizes_calls=self._template.properties.can_write_results,
                                 may_call_again=may_call_after_unreadable(),
                                 max_reply_tokens=reply_cap, on_started=on_started, **kwargs)
         try:
@@ -1099,7 +1088,7 @@ class ChatWrapper:
         results_cut = conversation.results_cut
         try:
             goes_on = text is None and conversation.turn_open
-            reply_text = ReplyText(self._template.reasoning,
+            reply_text = ReplyText(self._template.properties.reasoning,
                                    self._template.answer_opening(conversation.reasoning),
                                    self._template.reply_header(conversation.reasoning),
                                    conversation.prompt_text, list(stop), generated.tag_spans,
@@ -1173,7 +1162,7 @@ class ChatWrapper:
     def _turn_end_test(self, reply_text: ReplyText,
                        generated: GenerationAccumulator) -> Callable[[int], bool] | None:
         """Whether a sampled token ends the reply ``generated`` collects, besides the end-of-generation tokens."""
-        turn_end = self._template.turn_end_token
+        turn_end = self._template.properties.turn_end_token
         if turn_end is None:
             return None
         return reply_text.turn_end_test(turn_end, self._context.token_text(turn_end),
@@ -1192,7 +1181,7 @@ class ChatWrapper:
         called = generated.stop_reason == "tool_call"
         if called and not calls:
             generated.stop_reason = "unreadable_tool_call"
-        tags, answer = self._template.reasoning, reply_text.answer
+        tags, answer = self._template.properties.reasoning, reply_text.answer
         # Given to a template that writes a past reply's thought; another is written without it.
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         return self._conversation.record_reply(

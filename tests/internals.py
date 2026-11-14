@@ -8,7 +8,7 @@ import dataclasses
 import sys
 
 from llama_chat.cache_sync import _TOKEN_OFFSET
-from llama_chat.resolved_template import ResolvedTemplate
+from llama_chat.template_reading import TemplateReader
 
 
 def token_id_range() -> range:
@@ -102,7 +102,7 @@ def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
 
 def renders_in_windows(wrapper) -> bool:
     """Whether windows of the conversation stand for its whole render."""
-    return wrapper._conversation._state.windows
+    return wrapper._conversation._state.checks.windows
 
 
 def last_spliced_question(wrapper) -> str | None:
@@ -124,8 +124,8 @@ def pending_calls_held(wrapper) -> list:
 # ----- a template read otherwise than it writes ---------------------------------------
 def read_fragments_as(monkeypatch, **changes) -> None:
     """Have every template's fragments read with ``changes``, as no template can make them read."""
-    read = ResolvedTemplate._resolve_fragments
-    monkeypatch.setattr(ResolvedTemplate, "_resolve_fragments",
+    read = TemplateReader._resolve_fragments
+    monkeypatch.setattr(TemplateReader, "_resolve_fragments",
                         lambda self: dataclasses.replace(read(self), **changes))
 
 
@@ -141,4 +141,4 @@ def called_in_thought(wrapper) -> bool:
 
 def tool_turns_stay(wrapper) -> bool:
     """Whether the conversation's template keeps a past turn that called tools as written once another exchange follows."""
-    return wrapper._conversation._state.tool_turns_stay
+    return wrapper._conversation._state.checks.tool_turns_stay

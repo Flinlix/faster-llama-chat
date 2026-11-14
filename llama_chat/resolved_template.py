@@ -1,9 +1,6 @@
-"""What one model's own chat template supports, read from its renders once and checked.
+"""One model's chat template as a conversation uses it: its renders, the prompt a reply follows, and its calls read, with what a load read of it in one record.
 
-Everything here is settled while a wrapper is being built: the tags around a
-turn and a thought, where a reply ends, and the four steps tool calling needs.
-An instance is therefore a template known to work. Nothing here touches a
-conversation.
+See :mod:`llama_chat.template_reading` for what a load reads and checks.
 """
 
 from __future__ import annotations
@@ -13,49 +10,17 @@ import logging
 from collections.abc import Mapping
 
 from .cache_context import MODEL_READER, TOOL_USE_TEMPLATE, ensure_answers
-from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
-                          extract_json_call_keys, extract_named_twice_opening,
-                          extract_tool_fragments)
 from .call_parsing import parse_calls
 from .errors import UnsupportedError
-from .messages import call_id, calling_message, result_message, with_thought_as
-from .model_template import RENDERER_VARIABLES, ModelTemplate, names_read
-from .sequences import common_prefix_length
-from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
-                       ToolCallFragments, shared_tags_length)
-from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
-                               extract_fragments, extract_reasoning, extract_removed_thought,
-                               refusing)
-from .render_checks import writes_two_user_turns
+from .messages import with_thought_as
+from .model_template import ModelTemplate
 from .reply_text import reply_header
-from .tokenizing import first_special_token, split_at_tags, tag_texts
-from .tools import ToolCall, ToolSpec
+from .template import CallBoundary, shared_tags_length
+from .template_reading import TemplateProperties, TemplateReader
+from .tools import ToolCall
 
 _log = logging.getLogger(__name__)
 
-# The function a template calls to read the clock, as the renderer provides it.
-_CLOCK = "strftime_now"
-# Where the prompt and a tool result go in a render. Neither contains the
-# other, so a split on either lands where it means to.
-_PROMPT = "PROMPTMSG"
-_RESULT = "RESULTMSG"
-_NEXT = "NEXTMSG"
-_TEXT = "TEXTMSG"
-_SYSTEM = "SYSTEMMSG"
-# A reply and a user turn after the first, so a template that declares tools
-# before the newest user turn shows it after the first turn, not ahead of it.
-_EXCHANGE = ({"role": "assistant", "content": "REPLYMSG"},
-             {"role": "user", "content": "LATERMSG"})
-# A question, a past reply to it, and the next question.
-_PAST_REPLY = ({"role": "user", "content": _PROMPT}, {"role": "assistant", "content": _NEXT},
-               *_EXCHANGE[1:])
-
-# The stand-in a probe declares and answers a call for. What a template renders
-# around a declaration or around a result does not depend on which function it
-# is, so one probe settles both for every tool. It never reaches a model.
-_PROBE_FUNCTION = "probe"
-_PROBE_TOOL = ToolSpec(name=_PROBE_FUNCTION, description="probe",
-                       parameters={"type": "object", "properties": {}})
 
 class ResolvedTemplate:
     """This model's chat template, recovered and proven usable.
@@ -82,84 +47,20 @@ class ResolvedTemplate:
                  template_name: str | None = None,
                  reasoning_on: Mapping[str, object] | None = None) -> None:
         ensure_answers(context, MODEL_READER)
-        self._context = context
-        self._addon_call = dict(addon_call or {})
         text = context.chat_template_text(template_name)
         if text is None:
             raise ValueError("the model ships no chat template, which this library writes every "
                              "conversation with")
-        self._model = ModelTemplate(text, context.eos_token_text())
+        model = ModelTemplate(text, context.eos_token_text())
         # A template for tools is written for a list of them, so it is given one, empty where none is declared.
         listed = template_name == TOOL_USE_TEMPLATE
-        self._model_render = with_reasoning_on(with_tool_list(self._model.render, listed),
+        self._model_render = with_reasoning_on(with_tool_list(model.render, listed),
                                                dict(reasoning_on or {}))
-        self._model_refusal = with_reasoning_on(with_tool_list(self._model.refusal_reason, listed),
+        self._model_refusal = with_reasoning_on(with_tool_list(model.refusal_reason, listed),
                                                 dict(reasoning_on or {}))
-        self._probe_render = refusing(self._model_render)
-        self._variables: dict = {}      # template variables every render passes
-        self._read_as_probes_for: tuple | None = None   # the variables it was made for
-        self._declares_in_system_turn_for: dict[tuple, bool] = {}
+        self.properties: TemplateProperties = TemplateReader(
+            context, model, self._model_render, addon_call, reasoning_on).properties
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
-        self._tag_texts = tag_texts(context)
-        self._ensure_tags_listed()
-        self._reads_clock = _CLOCK in text
-        self._fragments = self._resolve_fragments()
-        self._has_system_turn = self._resolve_has_system_turn()
-        self._validate_template()
-        turn_end_token = self._resolve_turn_end_token()
-        # None where this model cannot call tools at all.
-        self._tool_calls = extract_tool_fragments(self._read_as_probes, self._fragments,
-                                                  self._tag_texts)
-        (self._boundary, self._call_lead_in, self._call_from_file,
-         self._turn_end_token) = self._resolve_calls(turn_end_token)
-        self._call_body = self._resolve_call_body()
-        self._json_keys = (None if self._call_from_file or not self._calls_marked
-                           else extract_json_call_keys(self._read_as_probes))
-        self._declares_before_newest_turn = self._resolve_declares_before_newest_turn()
-        if not self._declares_before_newest_turn:
-            self._variables = self._resolve_declaration_variables()
-        self._can_declare_tools = self._resolve_can_declare_tools()
-        self._can_write_results = self._resolve_can_write_results()
-        self._reasoning = self._resolve_reasoning()
-        # A prompt "with reasoning" that closes the thought already reasons not at all.
-        self._can_reason = self._reasoning is not None and not (
-            self._reasoning.thought_close.strip()
-            and self._reasoning.generation_prompt.rstrip().endswith(
-                self._reasoning.thought_close.strip()))
-        if self._reasoning is not None:
-            tags = (self._reasoning.thought_open.strip(), self._reasoning.thought_close.strip())
-            self._boundary = dataclasses.replace(self._boundary,
-                                                 thought_tags=tuple(t for t in tags if t))
-        if reasoning_on:
-            self._ensure_reasoning_on_changes_the_prompt()
-        self._check_what_generation_reads()
-        boundary = self._boundary
-        # A turn may end inside a call, which is then closed as the template closes one.
-        call_closing = (len(context.tokenize(boundary.call_texts[1], add_special=False,
-                                             parse_special=True)) if boundary.call_texts
-                        else 1 if boundary.tool_tokens else 0)
-        self._n_closing_tokens = max(call_closing, len(context.tokenize(
-            self._fragments.assistant_suffix, add_special=False)))
-        self.properties = self._read_properties()
-
-    def _read_properties(self) -> TemplateProperties:
-        """Every property this load read from the template, in one record."""
-        boundary = self._boundary
-        return TemplateProperties(
-            reads_clock=self._reads_clock, fragments=self._fragments,
-            has_system_turn=self._has_system_turn, turn_end_token=self._turn_end_token,
-            content_rewrites=self._fragments.rewrites, tool_fragments=self._tool_calls,
-            call_tags=boundary.tool_tokens, call_texts=boundary.call_texts,
-            call_follows_text=boundary.follows_text, call_lead_in=self._call_lead_in,
-            call_format_from_addon=self._call_from_file, call_body=self._call_body,
-            json_call_keys=self._json_keys,
-            declares_before_newest_turn=self._declares_before_newest_turn,
-            declaration_variables=dict(self._variables),
-            can_declare_tools=self._can_declare_tools,
-            can_write_results=self._can_write_results, reasoning=self._reasoning,
-            can_reason=self._can_reason, n_closing_tokens=self._n_closing_tokens,
-            writes_two_user_turns=writes_two_user_turns(
-                lambda messages, prompt: self.render(messages, generation_prompt=prompt)))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -170,98 +71,21 @@ class ResolvedTemplate:
         """
         return self._model_render(self._as_template_reads(messages), tools,
                                   generation_prompt=generation_prompt, reasoning=reasoning,
-                                  variables=self._variables)
+                                  variables=self.properties.declaration_variables)
 
     def refusal_reason(self, messages: list[dict], tools: list[dict] | None = None, *,
                        generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
         """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
         return self._model_refusal(self._as_template_reads(messages), tools,
                                    generation_prompt=generation_prompt, reasoning=reasoning,
-                                   variables=self._variables)
+                                   variables=self.properties.declaration_variables)
 
     def _as_template_reads(self, messages: list[dict]) -> list[dict]:
         """``messages``, each reply's thought in the form the template reads a past reply's thought in."""
-        if self._reasoning is not None and self._reasoning.past_keeps_thought:
-            return [with_thought_as(message, self._reasoning.past_thought_form)
-                    for message in messages]
+        reasoning = self.properties.reasoning
+        if reasoning is not None and reasoning.past_keeps_thought:
+            return [with_thought_as(message, reasoning.past_thought_form) for message in messages]
         return messages
-
-    @property
-    def _read_as_probes(self):
-        """:meth:`_render` as the load checks read it, made once for each set of template variables."""
-        key = tuple(sorted(self._variables.items()))
-        if self._read_as_probes_for != key:
-            self._probes_render, self._read_as_probes_for = (
-                as_probes_read(self._render, self._tag_texts), key)
-        return self._probes_render
-
-    def _render(self, messages, tools=None, *, variables=None, **options):
-        """A probe's render of ``messages``, ``None`` where the template refuses them or raises."""
-        return self._probe_render(messages, tools, **options,
-                                  variables={**self._variables, **(variables or {})})
-
-    def _ensure_reasoning_on_changes_the_prompt(self) -> None:
-        """Refuse an add-on file's reasoning on that writes the prompt as reasoning off does.
-
-        Raises:
-            ValueError: If it does.
-        """
-        question = [{"role": "user", "content": _PROMPT}]
-        on, off = (self._render(question, generation_prompt=True, reasoning=reasoning)
-                   for reasoning in (True, False))
-        if on is None or on == off:
-            raise ValueError("the add-on file's reasoning_on writes the prompt as reasoning "
-                             "off does; name the template variables that turn this "
-                             "model's reasoning on")
-
-    # ----- what the wrapper reads ----------------------------------------------
-    @property
-    def fragments(self) -> TemplateFragments:
-        """The tags a turn is wrapped in, and how a message's text is written."""
-        return self._fragments
-
-    @property
-    def turn_end_token(self) -> int | None:
-        """The tag a reply's closing begins with, which ends a reply where sampled.
-
-        ``None`` where the closing does not begin with one of the model's tags.
-        """
-        return self._turn_end_token
-
-    @property
-    def reasoning(self) -> Reasoning | None:
-        """How this model marks a thought and reasons, or ``None`` where it marks none."""
-        return self._reasoning
-
-    @property
-    def can_reason(self) -> bool:
-        """Whether a conversation can be asked to reason, as the template does it: it marks a thought, and its prompt with reasoning on leaves the thought open."""
-        return self._can_reason
-
-    @property
-    def can_turn_off_reasoning(self) -> bool:
-        """Whether a reply asked for without reasoning is generated without it, as the template's own off writes it.
-
-        True where the template marks no thought.
-        """
-        return self._reasoning is None or self._reasoning.can_turn_off
-
-    @property
-    def has_system_turn(self) -> bool:
-        """Whether a system prompt can be kept: no later question moves where the template writes it."""
-        return self._has_system_turn
-
-    def _resolve_has_system_turn(self) -> bool:
-        """Whether a system prompt lies in the opening of two renders that differ only in the oldest question."""
-        def render(oldest):
-            return self._render([{"role": "system", "content": _SYSTEM},
-                                 {"role": "user", "content": oldest}, *_EXCHANGE[:1],
-                                 {"role": "user", "content": _NEXT}],
-                                generation_prompt=True, reasoning=False)
-        first, second = render(_PROMPT), render(_RESULT)
-        if first is None or second is None:
-            return False
-        return _SYSTEM in first[:common_prefix_length(first, second)]
 
     def ensure_can_reason(self) -> None:
         """Refuse to have this model reason where its template marks no thought.
@@ -269,7 +93,7 @@ class ResolvedTemplate:
         Raises:
             UnsupportedError: If this model cannot reason, naming ``reasoning``.
         """
-        if not self.can_reason:
+        if not self.properties.can_reason:
             raise UnsupportedError("reasoning",
                                    "this model's template marks no thought that could be told "
                                    "from the answer, or its prompt with reasoning on closes the "
@@ -283,15 +107,16 @@ class ResolvedTemplate:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
         if not reasoning:
-            return self._fragments.generation_prompt_without_reasoning
+            return self.properties.fragments.generation_prompt_without_reasoning
         self.ensure_can_reason()
-        return self._reasoning.generation_prompt
+        return self.properties.reasoning.generation_prompt
 
     def reply_header(self, reasoning: bool = False) -> tuple[str, str] | None:
         """The start and end of a header naming a reply's reader, as :func:`~llama_chat.reply_text.reply_header` reads them, worked out once for each reasoning mode."""
         if reasoning not in self._reply_headers:
-            self._reply_headers[reasoning] = reply_header(self.answer_opening(reasoning),
-                                                          self._reasoning, self._tag_texts)
+            properties = self.properties
+            self._reply_headers[reasoning] = reply_header(
+                self.answer_opening(reasoning), properties.reasoning, properties.tag_texts)
         return self._reply_headers[reasoning]
 
     def answer_opening(self, reasoning: bool = False) -> str:
@@ -300,304 +125,25 @@ class ResolvedTemplate:
         Raises:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
-        prompt, tag = self.generation_prompt(reasoning), self._fragments.assistant_prefix
+        prompt, tag = self.generation_prompt(reasoning), self.properties.fragments.assistant_prefix
         if tag.startswith(prompt):
             return tag[len(prompt):]
-        shared = shared_tags_length(tag, prompt, self._tag_texts)
+        shared = shared_tags_length(tag, prompt, self.properties.tag_texts)
         return tag[shared:] if self._closes_empty_thought(prompt[shared:], tag[shared:]) else ""
 
     def _closes_empty_thought(self, written: str, opening: str) -> bool:
         """Whether ``written`` is a thought with nothing in it, closed, and ``opening`` the rest of its closing, whitespace aside."""
-        if self._reasoning is None:
+        reasoning = self.properties.reasoning
+        if reasoning is None:
             return False
         def unspaced(text: str) -> str:
             return "".join(text.split())
 
-        thought_open = unspaced(self._reasoning.thought_open)
+        thought_open = unspaced(reasoning.thought_open)
         written = unspaced(written)
         return (written.startswith(thought_open) and len(written) > len(thought_open)
                 and written + unspaced(opening)
-                == thought_open + unspaced(self._reasoning.thought_close))
-
-    @property
-    def n_closing_tokens(self) -> int:
-        """How many tokens the closing after a reply's text, or after a call its turn ends inside, takes at most."""
-        return self._n_closing_tokens
-
-    @property
-    def can_write_results(self) -> bool:
-        """Whether the template renders a block a call's result, or the failure it is told, goes in."""
-        return self._can_write_results
-
-    @property
-    def can_call_tools(self) -> bool:
-        """Whether the call tags, the declarations, the argument spelling and the result block all came out of this template.
-
-        :meth:`ensure_tools_usable` says which one is missing.
-        """
-        return (self._calls_marked and self._can_declare_tools
-                and self._call_body is not None and self._can_write_results)
-
-    @property
-    def _calls_marked(self) -> bool:
-        """Whether a call can be told from a reply, by its tags or by its texts."""
-        return self._boundary.tool_tokens is not None or self._boundary.call_texts is not None
-
-    @property
-    def call_close_text(self) -> str:
-        """The text a call ends with, empty where this model marks no call."""
-        if self._boundary.call_texts is not None:
-            return self._boundary.call_texts[1]
-        if self._boundary.tool_tokens is not None:
-            return self._context.token_text(self._boundary.tool_tokens[1])
-        return ""
-
-    @property
-    def reads_clock(self) -> bool:
-        """Whether the template may read the clock, so that a render can change while the conversation does not; true where its text names the clock or cannot be read."""
-        return self._reads_clock
-
-    @property
-    def declares_before_newest_turn(self) -> bool:
-        """Whether the template writes tool declarations right before the newest user turn, so that they move with each question."""
-        return self._declares_before_newest_turn
-
-    def ensure_tools_usable(self, field: str) -> None:
-        """Refuse to declare tools this model could never use.
-
-        Args:
-            field: The parameter the tools were given in, which a refusal names.
-
-        Raises:
-            UnsupportedError: If the call tags, the declarations, the argument
-                spelling or the result block cannot be had from this model.
-        """
-        if not self._calls_marked and self._tool_calls is not None:
-            raise UnsupportedError(
-                field,
-                "this model writes a tool call as plain text, without a tag "
-                "token of its own, so a call could not be told from a reply; "
-                "its add-on file can say how it writes one")
-        if not self._calls_marked:
-            raise UnsupportedError(
-                field,
-                "this model's template describes no tool call, so a tool "
-                "could never be reached")
-        if not self._can_declare_tools:
-            raise UnsupportedError(
-                field,
-                "this model's template declares no tools, so the model would "
-                "never be told the tool exists")
-        if self._call_body is None:
-            raise UnsupportedError(
-                field,
-                "this model's call format could not be recovered from its "
-                "template, so a call would be detected but never read")
-        if not self._can_write_results:
-            raise UnsupportedError(
-                field,
-                "this model's template renders no tool result, so a call could "
-                "be made but never answered")
-
-    def _ensure_tags_listed(self) -> None:
-        """Refuse a model whose tokenizer reads a tag in its template's render that its list of tags leaves out, so that no tag's end is taken for text.
-
-        Raises:
-            ValueError: If it does.
-        """
-        probe = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT},
-                 {"role": "assistant", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
-        rendered = self._probe_render(probe, generation_prompt=True, reasoning=False)
-        if rendered is None:
-            return
-        read = {self._context.token_text(token)
-                for token in self._context.tokenize(rendered, add_special=False, parse_special=True)
-                if self._context.is_special(token)}
-        missing = sorted(text for text in read - set(self._tag_texts) if text)
-        if missing:
-            raise ValueError(
-                f"the model's tokenizer reads {', '.join(map(repr, missing[:3]))} as tags, which "
-                "its list of tags leaves out, so where its tags end could not be told; the "
-                "cache context must list every tag")
-
-    def _resolve_fragments(self) -> TemplateFragments:
-        """Recover the template fragments from the model's own chat template."""
-        fragments = extract_fragments(self._model_render, self._tag_texts)
-        if fragments is None:
-            raise ValueError(
-                "this model's chat template writes no turn whose reply can be told from the "
-                "question, so a conversation cannot be written with it"
-            )
-        rewrites = extract_content_rewrites(self._model_render, (*self._tag_texts, *ESCAPABLE),
-                                            self._tag_texts)
-        return dataclasses.replace(fragments, rewrites=rewrites) if rewrites else fragments
-
-    def _validate_template(self) -> None:
-        """Ensure the closing after a reply opens with one of this model's own tags.
-
-        Where the closing is empty, the tag that opens the next turn must end a
-        generation instead.
-        """
-        closing = self._fragments.assistant_suffix.strip()
-        if not closing:
-            self._ensure_next_turn_ends_a_reply()
-            return
-        pieces = split_at_tags(self._context, closing)
-        if not (pieces and pieces[0][1]):
-            raise ValueError(
-                "chat template is not valid for this model: its closing after a reply "
-                f"{closing!r} does not open with one of the model's own tags, so "
-                "generation would never stop. The model's embedded chat template "
-                "is malformed, so the model cannot be used."
-            )
-
-    def _ensure_next_turn_ends_a_reply(self) -> None:
-        """Ensure the turn after a reply opens with a tag that ends a generation.
-
-        Raises:
-            ValueError: If it opens with plain text, or with a tag the model
-                generates without ending.
-        """
-        past = self._render(list(_PAST_REPLY), reasoning=False)
-        after = past.split(_NEXT, 1)[-1].lstrip() if past is not None else ""
-        first = self._context.tokenize(after, add_special=False)[:1] if after else []
-        if first and self._context.is_special(first[0]):
-            if self._context.ends_generation(first[0]):
-                return
-            opens_with = (f"the tag {self._context.token_text(first[0])!r}, which does not "
-                          "end a generation for this model")
-        else:
-            opens_with = "no tag of the model's own"
-        raise ValueError(
-            "this model's template writes nothing after a reply, and the turn after "
-            f"one opens with {opens_with}, so a reply would never stop; the model "
-            "cannot be used")
-
-    def _resolve_turn_end_token(self) -> int | None:
-        """The first token of the closing after a reply, where it is one of the model's tags."""
-        closing = self._fragments.assistant_suffix.strip()
-        if not closing:
-            return None
-        first = first_special_token(self._context, closing)
-        tokens = self._context.tokenize(closing, add_special=False)
-        return first if tokens and tokens[0] == first else None
-
-    def _check_what_generation_reads(self) -> None:
-        """Ensure the tags read around a generation are the ones the template writes.
-
-        In each reasoning mode: the generation prompt ends the render of a
-        question, and the closing after a reply follows a past reply's text.
-
-        Raises:
-            ValueError: If the template writes either otherwise.
-        """
-        question = [{"role": "user", "content": _PROMPT}]
-        closing = self._fragments.assistant_suffix.strip()
-        for reasoning in (False, True) if self.can_reason else (False,):
-            prompted = self._render(question, generation_prompt=True, reasoning=reasoning)
-            past = self._render(list(_PAST_REPLY), reasoning=reasoning)
-            if prompted is None or past is None or not prompted.endswith(
-                    self.generation_prompt(reasoning)) or not past.split(_NEXT, 1)[-1].lstrip() \
-                    .startswith(closing):
-                raise ValueError(
-                    "this model's template writes its generation prompt or the closing "
-                    "after a reply otherwise than as its own probes read them, so a "
-                    "reply's start and end could not be told; the model cannot be used")
-
-    def _resolve_reasoning(self) -> Reasoning | None:
-        """What turns this model's reasoning on, recovered from its template."""
-        render = self._read_as_probes
-        found = extract_reasoning(render, self._fragments, self._tool_calls, self._tag_texts)
-        if found is None:
-            found = extract_removed_thought(render, self._fragments, self._tag_texts)
-        return found
-
-    def _resolve_tool_tokens(self) -> tuple[tuple[int, int] | None, str]:
-        """This model's call tags as tokens, and the text it writes before a name."""
-        fragments = self._tool_calls
-        if fragments is None:
-            return None, ""
-        opener = first_special_token(self._context, fragments.call_open)
-        closer = self._call_closer(fragments)
-        if opener is None or closer is None:
-            return None, ""
-        tag = self._context.token_text(opener)
-        reply = self._fragments
-        if any(tag in text for text in (reply.assistant_prefix, reply.assistant_suffix,
-                                        reply.generation_prompt)):
-            return None, ""         # it marks every reply, not a call
-        # Text the template writes before the tag belongs to the reply, not to the call.
-        lead_in = fragments.call_open.partition(tag)[2]
-        return (opener, closer), lead_in
-
-    def _resolve_calls(self, turn_end_token: int | None):
-        """How a generated call is marked, in one step, as nothing later changes it.
-
-        Returns:
-            The call boundary, the text a call writes before its function's
-            name, whether the add-on file gave the call's texts, and the token
-            that ends a reply, which a reply ended by text has none of.
-        """
-        # An add-on file's call wins over what the template shows of one.
-        tool_tokens, lead_in = (None, "") if self._addon_call else self._resolve_tool_tokens()
-        call_texts, from_file = (None, False) if tool_tokens is not None else self._resolve_call_texts()
-        opens_as_text = (call_texts is not None
-                         and first_special_token(self._context, call_texts[0]) is None)
-        if call_texts is not None:
-            lead_in = self._text_after_last_tag(call_texts[0])
-        turn_end_text = self._resolve_turn_end_text(call_texts)
-        boundary = CallBoundary(tool_tokens, call_texts, opens_as_text, turn_end_text,
-                                follows_text=opens_as_text and self._writes_call_after_text(
-                                    call_texts[0]))
-        return boundary, lead_in, from_file, None if turn_end_text else turn_end_token
-
-    def _resolve_call_texts(self) -> tuple[tuple[str, str] | None, bool]:
-        """The texts around a call, from the model's add-on file, else from the template.
-
-        Returns:
-            The texts, and whether they came from the add-on file.
-        """
-        call = self._addon_call
-        if not call:
-            return self._template_call_texts(), False
-        if self._tool_calls is None:
-            return None, False
-        rendered = self._render([{"role": "user", "content": _PROMPT},
-                                 calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0)])
-        if rendered is None or call["closing"] not in rendered:
-            raise ValueError("the model's add-on file closes a call with text its "
-                             "template never writes after one")
-        return (call["opening"], call["closing"]), True
-
-    def _writes_call_after_text(self, opening: str) -> bool:
-        """Whether the template writes a call's ``opening`` right after a reply's text, whitespace apart."""
-        rendered = self._render([{"role": "user", "content": _PROMPT},
-                                 calling_message(_TEXT, [ToolCall(_PROBE_FUNCTION, {})], 0)])
-        if rendered is None or _TEXT not in rendered:
-            return False
-        return rendered.partition(_TEXT)[2].lstrip().startswith(opening.strip())
-
-    def _template_call_texts(self) -> tuple[str, str] | None:
-        """The texts around a call, for a template whose call tags also mark every reply."""
-        if self._tool_calls is None:
-            return None
-        call_open = self._tool_calls.call_open
-        if first_special_token(self._context, call_open) is None:
-            # Named in the header first: the call opens where the name is written again.
-            opening = extract_named_twice_opening(self._read_as_probes, call_open)
-            if opening:
-                close = extract_call_close_text(self._read_as_probes, opening)
-                return (opening, close) if close else None
-            if self._opens_in_reply_header(call_open):
-                return None
-        close = extract_call_close_text(self._read_as_probes, call_open)
-        return (call_open, close) if close else None
-
-    def _text_after_last_tag(self, text: str) -> str:
-        """Where a call's own text begins in its opening: after the opening's last tag."""
-        tags = self._tags_in(text)
-        last = self._context.token_text(tags[-1]) if tags else ""
-        return text.rpartition(last)[2] if last else text
+                == thought_open + unspaced(reasoning.thought_close))
 
     def call_boundary(self, recognizes_calls: bool = True, withhold: bool = False) -> CallBoundary:
         """Where a generated call opens and closes and where a reply ends, as generation reads it.
@@ -607,13 +153,14 @@ class ResolvedTemplate:
         drawn; a call that opens with plain text cannot be kept from the model
         that way, so the reply ends where such a call opens.
         """
+        boundary = self.properties.boundary
         if recognizes_calls:
-            return self._boundary
-        if withhold and self._boundary.opens_as_text and self._boundary.call_texts:
-            return dataclasses.replace(self._boundary, tool_tokens=None, ends_at_call=True)
-        tokens = self._boundary.tool_tokens
-        return CallBoundary(opens_as_text=self._boundary.opens_as_text,
-                            turn_end_text=self._boundary.turn_end_text,
+            return boundary
+        if withhold and boundary.opens_as_text and boundary.call_texts:
+            return dataclasses.replace(boundary, tool_tokens=None, ends_at_call=True)
+        tokens = boundary.tool_tokens
+        return CallBoundary(opens_as_text=boundary.opens_as_text,
+                            turn_end_text=boundary.turn_end_text,
                             withheld_tokens=(tokens[0],) if tokens and withhold else ())
 
     def read_calls(self, generated_call_text: str,
@@ -626,155 +173,48 @@ class ResolvedTemplate:
         Raises:
             ValueError: If the text is not a call this model's format reads.
         """
-        text = generated_call_text
-        if self._boundary.call_texts is not None:
-            text = self._call_lead_in + text    # the opening text holds the lead-in's start
-        return parse_calls(text, None if self._json_keys else self._call_body,
-                           self._call_lead_in, parameters, self._json_keys)
+        properties, text = self.properties, generated_call_text
+        if properties.call_texts is not None:
+            text = properties.call_lead_in + text    # the opening text holds the lead-in's start
+        return parse_calls(text, None if properties.json_call_keys else properties.call_body,
+                           properties.call_lead_in, parameters, properties.json_call_keys)
 
-    def _opens_in_reply_header(self, call_open: str) -> bool:
-        """Whether a plain-text opening begins with text of a reply's own opening."""
-        header, text = self._fragments.assistant_prefix, ""
-        for tag in self._tags_in(header):
-            text_before, _, header = header.partition(self._context.token_text(tag))
-            text += " " + text_before
-        words = (text + " " + header).split()
-        return any(call_open.lstrip().startswith(word) for word in words)
+    def ensure_tools_usable(self, field: str) -> None:
+        """Refuse to declare tools this model could never use.
 
-    def _resolve_turn_end_text(self, call_texts: tuple[str, str] | None) -> str | None:
-        """Where a reply ends, where a call opens with the start of a reply's closing."""
-        if call_texts is None:
-            return None
-        closing, call_open = self._fragments.assistant_suffix, call_texts[0]
-        shared = shared_tags_length(closing, call_open, self._tag_texts)
-        if not shared:
-            return None
-        tag = first_special_token(self._context, closing[shared:])
-        text = self._context.token_text(tag) if tag is not None else ""
-        if not text or not closing[shared:].startswith(text):
-            return None
-        return closing[:shared] + text
+        Args:
+            field: The parameter the tools were given in, which a refusal names.
 
-    def _call_closer(self, fragments: ToolCallFragments) -> int | None:
-        """The tag that ends a call.
-
-        The last tag between two calls of one turn, where the template writes one
-        there that ``call_close`` also holds; otherwise the first tag of
-        ``call_close``.
+        Raises:
+            UnsupportedError: If the call tags, the declarations, the argument
+                spelling or the result block cannot be had from this model.
         """
-        separator = extract_call_separator(self._read_as_probes,
-                                           fragments.call_open)
-        tags = self._tags_in(separator or "")
-        if tags and self._context.token_text(tags[-1]) in fragments.call_close:
-            return tags[-1]
-        return first_special_token(self._context, fragments.call_close)
-
-    def _tags_in(self, text: str) -> list[int]:
-        """The model's own tags in ``text``, in order."""
-        found = (first_special_token(self._context, piece)
-                 for piece, is_tag in split_at_tags(self._context, text) or () if is_tag)
-        return [tag for tag in found if tag is not None]
-
-    def _resolve_call_body(self) -> CallBody | None:
-        """This model's argument spelling, or ``None`` if it cannot be read."""
-        if not self._calls_marked or self._tool_calls is None:
-            return None
-        if self._call_from_file:
-            # The name ends where the file says; the arguments are read as written.
-            return CallBody(name_close=self._addon_call["name_close"], key_open="",
-                            key_close="", pair_sep="", body_close="", empty_close="",
-                            arguments_json=True)
-        call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
-                     else self._tool_calls.call_open)
-        return extract_call_body(self._read_as_probes, call_open, self.call_close_text)
-
-    def _resolve_can_declare_tools(self) -> bool:
-        """Whether this model's template renders tool declarations at all."""
-        if not self._calls_marked:
-            return False
-        return self._declares_before_newest_turn or self._declares_in_system_turn()
-
-    def _resolve_declaration_variables(self) -> dict:
-        """A template variable that puts tool declarations into the system turn, where needed.
-
-        One the template reads qualifies where setting it changes nothing in a
-        conversation without tools; empty where the system turn declares them
-        already, or no variable makes it.
-        """
-        if not self._calls_marked or self._declares_in_system_turn():
-            return {}
-        conversation = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
-        plain = self._render(conversation)
-        names = names_read(self._model.text)
-        for name in sorted(names - RENDERER_VARIABLES):
-            for value in (False, True):
-                self._variables = {}
-                if self._render(conversation, variables={name: value}) != plain:
-                    continue
-                self._variables = {name: value}
-                if self._declares_in_system_turn():
-                    return {name: value}
-        self._variables = {}
-        return {}
-
-    def _resolve_declares_before_newest_turn(self) -> bool:
-        """Whether the template declares tools right before the newest user turn alone."""
-        if not self._calls_marked or self._declares_in_system_turn():
-            return False
-        tools = [_PROBE_TOOL.as_declaration()]
-        found = set()
-        for messages in ([{"role": "user", "content": _NEXT}],
-                         [{"role": "user", "content": _PROMPT}, *_EXCHANGE[:1],
-                          {"role": "user", "content": _NEXT}]):
-            rendered = self._render(messages, tools=tools)
-            plain = self._render(messages)
-            newest = self._fragments.user_prefix + _NEXT
-            if rendered is None or plain is None or newest not in rendered \
-                    or newest not in plain:
-                return False
-            declared_head, _, declared_tail = rendered.rpartition(newest)
-            plain_head, _, plain_tail = plain.rpartition(newest)
-            if declared_tail != plain_tail or not declared_head.startswith(plain_head) \
-                    or declared_head == plain_head:
-                return False
-            found.add(declared_head[len(plain_head):])
-        return len(found) == 1
-
-    def _resolve_can_write_results(self) -> bool:
-        """Whether this model's template renders a block to answer a call in."""
-        if not self._calls_marked:
-            return False
-        rendered = self._render([
-            {"role": "user", "content": _PROMPT},
-            calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0),
-            result_message(_PROBE_FUNCTION, call_id(0), _RESULT)],
-            generation_prompt=True, reasoning=False)
-        return rendered is not None and _RESULT in rendered
-
-    def _system_turn(self, tools: list[dict] | None) -> str | None:
-        """The system turn rendered ahead of a user turn, which some templates require.
-
-        Cut where the user turn begins, so whatever the template writes between
-        the two belongs to the system turn.
-        """
-        rendered = self._render(
-            [{"role": "system", "content": _PROMPT},
-             {"role": "user", "content": _NEXT}, *_EXCHANGE], tools=tools)
-        opened = self._fragments.user_prefix + _NEXT
-        if rendered is None or opened not in rendered:
-            return None
-        return rendered.split(opened, 1)[0]
-
-    def _declares_in_system_turn(self) -> bool:
-        """Whether the system turn the template renders holds a stand-in tool's declaration, worked out once for each set of template variables."""
-        key = tuple(sorted(self._variables.items()))
-        if key not in self._declares_in_system_turn_for:
-            rendered = self._system_turn([_PROBE_TOOL.as_declaration()])
-            plain = self._system_turn(None)
-            self._declares_in_system_turn_for[key] = (
-                rendered is not None and plain is not None and _PROMPT in rendered
-                and _PROMPT in plain and rendered != plain)
-        return self._declares_in_system_turn_for[key]
+        if not self.properties.calls_marked and self.properties.tool_fragments is not None:
+            raise UnsupportedError(
+                field,
+                "this model writes a tool call as plain text, without a tag "
+                "token of its own, so a call could not be told from a reply; "
+                "its add-on file can say how it writes one")
+        if not self.properties.calls_marked:
+            raise UnsupportedError(
+                field,
+                "this model's template describes no tool call, so a tool "
+                "could never be reached")
+        if not self.properties.can_declare_tools:
+            raise UnsupportedError(
+                field,
+                "this model's template declares no tools, so the model would "
+                "never be told the tool exists")
+        if self.properties.call_body is None:
+            raise UnsupportedError(
+                field,
+                "this model's call format could not be recovered from its "
+                "template, so a call would be detected but never read")
+        if not self.properties.can_write_results:
+            raise UnsupportedError(
+                field,
+                "this model's template renders no tool result, so a call could "
+                "be made but never answered")
 
 
 def with_tool_list(render, listed: bool):
@@ -797,62 +237,6 @@ def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
             variables = {**reasoning_on, **(variables or {})}
         return render(messages, tools, reasoning=reasoning, variables=variables, **options)
     return rendered
-
-
-@dataclasses.dataclass(frozen=True)
-class TemplateProperties:
-    """Everything a load reads from a model's chat template, in one place; see each field's reader on :class:`ResolvedTemplate`.
-
-    Attributes:
-        reads_clock: The template reads the date, so a render may change with it.
-        fragments: The texts around each kind of turn.
-        has_system_turn: A system prompt stays where it is written.
-        turn_end_token: The tag that ends a reply, where one does.
-        content_rewrites: Texts the template writes otherwise inside a message.
-        tool_fragments: The texts around a past call and its result; ``None``
-            where the template describes no call.
-        call_tags: The tags that open and close a generated call, where it has
-            tags of its own.
-        call_texts: The texts that open and close a generated call, where it
-            has no tags.
-        call_follows_text: A call may follow a reply's text.
-        call_lead_in: Fixed text the model writes before a call's name.
-        call_format_from_addon: The call format comes from the add-on file.
-        call_body: How a call's arguments are spelled, where not as JSON.
-        json_call_keys: The keys a JSON call names its function and arguments
-            by, where a call is JSON.
-        declares_before_newest_turn: The declarations move with each question.
-        declaration_variables: The template variables the declarations are
-            passed under.
-        can_declare_tools: The template writes the declarations.
-        can_write_results: The template writes a call's result.
-        reasoning: How a thought is marked and turned on, where it is.
-        can_reason: A conversation can be asked to reason.
-        n_closing_tokens: Tokens the closing after a reply takes at most.
-        writes_two_user_turns: The template writes two questions in a row.
-    """
-
-    reads_clock: bool
-    fragments: TemplateFragments
-    has_system_turn: bool
-    turn_end_token: int | None
-    content_rewrites: tuple
-    tool_fragments: ToolCallFragments | None
-    call_tags: tuple[int, int] | None
-    call_texts: tuple[str, str] | None
-    call_follows_text: bool
-    call_lead_in: str
-    call_format_from_addon: bool
-    call_body: CallBody | None
-    json_call_keys: tuple[str, ...] | None
-    declares_before_newest_turn: bool
-    declaration_variables: dict
-    can_declare_tools: bool
-    can_write_results: bool
-    reasoning: Reasoning | None
-    can_reason: bool
-    n_closing_tokens: int
-    writes_two_user_turns: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -921,21 +305,36 @@ class ResolvedTemplates:
         """The template a conversation is written with: the one for tools where it is begun with tools."""
         return self._for_tools if uses_tools else self._default
 
-    def ensure_tools_usable(self, template: ResolvedTemplate, field: str) -> None:
-        """Refuse tools in a conversation written with ``template``, one of :meth:`for_conversation`, where it could never use them.
+    def ensure_accepts(self, uses_tools: bool, *, tools_field: str | None = None,
+                       reasoning: bool = False, system_prompt_field: str | None = None) -> None:
+        """Refuse what a conversation written with :meth:`for_conversation` of ``uses_tools`` cannot take, exactly where :meth:`capabilities` says it does not.
+
+        Args:
+            tools_field: The parameter that names tools or holds a call, where one does.
+            reasoning: Whether reasoning is asked for.
+            system_prompt_field: The parameter a system prompt comes with, where one does.
 
         Raises:
-            UnsupportedError: Naming ``field``, if the model's template for
-                tools could not be read, or ``template`` cannot call tools.
+            UnsupportedError: Naming that parameter, with the cause.
         """
-        if self._tools_refused is not None:
-            raise UnsupportedError(field, "this model's template for tools could not be read, "
-                                          f"so it calls no tools: {self._tools_refused}")
-        template.ensure_tools_usable(field)
+        capabilities, template = self.capabilities(uses_tools), self.for_conversation(uses_tools)
+        if tools_field is not None and not capabilities.can_call_tools:
+            if self._tools_refused is not None:
+                raise UnsupportedError(tools_field, "this model's template for tools could not "
+                                       f"be read, so it calls no tools: {self._tools_refused}")
+            template.ensure_tools_usable(tools_field)
+        if reasoning and not capabilities.can_reason:
+            template.ensure_can_reason()
+        if system_prompt_field is not None and not capabilities.can_take_system_prompt:
+            raise UnsupportedError(
+                system_prompt_field,
+                "this model's template does not keep a system prompt in place: it writes one "
+                "where the questions after it change it, so a system prompt kept for the whole "
+                "conversation cannot be; begin without one")
 
     def capabilities(self, uses_tools: bool) -> Capabilities:
         """What a conversation written with :meth:`for_conversation` of ``uses_tools`` accepts."""
-        template = self.for_conversation(uses_tools)
-        return Capabilities(template.can_call_tools and self._tools_refused is None,
-                            template.can_reason,
-                            template.can_turn_off_reasoning, template.has_system_turn)
+        properties = self.for_conversation(uses_tools).properties
+        return Capabilities(properties.can_call_tools and self._tools_refused is None,
+                            properties.can_reason, properties.can_turn_off_reasoning,
+                            properties.has_system_turn)

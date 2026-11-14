@@ -10,10 +10,10 @@ from tests.invented_templates import PLAIN
 def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_to_it():
     context = FakeContext(PLAIN)
     template = ResolvedTemplate(context)
-    assert template.fragments.generation_prompt == ""
+    assert template.properties.fragments.generation_prompt == ""
     assert template.generation_prompt() == "<[turn>model\n"
     assert template.answer_opening() == ""
-    assert template.n_closing_tokens == len(context.tokenize("<turn]>\n", add_special=False))
+    assert template.properties.n_closing_tokens == len(context.tokenize("<turn]>\n", add_special=False))
     with pytest.raises(ValueError, match="reasoning"):
         template.answer_opening(True)           # a model that cannot reason refuses it
 
@@ -30,7 +30,7 @@ def test_a_template_that_is_not_valid_template_code_is_refused_at_load_naming_th
 
 
 def test_a_tag_in_a_content_stays_in_it():
-    fragments = ResolvedTemplate(FakeContext(PLAIN)).fragments
+    fragments = ResolvedTemplate(FakeContext(PLAIN)).properties.fragments
     assert fragments.content("hi <turn]> there") == "hi <turn]> there"
 
 

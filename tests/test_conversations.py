@@ -116,8 +116,8 @@ class _Run:
 
 def _as_generated(template, answers, reasoning):
     """Each answer as the model generates it: after a thought it closes, where the generation prompt opens one."""
-    tags = template.reasoning
-    if tags is None or (reasoning and not template.can_reason):
+    tags = template.properties.reasoning
+    if tags is None or (reasoning and not template.properties.can_reason):
         return list(answers)
     opens = begins_in_thought(tags, template.generation_prompt(reasoning))
     if reasoning:
@@ -298,7 +298,7 @@ def test_a_question_that_repeats_an_earlier_reply_is_refused_before_its_reply_wh
 def test_a_conversation_whose_declarations_move_with_each_question_renders_no_windows(stem):
     run = _Run(stem)
     run.begin(tools=[WEATHER])
-    moving = internals.template(run.chat).declares_before_newest_turn
+    moving = internals.template(run.chat).properties.declares_before_newest_turn
     assert not (moving and internals.renders_in_windows(run.chat))
 
 
@@ -1070,7 +1070,7 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
     assert checked == both
     add_tools(run.chat, [WEATHER])
     # Declarations that move with each question leave no windows to check.
-    declared = both[:1] if internals.template(run.chat).declares_before_newest_turn else both
+    declared = both[:1] if internals.template(run.chat).properties.declares_before_newest_turn else both
     assert checked == both + declared
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.chat.reply(QUESTIONS[1]).finish()
@@ -1088,7 +1088,7 @@ def test_with_reasoning_on_every_reply_starts_from_the_templates_render(stem):
     run.begin()
     answers = [run.chat.reply(question).finish().text for question in QUESTIONS[:3]]
     assert answers == ANSWERS[:3]                      # the thought kept out of each
-    keeps = run.template.reasoning.past_keeps_thought
+    keeps = run.template.properties.reasoning.past_keeps_thought
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS, forms=(_THOUGHT,) if keeps else (None,))
 
 
@@ -1104,7 +1104,7 @@ def test_a_short_thought_written_in_the_models_own_tags_leaves_the_whole_answer(
 def test_a_call_after_a_short_thought_written_in_the_models_own_tags_is_handed_over(stem):
     run = _Run(stem, reasoning=True)
     _opener, body, _closer = _call_body(run, {"city": "Bonn"})
-    tags = run.template.reasoning
+    tags = run.template.properties.reasoning
     opens = begins_in_thought(tags, run.template.generation_prompt(True))
     run.context.replies = [ScriptedCall(
         body, before=("" if opens else tags.thought_open) + "Kurz." + tags.thought_close)]
@@ -1119,7 +1119,7 @@ def _owing_a_call(stem, reasoning):
     """A conversation on ``stem`` whose reply made a call under ``"yield"``, after a short thought where it reasons, and the call."""
     run = _Run(stem, reasoning=reasoning)
     _opener, body, _closer = _call_body(run, {"city": "Bonn"})
-    tags, thought = run.template.reasoning, ""
+    tags, thought = run.template.properties.reasoning, ""
     if reasoning:
         opens = begins_in_thought(tags, run.template.generation_prompt(True))
         thought = ("" if opens else tags.thought_open) + "Kurz." + tags.thought_close
@@ -1164,7 +1164,7 @@ def test_a_past_replys_thought_stays_in_the_cache_wherever_the_template_keeps_it
     for question in QUESTIONS[:3]:
         run.chat.reply(question).finish()
     kept = [cached.count(_THOUGHT) for cached in run.seen]
-    assert kept == ([0, 1, 2] if run.template.reasoning.past_keeps_thought else [0, 0, 0])
+    assert kept == ([0, 1, 2] if run.template.properties.reasoning.past_keeps_thought else [0, 0, 0])
 
 
 @pytest.mark.parametrize("stem", [stem for stem in sorted(_FIXTURES)
@@ -1231,7 +1231,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
             messages + [{"role": "user", "content": QUESTIONS[0]}], [WEATHER]), result
         add_tools(run.chat, [clock])
         run.chat.reply(QUESTIONS[1]).finish()
-        kept = _THOUGHT if reasoning and run.template.reasoning.past_keeps_thought else None
+        kept = _THOUGHT if reasoning and run.template.properties.reasoning.past_keeps_thought else None
         sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
         assert run.seen[-1] in run.renders_in_each_thought_form(
             sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER, clock]), result
@@ -1298,7 +1298,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     call, = [event for event in events if isinstance(event, ToolCall)]
     assert (call.name, call.arguments) == (WEATHER.name, {"city": "Bonn"}) and call.id
     run.chat.inject_tool_result(call, '{"weather": "sunny"}')
-    tags = run.template.reasoning
+    tags = run.template.properties.reasoning
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
             and not run.context.replies[0].startswith(tags.thought_close):
         run.context.replies[0] = tags.thought_close + run.context.replies[0]   # the model closes it
@@ -1412,7 +1412,7 @@ def test_a_turn_out_of_room_after_several_calls_closes_and_the_conversation_goes
         held = probe.chat.total_tokens
         probe.chat.inject_tool_result(call, "x")
     # Room for the second call, and too little after it for even an empty result and a reply.
-    closing = probe.template.n_closing_tokens
+    closing = probe.template.properties.n_closing_tokens
     run = _calling_again(stem, context_size=held + closing, min_reply_tokens=closing + 20)
     registry = ToolRegistry()
     registry.tool(lambda city: "x", name=WEATHER.name, description=WEATHER.description,
@@ -1554,7 +1554,7 @@ def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
 @pytest.mark.parametrize("stem, reasoning", _each_mode(
     [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["marks_thought"]]))
 def test_an_answer_holding_its_templates_thought_tags_is_kept_as_the_template_writes_it(stem, reasoning):
-    tags = _Run(stem, reasoning=reasoning).template.reasoning
+    tags = _Run(stem, reasoning=reasoning).template.properties.reasoning
     answers = [f"Close it with {tags.thought_close} like this.", f"Open it with {tags.thought_open} so.",
                f"{tags.thought_close}", ANSWERS[0]]
     run = _Run(stem, reasoning=reasoning)
@@ -1684,7 +1684,7 @@ def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_
     opening = fake._call_marks()[0]
 
     def filling_the_room(_text):
-        room = size - len(fake.cache) - internals.template(chat).n_closing_tokens
+        room = size - len(fake.cache) - internals.template(chat).properties.n_closing_tokens
         fake.replies = [ScriptedCall("x" * (room - 1 - len(opening)), closes=False)]
 
     fake.before_reply = filling_the_room
@@ -1756,7 +1756,7 @@ _CALLING_IN_THOUGHTS = [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can
 @pytest.mark.parametrize("stem", _CALLING_IN_THOUGHTS)
 def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
     run = _Run(stem, reasoning=True)
-    tags = run.template.reasoning
+    tags = run.template.properties.reasoning
     _opener, body, _closer = _call_body(run, {"city": "Bonn"})
     opens = begins_in_thought(tags, run.template.generation_prompt(True))
     run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I will check ")]
@@ -1786,7 +1786,7 @@ def test_a_result_owed_to_a_history_with_no_question_is_written_where_the_templa
 def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_starts_outside_it(
         stem, readable):
     run = _Run(stem, reasoning=True)
-    tags = run.template.reasoning
+    tags = run.template.properties.reasoning
     opens = begins_in_thought(tags, run.template.generation_prompt(True))
     body = _call_body(run, {"city": "Bonn"})[1] if readable else _unreadable_body(run)
     run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I check "),
@@ -1949,7 +1949,7 @@ def test_a_reply_taken_back_with_its_request_says_so(stem):
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if _FIXTURES[stem]["marks_thought"]])
 def test_a_reply_kept_otherwise_than_shown_says_what_was_kept(stem):
     run = _Run(stem)
-    close = run.template.reasoning.thought_close.strip()
+    close = run.template.properties.reasoning.thought_close.strip()
     run.context.replies = [f"Erst das. {close} Dann das."]
     run.begin()
     reply = run.chat.reply(QUESTIONS[0]).finish()

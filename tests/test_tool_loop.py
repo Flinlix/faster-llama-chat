@@ -1818,7 +1818,7 @@ def test_a_conversation_with_no_tools_needs_no_registry():
 def test_declarations_move_on_with_the_newest_user_turn(can_shift):
     w, fake = _moving(can_shift=can_shift)
     specs = [ToolSpec("uhr", "", {})]
-    assert ResolvedTemplate(FakeContext(TOOLS_DECLARED_IN_THE_NEWEST_TURN)).declares_before_newest_turn
+    assert ResolvedTemplate(FakeContext(TOOLS_DECLARED_IN_THE_NEWEST_TURN)).properties.declares_before_newest_turn
     assert w.capabilities(tools=True).can_call_tools
     w.begin("s", tools=specs)
     assert_cache_reads_as_rendered(w, fake)

@@ -22,10 +22,10 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     w, _fake = reasoning_wrapper()
     assert w.capabilities(tools=False).can_reason
     template = ResolvedTemplate(FakeContext(REASONING))
-    assert template.reasoning == Reasoning(
+    assert template.properties.reasoning == Reasoning(
         thought_open="<thought>", thought_close="</thought>",
         generation_prompt="<[turn>model\n", can_turn_off=True)
-    assert template.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
+    assert template.properties.fragments.generation_prompt == "<[turn>model\n" + EMPTY_THOUGHT
 
 
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
@@ -209,7 +209,7 @@ def test_a_thought_whose_tags_are_not_angle_brackets_is_read_by_the_models_own_t
     template = ResolvedTemplate(FakeContext(
         {"chat_template": _TURNS + prompt, "eos_token": "<|said|>",
          "render_variables": {"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}}))
-    assert (template.reasoning.thought_open, template.reasoning.thought_close) == \
+    assert (template.properties.reasoning.thought_open, template.properties.reasoning.thought_close) == \
         ("◁ponder▷", "◁/ponder▷")
 
 
@@ -225,7 +225,7 @@ def test_a_stop_string_inside_the_thought_does_not_end_the_reply():
 # ----- a reply kept with its thought ---------------------------------------
 def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into():
     w, fake = reasoning_wrapper(template=REASONING_KEEPING_THOUGHTS, tokens_spell_text=False)
-    assert ResolvedTemplate(FakeContext(REASONING_KEEPING_THOUGHTS)).reasoning.past_keeps_thought
+    assert ResolvedTemplate(FakeContext(REASONING_KEEPING_THOUGHTS)).properties.reasoning.past_keeps_thought
     reply = w.reply("hi").finish()
     assert reply.text == "Antwort."
     assert (rendered_prompt(fake, reasoning=True) + THOUGHTFUL
@@ -296,7 +296,7 @@ def test_the_add_on_files_reasoning_on_is_what_reasoning_on_renders():
                            reasoning=True).endswith("<|assistant_says|><reason>")
     assert template.render(_QUESTION, generation_prompt=True,
                            reasoning=False).endswith("<|assistant_says|><reason></reason>")
-    assert template.can_reason
+    assert template.properties.can_reason
 
 
 def test_a_reasoning_on_that_writes_the_prompt_as_off_does_is_refused_at_load():

@@ -15,6 +15,7 @@ import pytest
 from llama_chat import ChatWrapper, Config
 from llama_chat.addon_files import addon_file, template_fingerprint
 from llama_chat.cache_context import TOOL_USE_TEMPLATE
+from llama_chat.errors import UnsupportedError
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
@@ -52,8 +53,8 @@ def test_a_test_templates_file_states_every_key_it_must_and_no_unknown_one(stem)
 def test_the_template_loads_and_supports_what_it_is_known_to(stem):
     known = fixture(stem)
     _context, template = _load(stem)
-    assert (template.reasoning is not None) == known["marks_thought"]
-    assert template.can_reason == known["can_reason"]
+    assert (template.properties.reasoning is not None) == known["marks_thought"]
+    assert template.properties.can_reason == known["can_reason"]
     assert _describes_a_call(template) == known["calls_tools"]
     assert template.answer_opening() == expected(known, "answer_opening")
 
@@ -61,8 +62,8 @@ def test_the_template_loads_and_supports_what_it_is_known_to(stem):
 @pytest.mark.parametrize("stem", STEMS)
 def test_a_template_reads_the_clock_where_it_names_it_and_every_one_writing_a_date_does(stem):
     _context, template = _load(stem)
-    assert template.reads_clock == ("strftime_now" in fixture(stem)["chat_template"])
-    assert template.reads_clock or not expected(fixture(stem), "date_format")
+    assert template.properties.reads_clock == ("strftime_now" in fixture(stem)["chat_template"])
+    assert template.properties.reads_clock or not expected(fixture(stem), "date_format")
 
 
 @pytest.mark.parametrize("stem", STEMS)
@@ -85,11 +86,11 @@ def test_a_template_reasons_only_with_the_reasoning_its_add_on_file_names(stem):
     """Without it, its prompt "with reasoning" closes the thought at once: it cannot reason."""
     context = FakeContext(fixture(stem))
     alone = ResolvedTemplate(context, shipped_addon_call(fixture(stem)["chat_template"]))
-    assert not alone.can_reason
+    assert not alone.properties.can_reason
     with pytest.raises(ValueError, match="reasoning_on"):
         alone.generation_prompt(True)
     _context, template = _load(stem)
-    assert template.can_reason
+    assert template.properties.can_reason
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if "[/" in fixture(stem)["chat_template"]])
@@ -108,8 +109,8 @@ _ENDING_TAG_STEMS = [stem for stem in STEMS if expected(fixture(stem), "ends_gen
 def test_a_reply_closed_by_nothing_is_refused_at_load_unless_the_next_turns_tag_ends_a_generation(stem):
     known = fixture(stem)
     context, template = _load(stem)
-    assert not template.fragments.assistant_suffix.strip()
-    next_turn = template.fragments.user_prefix.strip()
+    assert not template.properties.fragments.assistant_suffix.strip()
+    next_turn = template.properties.fragments.user_prefix.strip()
     assert context.ends_generation(first_special_token(context, next_turn))
     with pytest.raises(ValueError, match="writes nothing after a reply") as refused:
         ResolvedTemplate(FakeContext({**known, "ends_generation": []}),
@@ -123,7 +124,7 @@ def test_reasoning_can_be_turned_off_exactly_where_the_template_writes_its_off_o
     question = [{"role": "user", "content": "x"}]
     on, off = (context.stated_render(question, generation_prompt=True, reasoning=reasoning)
                for reasoning in (True, False))
-    assert template.can_turn_off_reasoning == (on != off)
+    assert template.properties.can_turn_off_reasoning == (on != off)
 
 
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
@@ -132,7 +133,7 @@ def test_a_template_with_or_without_an_off_says_so_and_still_begins_without_reas
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
                        context=FakeContext(fixture(stem)))
     assert chat.capabilities(tools=False).can_reason
-    assert chat.capabilities(tools=False).can_turn_off_reasoning == template.can_turn_off_reasoning
+    assert chat.capabilities(tools=False).can_turn_off_reasoning == template.properties.can_turn_off_reasoning
     chat.begin("", reasoning=False)             # nothing that works today is refused
 
 
@@ -148,7 +149,7 @@ def _describes_a_call(template):
 @pytest.mark.parametrize("stem", _REASONING_STEMS)
 def test_a_reply_that_reasons_streams_only_its_answer(stem):
     _context, template = _load(stem)
-    tags, prompt = template.reasoning, template.generation_prompt(True)
+    tags, prompt = template.properties.reasoning, template.generation_prompt(True)
     inside = begins_in_thought(tags, prompt)
     generated = ("" if inside else tags.thought_open) + "Denken" \
         + tags.thought_close + "Antwort."
@@ -162,7 +163,7 @@ def test_a_reply_that_reasons_streams_only_its_answer(stem):
 @pytest.mark.parametrize("stem", STEMS)
 def test_a_reply_ends_at_the_first_tag_of_its_closing(stem):
     context, template = _load(stem)
-    turn_end = template.turn_end_token
+    turn_end = template.properties.turn_end_token
     found = context.token_text(turn_end) if turn_end is not None else None
     assert found == expected(fixture(stem), "turn_end_token")
 
@@ -171,7 +172,7 @@ def test_a_reply_ends_at_the_first_tag_of_its_closing(stem):
 def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
     """A thought may close with the tag that also closes the turn; only the turn's own closing ends the reply."""
     context, template = _load(stem)
-    tags, turn_end = template.reasoning, template.turn_end_token
+    tags, turn_end = template.properties.reasoning, template.properties.turn_end_token
     prompt = template.generation_prompt(True)
     inside = begins_in_thought(tags, prompt)
     reply_text = ReplyText(tags, template.answer_opening(True), template.reply_header(True),
@@ -182,7 +183,7 @@ def test_a_thought_closing_with_the_turns_end_does_not_end_the_reply(stem):
                                      context.token_bytes, context.is_special)
             if turn_end is not None else lambda token: False)
     reply = (("" if inside else tags.thought_open) + "Denken" + tags.thought_close + "Antwort."
-             + (template.fragments.assistant_suffix if turn_end is not None else ""))
+             + (template.properties.fragments.assistant_suffix if turn_end is not None else ""))
     shown = ""
     for token in context.tokenize(reply):
         if ends(token):
@@ -236,7 +237,7 @@ def test_a_call_marked_by_its_texts_opens_with_a_tag_of_the_reply(stem):
     context, template = _load(stem)
     boundary = template.call_boundary()
     tag = context.token_text(first_special_token(context, boundary.call_texts[0]))
-    reply = template.fragments
+    reply = template.properties.fragments
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
 
 
@@ -251,7 +252,7 @@ def test_a_reply_routed_through_a_channel_streams_only_its_answer(stem):
     _context, template = _load(stem)
     opening = template.answer_opening()
     generated = opening + "Antwort."
-    reply = ReplyText(template.reasoning, opening, template.reply_header(),
+    reply = ReplyText(template.properties.reasoning, opening, template.reply_header(),
                       template.generation_prompt(), [])
     shown = "".join(reply.feed(c) for c in generated) + reply.finish("end_of_turn")
     assert shown == "Antwort."
@@ -410,3 +411,23 @@ def test_every_property_a_load_reads_is_what_the_templates_file_states(stem):
     if marks is not None:
         assert properties.call_follows_text == expected(known, "call_follows_text")
         assert (properties.call_tags is not None) == marks["tags"]
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_begin_refuses_exactly_what_capabilities_says_a_conversation_cannot_take(stem):
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
+                       context=FakeContext(fixture(stem)))
+    for uses_tools in (False, True):
+        capabilities = chat.capabilities(tools=uses_tools)
+        tools = [WEATHER] if uses_tools else None
+        for asked, accepted, field in (
+                (dict(system_prompt="s"), capabilities.can_take_system_prompt, "system_prompt"),
+                (dict(reasoning=True), capabilities.can_reason, "reasoning"),
+                (dict(tools=tools), capabilities.can_call_tools or not uses_tools, "tools")):
+            given = {"system_prompt": "", "tools": [] if uses_tools else None, **asked}
+            try:
+                chat.begin(**given)
+            except UnsupportedError as refused:
+                assert not accepted and refused.field == field, (uses_tools, asked)
+            else:
+                assert accepted, (uses_tools, asked)

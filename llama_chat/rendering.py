@@ -149,8 +149,8 @@ class ConversationRendering:
             split = split_render(
                 lambda m, declared: self._render_given(
                     m, generation_prompt, None if declared is declarations else declared),
-                given, self._template.fragments.content, declarations,
-                reads_clock=self._template.reads_clock)
+                given, self._template.properties.fragments.content, declarations,
+                reads_clock=self._template.properties.reads_clock)
             memo[key] = split
         return memo[key]
 
@@ -319,7 +319,7 @@ class ConversationRendering:
         start = self.tag_after_content(split, first - 1)
         if kept.on_call:
             called = split.call_ends[last]
-            closing = self._template.call_close_text
+            closing = self._template.properties.call_close_text
             found = split.text.find(closing, called) if called is not None and closing else -1
             end = found + len(closing) if found >= 0 else None
         elif split.contents[last] is not None:
@@ -327,7 +327,7 @@ class ConversationRendering:
         else:
             # A reply without text: it ends where the template's closing after it begins,
             # the last before the next text of the caller's own after the message before it.
-            closing = self._template.fragments.assistant_suffix.strip()
+            closing = self._template.properties.fragments.assistant_suffix.strip()
             before = split.contents[last - 1]
             after = None if start is None else max(
                 start, split.call_ends[last - 1] or start, before[1] if before else start)

@@ -29,6 +29,20 @@ class Ahead:
     made_for: MadeFor
 
 
+@dataclass(frozen=True)
+class RenderChecks:
+    """What the template's renders allow, as the system turn, the declarations and the clock leave them; worked out again whenever one of those changes."""
+
+    opening: str | None = None            # how the conversation opens, to see a clock move on
+    windows: bool = False                 # whether windows of the conversation stand for its render
+    splice_probe: str | None = None       # what a question's render after one exchange is compared with
+    repeats_alike: bool = True            # whether a repeated question is written as any other
+    # Whether a past turn that called tools is written as before once another exchange follows.
+    tool_turns_stay: bool = False
+    # What the system turn and a one-character question take, with the generation prompt.
+    with_a_short_question: int = 0
+
+
 @dataclass
 class ConversationState:
     """What a failed action puts back as it was, the cache's tokens besides."""
@@ -44,13 +58,7 @@ class ConversationState:
     kept_at: dict[KeptTurn, int] = field(default_factory=dict)
     n_calls: int = 0
     results_cut: list[ToolCall] = field(default_factory=list)   # since the newest generation
-    windows: bool = False                 # whether windows of the conversation stand for its render
-    splice_probe: str | None = None       # what a question's render after one exchange is compared with
-    repeats_alike: bool = True            # whether a repeated question is written as any other
-    # Whether a past turn that called tools is written as before once another exchange follows.
-    tool_turns_stay: bool = False
-    # What the system turn and a one-character question take, with the generation prompt.
-    with_a_short_question: int = 0
+    checks: RenderChecks = RenderChecks()
     # Whether the open turn's newest call was made inside a thought the model had not closed.
     called_in_thought: bool = False
     ahead: Ahead | None = None
@@ -60,7 +68,6 @@ class ConversationState:
     # decoded for: the conversation with the question newest, and the cache after them.
     spliced_at: tuple[int, list[int], MadeFor] | None = None
     begun: bool = False
-    opening: str | None = None            # how the conversation opens, to see a clock move on
 
     def copied(self) -> ConversationState:
         """This state as it is now, each list and dict copied so that later changes leave it alone."""
@@ -124,4 +131,4 @@ def goes_on_from(state: ConversationState, made_for: MadeFor) -> bool:
     return (len(made_for.messages) <= len(state.messages)
             and all(a is b for a, b in zip(made_for.messages, state.messages))
             and made_for.tools == tuple(state.tools)
-            and (made_for.reasoning, made_for.opening) == (state.reasoning, state.opening))
+            and (made_for.reasoning, made_for.opening) == (state.reasoning, state.checks.opening))

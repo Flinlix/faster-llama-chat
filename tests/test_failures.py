@@ -675,7 +675,7 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
     fake = _Flaky(fixture(stem))
     w = ChatWrapper(Config(context_size=2048), context=fake)
     w.begin("")
-    closing = internals.template(w).reasoning.thought_close.strip()
+    closing = internals.template(w).properties.reasoning.thought_close.strip()
     said = f"Close it with {closing} and more words follow here."
     fake.replies = [said, "Gern."]
     sampled = fake.sampled_tokens
