@@ -84,6 +84,30 @@ class ResultCutting:
         del messages[at + 1:]
         return dropped
 
+    def cut_to_fit(self, room: int, held: set[int]) -> None:
+        """Cut the results of the newest exchange, the newest first, until the conversation fits in ``room`` with the generation prompt, as a result written in a running conversation is cut; none of those at ``held``, which a kept turn's tokens stand for.
+
+        It is measured with the generation prompt, as a reply follows only
+        where the conversation ends on a question or a result.
+        """
+        messages = self._state.messages
+        asked = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=0)
+        for at in range(len(messages) - 1, asked, -1):
+            message = messages[at]
+            if message["role"] != "tool" or at in held or not message["content"]:
+                continue
+            text = message["content"]
+            if self._fits(at, text, room):
+                return
+            if not self._fits(at, cut_result(text, 0), room):
+                messages[at] = with_result_text(message, cut_result(text, 0))
+                self._note(self._call_answered(at), 0, len(text), "a result", "at the begin")
+                continue
+            kept = _most_kept(lambda n: self._fits(at, cut_result(text, n), room), len(text))
+            messages[at] = with_result_text(message, cut_result(text, kept))
+            self._note(self._call_answered(at), kept, len(text), "a result", "at the begin")
+            return
+
     def _fits(self, at: int, content: str, room: int) -> bool:
         """Whether the conversation, its message at ``at``, a result, holding ``content``, fits in ``room`` with the generation prompt."""
         messages = self._state.messages

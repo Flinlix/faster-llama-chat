@@ -21,13 +21,13 @@ import pytest
 
 import llama_chat
 from llama_chat import ChatWrapper, Config, ContextOverflowError
-from llama_chat.messages import as_messages
+from llama_chat.history_forms import answer_in_order, read_messages
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_chat.tools import ToolCall, ToolSpec, result_text
 
-from tests.chat_messages import Result, tool_turn
+from tests.chat_messages import Result, tool_turn, opened, after_system
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from .fake_context import (FakeContext, ScriptedCall, call_marks, shipped_addon_call,
@@ -100,8 +100,7 @@ class _Run:
         self.renders.append(len(self.context.rendered))
 
     def begin(self, history=(), tools=None):
-        return self.chat.begin(self.system, list(history), tools=tools,
-                               reasoning=self.reasoning).n_kept_messages
+        return self.chat.begin(opened(self.system, list(history)), tools=tools, reasoning=self.reasoning).n_kept_messages
 
     def render(self, messages, tools=None):
         system = [{"role": "system", "content": self.system}] if self.system else []
@@ -132,10 +131,7 @@ _THOUGHT = "Erst denken."
 
 def _sent(chat):
     """The messages the conversation holds, the system prompt's included, read from what the wrapper publishes."""
-    saved = chat.conversation()
-    system = saved["system_prompt"]
-    return ([{"role": "system", "content": system}] if system else []) \
-        + as_messages(saved["messages"])
+    return answer_in_order(read_messages(chat.conversation()["messages"]), "")
 
 
 def _exchanges(questions, answers, thought=None):
@@ -285,7 +281,7 @@ def test_a_question_that_repeats_an_earlier_reply_is_refused_before_its_reply_wh
         "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}"))
     context = FakeContext(marking, ["Fine.", "Fine.", "Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    chat.begin("")
+    chat.begin(opened(""))
     chat.reply("Hello?").finish()
     before = chat.conversation()
     with pytest.raises(ValueError, match="text in its place"):
@@ -309,7 +305,7 @@ def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_
         "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}"))
     context = FakeContext(escaping, ANSWERS)
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    chat.begin("")
+    chat.begin(opened(""))
     assert internals.renders_in_windows(chat)
     seen, sent, spliced = [], [], []
     context.before_reply = seen.append
@@ -335,7 +331,7 @@ def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_
     run = _Run(stem, replies=["", ANSWERS[1]], reasoning=True)
     run.begin()
     assert run.chat.reply(QUESTIONS[0]).finish().text == ""
-    assert run.chat.conversation()["messages"][-1] == {"role": "user", "content": QUESTIONS[0]}
+    assert after_system(run.chat.conversation()["messages"])[-1] == {"role": "user", "content": QUESTIONS[0]}
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
 
 
@@ -411,7 +407,7 @@ def test_a_limit_on_exchanges_decodes_a_cache_that_cannot_shift_again_only_every
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
-        assert len(run.chat.conversation()["messages"]) <= 2 * 4
+        assert len(after_system(run.chat.conversation()["messages"])) <= 2 * 4
     assert evicted
     _assert_each_reply_followed_what_was_sent(run, questions)
     over = [k for k in range(1, len(run.decoded))
@@ -456,8 +452,8 @@ def test_a_system_prompt_is_kept_where_no_later_question_moves_it_and_refused_wh
     assert run.chat.capabilities(tools=False).can_take_system_prompt == takes
     if not takes:
         with pytest.raises(ValueError, match="does not keep a system prompt in place"):
-            run.chat.begin("persona")
-    run.chat.begin("persona" if takes else "")
+            run.chat.begin(opened("persona"))
+    run.chat.begin(opened("persona" if takes else ""))
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -466,7 +462,7 @@ def test_a_system_prompt_longer_than_the_threshold_is_refused_at_begin(stem):
     takes_system = run.chat.capabilities(tools=False).can_take_system_prompt
     refusal = ContextOverflowError if takes_system else ValueError
     with pytest.raises(refusal):
-        run.chat.begin("Keep it short. " * 80)
+        run.chat.begin(opened("Keep it short. " * 80))
     with pytest.raises(ValueError, match="call begin"):
         run.chat.reply("Still there?")      # nothing was begun
 
@@ -480,7 +476,7 @@ def test_a_long_history_is_kept_from_its_newest_end_within_half_the_context_unre
     before = len(run.context.rendered)
     kept = run.begin(history)
     assert 0 < kept < len(history)
-    assert run.chat.conversation()["messages"] == history[-kept:]
+    assert after_system(run.chat.conversation()["messages"]) == history[-kept:]
     # No render is given much more than twice what is kept, never the whole history.
     assert max(run.context.rendered[before:]) <= 2 * kept + 4
     tokens = lambda items: len(run.context.tokenize(run.render(list(items))))   # noqa: E731
@@ -518,7 +514,7 @@ def test_an_eviction_on_a_cache_that_cannot_shift_keeps_history_however_long_the
     evicted = 0
     for question in questions:
         evicted += run.chat.reply(question).finish().n_evicted_messages
-        assert any(item["role"] == "user" for item in run.chat.conversation()["messages"])
+        assert any(item["role"] == "user" for item in after_system(run.chat.conversation()["messages"]))
     assert evicted
 
 
@@ -551,8 +547,8 @@ def _longer_than_the_room_left(run):
 def test_a_result_longer_than_the_room_left_drops_only_part_of_the_history_of_a_cache_that_cannot_shift(
         stem):
     run = _weather_run(stem, can_shift=False, turns=1)
-    held = len(run.chat.conversation()["messages"])
-    evicted = run.chat.inject_tool_result(_called(run, "Weather in Bonn?"),
+    held = len(after_system(run.chat.conversation()["messages"]))
+    evicted = run.chat.inject_tool_result(_called(run, "Weather in Bonn?").id,
                                           _longer_than_the_room_left(run))
     assert 0 < evicted.n_evicted_messages < held
     run.chat.reply(tool_call_policy="yield").finish()
@@ -573,7 +569,7 @@ def test_results_that_need_room_decode_a_cache_that_cannot_shift_again_only_ever
             before = run.context.total_prefilled()
             call = _called(run, f"Weather {k} in Bonn?")
             result = _longer_than_the_room_left(run) if k % 4 == 3 else "sunny"
-            run.chat.inject_tool_result(call, result)
+            run.chat.inject_tool_result(call.id, result)
             run.chat.reply(tool_call_policy="yield").finish()
             costs[can_shift].append(run.context.total_prefilled() - before - len(result))
     exchange = _exchange_length(_Run(stem), QUESTIONS[0], ANSWERS[0])
@@ -714,7 +710,7 @@ def test_exchanges_that_repeat_word_for_word_are_kept_as_many_as_fit(stem):
         counts = []
         for question in questions:
             run.chat.reply(question).finish()
-            counts.append(sum(item["role"] == "user" for item in run.chat.conversation()["messages"]))
+            counts.append(sum(item["role"] == "user" for item in after_system(run.chat.conversation()["messages"])))
         kept[same] = min(counts[8:])
     assert kept[True] >= kept[False]
 
@@ -750,7 +746,7 @@ def test_a_reply_that_fails_part_way_is_kept_or_taken_back_and_the_next_follows_
     run.context.sampled_tokens = sampled
     run.chat.reply(QUESTIONS[3]).finish()
     # Recorded where some of it was answer, taken back whole where none was.
-    asked = {"role": "user", "content": QUESTIONS[2]} in run.chat.conversation()["messages"]
+    asked = {"role": "user", "content": QUESTIONS[2]} in after_system(run.chat.conversation()["messages"])
     assert (QUESTIONS[2] in run.context.text_of(run.context.cache)) == asked
 
 
@@ -786,7 +782,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
         chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
                                   min_reply_tokens=120), context=context)
         try:
-            chat.begin("Be brief.", tools=[WEATHER])
+            chat.begin(opened("Be brief."), tools=[WEATHER])
             reply = chat.reply("Weather?", tool_call_policy="yield").finish()
         except ContextOverflowError:
             continue
@@ -809,7 +805,7 @@ def test_a_template_that_writes_text_of_its_own_around_a_message_is_written_so()
                            "{% else %}{{ m.content }}{% endif %}"))
     context = FakeContext(wrapping, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    chat.begin("")
+    chat.begin(opened(""))
     seen = []
     context.before_reply = lambda text: seen.append(list(context.cache))
     chat.reply("Is <|said|> a tag?").finish()
@@ -825,7 +821,7 @@ def test_a_template_that_writes_something_of_a_message_besides_its_text_is_refus
     context = FakeContext(counting, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     with pytest.raises(ValueError, match="text in its place"):
-        chat.begin("")
+        chat.begin(opened(""))
 
 
 # ----- histories, restarts, refusals ------------------------------------------------
@@ -848,7 +844,7 @@ def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_join
     run.chat.reply(" again ").finish()
     two = [{"role": "user", "content": " ping "}, {"role": "user", "content": " again "}]
     if run.render(two) is None:
-        assert run.chat.conversation()["messages"][0] == {"role": "user",
+        assert after_system(run.chat.conversation()["messages"])[0] == {"role": "user",
                                                            "content": " ping \n\n again "}
         assert run.seen[0] == run.render([{"role": "user", "content": " ping \n\n again "}])
     else:
@@ -864,7 +860,7 @@ def test_a_history_is_read_in_as_the_template_writes_it_and_reads_back_as_it_wen
     run.chat.reply("And now?").finish()
     sent = sum(_exchanges(QUESTIONS[:3], ANSWERS[:3]), [])
     assert run.seen[0] == run.render(sent + [{"role": "user", "content": "And now?"}])
-    assert run.chat.conversation()["messages"][:6] == sent
+    assert after_system(run.chat.conversation()["messages"])[:6] == sent
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -887,7 +883,7 @@ def test_a_template_that_writes_an_older_exchange_otherwise_once_another_follows
     context = FakeContext(rewriting, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     with pytest.raises(ValueError, match="older exchange"):
-        chat.begin("")
+        chat.begin(opened(""))
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -895,10 +891,10 @@ def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable(stem):
     run = _Run(stem, context_size=8192)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    history, held = run.chat.conversation()["messages"], list(run.context.cache)
+    history, held = after_system(run.chat.conversation()["messages"]), list(run.context.cache)
     with pytest.raises(ValueError):
-        run.chat.begin("x" * 9000)              # longer than the limit
-    assert run.chat.conversation()["messages"] == history and run.context.cache == held
+        run.chat.begin(opened("x" * 9000))              # longer than the limit
+    assert after_system(run.chat.conversation()["messages"]) == history and run.context.cache == held
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
 
 
@@ -908,10 +904,12 @@ def _assert_begins_again_the_same(chat, other=None):
     saved = chat.conversation()
     kept = (other or chat).begin(**saved).n_kept_messages
     again = (other or chat).conversation()
-    assert {key: again[key] for key in ("system_prompt", "tools", "reasoning")} \
-        == {key: saved[key] for key in ("system_prompt", "tools", "reasoning")}
-    assert again["messages"] == saved["messages"][len(saved["messages"]) - kept:]
-    assert kept or not saved["messages"]
+    assert {key: again[key] for key in ("tools", "reasoning")} \
+        == {key: saved[key] for key in ("tools", "reasoning")}
+    system = [m for m in saved["messages"][:1] if m["role"] == "system"]
+    history = saved["messages"][len(system):]
+    assert again["messages"] == system + history[len(history) - kept:]
+    assert kept or not history
     assert (other or chat).conversation() == again
 
 
@@ -938,7 +936,7 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
         call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
                  if isinstance(e, ToolCall)]
         _assert_begins_again_the_same(run.chat)             # the call still owed its result
-        run.chat.inject_tool_result(call, "sunny")
+        run.chat.inject_tool_result(call.id, "sunny")
         _assert_begins_again_the_same(run.chat)             # the turn open after its result
         run.chat.reply(tool_call_policy="yield").finish()
         _assert_begins_again_the_same(run.chat)
@@ -950,9 +948,10 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
         saved = run.chat.conversation()
         unanswered = tool_turn(ToolCall(WEATHER.name, {"city": "Rom"}))
         try:
-            run.chat.begin(saved["system_prompt"], saved["messages"]
-                           + [{"role": "user", "content": "Weather in Rome?"}, *unanswered, {"role": "user", "content": "Never mind."}],
-                           tools=saved["tools"], reasoning=reasoning)
+            run.chat.begin(opened("", saved["messages"] + [
+                {"role": "user", "content": "Weather in Rome?"}, *unanswered,
+                {"role": "user", "content": "Never mind."}]), tools=saved["tools"],
+                reasoning=reasoning)
         except ValueError as refused:       # a template that writes no call without its result
             assert "refuses" in str(refused) and run.chat.conversation() == saved
         else:
@@ -983,7 +982,7 @@ def test_a_result_owed_to_a_call_a_history_ends_on_only_adds_to_the_cache(
     assert_cache_reads_as_rendered(run.chat, run.context)
     held, edits, decoded = list(run.context.cache), len(run.context.edits), run.context.total_prefilled()
     for call in run.chat.pending_calls:
-        run.chat.inject_tool_result(call, "sunny")
+        run.chat.inject_tool_result(call.id, "sunny")
     assert run.context.cache[:len(held)] == held
     assert [edit for edit in run.context.edits[edits:] if edit[0] != "shift"] == []
     assert run.context.total_prefilled() - decoded == len(run.context.cache) - len(held)
@@ -1111,7 +1110,7 @@ def test_a_call_after_a_short_thought_written_in_the_models_own_tags_is_handed_o
     run.begin(tools=[WEATHER])
     calls = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": "Bonn"})]
-    run.chat.inject_tool_result(calls[0], "sunny")
+    run.chat.inject_tool_result(calls[0].id, "sunny")
     run.chat.reply().finish()
 
 
@@ -1138,7 +1137,7 @@ def test_a_call_owed_its_result_holds_the_render_up_to_its_turn_and_the_result_o
     run, call = _owing_a_call(stem, reasoning)
     assert_cache_reads_as_rendered(run.chat, run.context)
     owed = list(run.context.cache)
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     assert run.context.cache[:len(owed)] == owed
 
 
@@ -1235,7 +1234,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
         sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
         assert run.seen[-1] in run.renders_in_each_thought_form(
             sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER, clock]), result
-        assert run.chat.conversation()["messages"][1]["tool_calls"]
+        assert after_system(run.chat.conversation()["messages"])[1]["tool_calls"]
 
 
 @pytest.mark.parametrize("said, result", [("", ""), ("", "sunny"), ("Let me check. ", ""),
@@ -1297,7 +1296,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     events = list(run.chat.reply("Weather in Bonn?", tool_call_policy="yield"))
     call, = [event for event in events if isinstance(event, ToolCall)]
     assert (call.name, call.arguments) == (WEATHER.name, {"city": "Bonn"}) and call.id
-    run.chat.inject_tool_result(call, '{"weather": "sunny"}')
+    run.chat.inject_tool_result(call.id, '{"weather": "sunny"}')
     tags = run.template.properties.reasoning
     if tags and begins_in_thought(tags, run.context.text_of(run.context.cache)) \
             and not run.context.replies[0].startswith(tags.thought_close):
@@ -1335,7 +1334,7 @@ def test_a_text_argument_reaches_the_caller_as_the_model_spelled_it(stem):
                                             tool_call_policy="yield")
                  if isinstance(e, ToolCall)]
         assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": city})]
-        run.chat.inject_tool_result(calls[0], "sunny")
+        run.chat.inject_tool_result(calls[0].id, "sunny")
     run.chat.reply().finish()
 
 
@@ -1354,7 +1353,7 @@ def test_text_a_model_writes_before_its_call_is_held_once_and_its_turn_goes_on_o
     run.begin(tools=[WEATHER])
     call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     assert run.chat.reply().finish().text.strip() == "Sunny in Bonn."
     run.chat.reply(QUESTIONS[0]).finish()
     assert [seen.count(said) for seen in run.seen] == [0, 1, 1]
@@ -1365,7 +1364,7 @@ def test_text_a_model_writes_before_its_call_is_held_once_and_its_turn_goes_on_o
     plain.begin(tools=[WEATHER])
     call, = [e for e in plain.chat.reply("Weather in Bonn?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
-    plain.chat.inject_tool_result(call, "sunny")
+    plain.chat.inject_tool_result(call.id, "sunny")
     plain.chat.reply().finish()
     assert run.seen[1].endswith(plain.seen[1][len(plain.seen[1].rsplit("sunny", 1)[0]):])
 
@@ -1380,7 +1379,7 @@ def test_a_reply_a_stop_string_ends_after_a_result_leaves_nothing_after_it_in_th
     run.begin(tools=[WEATHER])
     call, = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     reply = run.chat.reply(stop=["HIDDEN"]).finish()
     assert reply.stop_reason == "stop_string" and "HIDDEN" not in reply.text
     assert "HIDDEN" not in run.context.text_of(run.context.cache)
@@ -1410,7 +1409,7 @@ def test_a_turn_out_of_room_after_several_calls_closes_and_the_conversation_goes
     for _ in range(2):
         call, = [e for e in probe.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
         held = probe.chat.total_tokens
-        probe.chat.inject_tool_result(call, "x")
+        probe.chat.inject_tool_result(call.id, "x")
     # Room for the second call, and too little after it for even an empty result and a reply.
     closing = probe.template.properties.n_closing_tokens
     run = _calling_again(stem, context_size=held + closing, min_reply_tokens=closing + 20)
@@ -1480,7 +1479,7 @@ def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
-    assert run.chat.conversation()["messages"][-1] == {"role": "assistant", "content": "Write"}
+    assert after_system(run.chat.conversation()["messages"])[-1] == {"role": "assistant", "content": "Write"}
 
 
 @pytest.mark.parametrize("stem", _TEXT_OPENED)
@@ -1496,10 +1495,10 @@ def test_text_written_before_a_follow_up_call_stays_in_the_tokens_kept_for_its_t
                             "Sunny twice.", "Bye."]
     run.begin(tools=[WEATHER])
     calls = [e for e in run.chat.reply("Weather in Bonn?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(calls[0], "sunny")
+    run.chat.inject_tool_result(calls[0].id, "sunny")
     calls = [e for e in run.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert [(c.name, c.arguments) for c in calls] == [(WEATHER.name, {"city": "Bonn"})]
-    run.chat.inject_tool_result(calls[0], "sunny")
+    run.chat.inject_tool_result(calls[0].id, "sunny")
     assert run.chat.reply().finish().text == "Sunny twice."
     run.chat.reply("Thanks.").finish()
     assert before + opener + body + closer in run.seen[-1]
@@ -1521,13 +1520,13 @@ def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limit
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
                        context=fake)
     registry = weather_registry()
-    chat.begin("persona", tools=registry.specs())
+    chat.begin(opened("persona"), tools=registry.specs())
     for n in range(8):
         fake.call_script = ["fn:weather{city:" + " " * 60 + "'Bonn'}"]      # far wider than written
         reply = chat.reply(f"Wetter {n}?", tool_call_policy=registry).finish()
         assert reply.text == "Sonnig"
         assert chat.total_tokens <= chat.config.evict_above_tokens
-    assert sum(m["role"] == "user" for m in chat.conversation()["messages"]) < 8
+    assert sum(m["role"] == "user" for m in after_system(chat.conversation()["messages"])) < 8
 
 
 def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refused():
@@ -1536,10 +1535,10 @@ def test_a_question_whose_words_change_how_the_template_opens_the_reply_is_refus
         "<|assistant_says|>{% if '/no_think' in messages[-1].content %}<|nothink|>{% endif %}"))
     context = FakeContext(switching, ["Fine.", "Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
-    chat.begin("")
+    chat.begin(opened(""))
     with pytest.raises(ValueError, match="text in its place"):
         chat.reply("Hello /no_think").finish()
-    assert chat.conversation()["messages"] == [] and chat.reply("Hello").finish().text == "Fine."
+    assert after_system(chat.conversation()["messages"]) == [] and chat.reply("Hello").finish().text == "Fine."
 
 
 def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
@@ -1548,7 +1547,7 @@ def test_a_template_that_refuses_the_probe_for_rewritten_history_is_refused():
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
                        context=FakeContext(short, []))
     with pytest.raises(ValueError, match="cannot\\s+be told"):
-        chat.begin("")
+        chat.begin(opened(""))
 
 
 @pytest.mark.parametrize("stem, reasoning", _each_mode(
@@ -1567,7 +1566,7 @@ def test_an_answer_holding_its_templates_thought_tags_is_kept_as_the_template_wr
     run.begin(tools=tools)
     if tools:
         call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-        run.chat.inject_tool_result(call, "sunny")
+        run.chat.inject_tool_result(call.id, "sunny")
         run.chat.reply().finish()
     questions = [f"Question {k}?" for k in range(len(answers))]
     for question in questions:
@@ -1591,7 +1590,7 @@ def test_a_tag_the_model_writes_inside_its_answer_is_never_shown(stem):
     run.begin()
     shown = "".join(run.chat.reply(QUESTIONS[0]))
     assert shown == "Rain first. Then sun."
-    assert run.chat.conversation()["messages"][-1]["content"] == shown
+    assert after_system(run.chat.conversation()["messages"])[-1]["content"] == shown
     run.chat.reply(QUESTIONS[1]).finish()
 
 
@@ -1626,7 +1625,7 @@ def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more
             run.begin(tools=[WEATHER])
             call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
                      if isinstance(e, ToolCall)]
-            run.chat.inject_tool_result(call, "sunny")
+            run.chat.inject_tool_result(call.id, "sunny")
             run.chat.reply().finish()
             stays = internals.tool_turns_stay(run.chat)
         else:
@@ -1680,7 +1679,7 @@ def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_
 
     fake = Bounded(_FIXTURES[stem])
     chat = ChatWrapper(Config(context_size=size, min_reply_tokens=32), context=fake)
-    chat.begin("", tools=[])
+    chat.begin(opened(""), tools=[])
     opening = fake._call_marks()[0]
 
     def filling_the_room(_text):
@@ -1697,7 +1696,7 @@ def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_
 def test_a_first_reply_that_produces_nothing_leaves_what_begin_decoded_in_the_cache(stem):
     fake = FakeContext(_fixture(stem))
     chat = ChatWrapper(Config(context_size=8192), context=fake)
-    chat.begin("")
+    chat.begin(opened(""))
     begun = chat.total_tokens
     fake.gen_tokens = 0
     chat.reply("hello").finish()
@@ -1728,24 +1727,35 @@ def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_rend
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_a_result_given_as_a_value_comes_back_as_that_value(stem):
+def test_a_result_given_as_a_value_comes_back_as_the_text_the_model_read(stem):
     run = _Run(stem)
     given = {"celsius": 18, "sky": ["light", "rain"]}
-    history = [{"role": "user", "content": "Weather?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"}),
-                                               Result(WEATHER.name, given), "18 degrees.")]
     _opener, body, _closer = _call_body(run, {"city": "Köln"})
     run.context.replies = [ScriptedCall(body), "Rain too."]
-    run.begin(history, tools=[WEATHER])
+    run.begin(tools=[WEATHER])
     call, = [e for e in run.chat.reply("And Köln?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, dict(given))
+    run.chat.inject_tool_result(call.id, dict(given))
     run.chat.reply().finish()
     assert [m["content"] for m in run.chat.conversation()["messages"] if m["role"] == "tool"] \
-        == [given, given]
+        == [result_text(given)]
     saved = run.chat.conversation()
     run.chat.begin(**saved)
-    # The newest part a begin keeps, its results still the values given.
-    kept = run.chat.conversation()["messages"]
-    assert kept and kept == saved["messages"][-len(kept):]
+    assert run.chat.conversation() == saved
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_result_given_to_begin_as_a_value_is_refused_naming_it(stem):
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    before = run.chat.conversation()
+    history = [{"role": "user", "content": "Weather?"},
+               {"role": "assistant", "content": None, "tool_calls": [
+                   {"id": "call00000", "type": "function",
+                    "function": {"name": WEATHER.name, "arguments": '{"city":"Bonn"}'}}]},
+               {"role": "tool", "tool_call_id": "call00000", "content": {"celsius": 18}}]
+    with pytest.raises(ValueError, match="result of 'call00000'"):
+        run.chat.begin(history, tools=[WEATHER])
+    assert run.chat.conversation() == before
 
 
 # A call inside a thought is a mention where a call may follow text.
@@ -1762,10 +1772,10 @@ def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
     run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I will check ")]
     run.begin(tools=[WEATHER])
     call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     run.context.replies = ["it is sunny" + tags.thought_close + "Sunny."]
     reply = run.chat.reply().finish()
-    assert reply.text.strip() == "Sunny." and run.chat.conversation()["messages"]
+    assert reply.text.strip() == "Sunny." and after_system(run.chat.conversation()["messages"])
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
@@ -1777,7 +1787,7 @@ def test_a_result_owed_to_a_history_with_no_question_is_written_where_the_templa
             run.begin(history, tools=[WEATHER])
         return
     run.begin(history, tools=[WEATHER])
-    run.chat.inject_tool_result(run.chat.pending_calls[0], "sunny")
+    run.chat.inject_tool_result(run.chat.pending_calls[0].id, "sunny")
     assert not run.chat.pending_calls
 
 
@@ -1795,16 +1805,15 @@ def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_
     events = list(run.chat.reply("Weather?", tool_call_policy="yield"))
     if readable:
         call, = [e for e in events if isinstance(e, ToolCall)]
-        run.chat.inject_tool_result(call, "sunny")
+        run.chat.inject_tool_result(call.id, "sunny")
         shown = run.chat.reply().finish().text
     else:
         shown = "".join(e for e in events if isinstance(e, str))
     assert not run.chat.pending_calls
     assert shown.strip().endswith("Sunny.") and tags.thought_close.strip() not in shown
     # A history whose turn a result left open starts outside any thought.
-    run.chat.begin(run.system, [{"role": "user", "content": "Köln?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Köln"}),
-                                                             Result(WEATHER.name, "rainy"))],
-                   tools=[WEATHER], reasoning=True)
+    run.chat.begin(opened(run.system, [{"role": "user", "content": "Köln?"}, *tool_turn(ToolCall(WEATHER.name, {"city": "Köln"}),
+                                                             Result(WEATHER.name, "rainy"))]), tools=[WEATHER], reasoning=True)
     assert not internals.called_in_thought(run.chat)
 
 
@@ -1826,7 +1835,7 @@ def _with_a_live_turn(run, unreadable: bool) -> None:
     calls = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
     if run.chat.pending_calls:
-        run.chat.inject_tool_result(calls[0], "sunny")
+        run.chat.inject_tool_result(calls[0].id, "sunny")
     if run.chat.turn_open:
         run.chat.reply(tool_call_policy="yield").finish()
 
@@ -1854,12 +1863,12 @@ def test_turns_read_earlier_serve_messages_added_and_dropped_later(stem):
     run.context.replies = [ScriptedCall(body), "Fine."]
     call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
              if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     run.chat.reply(tool_call_policy="yield").finish()
     turns, kept = run.chat.generated_turns(), [k[0] for k in internals.kept_turns(run.chat)]
     run.chat.reply(QUESTIONS[1]).finish()           # an exchange after it, added below
-    messages = run.chat.conversation()["messages"][2:]
-    run.chat.begin(run.system, messages, tools=[WEATHER], generated_turns=turns)
+    messages = after_system(run.chat.conversation()["messages"])[2:]
+    run.chat.begin(opened(run.system, messages), tools=[WEATHER], generated_turns=turns)
     assert [k[0] for k in internals.kept_turns(run.chat)] == kept
 
 
@@ -1873,7 +1882,7 @@ def test_another_model_or_no_generated_turns_write_each_turn_as_its_template_doe
     for chat, conversation in ((other.chat, saved), (run.chat, {**saved, "generated_turns": None})):
         chat.begin(**conversation)
         assert internals.kept_turns(chat) == []
-        calls = [call for m in chat.conversation()["messages"] for call in m.get("tool_calls", ())]
+        calls = [call for m in after_system(chat.conversation()["messages"]) for call in m.get("tool_calls", ())]
         # An unreadable call is in the old model's format only: left out, with its error result.
         assert not any("unreadable" in call for call in calls)
         assert len(calls) == (0 if unreadable else 1)
@@ -1888,7 +1897,7 @@ def test_unreadable_calls_after_an_earlier_call_are_kept_as_generated_live_and_r
                            ScriptedCall(unreadable), "Sorry again."]
     run.begin(tools=[WEATHER])
     call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    run.chat.inject_tool_result(call, "sunny")
+    run.chat.inject_tool_result(call.id, "sunny")
     run.chat.reply().finish()
     statuses = []
     for question in ("And now?", "Once more?"):
@@ -1914,7 +1923,7 @@ def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
     assert run.chat.turn_open
     assert run.chat.reply(QUESTIONS[0]).finish().text == ANSWERS[0]
     assert not run.chat.turn_open and not run.chat.pending_calls
-    messages = run.chat.conversation()["messages"]
+    messages = after_system(run.chat.conversation()["messages"])
     # The turn stays, its call told it was not run, where the template writes the question
     # after it; else the turn goes and the question joins the one before it.
     assert messages[0]["content"] in ("Weather?", f"Weather?\n\n{QUESTIONS[0]}")
@@ -1927,12 +1936,12 @@ def test_a_change_of_tools_and_reasoning_keeps_every_message(stem):
     run.begin()
     for question in QUESTIONS[:3]:
         run.chat.reply(question).finish()
-    messages = run.chat.conversation()["messages"]
+    messages = after_system(run.chat.conversation()["messages"])
     assert run.chat.change_settings(tools=[WEATHER], reasoning=True).n_evicted_messages == 0
     held = run.chat.conversation()
-    assert held["messages"] == messages and held["tools"] == [WEATHER] and held["reasoning"]
+    assert after_system(held["messages"]) == messages and held["tools"] == [WEATHER] and held["reasoning"]
     assert run.chat.change_settings(tools=None, reasoning=False).n_evicted_messages == 0
-    assert run.chat.conversation()["messages"] == messages
+    assert after_system(run.chat.conversation()["messages"]) == messages
     assert run.chat.reply(QUESTIONS[3]).finish().text == ANSWERS[3]
 
 
@@ -1943,7 +1952,7 @@ def test_a_reply_taken_back_with_its_request_says_so(stem):
     run.begin()
     run.context.replies = [""]
     reply = run.chat.reply(QUESTIONS[0]).finish()
-    assert reply.taken_back and run.chat.conversation()["messages"] == []
+    assert reply.taken_back and after_system(run.chat.conversation()["messages"]) == []
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if _FIXTURES[stem]["marks_thought"]])
@@ -1953,7 +1962,7 @@ def test_a_reply_kept_otherwise_than_shown_says_what_was_kept(stem):
     run.context.replies = [f"Erst das. {close} Dann das."]
     run.begin()
     reply = run.chat.reply(QUESTIONS[0]).finish()
-    kept = run.chat.conversation()["messages"][-1]["content"]
+    kept = after_system(run.chat.conversation()["messages"])[-1]["content"]
     assert (reply.kept_text is None) == (kept == reply.text)
     assert reply.kept_text is None or reply.kept_text == kept
 
@@ -1979,13 +1988,29 @@ def test_a_history_whose_unreadable_call_is_left_out_is_written_as_the_template_
                     {"role": "tool", "tool_call_id": "call00001", "content": "sunny"},
                     {"role": "assistant", "content": "Sunny."}]
     try:
-        report = run.chat.begin(run.system, history, tools=[WEATHER])
+        report = run.chat.begin(opened(run.system, history), tools=[WEATHER])
     except ValueError as refused:       # refused before anything changed, with its cause
-        assert "refuses" in str(refused) and not run.chat.conversation()["messages"]
+        assert "refuses" in str(refused) and not after_system(run.chat.conversation()["messages"])
         return
     assert report.n_left_out_calls == 1
-    assert report.n_kept_messages == len(run.chat.conversation()["messages"])
-    assert not any("unreadable" in c for m in run.chat.conversation()["messages"]
+    assert report.n_kept_messages == len(after_system(run.chat.conversation()["messages"]))
+    assert not any("unreadable" in c for m in after_system(run.chat.conversation()["messages"])
                    for c in m.get("tool_calls", ()))
     assert_cache_reads_as_rendered(run.chat, run.context)
     assert run.chat.reply("And now?").finish().stop_reason == "end_of_turn"
+
+
+@pytest.mark.parametrize("stem", _CALLING_IN_THOUGHTS)
+def test_a_call_inside_a_thought_begun_again_from_the_conversation_goes_on_inside_it(stem):
+    """Restored exactly, the open turn still stands inside the thought, which stays hidden."""
+    run = _Run(stem, reasoning=True)
+    tags = run.template.properties.reasoning
+    opens = begins_in_thought(tags, run.template.generation_prompt(True))
+    body = _call_body(run, {"city": "Bonn"})[1]
+    run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I check "),
+                           "still thinking" + tags.thought_close + "Sunny."]
+    run.begin(tools=[WEATHER])
+    [e for e in run.chat.reply("Weather?", tool_call_policy="yield")]
+    run.chat.begin(**run.chat.conversation())
+    run.chat.inject_tool_result(run.chat.pending_calls[0].id, "sunny")
+    assert run.chat.reply().finish().text == "Sunny."

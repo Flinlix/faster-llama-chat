@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from llama_chat.tools import ToolCall
@@ -63,3 +64,54 @@ def tool_turn(*steps) -> list[dict]:
     if calls or text or thought or not isinstance(steps[-1], Result):
         messages.append(reply())
     return messages
+
+
+def opened(system_prompt: str, messages=()) -> list[dict]:
+    """The messages ``begin`` takes for ``system_prompt``, none where it is empty, and ``messages`` after it, each in the Chat Completions form.
+
+    Written for tests whose subject is not that form: a call without an id
+    is given the next one this library writes, its arguments are written
+    as JSON, and a result without the id of its call answers the oldest
+    call still owed one, its value written as JSON.
+    """
+    from llama_chat.messages import call_id
+    from llama_chat.tools import result_text
+    messages = list(messages)
+    taken = {c.get("id") for m in messages if isinstance(m, dict) for c in m.get("tool_calls") or ()}
+    numbers = (n for n in range(10 ** 6) if call_id(n) not in taken)
+    converted, owed = [], []
+    for message in messages:
+        if not isinstance(message, dict):
+            converted.append(message)
+            continue
+        message = dict(message)
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            calls = []
+            for call in message["tool_calls"]:
+                call = {**call, "function": dict(call.get("function") or {})}
+                call["id"] = call.get("id") or call_id(next(numbers))
+                call.setdefault("type", "function")
+                if call.pop("unreadable", False):
+                    call["function"] = {"name": "unknown", "arguments": "not a call"}
+                elif not isinstance(call["function"].get("arguments", ""), str):
+                    call["function"]["arguments"] = json.dumps(call["function"]["arguments"])
+                calls.append(call)
+                owed.append(call["id"])
+            message["tool_calls"] = calls
+        elif message.get("role") == "tool":
+            message.pop("name", None)
+            if not message.get("tool_call_id") and owed:
+                message["tool_call_id"] = owed[0]
+            if message.get("tool_call_id") in owed:
+                owed.remove(message["tool_call_id"])
+            if not isinstance(message.get("content"), str):
+                message["content"] = result_text(message.get("content"))
+        elif message.get("role") == "user":
+            owed = []
+        converted.append(message)
+    return ([{"role": "system", "content": system_prompt}] if system_prompt else []) + converted
+
+
+def after_system(messages: list[dict]) -> list[dict]:
+    """``messages`` without the system message they open with, where they open with one."""
+    return messages[1:] if messages and messages[0].get("role") == "system" else messages

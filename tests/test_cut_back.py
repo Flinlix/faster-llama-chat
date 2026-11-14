@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.chat_messages import opened
+
 from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
@@ -133,7 +135,7 @@ def test_a_cut_to_a_reply_the_template_does_not_write_is_refused(stem):
     """These templates write no empty reply, so a reply cut to nothing could be neither held nor followed."""
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
-    w.begin("")
+    w.begin(opened(""))
     w.reply("Hallo").finish()
     before, held = w.conversation(), list(fake.cache)
     with pytest.raises(ValueError, match="keep more"):
@@ -154,7 +156,7 @@ def test_a_cut_to_nothing_stands_where_the_template_writes_an_empty_reply():
 def test_a_reply_that_called_a_tool_cannot_be_cut():
     w, fake = begun_wrapper(TOOLS)
     fake.call_script.append("fn:uhr{}")
-    w.begin("s", tools=[ToolSpec("uhr", "", {})])
+    w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})])
     for _event in w.reply("wie spät?", tool_call_policy="yield"):
         pass
     with pytest.raises(ValueError, match="tool call"):
@@ -170,7 +172,7 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw", can_shift=False)
     if not saves_state:
         fake.save_state = _fails_to_save
-        w.begin("s")
+        w.begin(opened("s"))
     w.reply("hi").finish()
     resets = fake.resets
     w.truncate_last_reply("Eins.")
@@ -196,7 +198,7 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
 def test_a_cache_that_fails_to_save_a_state_is_rebuilt_instead():
     w, fake = reasoning_wrapper(can_shift=False)
     fake.save_state = _fails_to_save
-    w.begin("s", reasoning=True)
+    w.begin(opened("s"), reasoning=True)
     resets = fake.resets
     w.reply("hi").finish()
     assert fake.resets == resets + 1
@@ -218,7 +220,7 @@ def test_a_saved_state_the_cache_refuses_is_rebuilt_from_instead():
 def test_a_cache_that_takes_a_cut_needs_no_saved_state():
     w, fake = reasoning_wrapper(can_shift=False)
     fake.can_cut_tail = True
-    w.begin("s", reasoning=True)
+    w.begin(opened("s"), reasoning=True)
     saved, resets = fake.saved_states, fake.resets
     w.reply("hi").finish()
     w.truncate_last_reply("Ant")
@@ -254,7 +256,7 @@ def test_a_context_of_your_own_that_can_neither_shift_cut_nor_save_is_refused(re
                     context=_NoWayBack(PLAIN, can_shift=False, can_cut_tail=False))
     for can_shift, can_cut_tail in ((True, False), (False, True)):
         ChatWrapper(Config(context_size=500), context=_NoWayBack(
-            PLAIN, can_shift=can_shift, can_cut_tail=can_cut_tail)).begin("s")
+            PLAIN, can_shift=can_shift, can_cut_tail=can_cut_tail)).begin(opened("s"))
 
 
 def test_a_context_that_saves_states_must_restore_them():
@@ -274,7 +276,7 @@ def test_a_reply_ended_by_its_closing_text_is_cut_back_as_its_cache_allows(stem)
         # The reply, then its closing, which leaves the reply again.
         fake = FakeContext(known, ["rep" + closing, "Fine."], can_shift=can_shift)
         w = ChatWrapper(Config(context_size=2000, min_reply_tokens=8), context=fake)
-        w.begin("s")
+        w.begin(opened("s"))
         assert w.reply("hi").finish().text == "rep"
         assert fake.edit_count("cut" if can_shift else "restore") == 1
         w.reply("again").finish()

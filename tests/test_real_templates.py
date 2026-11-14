@@ -12,6 +12,8 @@ import re
 
 import pytest
 
+from tests.chat_messages import opened
+
 from llama_chat import ChatWrapper, Config
 from llama_chat.addon_files import addon_file, template_fingerprint
 from llama_chat.cache_context import TOOL_USE_TEMPLATE
@@ -134,7 +136,7 @@ def test_a_template_with_or_without_an_off_says_so_and_still_begins_without_reas
                        context=FakeContext(fixture(stem)))
     assert chat.capabilities(tools=False).can_reason
     assert chat.capabilities(tools=False).can_turn_off_reasoning == template.properties.can_turn_off_reasoning
-    chat.begin("", reasoning=False)             # nothing that works today is refused
+    chat.begin(opened(""), reasoning=False)             # nothing that works today is refused
 
 
 def _describes_a_call(template):
@@ -284,12 +286,12 @@ def test_an_add_on_files_call_format_makes_a_template_that_hides_its_call_callab
                               min_reply_tokens=8), context=without)
     assert not chat.capabilities(tools=True).can_call_tools
     with pytest.raises(ValueError, match="add-on file can say how it writes one"):
-        chat.begin("", tools=registry.specs())
+        chat.begin(opened(""), tools=registry.specs())
 
     context = FakeContext(known, ["Fine."])
     chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8), context=context)
     assert chat.capabilities(tools=True).can_call_tools
-    chat.begin("", tools=registry.specs())      # the whole chain is checked, and passes
+    chat.begin(opened(""), tools=registry.specs())      # the whole chain is checked, and passes
     # Read with the spelling the file gives.
     call = shipped_addon_call(known["chat_template"])
     written = "clock" + call["name_close"] + "{}"
@@ -421,10 +423,11 @@ def test_begin_refuses_exactly_what_capabilities_says_a_conversation_cannot_take
         capabilities = chat.capabilities(tools=uses_tools)
         tools = [WEATHER] if uses_tools else None
         for asked, accepted, field in (
-                (dict(system_prompt="s"), capabilities.can_take_system_prompt, "system_prompt"),
+                (dict(messages=[{"role": "system", "content": "s"}]),
+                 capabilities.can_take_system_prompt, "messages"),
                 (dict(reasoning=True), capabilities.can_reason, "reasoning"),
                 (dict(tools=tools), capabilities.can_call_tools or not uses_tools, "tools")):
-            given = {"system_prompt": "", "tools": [] if uses_tools else None, **asked}
+            given = {"tools": [] if uses_tools else None, **asked}
             try:
                 chat.begin(**given)
             except UnsupportedError as refused:

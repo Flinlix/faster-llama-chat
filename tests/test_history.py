@@ -1,13 +1,14 @@
 """A conversation begun from a history, tool turns included."""
 
+import json
+
 import pytest
 
 from llama_chat.config import Config
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from llama_chat.messages import as_messages
-from tests.chat_messages import Result, tool_turn
+from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
 from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS, TOOLS,
@@ -21,21 +22,21 @@ from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool
 def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     registry = weather_registry()
     live, fake = tool_wrapper(context_size=2048)
-    live.begin("persona", tools=registry.specs())
+    live.begin(opened("persona"), tools=registry.specs())
     live.reply("hallo").finish()
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     live.reply("wetter?", tool_call_policy=registry).finish()
     live.reply("danke").finish()
-    history = live.conversation()["messages"]
+    history = after_system(live.conversation()["messages"])
     assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant", "tool",
                                             "assistant", "user", "assistant"]
     assert history[3]["tool_calls"][0]["function"] == {"name": "weather",
-                                                       "arguments": {"city": "Bonn"}}
+                                                       "arguments": '{"city":"Bonn"}'}
 
     again, fake_again = tool_wrapper(context_size=2048)
-    again.begin("persona", history, tools=registry.specs())
+    again.begin(opened("persona", history), tools=registry.specs())
     assert fake_again.cache == fake.cache
-    assert again.conversation()["messages"] == history
+    assert after_system(again.conversation()["messages"]) == history
 
 
 def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reasoning():
@@ -48,16 +49,17 @@ def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reaso
                "<thought>Jetzt antworten</thought>Zwölf."]
     live_fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=list(replies))
     live = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=live_fake)
-    live.begin("persona", tools=registry.specs(), reasoning=True)
+    live.begin(opened("persona"), tools=registry.specs(), reasoning=True)
     live.reply("hallo").finish()
     add_tools(live, [later])
     live.reply("wie spät?", tool_call_policy=registry).finish()
     saved = live.conversation()
-    assert saved["system_prompt"] == "persona" and saved["reasoning"] is True
+    assert saved["messages"][0] == {"role": "system", "content": "persona"}
+    assert saved["reasoning"] is True
     assert [spec.name for spec in saved["tools"]] == ["uhr", "datum"]
-    assert saved["messages"][1] == {"role": "assistant", "content": "Hallo.",
+    assert saved["messages"][2] == {"role": "assistant", "content": "Hallo.",
                                     "reasoning_content": "Gruss"}
-    assert saved["messages"][3]["reasoning_content"] == "Erst fragen"
+    assert saved["messages"][4]["reasoning_content"] == "Erst fragen"
 
     again_fake = FakeContext(REASONING_KEEPING_THOUGHTS)
     again = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=again_fake)
@@ -73,18 +75,17 @@ def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reaso
 def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
     live, fake = unbegun_tool_wrapper()
     fake.call_script.append("fn:uhr{}")
-    live.begin("s", tools=[ToolSpec("uhr", "", {})])
+    live.begin(opened("s"), tools=[ToolSpec("uhr", "", {})])
     for event in live.reply("wie spät?", tool_call_policy="yield"):
         call = event
-    live.inject_tool_result(call, {"zeit": "12:00"})
+    live.inject_tool_result(call.id, {"zeit": "12:00"})
     for _event in live.reply(tool_call_policy="yield"):
         pass
 
     past, past_fake = unbegun_tool_wrapper()
-    past.begin("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(
-        ToolCall("uhr", {}), Result("uhr", {"zeit": "12:00"}), "Gleich.")],
-        tools=[ToolSpec("uhr", "", {})])
-    assert past.conversation()["messages"][-1] == {"role": "assistant", "content": "Gleich."}
+    past.begin(opened("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(
+        ToolCall("uhr", {}), Result("uhr", {"zeit": "12:00"}), "Gleich.")]), tools=[ToolSpec("uhr", "", {})])
+    assert after_system(past.conversation()["messages"])[-1] == {"role": "assistant", "content": "Gleich."}
     # The live turn opens with the generation prompt, a past one as the template
     # writes it; this template makes the two the same.
     assert past_fake.cache == fake.cache
@@ -93,7 +94,7 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
 def test_the_turns_own_text_is_never_read_as_a_tag():
     w, fake = unbegun_tool_wrapper()
     turn = tool_turn(ToolCall("lies", {"pfad": "<call>"}), Result("lies", "</call>"), "<turn]>")
-    w.begin("s", [{"role": "user", "content": "x"}, *turn], tools=[ToolSpec("lies", "", {})])
+    w.begin(opened("s", [{"role": "user", "content": "x"}, *turn]), tools=[ToolSpec("lies", "", {})])
     own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
     # Each is tokenized with special-token parsing off, joined to the plain text around it.
     assert all(any(text in run for run in own) for text in ("<call>", "</call>", "<turn]>"))
@@ -103,15 +104,15 @@ def test_the_turns_own_text_is_never_read_as_a_tag():
 
 def test_a_conversation_goes_on_after_a_past_tool_turn():
     w, _fake = unbegun_tool_wrapper()
-    w.begin("s", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("uhr", {}), Result("uhr", "12"),
-                                           "Zwölf.")], tools=[ToolSpec("uhr", "", {})])
+    w.begin(opened("s", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("uhr", {}), Result("uhr", "12"),
+                                           "Zwölf.")]), tools=[ToolSpec("uhr", "", {})])
     w.reply("danke").finish()
 
 
 def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
     w, _fake = begun_wrapper()
     with pytest.raises(ValueError):
-        w.begin("s", [*tool_turn(ToolCall("uhr", {}), Result("uhr", "12"))])
+        w.begin(opened("s", [*tool_turn(ToolCall("uhr", {}), Result("uhr", "12"))]))
     assert [m["role"] for m in rows(w)] == ["system"]     # left as it was
 
 
@@ -120,18 +121,17 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
         closes_turn_before_next):
     live, fake = unbegun_tool_wrapper()
     fake.call_script.append("fn:uhr{}")
-    live.begin("s", tools=[ToolSpec("uhr", "", {})])
+    live.begin(opened("s"), tools=[ToolSpec("uhr", "", {})])
     for event in live.reply("wie spät?", tool_call_policy="yield"):
         call = event
-    live.inject_tool_result(call, {"zeit": "12:00"})
+    live.inject_tool_result(call.id, {"zeit": "12:00"})
     for _event in live.reply(tool_call_policy="yield"):
         pass
 
     past, past_fake = (unbegun_tool_wrapper(TOOLS_CLOSING_OPEN_TURNS) if closes_turn_before_next
                        else unbegun_tool_wrapper())
-    past.begin("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("uhr", {}),
-                                                     Result("uhr", {"zeit": "12:00"}))],
-               tools=[ToolSpec("uhr", "", {})])
+    past.begin(opened("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("uhr", {}),
+                                                     Result("uhr", {"zeit": "12:00"}))]), tools=[ToolSpec("uhr", "", {})])
     *_, (_start, _n, want_logits) = past_fake.prefill_calls
     assert want_logits      # the reply is sampled straight from the read-in's end
     for _event in past.reply(tool_call_policy="yield"):
@@ -141,17 +141,17 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
 
 def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_the_same():
     live, fake = tool_wrapper()
-    live.begin("persona", tools=weather_registry().specs())
+    live.begin(opened("persona"), tools=weather_registry().specs())
     live.reply("hallo").finish()
     again, fake_again = tool_wrapper()
     again.begin(**live.conversation())
-    assert live.conversation()["system_prompt"] == "persona"
+    assert live.conversation()["messages"][0] == {"role": "system", "content": "persona"}
     assert fake_again.cache == fake.cache
 
 
 # ----- the id of every call --------------------------------------------------
 def _calls_in(history) -> list[ToolCall]:
-    return [ToolCall(call["function"]["name"], call["function"]["arguments"], call["id"])
+    return [ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"]), call["id"])
             for message in history for call in message.get("tool_calls", ())]
 
 
@@ -162,16 +162,16 @@ def _past_exchange(n: int) -> list:
 
 def test_every_call_has_an_id_the_history_and_the_reply_agree_on():
     w, fake = tool_wrapper(context_size=2048)
-    w.begin("persona", tools=weather_registry().specs())
+    w.begin(opened("persona"), tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     handed, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert handed.id and w.pending_calls == [handed]
-    w.inject_tool_result(handed, {"celsius": 18})
+    w.inject_tool_result(handed.id, {"celsius": 18})
     w.reply(tool_call_policy="yield").finish()
     fake.call_script = ["fn:weather{city:'Rom'}"]
     reply = w.reply("und in Rom?", tool_call_policy=weather_registry()).finish()
 
-    held = _calls_in(w.conversation()["messages"])
+    held = _calls_in(after_system(w.conversation()["messages"]))
     assert held[0] == handed and held[1] == reply.tool_calls[0]
     assert len({call.id for call in held}) == 2
 
@@ -180,9 +180,9 @@ def test_a_call_after_a_begin_that_shortened_the_history_gets_an_id_of_its_own()
     """The kept calls carry the ids they were written with; a new one must take none of them."""
     history = [item for n in range(6) for item in _past_exchange(n)]
     w, fake = unbegun_tool_wrapper()
-    kept = w.begin("s", history, tools=[ToolSpec("uhr", "", {})]).n_kept_messages
+    kept = w.begin(opened("s", history), tools=[ToolSpec("uhr", "", {})]).n_kept_messages
     assert kept < len(history)
-    ids = {call.id for call in _calls_in(w.conversation()["messages"])}
+    ids = {call.id for call in _calls_in(after_system(w.conversation()["messages"]))}
     fake.call_script.append("fn:uhr{}")
     handed, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert handed.id and handed.id not in ids
@@ -191,11 +191,11 @@ def test_a_call_after_a_begin_that_shortened_the_history_gets_an_id_of_its_own()
 def test_a_conversation_begun_again_keeps_the_ids_of_its_calls():
     history = [item for n in range(2) for item in _past_exchange(n)]
     w, _ = unbegun_tool_wrapper()
-    w.begin("s", history, tools=[ToolSpec("uhr", "", {})])
+    w.begin(opened("s", history), tools=[ToolSpec("uhr", "", {})])
     again, fake = unbegun_tool_wrapper()
     again.begin(**w.conversation())
     assert again.conversation() == w.conversation()
-    ids = {call.id for call in _calls_in(w.conversation()["messages"])}
+    ids = {call.id for call in _calls_in(after_system(w.conversation()["messages"]))}
     fake.call_script.append("fn:uhr{}")
     handed, = [e for e in again.reply("wie spät?", tool_call_policy="yield")
                if isinstance(e, ToolCall)]
@@ -208,29 +208,32 @@ def test_a_history_that_gives_one_id_to_two_calls_is_refused():
                                       ToolCall("uhr", {}, id="eins"), Result("uhr", "2"),
                                       "Fertig.")]
     with pytest.raises(ValueError, match="'eins'"):
-        w.begin("s", twice, tools=[ToolSpec("uhr", "", {})])
+        w.begin(opened("s", twice), tools=[ToolSpec("uhr", "", {})])
 
 
 # ----- what a caller is handed ---------------------------------------------
 def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     w, fake = tool_wrapper()
-    w.begin("persona", tools=weather_registry().specs())
+    w.begin(opened("persona"), tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
-    w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"]["city"] = "Rom"
-    assert w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] == {"city": "Bonn"}
+    w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] = '{"city":"Rom"}'
+    assert w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] \
+        == '{"city":"Bonn"}'
     again, _ = tool_wrapper()
-    again.begin("persona", w.conversation()["messages"], tools=weather_registry().specs())
+    given = w.conversation()["messages"]
+    again.begin(given, tools=weather_registry().specs())
+    given[-1]["content"] = "changed"
     pending_calls_held(again)[0].arguments["city"] = "Rom"
-    assert again.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] == {"city": "Bonn"}
+    assert again.conversation()["messages"] == w.conversation()["messages"]
 
 
 def test_the_conversation_reads_back_as_begin_takes_it():
     w, _ = tool_wrapper()
-    w.begin("eins", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
-    assert w.conversation() == {"system_prompt": "eins",
-                                "messages": [{"role": "user", "content": "a"},
+    w.begin(opened("eins", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
+    assert w.conversation() == {"messages": [{"role": "system", "content": "eins"},
+                                             {"role": "user", "content": "a"},
                                              {"role": "assistant", "content": "b"}],
                                 "tools": None, "reasoning": False, "generated_turns": None}
     again, _ = tool_wrapper()
@@ -238,43 +241,16 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     assert again.conversation() == w.conversation()
 
 
-def test_a_result_that_answers_no_call_owed_one_is_refused():
-    call, question = ToolCall("clock", {}), {"role": "user", "content": "q"}
-    with pytest.raises(ValueError, match="answers no call"):
-        as_messages([question, *tool_turn(Result("clock", "12:00"))])
-    with pytest.raises(ValueError, match="answers no call"):
-        as_messages([question, *tool_turn(call, Result("clock", "12:00"), Result("clock", "12:01"))])
-    as_messages([question, *tool_turn("Let me look.", call, Result("clock", "12:00"), "It is noon.")])
-
-
-def test_a_result_out_of_order_or_naming_another_function_is_refused():
-    turn = tool_turn(ToolCall("clock", {}, "c1"), ToolCall("date", {}, "c2"),
-                     Result("clock", "12:00"), Result("date", "1.1."))
-    turn[1]["tool_call_id"] = "c2"
-    with pytest.raises(ValueError, match="order of their calls"):
-        as_messages([{"role": "user", "content": "q"}, *turn])
-    turn[1].update(tool_call_id="c1", name="date")
-    with pytest.raises(ValueError, match="names the function 'date'"):
-        as_messages([{"role": "user", "content": "q"}, *turn])
-
-
-def test_a_reply_between_a_call_and_its_result_is_refused():
-    with pytest.raises(ValueError, match="before its result"):
-        as_messages([{"role": "user", "content": "q"}, *tool_turn(ToolCall("clock", {})), {"role": "assistant", "content": "Gleich."},
-                     *tool_turn(Result("clock", "12:00"))])
-
-
-# ----- the forms a history message takes ------------------------------------
 @pytest.mark.parametrize("item, error, cause", [
     (("user", "Hallo"), TypeError, "chat message dictionary"),
     ({"role": "human", "content": "Hallo"}, ValueError, "'human'"),
-    ({"role": "system", "content": "Sei kurz."}, ValueError, "begin"),
+    ({"role": "system", "content": "Sei kurz."}, ValueError, "only open"),
     ({"role": "tool", "content": "12:00"}, ValueError, "tool call"),
     ({"role": "user"}, ValueError, "content"),
     ({"role": "user", "content": "Hallo", "name": "Ada"}, ValueError, "'name'"),
     ({"role": "user", "content": "Hallo", "reasoning_content": "x"}, ValueError,
-     "may hold \\[\\]"),
-    ("Hallo", TypeError, "str"),
+     "'reasoning_content'"),
+    ("Hallo", TypeError, "chat message dictionary"),
     (("user", "Hallo", "zu viel"), TypeError, "tuple"),
 ], ids=["pair", "unknown-role", "system", "result-without-tools", "no-content", "other-key",
         "thought-of-a-question", "bare-text", "three-values"])
@@ -283,14 +259,14 @@ def test_a_history_message_of_another_form_or_role_is_refused_naming_it(item, er
     w.reply("eins").finish()
     before, held = w.conversation(), list(fake.cache)
     with pytest.raises(error, match=cause):
-        w.begin("s", [{"role": "user", "content": "a"}, item])
+        w.begin(opened("s", [{"role": "user", "content": "a"}, item]))
     assert w.conversation() == before and fake.cache == held      # left as it was
 
 
 def test_a_tool_turn_closed_by_an_empty_answer_begins_again_closed():
     registry = weather_registry()
     live, _ = tool_wrapper(context_size=2048, replies=[ScriptedCall("fn:weather{city:'Bonn'}"), ""])
-    live.begin("persona", tools=registry.specs())
+    live.begin(opened("persona"), tools=registry.specs())
     live.reply("wetter?", tool_call_policy=registry).finish()
     assert not live.turn_open
     saved = live.conversation()
@@ -306,54 +282,51 @@ def test_a_call_left_without_a_result_before_a_later_question_stays_in_its_place
     history = [{"role": "user", "content": "wetter?"}, *tool_turn(ToolCall("weather", {"city": "Bonn"})),
                {"role": "user", "content": "egal, danke"}]
     live, _ = tool_wrapper(context_size=2048)
-    live.begin("persona", history, tools=registry.specs())
+    live.begin(opened("persona", history), tools=registry.specs())
     assert not live.turn_open
     live.reply().finish()
     saved = live.conversation()
-    assert saved["messages"][1:2] == tool_turn(ToolCall("weather", {"city": "Bonn"}, "call00000"))
-    assert [m["role"] for m in saved["messages"]] == ["user", "assistant", "user", "assistant"]
+    assert saved["messages"][2] == {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "call00000", "type": "function",
+         "function": {"name": "weather", "arguments": '{"city":"Bonn"}'}}]}
+    assert [m["role"] for m in saved["messages"]] == ["system", "user", "assistant", "user",
+                                                      "assistant"]
     again, _ = tool_wrapper(context_size=2048)
     again.begin(**saved)
     assert again.conversation() == saved
 
 
 def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
-    """Within one wrapper no two calls share an id, whether made by the model or given to begin without one."""
+    """Within one wrapper no two calls share an id, a call the model makes after a begin included."""
     from tests.invented_templates import TOOLS
     registry = weather_registry()
     fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=2048, evict_above_fraction=0.9, max_history_exchanges=1),
                     context=fake)
-    w.begin("persona", tools=registry.specs())
+    w.begin(opened("persona"), tools=registry.specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     seen = {call.id for call in w.reply("wetter?", tool_call_policy=registry).finish().tool_calls}
     w.reply("hallo").finish()
-    assert not _calls_in(w.conversation()["messages"])     # the tool turn was evicted
+    assert not _calls_in(after_system(w.conversation()["messages"]))     # the tool turn was evicted
     w.begin(**w.conversation())
     fake.call_script = ["fn:weather{city:'Rom'}"]
     made, = w.reply("und Rom?", tool_call_policy=registry).finish().tool_calls
     assert made.id not in seen
-    seen.add(made.id)
-    w.begin("persona", [{"role": "user", "content": "a"}, *tool_turn(ToolCall("weather", {"city": "Ulm"}),
-                                                 Result("weather", "kalt"), "Kalt.")],
-            tools=registry.specs())
-    given, = _calls_in(w.conversation()["messages"])
-    assert given.id not in seen
 
 
 def test_begin_counts_the_messages_kept_and_a_reply_after_a_result_closes_its_turn():
     history = [{"role": "user", "content": "x"}, *tool_turn(ToolCall("uhr", {}), Result("uhr", "12")),
                {"role": "assistant", "content": "Zwölf."}]
     w, _ = unbegun_tool_wrapper()
-    assert w.begin("s", history, tools=[ToolSpec("uhr", "", {})]).n_kept_messages == len(history)
-    assert [m["role"] for m in w.conversation()["messages"]] == ["user", "assistant", "tool",
+    assert w.begin(opened("s", history), tools=[ToolSpec("uhr", "", {})]).n_kept_messages == len(history)
+    assert [m["role"] for m in after_system(w.conversation()["messages"])] == ["user", "assistant", "tool",
                                                                   "assistant"]
     assert not w.turn_open
     w, _ = unbegun_tool_wrapper()
     longer = [item for n in range(6) for item in _past_exchange(n)] + history
-    kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})]).n_kept_messages
+    kept = w.begin(opened("s", longer), tools=[ToolSpec("uhr", "", {})]).n_kept_messages
     assert 3 <= kept < len(longer)
-    assert w.conversation()["messages"][0] == longer[-kept]
+    assert after_system(w.conversation()["messages"])[0] == longer[-kept]
 
 
 @pytest.mark.parametrize("context_size", [4096, 8192])
@@ -361,21 +334,11 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
         context_size):
     fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=context_size), context=fake)
-    w.begin("sys", [m for _ in range(4000) for m in ({"role": "user", "content": "ok"}, {"role": "assistant", "content": "fine"})])
+    w.begin(opened("sys", [m for _ in range(4000) for m in ({"role": "user", "content": "ok"}, {"role": "assistant", "content": "fine"})]))
     before = len(fake.rendered)
     reply = w.reply("z" * int(context_size * 0.6)).finish()
     # Dropping hundreds of exchanges costs a few renders, not one each.
     assert reply.n_evicted_messages > 100 and len(fake.rendered) - before < 40
-
-
-@pytest.mark.parametrize("history, named", [
-    ([{"role": "user", "content": "q"}, 42], "int"),
-    ([{"role": "user", "content": "q"}, *tool_turn(ToolCall("clock", ["not", "a", "dict"]), Result("clock", "1"))],
-     "arguments"),
-])
-def test_a_history_item_or_call_of_another_type_is_refused_naming_it(history, named):
-    with pytest.raises(TypeError, match=named):
-        as_messages(history)
 
 
 def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is():
@@ -383,8 +346,7 @@ def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is(
         fake = FakeContext(TOOLS)
         w = ChatWrapper(Config(context_size=32768), context=fake)
         before = len(fake.rendered)
-        kept = w.begin("sys", [m for i in range(n) for m in ({"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"})]
-                       ).n_kept_messages
+        kept = w.begin(opened("sys", [m for i in range(n) for m in ({"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"})])).n_kept_messages
         assert kept == 2 * n
         return len(fake.rendered) - before
 
@@ -397,36 +359,73 @@ def test_a_history_whose_older_exchanges_are_long_is_not_rendered_whole_at_begin
     history = [m for i in range(300) for m in ({"role": "user", "content": f"q{i} " + "x" * 2000}, {"role": "assistant", "content": f"a{i}"})]
     history += [{"role": "user", "content": "thanks"}, {"role": "assistant", "content": "you are welcome"}, {"role": "user", "content": "bye"}, {"role": "assistant", "content": "bye"}]
     before = len(fake.rendered)
-    w.begin("sys", history)
+    w.begin(opened("sys", history))
     assert max(fake.rendered[before:]) < 100     # never near the 604 messages of the whole
 
 
-def test_an_unreadable_call_with_a_name_is_refused_and_one_beside_other_calls_is_taken():
-    named = tool_turn(ToolCall("", {}, status="unreadable"), Result("unknown", "e"))
-    named[0]["tool_calls"][0]["function"] = {"name": "weather", "arguments": {"city": "Bonn"}}
-    with pytest.raises(ValueError, match="no name or arguments"):
-        as_messages([{"role": "user", "content": "q"}, *named])
-    # An entry of a batch the model wrote unreadably stands beside the calls it could read.
-    as_messages([{"role": "user", "content": "q"}, *tool_turn(ToolCall("weather", {}), ToolCall("", {}, status="unreadable"),
-                                           Result("weather", "r"), Result("unknown", "e"))])
-
-
-def test_a_history_cannot_leave_an_unreadable_call_owed():
+def test_a_history_may_leave_a_call_that_could_not_be_read_owed_and_it_is_left_out():
     w, _fake = tool_wrapper(context_size=2048)
-    with pytest.raises(ValueError, match="cannot leave one owed"):
-        w.begin("persona", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("", {}, status="unreadable", text="t"))])
+    w.begin(opened("persona", [{"role": "user", "content": "x"},
+                               *tool_turn(ToolCall("", {}, status="unreadable", text="t"))]),
+            tools=weather_registry().specs())
+    assert not w.turn_open and w.awaits_reply
+    assert after_system(w.conversation()["messages"]) == [{"role": "user", "content": "x"}]
+    assert w.begin(opened("persona", [{"role": "user", "content": "x"}, *tool_turn(
+        ToolCall("", {}, status="unreadable", text="t"))]),
+        tools=weather_registry().specs()).n_left_out_calls == 1
 
 
 @pytest.mark.parametrize("turns", [
     {"turns": []},
-    {"model": "m", "turns": [{"tokens": [1], "message_count": 2}]},
-    {"model": "m", "turns": [{"tokens": ["x"], "message_count": 2, "digest": "d"}]},
+    {"model": "m", "turns": [{"tokens": [1], "span": 1, "messages": [], "count": 2}]},
+    {"model": "m", "turns": [{"tokens": ["x"], "span": 1, "count": 2, "digest": "d",
+                              "messages": [{"role": "assistant", "content": ""}]}]},
+    {"model": "m", "turns": [{"tokens": [1], "span": 1, "count": 2, "digest": "d",
+                              "messages": [{"role": "user", "content": "q"}]}]},
+    {"model": "m", "turns": [{"tokens": [1], "span": 2, "count": 2, "digest": "d",
+                              "messages": [{"role": "assistant", "content": ""}]}]},
     {"model": "m", "turns": "none"},
-], ids=["no-model", "no-digest", "tokens-of-text", "turns-not-a-list"])
+], ids=["no-model", "no-digest", "tokens-of-text", "a-question-held", "span-past-its-messages",
+        "turns-not-a-list"])
 def test_generated_turns_not_as_a_conversation_gives_them_are_refused_naming_them(turns):
     w, fake = begun_wrapper()
     before, held = w.conversation(), list(fake.cache)
     with pytest.raises(ValueError) as refused:
-        w.begin("s", [{"role": "user", "content": "a"}], generated_turns=turns)
+        w.begin(opened("s", [{"role": "user", "content": "a"}]), generated_turns=turns)
     assert refused.value.field == "generated_turns"
     assert w.conversation() == before and fake.cache == held
+
+
+def test_a_begin_takes_back_a_conversation_whose_result_was_cut_and_cuts_a_long_one_itself():
+    """A begin gives the newest exchange the room a running conversation gives it."""
+    from tests.invented_templates import JSON_TOOLS
+    clock = ToolSpec("clock", "time", {"type": "object", "properties": {}})
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=600), context=fake)
+    w.begin(opened("persona"), tools=[clock])
+    fake.call_script = ['[{"name": "clock", "arguments": {}}]']
+    list(w.reply("wie spät?", tool_call_policy="yield"))
+    assert w.inject_tool_result(w.pending_calls[0].id, "x" * 5000).tool_results_cut
+    saved = w.conversation()
+    again = ChatWrapper(Config(context_size=600), context=FakeContext(JSON_TOOLS))
+    again.begin(**saved)
+    assert again.conversation() == saved
+    whole = [*saved["messages"][:-1], {**saved["messages"][-1], "content": "x" * 5000}]
+    report = again.begin(whole, tools=[clock])
+    assert [call.name for call in report.tool_results_cut] == ["clock"]
+    assert again.conversation()["messages"][-1]["content"].endswith("characters kept)")
+    again.reply().finish()
+
+
+def test_a_call_whose_arguments_are_no_object_is_left_out_and_a_later_result_for_it_refused():
+    w, _ = unbegun_tool_wrapper()
+    history = [{"role": "user", "content": "wie spät?"},
+               {"role": "assistant", "content": None, "tool_calls": [
+                   {"id": "kaputt", "type": "function",
+                    "function": {"name": "uhr", "arguments": "{nicht json"}}]}]
+    report = w.begin(opened("s", history), tools=[ToolSpec("uhr", "", {})])
+    assert report.n_left_out_calls == 1 and not w.turn_open and w.awaits_reply
+    with pytest.raises(ValueError, match="'kaputt' could not be read") as refused:
+        w.inject_tool_result("kaputt", "12:00")
+    assert refused.value.field == "call_id"
+    w.reply().finish()                  # the question is answered all the same

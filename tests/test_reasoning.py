@@ -5,6 +5,8 @@ import sys
 
 import pytest
 
+from tests.chat_messages import opened
+
 from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
@@ -31,10 +33,10 @@ def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
 def test_a_model_without_a_switch_refuses_to_reason_and_keeps_its_conversation():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
                     context=FakeContext(PLAIN))
-    w.begin("s", [{"role": "user", "content": "hi"}])
+    w.begin(opened("s", [{"role": "user", "content": "hi"}]))
     assert not w.capabilities(tools=False).can_reason
     with pytest.raises(ValueError, match="reasoning"):
-        w.begin("t", reasoning=True)
+        w.begin(opened("t"), reasoning=True)
     assert [m["text"] for m in rows(w)] == ["s", "hi"]
 
 
@@ -55,7 +57,7 @@ def test_a_conversation_that_reasons_opens_its_system_turn_with_the_switch():
 def test_with_tools_declared_the_switch_is_rendered_with_them():
     w, fake = reasoning_wrapper()
     specs = [ToolSpec("uhr", "", {})]
-    w.begin("s", tools=specs, reasoning=True)
+    w.begin(opened("s"), tools=specs, reasoning=True)
     assert THINK_ON in system_turn(fake) and "<decl>uhr</decl>" in system_turn(fake)
 
 
@@ -102,7 +104,7 @@ def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
         ScriptedCall("fn:uhr{}", before="<thought>Erst fragen</thought>"),
         "<thought>Jetzt antworten</thought>Zwölf."])
     w = ChatWrapper(Config(context_size=1000, evict_above_fraction=1.0), context=fake)
-    w.begin("s", tools=registry.specs(), reasoning=True)
+    w.begin(opened("s"), tools=registry.specs(), reasoning=True)
     reply = w.reply("wie spät?", tool_call_policy=registry).finish()
     assert reply.text == "Zwölf."
     assert reply.thought == "Erst fragen\n\nJetzt antworten"
@@ -127,10 +129,10 @@ def test_the_eviction_after_a_reply_is_sized_by_the_past_reply():
 def test_a_reply_that_called_a_tool_is_kept_as_generated():
     w, fake = reasoning_wrapper()
     fake.call_script.append("fn:uhr{}")
-    w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=True)
+    w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})], reasoning=True)
     for event in w.reply("wie spät?", tool_call_policy="yield"):
         call = event
-    w.inject_tool_result(call, {"zeit": "12:00"})
+    w.inject_tool_result(call.id, {"zeit": "12:00"})
     generated = list(fake.cache)
     for _event in w.reply(tool_call_policy="yield"):
         pass
@@ -183,10 +185,10 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     """Nothing is added after the result: the template's wrapping ends the turn as it ends it."""
     w, fake = reasoning_wrapper(reasoning, gen_text="ok", gen_tokens=2)
     fake.call_script.append("fn:uhr{}")
-    w.begin("s", tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
+    w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
     for event in w.reply("wie spät?", tool_call_policy="yield"):
         call = event
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     before = len(fake.cache)
     list(w.reply(tool_call_policy="yield"))
     assert fake.cache[before:before + 2] == fake.tokenize("ok")
@@ -313,7 +315,7 @@ def test_a_wrapper_takes_reasoning_on_from_the_add_on_file_next_to_the_model(tmp
     fake = FakeContext(_DEFAULT_WITHOUT_THOUGHT)
     w = ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
                            evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "hi"}], reasoning=True)
+    w.begin(opened("s", [{"role": "user", "content": "hi"}]), reasoning=True)
     assert held_text(fake).endswith("<|assistant_says|><reason>")
 
 

@@ -118,7 +118,8 @@ def main() -> None:
 def begin(chat, system_prompt, history=None):
     """Begin with ``system_prompt``, or without one where the model's template has no system turn."""
     takes_system = chat.capabilities(tools=False).can_take_system_prompt
-    return chat.begin(system_prompt if takes_system else "", history)
+    system = [{"role": "system", "content": system_prompt}] if takes_system else []
+    return chat.begin(system + list(history or []))
 
 
 if __name__ == "__main__":

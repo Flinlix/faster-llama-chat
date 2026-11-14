@@ -4,6 +4,8 @@ from dataclasses import fields
 
 import pytest
 
+from tests.chat_messages import opened
+
 from llama_chat.config import (KV_CACHE_TYPES, UNQUANTIZED_KV_CACHE_TYPE, Config,
                                InvalidSettingError, Sampling, with_request_sampling)
 
@@ -147,7 +149,7 @@ def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
     from tests.fake_context import FakeContext
     from tests.invented_templates import PLAIN
     wrapper = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN))
-    wrapper.begin("s")
+    wrapper.begin(opened("s"))
     with pytest.raises(InvalidSettingError) as refused:
         wrapper.reply("hi", max_reply_tokens=cap)
     assert refused.value.field == "max_reply_tokens"

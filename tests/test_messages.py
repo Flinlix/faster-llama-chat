@@ -1,11 +1,15 @@
-"""A history as begin takes it, and as the messages a template is given."""
+"""A history in the Chat Completions form begin takes, as the messages a template is given, and back."""
 
 import itertools
 
-from llama_chat.messages import (as_history, as_messages, call_id, exchange_count,
-                                 exchange_starts, next_call_number)
+import pytest
+
+from llama_chat.history_forms import (answer_in_order, completions_messages, read_messages,
+                                      without_unreadable)
+from llama_chat.messages import (UNREADABLE_CALL, call_id, exchange_count, exchange_starts,
+                                 history_count, next_call_number)
 from llama_chat.tools import ToolCall
-from tests.chat_messages import Result, tool_turn
+from tests.chat_messages import Result, opened, tool_turn
 
 
 def test_kept_history_opens_on_each_user_turn():
@@ -29,51 +33,125 @@ def test_an_exchange_is_what_an_eviction_drops_at_once():
 
 
 _QUESTION = {"role": "user", "content": "q"}
+_HISTORIES = [
+    [_QUESTION, {"role": "assistant", "content": "a"}],
+    [{"role": "system", "content": "s"}, _QUESTION, {"role": "assistant", "content": "a"}],
+    [{"role": "system", "content": ""}, _QUESTION],
+    [_QUESTION, {"role": "assistant", "content": "a", "reasoning_content": "t"}],
+    [_QUESTION, *tool_turn("Let me look.", ToolCall("a", {"x": 1, "b": [2]}), Result("a", "1"), "ok")],
+    [_QUESTION, *tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
+                          Result("b", "2"), "ok")],
+    [_QUESTION, *tool_turn(ToolCall("a", {}))],                       # still owed a result
+    [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1"))],     # open after it
+    # Left without a result, or without a reply after it, before a later question.
+    [_QUESTION, *tool_turn(ToolCall("a", {})), _QUESTION, {"role": "assistant", "content": "a"}],
+    [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1")), _QUESTION,
+     *tool_turn(ToolCall("b", {}), Result("b", "2"), "ok")],
+]
 
 
-def test_every_history_comes_back_as_it_went_in():
-    histories = [
-        [_QUESTION, {"role": "assistant", "content": "a"}],
-        [_QUESTION, {"role": "assistant", "content": "a", "reasoning_content": "t"}],
-        [_QUESTION, *tool_turn("Let me look.", ToolCall("a", {"x": 1}), Result("a", "1"), "ok")],
-        [_QUESTION, *tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
-                              Result("b", "2"), "ok")],
-        [_QUESTION, *tool_turn(ToolCall("a", {}))],                  # still owed a result
-        [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1"))],    # open after it
-        # Left without a result, or without a reply after it, before a later question.
-        [_QUESTION, *tool_turn(ToolCall("a", {})), _QUESTION, {"role": "assistant", "content": "a"}],
-        [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1")), _QUESTION,
-         *tool_turn(ToolCall("b", {}), Result("b", "2"), "ok")],
-    ]
-    for history in histories:
-        back = as_history(as_messages(history))
-        # Each call comes back with the id it was given, and goes in again under it.
-        assert [_without_ids(item) for item in back] == history
-        assert as_history(as_messages(back)) == back
+def _read(history):
+    return answer_in_order(read_messages(history), "")
 
 
-def test_a_message_given_as_a_pair_comes_back_as_its_dictionary():
-    pairs = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
-    assert as_history(as_messages(pairs)) == [_QUESTION, {"role": "assistant", "content": "a"}]
-    assert all(isinstance(item, dict) for item in as_history(as_messages(pairs)))
+@pytest.mark.parametrize("history", [opened("", h) for h in _HISTORIES])
+def test_every_history_in_the_form_comes_back_unchanged_but_for_the_spelling_of_arguments(history):
+    back = completions_messages(_read(history), joins_questions=False)
+    assert back == [_normalized(m) for m in history]
+    assert completions_messages(_read(back), joins_questions=False) == back
 
 
-def _without_ids(message):
-    """``message`` as it was given: its calls without the ids they were given, a result without the call and function it answers."""
-    if message["role"] == "tool":
-        return {key: value for key, value in message.items() if key not in ("tool_call_id", "name")}
-    if "tool_calls" not in message:
+def _normalized(message):
+    """``message`` as the form gives it back: arguments compact, a reply that makes calls and says nothing null."""
+    if not message.get("tool_calls"):
         return message
-    return {**message, "tool_calls": [{key: value for key, value in call.items() if key != "id"}
-                                      for call in message["tool_calls"]]}
+    calls = [{**c, "function": {**c["function"], "arguments": c["function"]["arguments"]
+                                .replace(", ", ",").replace(": ", ":")}}
+             for c in message["tool_calls"]]
+    return {**message, "content": message["content"] or None, "tool_calls": calls}
 
 
-def test_each_result_of_a_batch_answers_its_own_call():
-    turn = tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
-                     Result("b", "2"), "ok")
-    messages = as_messages([{"role": "user", "content": "q"}, *turn])
-    calls = [call["id"] for m in messages for call in m.get("tool_calls", [])]
-    assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == calls
+def test_each_result_answers_its_own_call_and_is_named_for_it():
+    turn = tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"), Result("b", "2"), "ok")
+    messages = _read(opened("", [_QUESTION, *turn]))
+    calls = [(c["id"], c["function"]["name"]) for m in messages for c in m.get("tool_calls", [])]
+    assert [(m["tool_call_id"], m["name"]) for m in messages if m["role"] == "tool"] == calls
+
+
+def _call(arguments, name="f", call="call00000"):
+    return [_QUESTION, {"role": "assistant", "content": None, "tool_calls": [
+        {"id": call, "type": "function", "function": {"name": name, "arguments": arguments}}]}]
+
+
+@pytest.mark.parametrize("arguments, reads", [
+    ('{"x":1}', {"x": 1}), ('{ "x" : 1 }', {"x": 1}), ("", {}), ("{}", {}),
+    ("null", None), ("  ", None), ("[1]", None), ('"x"', None), ("{", None), ("not json", None)])
+def test_arguments_that_are_no_json_object_make_a_call_that_could_not_be_read(arguments, reads):
+    call, = read_messages(_call(arguments))[1]["tool_calls"]
+    if reads is None:
+        assert UNREADABLE_CALL in call and call["id"] == "call00000"
+    else:
+        assert UNREADABLE_CALL not in call and call["function"]["arguments"] == reads
+
+
+def test_a_call_that_could_not_be_read_is_left_out_with_its_result_and_its_id_given():
+    history = [*_call("{"), {"role": "tool", "tool_call_id": "call00000", "content": "r"},
+               {"role": "assistant", "content": "a"}]
+    kept, gone = without_unreadable(read_messages(history), set(), joins_questions=False)
+    assert kept == [_QUESTION, {"role": "assistant", "content": "a"}] and gone == {"call00000"}
+
+
+def test_an_unreadable_call_owed_next_is_answered_and_one_behind_a_readable_call_waits():
+    unreadable = {"id": "call00001", "type": "function", UNREADABLE_CALL: True,
+                  "function": {"name": "unknown", "arguments": {}}}
+    readable = {"id": "call00000", "type": "function", "function": {"name": "f", "arguments": {}}}
+    calling = {"role": "assistant", "content": "", "tool_calls": [unreadable, readable]}
+    answered = answer_in_order([_QUESTION, calling], "failed")
+    assert [m.get("tool_call_id") for m in answered] == [None, None, "call00001"]
+    waiting = {**calling, "tool_calls": [readable, unreadable]}
+    assert answer_in_order([_QUESTION, waiting], "failed") == [_QUESTION, waiting]
+
+
+@pytest.mark.parametrize("history, cause", [
+    ([{"role": "developer", "content": "s"}], "role"),
+    ([{"role": "user", "content": [{"type": "text", "text": "q"}]}], "list of parts"),
+    ([{"role": "user", "content": "q", "name": "n"}], "'name'"),
+    ([_QUESTION, {"role": "system", "content": "s"}], "only open"),
+    ([_QUESTION, {"role": "assistant", "content": "a", "refusal": None}], "'refusal'"),
+    ([_QUESTION, {"role": "assistant", "content": None}], "null"),
+    (_call("{}", call=""), "'id'"),
+    ([*_call("{}")[:1], {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c", "type": "custom", "custom": {"name": "f", "input": "x"}}]}], "'custom'"),
+    ([*_call("{}"), {"role": "tool", "content": "r"}], "tool_call_id"),
+    ([*_call("{}"), {"role": "tool", "tool_call_id": "call00000", "content": 18}], "result of"),
+    ([*_call("{}"), {"role": "tool", "tool_call_id": "call00000", "name": "f", "content": "r"}],
+     "'name'"),
+])
+def test_what_the_form_holds_otherwise_is_refused_naming_the_field(history, cause):
+    with pytest.raises(ValueError, match=cause):
+        _read(history)
+
+
+@pytest.mark.parametrize("history, cause", [
+    ([{"role": "user", "content": 5}], "messages\\[0\\].content"),
+    (["user"], "messages\\[0\\]"),
+    (_call({"x": 1}), "arguments"),
+])
+def test_a_value_of_another_type_is_refused_naming_where_it_stands(history, cause):
+    with pytest.raises(TypeError, match=cause):
+        _read(history)
+
+
+@pytest.mark.parametrize("history, cause", [
+    ([*_call("{}"), {"role": "tool", "tool_call_id": "other", "content": "r"}], "before the result"),
+    ([_QUESTION, {"role": "tool", "tool_call_id": "c", "content": "r"}], "answers no call"),
+    ([*_call("{}"), {"role": "assistant", "content": "a"}], "before its result"),
+    ([*_call("{}"), {"role": "tool", "tool_call_id": "call00000", "content": "r"},
+      *_call("{}")], "two calls"),
+])
+def test_results_out_of_the_order_of_their_calls_are_refused(history, cause):
+    with pytest.raises(ValueError, match=cause):
+        _read(history)
 
 
 def test_every_call_id_of_a_long_conversation_is_nine_letters_and_digits_and_new():
@@ -92,20 +170,10 @@ def test_ids_from_a_history_never_push_the_next_one_past_nine_characters():
                                                                   "callbacks"}
 
 
-def test_the_count_of_history_messages_is_what_reading_the_history_back_gives():
-    import itertools
-
-    from llama_chat.messages import as_history, history_count
-
-    calling = {"role": "assistant", "content": "", "tool_calls": [
-        {"id": "call00000", "type": "function", "function": {"name": "f", "arguments": {}}}]}
-    kinds = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}, calling,
-             {"role": "tool", "name": "f", "tool_call_id": "call00000", "content": "r"},
+def test_the_count_of_history_messages_leaves_out_only_the_system_message():
+    kinds = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"},
+             {"role": "tool", "name": "f", "tool_call_id": "c", "content": "r"},
              {"role": "system", "content": "s"}]
-    for length in range(6):
+    for length in range(5):
         for messages in itertools.product(kinds, repeat=length):
-            try:
-                history = as_history(list(messages))
-            except ValueError:
-                continue                # a result before its call is no history
-            assert history_count(list(messages)) == len(history)
+            assert history_count(list(messages)) == sum(m["role"] != "system" for m in messages)

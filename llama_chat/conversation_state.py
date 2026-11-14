@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, replace
+import copy
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 
 from .rendering import KeptTurn
 from .tools import ToolCall, ToolSpec
@@ -84,6 +85,14 @@ class ConversationState:
     # decoded for: the conversation with the question newest, and the cache after them.
     spliced_at: tuple[int, list[int], MadeFor] | None = None
     begun: bool = False
+    # What a call that could not be read is answered with, as the newest reply was told.
+    unreadable_result: dict | None = None
+    # The ids of the calls a begin left out as unreadable, which no result answers.
+    left_out_calls: frozenset[str] = frozenset()
+    # The policy the newest turn was started with, and the calls it may still run, which a
+    # reply going on with it keeps; the wrapper's own, kept here to be put back with the rest.
+    turn_policy: object = None
+    turn_budget: object = None
     # What the actions since the caller last asked changed beyond what was asked.
     changes: Changes = field(default_factory=Changes)
 
@@ -109,8 +118,8 @@ class Snapshot:
 class Published:
     """The conversation as the newest finished change left it, for readers that hold no lock."""
 
-    system_prompt: str = ""
-    history: tuple = ()
+    messages: tuple = ()                  # as the template is given them; never changed in place
+    joins_questions: bool = False         # whether two questions in a row are written as one
     tools: tuple | None = None            # None where it is not written with the template for tools
     reasoning: bool = False
     pending_calls: tuple = ()
@@ -118,8 +127,6 @@ class Published:
     turn_open: bool = False
     newest_role: str | None = None
     total_tokens: int = 0
-    # Each kept turn's tokens, how many messages it covers, and their portable digest.
-    kept: tuple = ()
     # The model's fingerprint, where a turn is kept: what the kept turns' tokens are valid for.
     model: str | None = None
 
@@ -132,6 +139,8 @@ def copied_value(value):
         return dict(value)
     if isinstance(value, Changes):
         return replace(value, tool_results_cut=list(value.tool_results_cut))
+    if is_dataclass(value) and not isinstance(value, type) and not value.__dataclass_params__.frozen:
+        return copy.copy(value)
     return value
 
 

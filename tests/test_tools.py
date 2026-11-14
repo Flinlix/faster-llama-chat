@@ -7,6 +7,8 @@ from typing import Annotated, Literal, Optional
 
 import pytest
 
+from tests.chat_messages import opened
+
 from llama_chat.tool_registry import ToolRegistry
 
 from llama_chat.tools import ToolCall
@@ -114,10 +116,10 @@ def test_a_registry_is_declared_by_its_specs():
         return "12:00"
 
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry.specs())
+    wrapper.begin(opened("persona"), tools=registry.specs())
     assert "<decl>clock</decl>" in system_turn(fake)
     with pytest.raises(TypeError, match="registry.specs|ToolRegistry.specs"):
-        wrapper.begin("persona", tools=registry)
+        wrapper.begin(opened("persona"), tools=registry)
 
 
 # ----- what a function declares --------------------------------------------

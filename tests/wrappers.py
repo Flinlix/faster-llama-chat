@@ -9,6 +9,7 @@ from llama_chat.config import Config
 from llama_chat.messages import UNREADABLE_CALL, result_message
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tool_registry import ToolRegistry
+from tests.chat_messages import opened
 from llama_chat.wrapper import ChatWrapper
 from tests import internals
 from tests.chat_templates import in_each_thought_form
@@ -367,7 +368,7 @@ def weather_registry():
 def begun_wrapper(template=PLAIN, **fake_kw):
     fake = FakeContext(template, **fake_kw)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     return w, fake
 
 
@@ -385,7 +386,7 @@ def reasoning_wrapper(reasoning=True, config=None, template=REASONING, **fake_kw
     fake = FakeContext(template, **fake_kw)
     w = ChatWrapper(config or Config(context_size=500, evict_above_fraction=1.0),
                     context=fake)
-    w.begin("s", reasoning=reasoning)
+    w.begin(opened("s"), reasoning=reasoning)
     return w, fake
 
 
@@ -420,10 +421,7 @@ def rendered_close(fake, reasoning=False) -> str:
 
 def rows(wrapper) -> list[dict]:
     """The conversation as ``{"role", "text"}`` rows, the system prompt first, read from what the wrapper publishes."""
-    saved = wrapper.conversation()
-    system = saved["system_prompt"]
-    found = [{"role": "system", "text": system}] if system else []
-    return found + [{"role": m["role"], "text": m["content"]} for m in saved["messages"]]
+    return [{"role": m["role"], "text": m["content"]} for m in wrapper.conversation()["messages"]]
 
 
 def add_tools(wrapper, specs) -> int:

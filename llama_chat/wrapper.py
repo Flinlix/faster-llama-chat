@@ -23,7 +23,7 @@ from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .generation import GenerationAccumulator
 from .messages import ensure_role, ensure_text
-from .publishing import ensure_generated_turns
+from .history_forms import ensure_saved_turns
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
                      UnsupportedError)
@@ -115,16 +115,10 @@ class ChatWrapper:
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
         self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
-        # The policy the newest turn was started with, or for a turn the history opened the
-        # first one a reply gave it, and the calls it may still run, which a reply going on
-        # with it keeps.
-        self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
         # The newest generation's Reply, which a stream closed early reads.
         self._newest_reply: Reply | None = None
-        self._turn_budget = _CallBudget(None)
 
-    def begin(self, system_prompt: str,
-              messages: list[dict] | None = None,
+    def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False, generated_turns: dict | None = None) -> Report:
         """Reset the conversation: prefill the system prompt and recent history.
@@ -133,26 +127,34 @@ class ChatWrapper:
         prefills the sequence opener and the system prompt.
 
         Args:
-            system_prompt: Always kept, never evicted. Empty, it is no system
-                message at all, and the conversation opens as the template
-                opens one without.
-            messages: Optional history, oldest first, as chat messages:
-                ``{"role": "user", "content": text}``; a reply,
-                ``{"role": "assistant", "content": text}``, with its thought
-                under ``"reasoning_content"`` and its calls under
-                ``"tool_calls"`` where it has them, each call
-                ``{"id": id, "type": "function", "function": {"name": name,
-                "arguments": dict}}``; and a call's result,
-                ``{"role": "tool", "tool_call_id": id, "content": result}``,
-                the result text or anything JSON writes, given in the order
-                of the calls. A call without an id is given one.
-                A history that ends on a call or a result leaves that turn
-                open, as a live turn is left, for :meth:`reply` to go on
-                with. Only the most recent are kept,
-                from a user turn on: those that fit with the system prompt in
-                half the context, at least the newest exchange, and no more
-                than ``max_history_exchanges``. Older ones are dropped
-                unrendered.
+            messages: The conversation so far, oldest first, as Chat Completions chat
+                messages, or ``None`` for none:
+
+                * ``{"role": "system", "content": text}``, only first: the
+                  system prompt, always kept, never evicted. An empty one is
+                  a system turn with no text; without one, the conversation
+                  opens as the template opens one without.
+                * ``{"role": "user", "content": text}``: a question.
+                * ``{"role": "assistant", "content": text}``: a reply, its
+                  thought under ``"reasoning_content"`` where it has one, and
+                  its calls under ``"tool_calls"``, each ``{"id": id, "type":
+                  "function", "function": {"name": name, "arguments": json}}``,
+                  the arguments a JSON object as a string, ``""`` for none;
+                  ``content`` may be ``None`` where it makes calls.
+                * ``{"role": "tool", "tool_call_id": id, "content": text}``:
+                  a call's result, in the order of the calls.
+
+                Every call needs an id of its own. A call whose arguments are
+                no JSON object could not be read: it is left out with its
+                result, and a later result for it is refused. A history that
+                ends on a call or a result leaves that turn open, as a live
+                turn is left, for :meth:`reply` to go on with. Only the most
+                recent are kept, from a user turn on: those that fit with the
+                system prompt in half the context, at least the newest
+                exchange, and no more than ``max_history_exchanges``; the
+                newest exchange may take the room a reply leaves, its results
+                cut to fit as :meth:`inject_tool_result` cuts one. Older ones
+                are dropped unrendered.
             tools: Tools to declare, a list of :class:`~llama_chat.tools.ToolSpec`
                 such as ``registry.specs()`` gives, written
                 where this model's template declares them; nothing else of
@@ -169,50 +171,52 @@ class ChatWrapper:
                 it yields, either way.
             generated_turns: What :meth:`conversation` gave beside the
                 messages: each turn the model generated with a call, as its
-                tokens. On the
-                model it came from, each such turn whose messages are kept
-                unchanged is restored as generated, token for token; on
-                another model, or without it, every turn is written as this
-                model's template writes it, and a call the model wrote
-                unreadably is left out with its error result. See
-                design_history.md, "Exact restore with model handover".
+                tokens and its messages as the conversation held them. On
+                the model it came from, each such turn the messages still
+                hold, found by its messages and the question before them, is
+                put back as it was and restored as generated, token for
+                token; on another model, or without it, every turn is written
+                as this model's template writes it. See design_history.md,
+                "Two history forms".
 
         Returns:
-            What it changed beyond what was asked: how many items of
-            ``messages`` it kept and why it left the others out, the calls it
-            left out, and the generated turns it restored. Each such change is
-            also logged once, at ``INFO``, under the logger ``llama_chat``.
+            What it changed beyond what was asked: how many of the messages
+            after the system message it kept and why it left the others out,
+            the calls it left out, the results it cut, and the generated
+            turns it restored. Each such change is also logged once, at
+            ``INFO``, under the logger ``llama_chat``.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
-                on, cannot fit beside them, or ``messages`` hold no user
-                message and cannot fit beside them either.
-            TypeError: If the system prompt or a history message's text is
-                not a ``str``, a history message is of another form, or
-                ``tools`` holds anything but tool specs.
+                on, leaves no room for a reply beside them even with its
+                results cut to nothing, or ``messages`` hold no user message
+                and cannot fit beside them either.
+            TypeError: If a message, a text, an id or a call's arguments is of
+                another type than stated above, or ``tools`` holds anything but
+                tool specs.
             UnsupportedError: If ``tools`` names anything, or the history
                 holds a call or a result, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
-                that template cannot reason; or if a system prompt is given and
-                it has no system turn.
-                Its ``field`` names the parameter: ``tools``, ``messages``,
-                ``reasoning`` or ``system_prompt``. :meth:`capabilities` says
-                beforehand what is accepted.
-            InvalidArgumentError: If a history message has another role, or
-                a dictionary other keys; if ``tools`` names one tool twice; if
-                two calls of the history carry one id; if a result answers
-                no call owed one, or not the oldest; or if ``generated_turns``
-                is not what :meth:`conversation` gives.
+                that template cannot reason; or if a system message is given
+                and it has no system turn. Its ``field`` names the parameter:
+                ``tools``, ``messages`` or ``reasoning``.
+                :meth:`capabilities` says beforehand what is accepted.
+            InvalidArgumentError: If a message holds a key its role does not
+                take here, such as ``name``, a list of content parts or a role
+                such as ``developer``, each named; if ``tools`` names one tool
+                twice; if two calls of the history carry one id, or a call has
+                none; if a result answers no call owed one, or not the oldest;
+                or if ``generated_turns`` is not what :meth:`conversation`
+                gives, naming ``generated_turns``.
             TemplateRefusedError: If the template refuses to write the
                 conversation.
             RuntimeError: If the wrapper is closed, or this thread is still
                 reading a reply.
             The previous conversation is left intact on every refusal here.
         """
-        ensure_text(system_prompt, "the system prompt")
-        ensure_generated_turns(generated_turns)
+        ensure_saved_turns(generated_turns)
         if tools is not None and not isinstance(tools, Iterable):
             raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
@@ -230,13 +234,19 @@ class ChatWrapper:
                 raise UnsupportedError(
                     "messages", "this model reads a turn that called tools only in a "
                     "conversation begun with tools; pass tools, an empty list included")
+            opens_on_system = bool(messages) and isinstance(messages[0], dict) \
+                and messages[0].get("role") == "system"
             self._templates.ensure_accepts(
                 uses_tools, tools_field="tools" if specs else "messages" if calls else None,
-                reasoning=reasoning, system_prompt_field="system_prompt" if system_prompt else None)
+                reasoning=reasoning, system_prompt_field="messages" if opens_on_system else None)
             self._conversation.report()         # changes of earlier actions are told already
-            self._conversation.start(system_prompt, messages, specs, reasoning, generated_turns)
+            # A begin leaves no turn a reply started, so a call it could not read is answered
+            # as one in a turn that runs no call.
+            self._conversation.start(messages, specs, reasoning, generated_turns,
+                                     _explain_failure(_UNREADABLE, may_call_again=False))
             # A turn the history leaves open was started by no reply.
-            self._turn_policy, self._turn_budget = None, _CallBudget(None)
+            self._conversation.turn_policy = None
+            self._conversation.turn_budget = _CallBudget(None)
             return self._conversation.report()
 
     # ----- adding context ------------------------------------------------------
@@ -460,7 +470,8 @@ class ChatWrapper:
             goes_on = text is None and self._conversation.turn_open
             policy = self._policy_for(given, goes_on)
             _ensure_max_calls_runs(policy, max_calls)
-            budget = self._turn_budget if goes_on and max_calls is None else _CallBudget(max_calls)
+            budget = (self._conversation.turn_budget if goes_on and max_calls is None
+                      else _CallBudget(max_calls))
             options["on_started"] = lambda: self._keep_turn(given, policy, budget)
             if policy not in ("yield", "withhold"):
                 return (yield from self._generate_until_answered(
@@ -482,7 +493,8 @@ class ChatWrapper:
         # Compared with None: an empty registry is false.
         if given is not None:
             return given
-        return self._turn_policy if goes_on and self._turn_policy is not None else "refuse"
+        policy = self._conversation.turn_policy
+        return policy if goes_on and policy is not None else "refuse"
 
     def _keep_turn(self, given: ToolCallPolicy | ToolRegistry | None,
                    policy: ToolCallPolicy | ToolRegistry, budget: _CallBudget) -> None:
@@ -492,11 +504,12 @@ class ChatWrapper:
         a turn the history opened gives it ``given``, where it gives one. The
         turn keeps ``budget``, the calls it may still run.
         """
-        if not self._conversation.turn_open or (self._turn_policy is None and given is not None):
-            self._turn_policy = policy
-        self._turn_budget = budget
+        conversation = self._conversation
+        if not conversation.turn_open or (conversation.turn_policy is None and given is not None):
+            self._conversation.turn_policy = policy
+        self._conversation.turn_budget = budget
 
-    def inject_tool_result(self, call: ToolCall, result) -> Report:
+    def inject_tool_result(self, call_id: str, result) -> Report:
         """Hand the model what the tool it called returned; what that changed beyond what was asked.
 
         Written where this model's own template writes a result, inside the
@@ -510,10 +523,10 @@ class ChatWrapper:
         the README, "Tool calling".
 
         Args:
-            call: The call being answered, as it was handed to you, or one
-                built without an id that names the same function with the
-                same arguments. It must be the oldest unanswered one.
-            result: What it returned. Anything but a string is sent as JSON.
+            call_id: The id of the call being answered, as it was handed to
+                you; the oldest one still owed a result.
+            result: What it returned. Anything but a string is written as
+                JSON at once, and :meth:`conversation` gives that text back.
                 One JSON cannot write, ``NaN`` and infinity included, is
                 answered with the ``unwritable_result`` failure a registered
                 tool's would be, and a warning is logged.
@@ -524,25 +537,28 @@ class ChatWrapper:
             want of room instead, its result dropped.
 
         Raises:
-            TypeError: If ``call`` is no :class:`~llama_chat.tools.ToolCall`.
+            TypeError: If ``call_id`` is no ``str``.
             OutOfOrderError: If no conversation has been begun, no call is
-                waiting, or this is not the one owed. The call stays owed.
+                waiting, ``call_id`` is not the one owed, or it names a call
+                :meth:`begin` left out as one that could not be read; its
+                ``field`` is ``call_id``. The call stays owed.
             UnsupportedError: If this model's template writes no result,
                 naming ``result``.
             RuntimeError: If the wrapper is closed, or this thread is still
                 reading a reply.
         """
-        if not isinstance(call, ToolCall):
-            raise TypeError(f"call must be the ToolCall being answered, not {call!r}")
+        if not isinstance(call_id, str):
+            raise TypeError(f"call_id must be the id of the call being answered, a str, "
+                            f"not {call_id!r}")
         failure = unwritable_failure(result)
         with self._held():
             self._ensure_open()
             # A failure is told as a failure a registered tool's is, whoever ran the tool.
             written = _explain_failure(result if failure is None else failure,
-                                       may_call_again=self._turn_policy == "yield")
+                                       may_call_again=self._conversation.turn_policy == "yield")
             self._conversation.report()
             try:
-                self._conversation.add_result(call, written)
+                self._conversation.add_result(call_id, written)
             except ContextOverflowError:
                 self._conversation.close_unanswered()
             report = self._conversation.report()
@@ -550,7 +566,7 @@ class ChatWrapper:
             told = ("the turn closed for want of room instead" if report.turn_closed
                     else "so the model is told the call failed (unwritable_result)")
             _log.warning("the result handed over for %s cannot be written, %s: %s",
-                         call.name, told, failure["message"])
+                         call_id, told, failure["message"])
         return report
 
     # ----- shortening the newest reply -----------------------------------------
@@ -709,22 +725,31 @@ class ChatWrapper:
     def conversation(self) -> dict:
         """Everything :meth:`begin` takes to begin the conversation the cache holds again, by its parameter names.
 
-        ``system_prompt``, ``messages``, ``tools``, ``reasoning`` and
-        ``generated_turns``, so that ``begin(**chat.conversation())`` begins again as
-        it was, a call still owed a result owed again and, on the same model,
-        each turn that called tools as the tokens it was generated as.
-        ``generated_turns`` is ``None`` where no turn is kept as generated; it is a
-        JSON-ready dictionary, only meaningful to this model, and the
-        messages alone begin any model again. ``messages`` is every message after the
-        system prompt, oldest first, as the chat messages :meth:`begin` takes:
-        a reply with ``"reasoning_content"`` where the template keeps its
-        thought and ``"tool_calls"`` where it called tools, and each result
-        as its caller gave it; a call the model wrote unreadably holds
-        ``"unreadable": True``, no name and no arguments. ``tools`` is every declaration, those of
-        :meth:`change_settings` gave included, and ``None`` where the conversation
-        was begun without tools and declares none. Safe from any thread, including while
-        another is mid-generation: all of it is read as the newest finished
-        change left it.
+        ``messages``, ``tools``, ``reasoning`` and ``generated_turns``, so
+        that ``begin(**chat.conversation())`` begins again as it was, a call
+        still owed a result owed again and, on the same model, each turn that
+        called tools as the tokens it was generated as.
+
+        ``messages`` is every message, the system message first where there
+        is one, in the Chat Completions form :meth:`begin` takes: a reply's text
+        ``None`` where it makes calls and says nothing, ``""`` where it does
+        neither, its thought under ``"reasoning_content"`` where the template
+        keeps it, and each call's arguments as compact JSON in their own
+        order; each result as the text the model read, cut with its note
+        where it was cut. A call the model wrote unreadably is left out with
+        its result, as :meth:`begin` leaves one out. Whatever :meth:`begin`
+        takes without leaving anything out, this gives back unchanged, apart
+        from the spelling of arguments and an empty text written as above.
+
+        ``generated_turns`` is ``None`` where no turn is kept as generated;
+        it is a JSON-ready dictionary, only meaningful to this model, holding
+        each such turn's tokens and its messages as the conversation holds
+        them, a call written unreadably and a thought included, and the
+        messages alone begin any model again. ``tools`` is every declaration,
+        those :meth:`change_settings` gave included, and ``None`` where the
+        conversation was begun without tools and declares none. Safe from any
+        thread, including while another is mid-generation: all of it is read
+        as the newest finished change left it.
         """
         return self._conversation.conversation()
 
@@ -1020,7 +1045,7 @@ class ChatWrapper:
         """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
         def write() -> None:
             for call, result in settled:
-                self._conversation.add_result(call, _explain_failure(result, may_call_again))
+                self._conversation.add_result(call.id, _explain_failure(result, may_call_again))
         return self._evicted_by(write)
 
     def _evicted_by(self, action: Callable[[], None]) -> int:
@@ -1065,13 +1090,9 @@ class ChatWrapper:
         conversation = self._conversation
         decoded_from = conversation.decoded
         evicted_before = conversation.changes_so_far().n_evicted
-        noted = self._turn_policy, self._turn_budget
         conversation.open_attempt(starts_request=on_started is not None, asks=text is not None)
-
-        def roll_back() -> None:
-            conversation.roll_back()
-            if conversation.rolled_back:
-                self._turn_policy, self._turn_budget = noted
+        # Put back with the conversation, the turn's policy and budget included.
+        roll_back = conversation.roll_back
 
         def interrupted() -> Reply:
             return Reply(text="", n_prefilled_tokens=conversation.decoded - decoded_from,
@@ -1140,8 +1161,6 @@ class ChatWrapper:
                 except BaseException:
                     roll_back()
                     raise
-                if conversation.rolled_back:
-                    self._turn_policy, self._turn_budget = noted
             changes = conversation.changes_so_far()
             # A generation put back puts back what it evicted too.
             n_evicted_messages = changes.n_evicted - evicted_before

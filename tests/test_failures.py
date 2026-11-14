@@ -1,6 +1,7 @@
 """Every action that is refused or fails leaves the conversation and the cache as they were before it, a reply keeping only what it produced, and usable."""
 
 import dataclasses
+import json
 import datetime as real_datetime
 import threading
 
@@ -11,7 +12,7 @@ from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflow
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
-from tests.chat_messages import Result, tool_turn
+from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests import internals
@@ -101,7 +102,7 @@ _CLOCK.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
 def _begin(*history):
     """A step that begins the conversation on ``history``, a clock its one tool."""
     def begin(w, fake):
-        w.begin("persona", list(history), tools=_CLOCK.specs())
+        w.begin(opened("persona", list(history)), tools=_CLOCK.specs())
     return begin
 
 
@@ -122,7 +123,7 @@ def _owing(w, fake):
 
 def _answered(w, fake):
     _owing(w, fake)
-    w.inject_tool_result(w.pending_calls[0], "sonnig")
+    w.inject_tool_result(w.pending_calls[0].id, "sonnig")
 
 
 def _replying(text=None, script=None, **options):
@@ -136,10 +137,10 @@ def _replying(text=None, script=None, **options):
 
 # What each action is taken from, what it does, and for a reply the calls its model makes.
 _ACTIONS = {
-    "begin": (_exchanged, lambda w, f, s: w.begin("neu", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]), None),
-    "begin while a call is owed": (_owing, lambda w, f, s: w.begin("neu"), None),
+    "begin": (_exchanged, lambda w, f, s: w.begin(opened("neu", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])), None),
+    "begin while a call is owed": (_owing, lambda w, f, s: w.begin(opened("neu")), None),
     "inject": (_exchanged, lambda w, f, s: w.inject("Notiz dazu."), None),
-    "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.pending_calls[0], "sonnig"),
+    "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.pending_calls[0].id, "sonnig"),
                            None),
     "truncate_last_reply": (_exchanged, lambda w, f, s: w.truncate_last_reply("Ge"), None),
     "declare_tools": (_exchanged, lambda w, f, s: add_tools(w, [_CALENDAR]), None),
@@ -162,19 +163,21 @@ def _state(w):
 def _steps(history):
     """A history as one list: each message, a reply that called tools as its text, then each call as a ToolCall."""
     return [step for message in history for step in (
-        [{"role": "assistant", "content": message["content"]},
-         *(ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
+        [{"role": "assistant", "content": message["content"] or ""},
+         *(ToolCall(c["function"]["name"], json.loads(c["function"]["arguments"]), c["id"])
            for c in message["tool_calls"])]
         if message.get("tool_calls") else [message])]
 
 
 def _assert_kept_only_what_it_produced(before, after, shown, calls):
     """A failed reply loses nothing but the oldest exchanges a result evicted for room, and adds nothing, or what it produced: the text it showed, then a call or a result."""
-    held, kept = _steps(before[0]["messages"]), _steps(after[0]["messages"])
+    assert before[0]["messages"][:1] == after[0]["messages"][:1]       # the system message
+    held, kept = (_steps(after_system(before[0]["messages"])),
+                  _steps(after_system(after[0]["messages"])))
     starts = [i for i, step in enumerate(held) if isinstance(step, dict) and step["role"] == "user"]
     evicted = next((i for i in [0] + starts + [len(held)] if kept[:len(held) - i] == held[i:]),
                    None)
-    assert after[0]["system_prompt"] == before[0]["system_prompt"] and evicted is not None
+    assert evicted is not None
     held = held[evicted:]
     added = kept[len(held):]
     texts = [step["content"] for step in added
@@ -192,10 +195,10 @@ def _go_on(w, fake):
     """Use the conversation as it was left: answer what is owed, close an open turn, then reply."""
     fake.call_script = []
     for call in w.pending_calls:
-        w.inject_tool_result(call, "sonnig")
+        w.inject_tool_result(call.id, "sonnig")
     if w.turn_open:
         w.reply(tool_call_policy="yield").finish()
-    history = w.conversation()["messages"]
+    history = after_system(w.conversation()["messages"])
     waiting = bool(history) and isinstance(history[-1], dict) and history[-1]["role"] == "user"
     w.reply(None if waiting else "weiter").finish()
 
@@ -272,12 +275,13 @@ def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(c
 # ----- restarts --------------------------------------------------------------------
 def test_a_refused_restart_keeps_the_previous_conversation_usable():
     w, fake = _flaky(gen_tokens=2)
-    w.begin("s")
+    w.begin(opened("s"))
     w.reply("eins").finish()
-    before = w.conversation()["messages"]
+    before = after_system(w.conversation()["messages"])
     with pytest.raises(ContextOverflowError):
-        w.begin("x" * 600)
-    assert w.conversation()["system_prompt"] == "s" and w.conversation()["messages"] == before
+        w.begin(opened("x" * 600))
+    assert w.conversation()["messages"][0] == {"role": "system", "content": "s"}
+    assert after_system(w.conversation()["messages"]) == before
     w.reply("zwei").finish()
     assert [r["text"] for r in rows(w)][-2:] == ["zwei", "re"]
 
@@ -290,25 +294,25 @@ def test_a_refused_restart_on_a_template_that_writes_the_date_keeps_the_conversa
         stem, system, clock):
     context = FakeContext(fixture(stem), ["Eins.", "Zwei."])
     w = ChatWrapper(Config(context_size=8192, min_reply_tokens=8), context=context)
-    w.begin(system)
+    w.begin(opened(system))
     w.reply("One?").finish()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     with pytest.raises(ContextOverflowError):
-        w.begin("x" * 9000)
-    assert w.conversation()["messages"] == [{"role": "user", "content": "One?"},
+        w.begin(opened("x" * 9000))
+    assert after_system(w.conversation()["messages"]) == [{"role": "user", "content": "One?"},
                                             {"role": "assistant", "content": "Eins."}]
     assert w.reply("Two?").finish().text == "Zwei."
 
 
 def test_a_failed_restart_keeps_the_call_its_conversation_owes_and_nothing_else():
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     with pytest.raises(ContextOverflowError):
-        w.begin("x" * 600)
+        w.begin(opened("x" * 600))
     assert w.turn_open and w.pending_calls == [call]
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     w.reply().finish()
     assert not w.turn_open
 
@@ -318,15 +322,15 @@ def test_a_result_that_leaves_no_room_for_the_reply_closes_the_turn_and_the_conv
     fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=40),
                     context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     fake.call_script = ["fn:clock{}"]
     for n in range(100, 300):
-        w.begin("s")
+        w.begin(opened("s"))
         try:
             calls = [e for e in w.reply("q" * n, tool_call_policy="yield") if isinstance(e, ToolCall)]
         except ContextOverflowError:
             break
-        w.inject_tool_result(calls[0], "12:00")
+        w.inject_tool_result(calls[0].id, "12:00")
         if not w.turn_open:
             assert w.pending_calls == []
             with pytest.raises(ValueError, match="nothing to answer"):
@@ -343,21 +347,21 @@ def test_a_turn_closing_for_want_of_room_that_fails_part_way_leaves_the_call_owe
         fake = _Flaky(TOOLS)
         w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=40),
                         context=fake)
-        w.begin("s")
+        w.begin(opened("s"))
         fake.call_script = ["fn:clock{}"]
         call, = [e for e in w.reply("q" * 210, tool_call_policy="yield") if isinstance(e, ToolCall)]
         fake.operations = 0
         return w, fake, call
 
     w, fake, call = owing()
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     assert not w.turn_open and fake.operations > 0     # the turn closes, the cache settled after it
     for at in range(fake.operations):
         w, fake, call = owing()
         before = _state(w)
         fake.fail_at = at
         with pytest.raises(RuntimeError):
-            w.inject_tool_result(call, "12:00")
+            w.inject_tool_result(call.id, "12:00")
         assert _state(w) == before
         _go_on(w, fake)
         assert_cache_reads_as_rendered(w, fake)
@@ -372,11 +376,11 @@ _UNWRITABLE = [{"when": real_datetime.date(2026, 11, 8)}, {"t": float("nan")},
 def test_a_result_handed_over_that_cannot_be_written_reaches_the_model_as_a_failure(
         result, caplog):
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     with caplog.at_level("WARNING", logger="llama_chat"):
-        w.inject_tool_result(call, result)
+        w.inject_tool_result(call.id, result)
     assert "unwritable_result" in held_text(fake) and "NaN" not in held_text(fake)
     assert w.pending_calls == [] and "unwritable_result" in caplog.text
     w.reply().finish()
@@ -388,7 +392,7 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error(re
     registry.tool(lambda: returned, description="Das Datum.", name="clock",
                   parameters={"type": "object", "properties": {}})
     w, fake = tool_wrapper()
-    w.begin("persona", tools=registry.specs())
+    w.begin(opened("persona"), tools=registry.specs())
     fake.call_script = ["fn:clock{}"]
     reply = w.reply("welcher Tag?", tool_call_policy=registry).finish()
     assert reply.stop_reason == "end_of_turn" and not w.turn_open
@@ -397,10 +401,10 @@ def test_a_tool_that_returns_what_cannot_be_written_is_answered_with_an_error(re
 
 def test_a_resumed_turn_cancelled_before_it_starts_stays_open_and_goes_on_later():
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     before = _state(w)
     cancel = threading.Event()
     cancel.set()
@@ -414,10 +418,10 @@ def test_a_resumed_turn_cancelled_before_it_starts_stays_open_and_goes_on_later(
 def test_an_action_whose_render_cannot_place_a_kept_turn_is_refused_and_changes_nothing(
         monkeypatch):
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     w.reply().finish()
     before, held = w.conversation(), list(fake.cache)
     with monkeypatch.context() as patched:
@@ -435,10 +439,10 @@ def test_a_question_without_room_for_its_reply_is_not_recorded():
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60),
                     context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     with pytest.raises(ContextOverflowError):
         w.reply("hello").finish()
-    assert w.conversation()["messages"] == []
+    assert after_system(w.conversation()["messages"]) == []
 
 
 # ----- a cache that cannot shift ----------------------------------------------------
@@ -447,7 +451,7 @@ def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_o
     monkeypatch.setattr(eviction, "EVICT_TO_FRACTION_WITHOUT_SHIFT", 0.2)
     fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     for i in range(8):
         before = fake.resets + fake.edit_count("restore")
         w.reply(f"message number {i} with some length").finish()
@@ -458,12 +462,12 @@ def test_one_turn_that_drops_twice_on_a_cache_that_cannot_shift_brings_it_back_o
 # ----- reading from another thread ------------------------------------------------
 def test_the_history_read_from_another_thread_is_never_half_built(monkeypatch):
     w, fake = tool_wrapper()
-    w.begin("persona", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    w.begin(opened("persona", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
     seen = []
     split = ConversationRendering.split
 
     def reading(self, messages, generation_prompt):
-        seen.append(len(w.conversation()["messages"]))           # as another thread reads it, mid-action
+        seen.append(len(after_system(w.conversation()["messages"])))           # as another thread reads it, mid-action
         return split(self, messages, generation_prompt)
 
     monkeypatch.setattr(ConversationRendering, "split", reading)
@@ -476,7 +480,7 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
         monkeypatch):
     """Read in the middle of a begin that fails, they are what the conversation it leaves standing holds."""
     w, fake = tool_wrapper()
-    w.begin("persona", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    w.begin(opened("persona", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
     before, seen = (w.total_tokens, w.turn_open), []
     split = ConversationRendering.split
 
@@ -490,8 +494,7 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
     monkeypatch.setattr(ConversationRendering, "split", reading)
     fake.prefill = failing
     with pytest.raises(RuntimeError):
-        w.begin("persona", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("weather", {"city": "Bonn"}))],
-                tools=weather_registry().specs())
+        w.begin(opened("persona", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("weather", {"city": "Bonn"}))]), tools=weather_registry().specs())
     del fake.prefill
     assert seen and set(seen) == {before}
     assert (w.total_tokens, w.turn_open) == before
@@ -504,12 +507,12 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
 def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending,
                                                                        step):
     w, fake = tool_wrapper()
-    w.begin("persona", tools=weather_registry().specs())
+    w.begin(opened("persona"), tools=weather_registry().specs())
     w.reply("eins").finish()
     if ending == "going on after a result":
         fake.call_script = ['fn:weather{"city": "Bonn"}']
         list(w.reply("Wetter?", tool_call_policy="yield"))
-        w.inject_tool_result(w.pending_calls[0], "sonnig")
+        w.inject_tool_result(w.pending_calls[0].id, "sonnig")
     before = _state(w)
     recorded = getattr(rendered_cache.RenderedCache, step)
     failing = iter([True])
@@ -530,12 +533,12 @@ def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypat
     if ending == "going on after a result":
         w.reply(tool_call_policy="yield").finish()
     w.reply("drei").finish()
-    assert w.conversation()["messages"][-2] == {"role": "user", "content": "drei"}
+    assert after_system(w.conversation()["messages"])[-2] == {"role": "user", "content": "drei"}
 
 
 def test_a_call_that_cannot_be_read_is_never_published_as_owed(monkeypatch):
     w, fake = tool_wrapper()
-    w.begin("persona", tools=weather_registry().specs())
+    w.begin(opened("persona"), tools=weather_registry().specs())
     owed = []
     publish = rendered_cache.RenderedCache._publish
 
@@ -552,17 +555,17 @@ def test_a_call_that_cannot_be_read_is_never_published_as_owed(monkeypatch):
 # ----- what a request asks for ------------------------------------------------------
 def test_a_call_ceiling_where_no_call_is_run_is_refused():
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     for tool_call_policy in TOOL_CALL_POLICIES:
         with pytest.raises(ValueError, match="max_calls"):
             w.reply("x", tool_call_policy=tool_call_policy, max_calls=2)
-    assert w.conversation()["messages"] == []
+    assert after_system(w.conversation()["messages"]) == []
 
 
 def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
     fake = _Flaky(TOOLS, gen_tokens=3)
     w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
-    w.begin("s", tools=weather_registry().specs())
+    w.begin(opened("s"), tools=weather_registry().specs())
     fake.call_script.append("fn:@@@ kein Aufruf @@@")
     sampled = fake.sampled_tokens
 
@@ -577,7 +580,7 @@ def test_a_failed_decode_of_the_answer_to_an_unreadable_call_closes_its_turn():
         w.reply("Wetter?", tool_call_policy="yield").finish()
     fake.sampled_tokens = sampled
     assert not w.turn_open and w.pending_calls == []
-    assert w.conversation()["messages"][-2:] == [{"role": "user", "content": "Wetter?"},
+    assert after_system(w.conversation()["messages"])[-2:] == [{"role": "user", "content": "Wetter?"},
                                                  {"role": "assistant", "content": ""}]
     w.reply("weiter").finish()
 
@@ -588,7 +591,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
         w = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0, min_reply_tokens=60),
                         context=fake)
         try:
-            w.begin("s", tools=weather_registry().specs())
+            w.begin(opened("s"), tools=weather_registry().specs())
             w.reply("eins").finish()
             fake.call_script.append("fn:@@@ kein Aufruf @@@")
             reply = w.reply("Wetter?", tool_call_policy="yield").finish()
@@ -603,7 +606,7 @@ def test_a_reply_kept_without_text_holds_the_replys_opening_once():
 def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
     fake = FakeContext(REFUSES_TWO_USER_TURNS, can_shift=False, can_cut_tail=False, gen_tokens=3)
     w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}] * 10 + [{"role": "user", "content": "q"}])
+    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}] * 10 + [{"role": "user", "content": "q"}]))
     with pytest.raises(ContextOverflowError):
         w.inject("x" * 3000)                    # refused before anything is dropped
     resets, decoded = fake.resets, fake.total_prefilled()
@@ -674,7 +677,7 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
         stem, cut):
     fake = _Flaky(fixture(stem))
     w = ChatWrapper(Config(context_size=2048), context=fake)
-    w.begin("")
+    w.begin(opened(""))
     closing = internals.template(w).properties.reasoning.thought_close.strip()
     said = f"Close it with {closing} and more words follow here."
     fake.replies = [said, "Gern."]
@@ -692,7 +695,7 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
     with pytest.raises(RuntimeError, match="generation failed"):
         w.reply("Q?").finish()
     fake.sampled_tokens = sampled
-    messages = w.conversation()["messages"]
+    messages = after_system(w.conversation()["messages"])
     # Kept with a part of what it wrote, or taken back whole with its question.
     assert messages == [] or (messages[0] == {"role": "user", "content": "Q?"}
                               and messages[1]["content"].strip()
@@ -704,7 +707,7 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
 def test_a_reply_failing_before_it_generates_is_taken_back_with_its_question(monkeypatch, template):
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
                     context=FakeContext(template, gen_tokens=3))
-    w.begin("persona", [{"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"}])
+    w.begin(opened("persona", [{"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"}]))
     w.reply("eins").finish()
     before = _state(w)
 
@@ -723,9 +726,8 @@ def test_a_reply_that_fails_before_writing_anything_leaves_its_turns_policy_as_i
     def turn_opened_by_its_history():
         fake = _Flaky(TOOLS, gen_tokens=3)
         w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
-        w.begin("s", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("weather", {"city": "Bonn"}),
-                                               Result("weather", "18"))],
-                tools=weather_registry().specs())
+        w.begin(opened("s", [{"role": "user", "content": "x"}, *tool_turn(ToolCall("weather", {"city": "Bonn"}),
+                                               Result("weather", "18"))]), tools=weather_registry().specs())
         return w, fake
 
     w, fake = turn_opened_by_its_history()
@@ -743,7 +745,7 @@ def test_a_reply_that_fails_before_writing_anything_leaves_its_turns_policy_as_i
 def test_a_request_cancelled_before_it_starts_changes_nothing(template):
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, min_reply_tokens=20),
                     context=FakeContext(template, gen_tokens=5))
-    w.begin("s")
+    w.begin(opened("s"))
     for n in range(8):
         w.reply(f"frage {n} " + "x" * 20).finish()
     before = _state(w)
@@ -757,7 +759,7 @@ def test_a_request_cancelled_before_it_starts_changes_nothing(template):
 def test_a_long_question_stops_decoding_within_a_part_once_cancelled():
     fake = FakeContext(PLAIN, gen_tokens=5)
     w = ChatWrapper(Config(context_size=8192), context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     w.reply("eins").finish()
     before, cancel, decoded = _state(w), threading.Event(), []
     prefill = fake.prefill
@@ -778,7 +780,7 @@ def test_a_long_question_stops_decoding_within_a_part_once_cancelled():
 def test_a_cancel_set_while_the_question_is_decoded_changes_nothing_and_counts_what_was_decoded(cache):
     fake = FakeContext(PLAIN, gen_tokens=5, **_CACHES[cache])
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=0.75), context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     for n in range(40):
         w.reply(f"frage {n} " + "x" * 120).finish()
     before, cancel = _state(w), threading.Event()
@@ -798,7 +800,7 @@ def test_a_cancel_set_while_the_question_is_decoded_changes_nothing_and_counts_w
 def test_a_cancel_set_during_a_short_questions_decode_changes_nothing():
     fake = FakeContext(PLAIN, gen_tokens=5)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, min_reply_tokens=20), context=fake)
-    w.begin("s")
+    w.begin(opened("s"))
     for n in range(8):
         w.reply(f"frage {n} " + "x" * 20).finish()
     before, cancel = _state(w), threading.Event()
@@ -819,9 +821,9 @@ def _evicting_conversation(fake):
     """A wrapper whose history a long question pushes out at once, and that history."""
     w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=32),
                     context=fake)
-    w.begin("s", [{"role": "user", "content": "a" * 60}, {"role": "assistant", "content": "b" * 60}, {"role": "user", "content": "c" * 60},
-                  {"role": "assistant", "content": "d" * 30}])
-    return w, w.conversation()["messages"]
+    w.begin(opened("s", [{"role": "user", "content": "a" * 60}, {"role": "assistant", "content": "b" * 60}, {"role": "user", "content": "c" * 60},
+                  {"role": "assistant", "content": "d" * 30}]))
+    return w, after_system(w.conversation()["messages"])
 
 
 def test_a_generation_failing_before_its_first_word_puts_back_the_history_its_question_evicted():
@@ -830,7 +832,7 @@ def test_a_generation_failing_before_its_first_word_puts_back_the_history_its_qu
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply(" " + "q" * 150).finish()       # not spliced, so it evicts as it is asked
-    assert w.conversation()["messages"] == history
+    assert after_system(w.conversation()["messages"]) == history
     assert_cache_reads_as_rendered(w, fake)
 
 
@@ -850,7 +852,7 @@ class _CancelAtTheFirstDraw(FakeContext):
 def test_a_cancel_at_the_first_draw_changes_nothing(template):
     fake = _CancelAtTheFirstDraw(template)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
     before = w.conversation()
     fake.cancel = threading.Event()
     reply = w.reply("q", cancel=fake.cancel).finish()
@@ -862,7 +864,7 @@ def test_a_cancel_at_the_first_draw_changes_nothing(template):
 def test_a_cancel_at_the_first_draw_after_an_injected_question_keeps_that_question():
     fake = _CancelAtTheFirstDraw(REFUSES_TWO_USER_TURNS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
     w.inject("q")
     before = w.conversation()
     fake.cancel = threading.Event()
@@ -873,8 +875,8 @@ def test_a_cancel_at_the_first_draw_after_an_injected_question_keeps_that_questi
 def test_a_cancel_at_the_first_draw_of_a_turn_going_on_leaves_it_open_with_its_results():
     fake = _CancelAtTheFirstDraw(TOOLS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("clock", {}),
-                                                   Result("clock", "12:00"))])
+    w.begin(opened("s", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("clock", {}),
+                                                   Result("clock", "12:00"))]))
     assert w.turn_open
     before = w.conversation()
     fake.cancel = threading.Event()
@@ -888,21 +890,21 @@ def test_a_reply_taken_back_with_its_question_puts_back_what_the_question_evicte
     fake = FakeContext(fixture(stem), gen_tokens=0)
     w = ChatWrapper(Config(context_size=4096, evict_above_fraction=1.0, min_reply_tokens=32),
                     context=fake)
-    w.begin("", [{"role": "user", "content": "a" * 500}, {"role": "assistant", "content": "b" * 500}, {"role": "user", "content": "c" * 500},
-                 {"role": "assistant", "content": "d" * 250}])
-    history = w.conversation()["messages"]
+    w.begin(opened("", [{"role": "user", "content": "a" * 500}, {"role": "assistant", "content": "b" * 500}, {"role": "user", "content": "c" * 500},
+                 {"role": "assistant", "content": "d" * 250}]))
+    history = after_system(w.conversation()["messages"])
     # Not spliced, and too long to fit beside the whole history: it evicts as it is asked.
     question = " " + "q" * (4096 - w.total_tokens + 100)
     reply = w.reply(question).finish()          # ends at once: no empty reply is written
     assert reply.stop_reason == "end_of_turn"
-    assert w.conversation()["messages"] == history and reply.n_evicted_messages == 0
+    assert after_system(w.conversation()["messages"]) == history and reply.n_evicted_messages == 0
     assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_cache_whose_repair_fails_once_is_decoded_whole_again_by_the_next_action():
     fake = _Flaky(PLAIN, gen_tokens=5)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]))
     fake.fail = "generate"
     with pytest.raises(RuntimeError):
         w.reply("eins").finish()
@@ -916,8 +918,8 @@ def test_a_refusal_carries_what_the_template_itself_says():
                                      "{{ raise_exception('this word is not written') }}{% endif %}"
                 + PLAIN["chat_template"])
     w = ChatWrapper(Config(context_size=500), context=FakeContext(says))
-    w.begin("s")
+    w.begin(opened("s"))
     with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
         w.inject("verboten")
     with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
-        w.begin("s", [{"role": "user", "content": "verboten"}])
+        w.begin(opened("s", [{"role": "user", "content": "verboten"}]))

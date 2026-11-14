@@ -3,8 +3,8 @@
 from llama_chat.config import Config
 from llama_chat.generation import generate
 from llama_chat.template import CallBoundary
-from llama_chat.tools import ToolCall
 from llama_chat.wrapper import ChatWrapper
+from tests.chat_messages import opened, after_system
 from tests.fake_context import FakeContext
 from tests.invented_templates import TOOLS
 from tests.wrappers import rows
@@ -187,12 +187,12 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     """
     fake = FakeContext(TOOLS, gen_text="neun Uhr")
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
-    wrapper.begin("persona")
+    wrapper.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", tool_call_policy="yield"))
-    assert rows(wrapper)[-1]["text"] == ""     # nothing visible yet
+    assert rows(wrapper)[-1]["text"] is None   # nothing visible yet: a reply that only calls
 
-    wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
+    wrapper.inject_tool_result(wrapper.pending_calls[0].id, {"time": "09:00"})
     fake.call_script = []
     resumed = "".join(e for e in wrapper.reply(tool_call_policy="yield") if isinstance(e, str))
 
@@ -202,4 +202,4 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     assert "09:00" not in row["text"]               # nor is the result
     held = fake.text_of(fake.cache)
     assert "clock" in held and "09:00" in held      # yet both reached the cache
-    assert wrapper.conversation()["messages"][-1]["content"] == resumed   # and that is what is read back
+    assert after_system(wrapper.conversation()["messages"])[-1]["content"] == resumed   # and that is what is read back

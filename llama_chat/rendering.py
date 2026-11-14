@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .errors import TemplateRefusedError, with_template_reason
-from .messages import (KEPT_TURN, RESULT_AS_GIVEN, THOUGHT_KEY, UNREADABLE_CALL,
+from .messages import (KEPT_TURN, THOUGHT_KEY, UNREADABLE_CALL,
                        exchange_starts, system_part)
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
@@ -130,9 +130,7 @@ class ConversationRendering:
     def _as_given(self, messages: list[dict]) -> list[dict]:
         """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
         inside = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
-        if inside or any(RESULT_AS_GIVEN in m
-                         or any(UNREADABLE_CALL in c for c in m.get("tool_calls") or ())
-                         for m in messages):
+        if inside or any(UNREADABLE_CALL in c for m in messages for c in m.get("tool_calls") or ()):
             # What a caller gave is the conversation's to give back: not the template's to write.
             messages = [_without_kept_texts(m) for m in messages]
         if not any(messages[i].get("tool_calls") and messages[i]["content"] for i in inside):
@@ -385,13 +383,11 @@ class ConversationRendering:
 
 
 def _without_kept_texts(message: dict) -> dict:
-    """``message`` without what the conversation keeps beside it for itself: a result as given, a kept turn, and the mark of a call that could not be read."""
+    """``message`` without what the conversation keeps beside it for itself: a kept turn, and the mark of a call that could not be read."""
     calls = message.get("tool_calls") or ()
-    if RESULT_AS_GIVEN not in message and KEPT_TURN not in message \
-            and not any(UNREADABLE_CALL in c for c in calls):
+    if KEPT_TURN not in message and not any(UNREADABLE_CALL in c for c in calls):
         return message
-    message = {key: value for key, value in message.items()
-               if key not in (RESULT_AS_GIVEN, KEPT_TURN)}
+    message = {key: value for key, value in message.items() if key != KEPT_TURN}
     if calls:
         message["tool_calls"] = [{key: value for key, value in call.items() if key != UNREADABLE_CALL}
                                  for call in calls]

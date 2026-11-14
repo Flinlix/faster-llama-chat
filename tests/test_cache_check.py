@@ -3,7 +3,7 @@
 import pytest
 
 from llama_chat.tools import ToolCall
-from tests.chat_messages import tool_turn
+from tests.chat_messages import tool_turn, opened, after_system
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)
@@ -25,10 +25,10 @@ def _reasoning():
 
 def _with_a_kept_turn():
     w, fake = tool_wrapper()
-    w.begin("persona")
+    w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    w.inject_tool_result(call, "12:00")
+    w.inject_tool_result(call.id, "12:00")
     w.reply(tool_call_policy="yield").finish()
     w.reply("und?").finish()
     return w, fake
@@ -36,7 +36,7 @@ def _with_a_kept_turn():
 
 def _owed_from_a_history():
     w, fake = tool_wrapper()
-    w.begin("persona", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("clock", {}))])
+    w.begin(opened("persona", [{"role": "user", "content": "wie spät?"}, *tool_turn(ToolCall("clock", {}))]))
     assert w.pending_calls
     return w, fake
 
@@ -159,7 +159,7 @@ def test_a_cache_missing_an_exchange_after_a_kept_turn_is_caught_where_replies_r
     w, fake = _with_a_kept_turn()
     w.reply("noch?").finish()
     sound = list(fake.cache)
-    replies = [m["content"] for m in w.conversation()["messages"]
+    replies = [m["content"] for m in after_system(w.conversation()["messages"])
                if m["role"] == "assistant" and "tool_calls" not in m]
     assert len(replies) >= 2 and len(set(replies)) == 1     # every reply repeats one text
     # The cache without the exchange the question "und?" opened.
