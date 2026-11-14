@@ -32,7 +32,7 @@ from llama_chat._backend import Backend
 from llama_chat.config import KV_CACHE_TYPES
 from llama_chat.tokenizing import split_at_tags, tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
-from llama_chat.cache_context import GenerationAccumulator
+from llama_chat.generation import GenerationAccumulator
 from llama_chat.context import KVContext, _physical_cores
 from llama_chat.generation import generate
 from llama_chat.config import Config, Sampling

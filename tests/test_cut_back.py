@@ -161,11 +161,15 @@ def test_a_reply_that_called_a_tool_cannot_be_cut():
         w.truncate_last_reply("")
 
 
+def _fails_to_save():
+    raise RuntimeError("no state saved this time")
+
+
 @pytest.mark.parametrize("saves_state", [True, False])
 def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw", can_shift=False)
     if not saves_state:
-        fake.save_state = lambda: None
+        fake.save_state = _fails_to_save
         w.begin("s")
     w.reply("hi").finish()
     resets = fake.resets
@@ -189,9 +193,9 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
     assert fake.resets == resets
 
 
-def test_a_cache_that_saves_no_state_is_rebuilt_instead():
+def test_a_cache_that_fails_to_save_a_state_is_rebuilt_instead():
     w, fake = reasoning_wrapper(can_shift=False)
-    fake.save_state = lambda: None
+    fake.save_state = _fails_to_save
     w.begin("s", reasoning=True)
     resets = fake.resets
     w.reply("hi").finish()

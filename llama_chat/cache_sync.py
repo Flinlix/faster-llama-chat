@@ -6,7 +6,8 @@ import logging
 
 import threading
 
-from .cache_context import CacheContext, GenerationAccumulator
+from .cache_context import CacheContext
+from .generation import GenerationAccumulator
 from .generation import generate
 from .template import common_prefix_length
 
@@ -232,9 +233,7 @@ class CacheSync:
         try:
             state = self._context.save_state()
         except RuntimeError:
-            state = None                # decoding again stands in where none is saved
-        if state is None:
-            self._rest_states = []
+            self._rest_states = []      # decoding again stands in where none is saved
             return
         self._rest_states = ([s for s in self._rest_states if s[0] < self._end][-1:]
                              + [(self._end, state)])
@@ -305,19 +304,15 @@ class CacheSync:
         self.decoded += len(tokens)
         if self._needs_pinned_state() and self._end == self._pin:
             try:
-                state = self._context.save_state()
+                self._pinned = (self._end, self._context.save_state())
             except RuntimeError:
-                state = None
-            if state is not None:
-                self._pinned = (self._end, state)
+                pass                    # decoding again stands in where none is saved
 
     def _needs_pinned_state(self) -> bool:
         return self._pin is not None and self._pinned is None and not self._can_cut
 
     def _decode_again_with_logits(self) -> None:
         """Decode the last token again, so that the next token can be drawn after it."""
-        if not self._tokens:
-            raise ValueError("the cache holds nothing to generate after")
         last = self._tokens[-1]
         self.cut_to(len(self._tokens) - 1)
         self._bring_up(want_logits=False)

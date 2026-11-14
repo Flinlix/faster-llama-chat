@@ -17,11 +17,11 @@ from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field, replace
 
 from .addon_files import addon_file, with_model_sampling
-from .cache_context import (CACHE_CONTEXT, GenerationAccumulator, ensure_answers,
-                            ensure_can_go_back)
+from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
 from .cache_sync import Cancelled
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
+from .generation import GenerationAccumulator
 from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
@@ -29,8 +29,8 @@ from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingE
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
-from .tools import (ToolCall, ToolRegistry, ToolSpec, ensure_declarable,
-                    unwritable_failure)
+from .tool_registry import ToolRegistry
+from .tools import ToolCall, ToolSpec, ensure_declarable, unwritable_failure
 
 _log = logging.getLogger(__name__)
 
@@ -153,7 +153,8 @@ class ChatWrapper:
                 half the context, at least the newest exchange, and no more
                 than ``max_history_exchanges``. Older ones are dropped
                 unrendered.
-            tools: Tools to declare, a list of specs or a registry, written
+            tools: Tools to declare, a list of :class:`~llama_chat.tools.ToolSpec`
+                such as ``registry.specs()`` gives, written
                 where this model's template declares them; nothing else of
                 them is kept. Refused up front
                 where this model could not use them, rather than at the first
@@ -211,7 +212,8 @@ class ChatWrapper:
         """
         ensure_text(system_prompt, "the system prompt")
         if tools is not None and not isinstance(tools, Iterable):
-            raise TypeError(f"tools must be ToolSpecs or a ToolRegistry, not {tools!r}")
+            raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
+                            f"gives, not {tools!r}")
         messages = list(messages or [])         # read once, a generator included
         with self._held():
             self._ensure_open()
@@ -340,7 +342,7 @@ class ChatWrapper:
                   call as long as there is room, and after
                   ``MAX_UNREADABLE_CALLS_IN_A_ROW`` such calls in a row it is
                   told not to call again.
-                * A :class:`~llama_chat.tools.ToolRegistry`: each call is run
+                * A :class:`~llama_chat.tool_registry.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
                   stream just before it runs. In the last permitted round the
@@ -595,7 +597,7 @@ class ChatWrapper:
 
         Args:
             tools: Every tool the conversation declares from now on, a list of
-                specs or a registry, in place of those before; ``None`` for
+                :class:`~llama_chat.tools.ToolSpec`, in place of those before; ``None`` for
                 none, written with the default template; left out, unchanged.
                 Given, even empty, it writes the conversation with the model's
                 template for tools where it ships one, as :meth:`begin` does.
@@ -632,7 +634,8 @@ class ChatWrapper:
         specs = None
         if tools is not _UNCHANGED and tools is not None:
             if not isinstance(tools, Iterable):
-                raise TypeError(f"tools must be ToolSpecs or a ToolRegistry, not {tools!r}")
+                raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
+                                f"gives, not {tools!r}")
             specs = list(tools)
             ensure_declarable(specs)
         if reasoning is not _UNCHANGED and not isinstance(reasoning, bool):

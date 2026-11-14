@@ -5148,3 +5148,33 @@ the render-count tests read; the stand-in context no longer renders.
 Removed with it: the test of a context that raises while it renders, since a
 context renders nothing now; a template that raises during the load's probes
 is tested instead.
+
+### Small cleanups after the structure review (405.7A)
+
+Seven changes without a change in behaviour:
+
+- The tool runner, `ToolRegistry` with the reading of a function's signature,
+  moves from `tools.py` to `tool_registry.py`; `tools.py` keeps the record
+  types a call and a declaration are.
+- `GenerationAccumulator` moves from `cache_context.py`, the interface a
+  context answers, to `generation.py`, which fills it; no context reads it.
+- `ToolRegistry.__iter__` goes. It was a second way to list a registry's
+  declarations, and `begin` and `change_settings` said they took "a list of
+  specs or a registry", against the decision recorded under "One way to run
+  tool calls": they take a list of `ToolSpec`, which `registry.specs()`
+  gives. A registry passed as it is is now a `TypeError` that says so.
+- The render memo clears itself where the template, the declarations or the
+  reasoning switch differ from those it was filled under, instead of relying
+  on `begin` and `change_settings` to clear it. Every action still clears it
+  for a template that reads the clock.
+- The conversation no longer reaches into the context: whether the cache
+  shifts is handed to the eviction part once, and counting a message's
+  tokens and telling a plain question go through the conversation's
+  renderer, with its bounded tokenizer memory.
+- `ConversationRendering.turn_start`, an alias of `tag_after_content`, goes.
+- Two checks for cases that cannot happen go: a saved state of `None` after
+  adoption proved the cache saves states (a failure to save is still a
+  `RuntimeError` and still handled), and an empty cache before a
+  generation, which always follows a begun conversation.
+
+All seven are in one change, since several touch the same lines.

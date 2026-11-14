@@ -94,7 +94,7 @@ def test_the_reply_hands_back_the_thought_it_kept_out_of_the_answer():
 
 
 def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
-    from llama_chat.tools import ToolRegistry
+    from llama_chat.tool_registry import ToolRegistry
     from tests.fake_context import ScriptedCall
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Uhrzeit.", name="uhr", parameters={"type": "object"})

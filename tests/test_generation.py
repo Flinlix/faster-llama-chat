@@ -42,7 +42,7 @@ _TAGS = (1, 3)
 
 # ----- detecting a call as it is generated ---------------------------------
 def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
@@ -56,7 +56,7 @@ def test_a_call_is_recognised_by_its_token_and_never_reaches_the_reply():
 
 def test_the_held_back_tail_is_released_when_a_call_opens():
     """The text a reply ends with holds text back; the call is not what it was waiting for."""
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     # "ZZZZ" is longer than "hi ", so nothing can be emitted before the call.
@@ -72,7 +72,7 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
     It used to sit outside the ``GeneratorExit`` handler, and a consumer that
     closed exactly then saw ``stop_reason == "token_limit"``.
     """
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 10, out=acc,
@@ -84,7 +84,7 @@ def test_closing_the_stream_as_a_call_opens_still_reads_as_interrupted():
 
 def test_a_call_the_token_cap_cuts_short_is_dropped():
     """Truncation mid-call loses the call, not the reply, and closes normally."""
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 1, 2]), 0, 3, out=acc, boundary=CallBoundary(tool_tokens=_TAGS))
@@ -96,7 +96,7 @@ def test_a_call_the_token_cap_cuts_short_is_dropped():
 
 def test_a_turn_that_ends_inside_a_call_closed_by_a_tag_closes_the_call_with_that_tag():
     """The model ends its turn before the call's closing tag: the call is closed as the template closes one."""
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 1, 2, 5], eog=5), 0, 10, out=acc,
@@ -109,7 +109,7 @@ def test_a_turn_that_ends_inside_a_call_closed_by_a_tag_closes_the_call_with_tha
 
 def test_without_tool_tokens_a_call_tag_is_ordinary_text():
     """A model that cannot call tools has its tags yielded like any other text."""
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 1, 2, 3]), 0, 4, out=acc)
@@ -120,7 +120,7 @@ def test_without_tool_tokens_a_call_tag_is_ordinary_text():
 # The two ways a stream ends besides a call, and what reaches the cache
 # before it stops.
 def test_end_of_generation_stops_before_the_token_reaches_the_cache():
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating(_PIECES, [0, 4], eog=4), 0, 10, out=acc)
@@ -132,7 +132,7 @@ def test_end_of_generation_stops_before_the_token_reaches_the_cache():
 def test_cancelling_ends_the_stream_within_one_token():
     import threading
 
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     cancel = threading.Event()
@@ -149,7 +149,7 @@ def test_cancelling_ends_the_stream_within_one_token():
 
 
 def test_only_a_tail_that_could_begin_a_mark_is_held_back():
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     stream = generate(_generating({0: b"ab", 1: b"cZ", 2: b"Zq", 3: b"Z"}, [0, 1, 2, 3]), 0, 4,
@@ -167,7 +167,7 @@ def test_a_tail_that_could_begin_a_plain_text_opening_is_held_only_where_a_call_
 
 
 def test_the_held_back_tail_is_flushed_when_generation_runs_out():
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     acc = GenerationAccumulator()
     # The reply ends on text that could still begin the closing, so without the

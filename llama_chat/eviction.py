@@ -25,8 +25,8 @@ EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 class Eviction:
     """Drops the oldest exchanges of the conversation state it is given, measured with ``rendering``."""
 
-    def __init__(self, rendering, config: Config, context) -> None:
-        self._rendering, self._config, self._context = rendering, config, context
+    def __init__(self, rendering, config: Config, can_shift: bool) -> None:
+        self._rendering, self._config, self._can_shift = rendering, config, can_shift
 
     def with_a_short_question(self, state: ConversationState) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
@@ -168,7 +168,7 @@ class Eviction:
         what the open turn takes with the system turn and that fraction of
         the room after them.
         """
-        if self._context.can_shift:
+        if self._can_shift:
             return limit
         system = min(self.with_a_short_question(state), limit)
         bound = system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
@@ -187,7 +187,7 @@ class Eviction:
         Where the cache cannot shift, that fraction of them, at least one.
         """
         limit = self._config.max_history_exchanges
-        if limit is None or self._context.can_shift:
+        if limit is None or self._can_shift:
             return limit
         return min(limit, max(1, int(limit * EVICT_TO_FRACTION_WITHOUT_SHIFT)))
 

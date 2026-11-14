@@ -8,7 +8,7 @@ import re
 from llama_chat.config import Config
 from llama_chat.messages import UNREADABLE_CALL, result_message
 from llama_chat.tokenizing import split_at_tags
-from llama_chat.tools import ToolRegistry
+from llama_chat.tool_registry import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
 from tests import internals
 from tests.chat_templates import in_each_thought_form

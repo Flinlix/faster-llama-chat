@@ -7,7 +7,9 @@ from typing import Annotated, Literal, Optional
 
 import pytest
 
-from llama_chat.tools import ToolCall, ToolRegistry
+from llama_chat.tool_registry import ToolRegistry
+
+from llama_chat.tools import ToolCall
 from tests.wrappers import system_turn, tool_wrapper
 
 
@@ -103,7 +105,7 @@ def test_a_parameter_taken_only_by_position_is_refused():
         ToolRegistry().tool(clock, description="Sagt die Zeit.")
 
 
-def test_a_registry_is_declared_as_it_is():
+def test_a_registry_is_declared_by_its_specs():
     registry = ToolRegistry()
 
     @registry.tool
@@ -112,9 +114,10 @@ def test_a_registry_is_declared_as_it_is():
         return "12:00"
 
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", tools=registry)
+    wrapper.begin("persona", tools=registry.specs())
     assert "<decl>clock</decl>" in system_turn(fake)
-    assert list(registry) == registry.specs()
+    with pytest.raises(TypeError, match="registry.specs|ToolRegistry.specs"):
+        wrapper.begin("persona", tools=registry)
 
 
 # ----- what a function declares --------------------------------------------

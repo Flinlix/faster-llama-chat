@@ -55,8 +55,9 @@ class ConversationRendering:
     """One conversation's renders, made with its declarations, its reasoning switch and its kept turns.
 
     ``inputs`` returns those as they are, and is read at every use. Renders
-    and splits are reused until :meth:`forget_renders`, which is due wherever
-    the declarations, the reasoning switch or the clock may have changed.
+    and splits are reused while the template, the declarations and the
+    reasoning switch stay as they were, and until :meth:`forget_renders`,
+    which is due wherever the clock a template reads may have moved.
     """
 
     def __init__(self, context, template: Callable[[], ResolvedTemplate],
@@ -66,6 +67,7 @@ class ConversationRendering:
         self._inputs = inputs
         self._reader = MemoTokenizer(context)
         self._memo: dict = {}             # renders and splits, by what was rendered
+        self._memo_made_for: tuple | None = None    # the template and inputs the memo holds
         self._tag_tokens: dict = {}       # each template's call tags, by their texts
 
     @property
@@ -76,6 +78,15 @@ class ConversationRendering:
     def forget_renders(self) -> None:
         """Render everything again from now on."""
         self._memo.clear()
+
+    def _current_memo(self) -> dict:
+        """The memo of renders and splits, emptied first where the template, the declarations or the reasoning switch changed since it was filled."""
+        inputs = self._inputs()
+        made_for = (self._template, tuple(inputs.tools), inputs.reasoning)
+        if made_for != self._memo_made_for:
+            self._memo.clear()
+            self._memo_made_for = made_for
+        return self._memo
 
     # ----- rendering ----------------------------------------------------------------
     def render(self, messages, generation_prompt: bool) -> str | None:
@@ -89,11 +100,12 @@ class ConversationRendering:
         tools = self._declarations() if declarations is None else declarations
         key = ("render", json.dumps([messages, declarations, generation_prompt], sort_keys=True,
                                     default=str))
-        if key not in self._memo:
-            self._memo[key] = self._template.render(
+        memo = self._current_memo()
+        if key not in memo:
+            memo[key] = self._template.render(
                 messages, tools, generation_prompt=generation_prompt,
                 reasoning=inputs.reasoning)
-        return self._memo[key]
+        return memo[key]
 
     def refusal_reason(self, messages, generation_prompt: bool) -> str | None:
         """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
@@ -130,7 +142,8 @@ class ConversationRendering:
         """
         given = self._as_given(messages)
         key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
-        if key not in self._memo:
+        memo = self._current_memo()
+        if key not in memo:
             declarations = self._declarations()
             # The render as it is is the one :meth:`render` makes, and shares its memo.
             split = split_render(
@@ -138,8 +151,8 @@ class ConversationRendering:
                     m, generation_prompt, None if declared is declarations else declared),
                 given, self._template.fragments.content, declarations,
                 reads_clock=self._template.reads_clock)
-            self._memo[key] = split
-        return self._memo[key]
+            memo[key] = split
+        return memo[key]
 
     def opening_render(self, system: list[dict]) -> str | None:
         """How the template opens a conversation on ``system``, which changes where it writes the date, say."""
@@ -281,6 +294,17 @@ class ConversationRendering:
         return tokenize_pieces(self._reader, pieces, add_special=add_special,
                                tag_tokens=self._call_tags())
 
+    def count_tokens(self, text: str) -> int:
+        """How many tokens ``text`` takes as a caller's text, a tag in it read as its letters."""
+        return len(self._reader.tokenize(text, add_special=False, parse_special=False))
+
+    def is_plain(self, text: str) -> bool:
+        """Whether ``text`` is a question the stand-in may stand for: words without tags or surrounding space."""
+        if not text or text != text.strip() or STAND_IN in text:
+            return False
+        split = split_at_tags(self._reader, text)
+        return split is not None and not any(is_tag for _, is_tag in split)
+
     def _call_tags(self) -> dict[str, int]:
         """The tokens the template's call tags are, by their texts."""
         template = self._template
@@ -297,7 +321,7 @@ class ConversationRendering:
         last = next((i for i, m in enumerate(messages) if m is kept.last), None)
         if not first or last is None:
             return None
-        start = self.turn_start(split, first - 1)
+        start = self.tag_after_content(split, first - 1)
         if kept.on_call:
             called = split.call_ends[last]
             closing = self._template.call_close_text
@@ -321,10 +345,6 @@ class ConversationRendering:
             return None
         return start, end, self._inputs().kept.index(kept)
 
-    def turn_start(self, split: SplitRender, before: int) -> int | None:
-        """Where a turn kept as generated begins in ``split`` after message ``before``: at the first tag after its content."""
-        return self.tag_after_content(split, before)
-
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
         kept = {id(m) for k in self._inputs().kept for m in (k.first, k.last)}
@@ -341,7 +361,7 @@ class ConversationRendering:
     def tag_from(self, text: str, at: int, split: SplitRender | None = None) -> int | None:
         """Where the first tag at or after ``at`` begins, before the next own text of ``split`` where given."""
         end = next((s for s, _ in split.own if s >= at), len(text)) if split else len(text)
-        pieces = split_at_tags(self._context, text[at:end])
+        pieces = split_at_tags(self._reader, text[at:end])
         if pieces is None:
             return None
         for piece, is_tag in pieces:
@@ -359,7 +379,7 @@ class ConversationRendering:
             if own:
                 start += len(piece)
                 continue
-            pieces = split_at_tags(self._context, piece)
+            pieces = split_at_tags(self._reader, piece)
             if pieces is None:
                 return None
             for part, is_tag in pieces:

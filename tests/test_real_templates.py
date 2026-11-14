@@ -17,7 +17,8 @@ from llama_chat.addon_files import addon_file, template_fingerprint
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
-from llama_chat.tools import ToolCall, ToolRegistry
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall
 
 from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
 from .fake_context import (FakeContext, call_marks, shipped_addon_call, shipped_addon_reasoning_on,

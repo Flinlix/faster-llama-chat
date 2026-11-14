@@ -9,12 +9,51 @@ from __future__ import annotations
 import bisect
 import codecs
 import threading
+from dataclasses import dataclass, field
 from collections.abc import Callable, Generator, Iterator
 
-from .cache_context import CacheContext, GenerationAccumulator
+from .cache_context import CacheContext
 from .config import Sampling
 from .reply_text import earliest, partial_match_at
 from .template import CallBoundary
+
+
+@dataclass
+class GenerationAccumulator:
+    """What one generation has produced so far, filled as tokens stream in.
+
+    Every token is decoded into the cache before its text is yielded, so a
+    caller that abandons the stream still reads exactly what reached the cache.
+
+    Attributes:
+        token_ids: Every token decoded into the cache.
+        text_pieces: Visible reply text so far, as it was yielded; :attr:`text`
+            joins it.
+        stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
+        tool_call: What the model generated between its call tags, tags
+            excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
+            ``text``.
+        cached_beyond: Tokens decoded into the cache after ``token_ids`` that
+            belong to no reply, such as the first tokens of a closing written
+            whole later; the caller cuts them away again.
+        cut_inside_call: Whether the reply cap or a cancel ended it inside a
+            call, which is then dropped.
+        tag_spans: Where each of the model's own tags it wrote stands in the
+            visible text, as its start and end there.
+    """
+
+    token_ids: list[int] = field(default_factory=list)
+    text_pieces: list[str] = field(default_factory=list)
+    stop_reason: str = "token_limit"
+    tool_call: str = ""
+    cached_beyond: int = 0
+    cut_inside_call: bool = False
+    tag_spans: list[tuple[int, int]] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        """Visible reply text so far."""
+        return "".join(self.text_pieces)
 
 
 class _TextBuffer:

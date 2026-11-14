@@ -25,7 +25,8 @@ from .cache_context import TOOL_USE_TEMPLATE, CacheContext
 from .config import Config, Sampling
 from .errors import (ContextOverflowError, EngineError, InvalidArgumentError, InvalidSettingError,
                      OutOfOrderError, RefusalError, TemplateRefusedError, UnsupportedError)
-from .tools import ToolCall, ToolCallStatus, ToolRegistry, ToolSpec
+from .tool_registry import ToolRegistry
+from .tools import ToolCall, ToolCallStatus, ToolSpec
 from .reply import (EVICTION_CAUSES, STOP_REASONS, TOOL_CALL_POLICIES, EvictionCause, Reply,
                     ReplyStream, Report, StopReason, ToolCallPolicy)
 from .resolved_template import Capabilities

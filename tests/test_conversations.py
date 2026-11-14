@@ -24,7 +24,8 @@ from llama_chat import ChatWrapper, Config, ContextOverflowError
 from llama_chat.messages import as_messages
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall, ToolSpec
 
 from tests.chat_messages import Result, tool_turn
 from . import internals

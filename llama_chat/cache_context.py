@@ -9,7 +9,6 @@ first call that finds a member missing or taking other arguments.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
 from collections.abc import Generator, Mapping
 from typing import Protocol
 
@@ -18,44 +17,6 @@ from .config import Sampling
 # The name of the further chat template a GGUF may ship for a conversation that
 # declares tools, beside its default one.
 TOOL_USE_TEMPLATE = "tool_use"
-
-
-@dataclass
-class GenerationAccumulator:
-    """What one generation has produced so far, filled as tokens stream in.
-
-    Every token is decoded into the cache before its text is yielded, so a
-    caller that abandons the stream still reads exactly what reached the cache.
-
-    Attributes:
-        token_ids: Every token decoded into the cache.
-        text_pieces: Visible reply text so far, as it was yielded; :attr:`text`
-            joins it.
-        stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
-        tool_call: What the model generated between its call tags, tags
-            excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
-            ``text``.
-        cached_beyond: Tokens decoded into the cache after ``token_ids`` that
-            belong to no reply, such as the first tokens of a closing written
-            whole later; the caller cuts them away again.
-        cut_inside_call: Whether the reply cap or a cancel ended it inside a
-            call, which is then dropped.
-        tag_spans: Where each of the model's own tags it wrote stands in the
-            visible text, as its start and end there.
-    """
-
-    token_ids: list[int] = field(default_factory=list)
-    text_pieces: list[str] = field(default_factory=list)
-    stop_reason: str = "token_limit"
-    tool_call: str = ""
-    cached_beyond: int = 0
-    cut_inside_call: bool = False
-    tag_spans: list[tuple[int, int]] = field(default_factory=list)
-
-    @property
-    def text(self) -> str:
-        """Visible reply text so far."""
-        return "".join(self.text_pieces)
 
 
 class ModelReader(Protocol):
@@ -143,7 +104,10 @@ class CacheContext(ModelReader, Protocol):
         """Remove every cached token from ``pos`` to the end."""
 
     def save_state(self):
-        """``None`` where the cache cannot save one."""
+        """The cache's state as it is, for :meth:`restore_state`; ``None`` where the cache can never save one, which is read once where the context is adopted.
+
+        It may raise ``RuntimeError`` where saving fails this time.
+        """
 
     def restore_state(self, state, pos: int) -> None:
         """Put the cache back to ``state``, which :meth:`save_state` gave while it held ``pos`` tokens."""

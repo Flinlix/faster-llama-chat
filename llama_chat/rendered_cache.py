@@ -23,7 +23,7 @@ import logging
 import threading
 from dataclasses import replace
 
-from .cache_context import GenerationAccumulator
+from .generation import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published, Snapshot,
@@ -45,7 +45,6 @@ from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
-from .tokenizing import split_at_tags
 from .reply import Report
 from .tools import ToolCall, ToolSpec, result_text
 
@@ -77,7 +76,7 @@ class RenderedCache:
         self._state = ConversationState()
         self._rendering = ConversationRendering(context, lambda: self.template,
                                                 lambda: self._state)
-        self._eviction = Eviction(self._rendering, config, context)
+        self._eviction = Eviction(self._rendering, config, context.can_shift)
         self._cutting = ResultCutting(self._rendering)
         self._windows = Windows(self._rendering, self._eviction, config)
         # Where the newest generation's turn starts in the cache, and whether it went on
@@ -238,7 +237,6 @@ class RenderedCache:
         with self._action():
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
             self._state.uses_tool_template = tools is not None
-            self._rendering.forget_renders()
             system = [{"role": "system", "content": system_prompt}] if system_prompt else []
             self._state.messages = system + as_messages(history, self._state.n_calls)
             # Counted before the oldest are dropped, and never back, so that no later call
@@ -571,7 +569,7 @@ class RenderedCache:
         # A template may write a message otherwise where a later one repeats its text, which
         # only a render of the whole conversation shows.
         if (ahead is None or not self._is_current(ahead.made_for)
-                or not _is_plain(text, self._context)
+                or not self._rendering.is_plain(text)
                 or (not self._state.repeats_alike
                     and any(m["content"] == text for m in self._state.messages))
                 or not question_splices(self._rendering.render, self._system_part(), text,
@@ -633,8 +631,8 @@ class RenderedCache:
 
     def _length_alone(self, message: dict, limit: int, generation_prompt: bool) -> int:
         """How many tokens ``message`` takes beside the system turn alone, measured in their render only where its count comes within :data:`_NEAR_THE_ROOM_TOKENS` of ``limit``."""
-        counted = self._state.with_a_short_question + len(
-            self._context.tokenize(message["content"], add_special=False, parse_special=False))
+        counted = self._state.with_a_short_question + self._rendering.count_tokens(
+            message["content"])
         if counted + _NEAR_THE_ROOM_TOKENS <= limit:
             return counted
         return self._rendering.length(self._system_part() + [message], generation_prompt)
@@ -1094,7 +1092,6 @@ class RenderedCache:
                 accept()
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
             self._state.uses_tool_template = tools is not None
-            self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens
             self._check_renders()
@@ -1285,7 +1282,7 @@ class RenderedCache:
 
     def _reply_opening(self, split: SplitRender) -> list[tuple[str, bool]]:
         """The render ``split`` from where a reply after its newest message begins as a kept turn."""
-        start = self._rendering.turn_start(split, len(split.contents) - 1)
+        start = self._rendering.tag_after_content(split, len(split.contents) - 1)
         return split.pieces(start) if start is not None else []
 
     def _note_prompt(self, prompt_text: str, reply_opening: list[tuple[str, bool]],
@@ -1334,7 +1331,8 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
-        self._rendering.forget_renders()
+        if self.template.reads_clock:
+            self._rendering.forget_renders()
         self._memory.repair()
         if self._state.begun and self.template.reads_clock:
             opening = self._rendering.opening_render(self._system_part())
@@ -1422,11 +1420,3 @@ def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     return [(ToolCall("", {}, c["id"], "unreadable") if UNREADABLE_CALL in c else
              ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
              c["id"]) for c in messages[calling]["tool_calls"][answered:]]
-
-
-def _is_plain(text: str, reader) -> bool:
-    """A question the stand-in may stand for: words without tags or surrounding space."""
-    if not text or text != text.strip() or STAND_IN in text:
-        return False
-    split = split_at_tags(reader, text)
-    return split is not None and not any(is_tag for _, is_tag in split)

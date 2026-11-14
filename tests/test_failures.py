@@ -9,7 +9,8 @@ import pytest
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
 from llama_chat.rendering import ConversationRendering
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall, ToolSpec
 from tests.chat_messages import Result, tool_turn
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
@@ -629,7 +630,7 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
                                                                              can_cut_tail):
     import random
 
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
     from llama_chat.cache_sync import CacheSync
     fake = _Flaky(PLAIN, gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
     memory, draw = CacheSync(fake), random.Random(0)

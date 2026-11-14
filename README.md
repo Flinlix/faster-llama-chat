@@ -296,10 +296,10 @@ the type declared for it, so text keeps its spelling (`01234` stays
 `"01234"`); a number where text is asked is taken as the text it was written
 as, and an enum's value reaches the function as its member. A function that is
 asynchronous, takes a parameter only by position, or has no description is
-refused when it is registered. A registry lists its tools, so
-`begin(tools=registry)` declares them; `registry.specs()` gives each tool's
-`ToolSpec`, the declaration the model is told, and a `ToolSpec` of your own
-declares a tool that this process does not run.
+refused when it is registered. `registry.specs()` gives each tool's
+`ToolSpec`, the declaration the model is told, so `begin(tools=registry.specs())`
+declares them, and a `ToolSpec` of your own declares a tool that this process
+does not run.
 
 **When the model is told.** `begin(tools=...)` declares the specs it is given
 when it writes the conversation, and `change_settings(tools=...)` declares

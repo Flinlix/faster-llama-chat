@@ -14,7 +14,8 @@ import typing
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
@@ -406,7 +407,7 @@ def test_a_single_stop_text_is_one_stop_text_and_not_its_letters():
 def test_generator_close_marks_interrupted():
     # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).
-    from llama_chat.cache_context import GenerationAccumulator
+    from llama_chat.generation import GenerationAccumulator
 
     fake = FakeContext(PLAIN, gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()

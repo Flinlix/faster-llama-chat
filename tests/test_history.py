@@ -3,7 +3,8 @@
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from llama_chat.messages import as_messages
 from tests.chat_messages import Result, tool_turn
@@ -161,7 +162,7 @@ def _past_exchange(n: int) -> list:
 
 def test_every_call_has_an_id_the_history_and_the_reply_agree_on():
     w, fake = tool_wrapper(context_size=2048)
-    w.begin("persona", tools=weather_registry())
+    w.begin("persona", tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     handed, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     assert handed.id and w.pending_calls == [handed]
