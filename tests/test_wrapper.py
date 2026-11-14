@@ -1252,8 +1252,6 @@ def test_tools_of_another_shape_are_refused_before_anything_changes(tools):
     before = list(fake.cache)
     with pytest.raises(TypeError):
         w.begin(opened("t"), tools=tools)
-    with pytest.raises(TypeError):
-        w.change_settings(tools=tools)
     assert fake.cache == before
 
 
@@ -1433,5 +1431,5 @@ def test_every_action_reports_no_eviction_where_nothing_went():
     reports.append(w.inject_tool_result(w.pending_calls[0].id, "12:00"))
     reports.append(w.reply().finish())
     reports.append(w.inject("Danke.", role="user"))
-    reports.append(w.change_settings(reasoning=False))
+    reports.append(w.begin(**{**w.conversation(), "reasoning": False}))
     assert [(r.n_evicted_messages, r.evicted_for) for r in reports] == [(0, None)] * len(reports)

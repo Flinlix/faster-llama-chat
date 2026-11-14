@@ -429,3 +429,35 @@ def test_a_call_whose_arguments_are_no_object_is_left_out_and_a_later_result_for
         w.inject_tool_result("kaputt", "12:00")
     assert refused.value.field == "call_id"
     w.reply().finish()                  # the question is answered all the same
+
+
+def test_a_begin_decodes_only_from_where_the_conversation_differs_from_the_cache():
+    """The memory rolls across a begin: beginning again, or with a newer last message, decodes only that."""
+    registry = weather_registry()
+    w, fake = tool_wrapper(context_size=2048)
+    w.begin(opened("persona"), tools=registry.specs())
+    w.reply("hallo").finish()
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    w.reply("wetter?", tool_call_policy=registry).finish()
+    saved, held = w.conversation(), len(fake.cache)
+    decoded = w._conversation.decoded
+    w.begin(**saved)
+    assert w._conversation.decoded == decoded and len(fake.cache) == held
+    edited = [*saved["messages"][:-1], {"role": "assistant", "content": "Anders."}]
+    w.begin(edited, tools=saved["tools"], generated_turns=saved["generated_turns"])
+    assert 0 < w._conversation.decoded - decoded < 20
+
+
+def test_a_begin_that_goes_on_with_the_cached_conversation_keeps_it_to_the_eviction_limit():
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("s"))
+    for n in range(30):
+        w.reply(f"Frage {n} " + "x" * 20).finish()
+    saved = w.conversation()
+    assert w.total_tokens > 1000                # more than half the context
+    report = w.begin(**saved)
+    assert report.n_evicted_messages == 0 and w.conversation() == saved
+    fresh = ChatWrapper(Config(context_size=2000, evict_above_fraction=0.9),
+                        context=FakeContext(TOOLS))
+    assert fresh.begin(**saved).evicted_for == "half_context"

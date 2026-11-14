@@ -428,5 +428,6 @@ def add_tools(wrapper, specs) -> int:
     """Declare ``specs`` beside the tools the conversation declares already, as one that adds tools does; how many history messages went."""
     held = wrapper.conversation()["tools"] or []
     known = {spec.name for spec in held}
-    return wrapper.change_settings(
-        tools=held + [s for s in specs if s.name not in known]).n_evicted_messages
+    return wrapper.begin(**{**wrapper.conversation(),
+                            "tools": held + [s for s in specs if s.name not in known]}
+                         ).n_evicted_messages

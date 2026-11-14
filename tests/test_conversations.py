@@ -1937,10 +1937,12 @@ def test_a_change_of_tools_and_reasoning_keeps_every_message(stem):
     for question in QUESTIONS[:3]:
         run.chat.reply(question).finish()
     messages = after_system(run.chat.conversation()["messages"])
-    assert run.chat.change_settings(tools=[WEATHER], reasoning=True).n_evicted_messages == 0
+    assert run.chat.begin(**{**run.chat.conversation(), "tools": [WEATHER],
+                             "reasoning": True}).n_evicted_messages == 0
     held = run.chat.conversation()
     assert after_system(held["messages"]) == messages and held["tools"] == [WEATHER] and held["reasoning"]
-    assert run.chat.change_settings(tools=None, reasoning=False).n_evicted_messages == 0
+    assert run.chat.begin(**{**run.chat.conversation(), "tools": None,
+                             "reasoning": False}).n_evicted_messages == 0
     assert after_system(run.chat.conversation()["messages"]) == messages
     assert run.chat.reply(QUESTIONS[3]).finish().text == ANSWERS[3]
 

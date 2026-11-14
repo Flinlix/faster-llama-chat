@@ -699,28 +699,6 @@ def test_an_empty_parameter_schema_is_a_caller_saying_no_parameters():
     assert registry.specs()[0].parameters == {}
 
 
-def test_declaring_before_a_conversation_is_refused():
-    wrapper, fake = tool_wrapper()
-    registry = ToolRegistry()
-    registry.tool(lambda: {}, description="…", name="clock")
-
-    # `begin` would reset the conversation and throw the declaration away, so writing
-    # it here would be a silent loss rather than a declaration.
-    with pytest.raises(ValueError, match="no conversation to change the settings of"):
-        add_tools(wrapper, registry.specs())
-
-    assert fake.cache == []
-
-
-def test_a_model_without_tool_support_still_reports_the_missing_conversation():
-    # The caller's own mistake is named before the model's limits are.
-    fake = FakeContext(PLAIN)
-    wrapper = ChatWrapper(Config(context_size=512), context=fake)
-    spec = ToolSpec("clock", "…", {"type": "object", "properties": {}})
-    with pytest.raises(ValueError, match="no conversation to change the settings of"):
-        add_tools(wrapper, [spec])
-
-
 def test_a_call_this_parser_cannot_read_still_closes_the_turn():
     wrapper, fake = tool_wrapper()
     wrapper.begin(opened("persona"))
@@ -844,7 +822,7 @@ def test_turn_open_outlasts_the_pending_calls():
     assert not bool(wrapper.pending_calls)     # nothing is owed any more
     assert wrapper.turn_open                   # but the turn has not closed
     with pytest.raises(OutOfOrderError, match="while a reply is open"):
-        add_tools(wrapper, [ToolSpec("x", "d", {"type": "object", "properties": {}})])
+        wrapper.inject("Noch etwas.", role="assistant")
 
     list(wrapper.reply(tool_call_policy="yield"))
     assert not wrapper.turn_open               # closed, and work is allowed again
@@ -1979,7 +1957,7 @@ def test_a_change_of_tools_moves_the_conversation_between_its_templates_keeping_
     chat.reply("hallo?").finish()
     messages = after_system(chat.conversation()["messages"])
     assert "<[say>" in held_text(fake) and "<[turn>" not in held_text(fake)
-    chat.change_settings(tools=weather_registry().specs())
+    chat.begin(**{**chat.conversation(), "tools": weather_registry().specs()})
     assert "<[say>" not in held_text(fake) and "<decl>weather</decl>" in held_text(fake)
     assert after_system(chat.conversation()["messages"]) == messages
     fake.call_script = ["fn:weather{city:'Bonn'}"]

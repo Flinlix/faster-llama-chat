@@ -35,9 +35,6 @@ from .tools import ToolCall, ToolSpec, ensure_declarable, unwritable_failure
 
 _log = logging.getLogger(__name__)
 
-# What a setting left out of :meth:`ChatWrapper.change_settings` is, so that ``None`` can mean none.
-_UNCHANGED = object()
-
 
 class ChatWrapper:
     """Stateful single-conversation chat over a cache context, with KV reuse."""
@@ -162,13 +159,14 @@ class ChatWrapper:
                 where this model could not use them, rather than at the first
                 call. Given at all, even empty, it writes the conversation
                 with the model's template for tools, where it ships one;
-                ``None`` writes it with the default template.
-                :meth:`change_settings` changes them later.
+                ``None`` writes it with the default template. Beginning
+                again with the conversation and other tools changes them,
+                the cache decoded again only from where it differs.
             reasoning: Whether the model reasons before each answer, as its
                 template turns that on or off; :meth:`capabilities` says
-                whether it has an off. It belongs to the conversation: it
-                changes here and with :meth:`change_settings`. Every reply's thought is kept out of what
-                it yields, either way.
+                whether it has an off. It belongs to the conversation, and
+                changes as the tools do. Every reply's thought is kept out of
+                what it yields, either way.
             generated_turns: What :meth:`conversation` gave beside the
                 messages: each turn the model generated with a call, as its
                 tokens and its messages as the conversation held them. On
@@ -598,76 +596,6 @@ class ChatWrapper:
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
 
-    def change_settings(self, *, tools: Iterable[ToolSpec] | None | object = _UNCHANGED,
-                        reasoning: bool | object = _UNCHANGED) -> Report:
-        """Run the conversation under other tools or another reasoning setting from now on, every message kept.
-
-        The declarations go where the template writes them, and the cache is
-        decoded again from where the conversation is first written otherwise,
-        not from its start. The oldest exchanges go only where the
-        conversation no longer fits.
-
-        Args:
-            tools: Every tool the conversation declares from now on, a list of
-                :class:`~llama_chat.tools.ToolSpec`, in place of those before; ``None`` for
-                none, written with the default template; left out, unchanged.
-                Given, even empty, it writes the conversation with the model's
-                template for tools where it ships one, as :meth:`begin` does.
-            reasoning: Whether the model reasons before each answer from now
-                on; left out, unchanged.
-
-        Returns:
-            What it changed beyond what was asked: the history messages evicted
-            to make room, and why.
-
-        Raises:
-            TypeError: If ``tools`` is not an iterable of
-                :class:`~llama_chat.tools.ToolSpec`, or a spec's fields are of
-                other types than it states, or ``reasoning`` is no ``bool``.
-            InvalidArgumentError: If ``tools`` names one tool twice, or a tool
-                without a name.
-            UnsupportedError: If tools are named and the template this
-                conversation would be written with cannot call tools, naming
-                ``tools``; if reasoning is asked and it cannot reason, naming
-                ``reasoning``; or if it keeps no system prompt and the
-                conversation has one, naming ``tools``.
-            OutOfOrderError: If no conversation has been begun, or a tool call
-                has left a reply open.
-            TemplateRefusedError: If the template under the new settings
-                writes an older exchange otherwise once another follows, or a
-                turn kept as generated where it cannot be told apart; begin
-                again then, which writes it as the template does.
-            ContextOverflowError: If the system turn with the declarations
-                would leave no room under ``evict_above_tokens`` for a short
-                question.
-            RuntimeError: If the wrapper is closed, or this thread is still
-                reading a reply.
-        """
-        specs = None
-        if tools is not _UNCHANGED and tools is not None:
-            if not isinstance(tools, Iterable):
-                raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
-                                f"gives, not {tools!r}")
-            specs = list(tools)
-            ensure_declarable(specs)
-        if reasoning is not _UNCHANGED and not isinstance(reasoning, bool):
-            raise TypeError(f"reasoning must be True or False, not {reasoning!r}")
-        with self._held():
-            self._ensure_open()
-            conversation = self._conversation
-            if tools is _UNCHANGED:
-                specs = conversation.tools if conversation.tools_declared else None
-            if reasoning is _UNCHANGED:
-                reasoning = conversation.reasoning
-
-            def accept() -> None:
-                self._templates.ensure_accepts(
-                    specs is not None, tools_field="tools" if specs else None, reasoning=reasoning,
-                    system_prompt_field="tools" if conversation.has_system_prompt else None)
-            conversation.report()
-            conversation.change_settings(specs, reasoning, accept)
-            return conversation.report()
-
     # ----- introspection -------------------------------------------------------
     @property
     def total_tokens(self) -> int:
@@ -746,8 +674,7 @@ class ChatWrapper:
         each such turn's tokens and its messages as the conversation holds
         them, a call written unreadably and a thought included, and the
         messages alone begin any model again. ``tools`` is every declaration,
-        those :meth:`change_settings` gave included, and ``None`` where the
-        conversation was begun without tools and declares none. Safe from any
+        and ``None`` where the conversation was begun without tools. Safe from any
         thread, including while another is mid-generation: all of it is read
         as the newest finished change left it.
         """
@@ -778,7 +705,7 @@ class ChatWrapper:
 
         True from a call until :meth:`reply` closes the turn, the results in
         between included. While it is, :meth:`reply` with a request,
-        :meth:`inject` with an assistant message and :meth:`change_settings` refuse. Safe from any thread,
+        and :meth:`inject` with an assistant message refuse. Safe from any thread,
         as :meth:`conversation` is: as the newest finished change left it.
         """
         return self._conversation.published_turn_open()

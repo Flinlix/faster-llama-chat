@@ -40,7 +40,7 @@ class Eviction:
 
     def keep_newest_history(self, bound: int,
                             refused: Callable[[list[dict]], Exception]) -> None:
-        """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.
+        """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest; what went is the caller's to record.
 
         Raises:
             Exception: What ``refused`` makes of the messages the template refuses to write.
@@ -48,7 +48,6 @@ class Eviction:
         first = len(system_part(self._state.messages))
         if len(self._state.messages) == first:
             return
-        n_before = history_count(self._state.messages)
         opens = [first] + [i for i in exchange_starts(self._state.messages) if i > first]
 
         def length(count: int) -> int:
@@ -85,7 +84,6 @@ class Eviction:
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
         self._state.messages[:] = self._state.messages[:first] + self._state.messages[opens[-kept]:]
-        self.record(n_before, "half_context")
 
     def drop_while_over(self, limit: int, generation_prompt: bool, newest_too: bool = False,
                         tokens_only: bool = False, beside_open_turn: bool = False) -> str | None:

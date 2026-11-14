@@ -245,6 +245,9 @@ class RenderedCache:
                 writes an older exchange otherwise once another follows.
         """
         with self._action():
+            # What the cache holds of a conversation this one may go on with.
+            cached = ([_without_turn(m) for m in self._state.messages if m["role"] != "system"]
+                      if self._state.begun else [])
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
@@ -267,8 +270,7 @@ class RenderedCache:
             limit, room = self._config.evict_above_tokens, self._max_prompt_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
-            self._eviction.keep_newest_history(min(limit, self._config.context_size // 2),
-                                               self._refused_history)
+            self._keep_newest_history(cached)
             self._drop_unplaceable()
             self._state.changes.n_turns_restored = len(kept_turns(self._state.messages))
             if any(m["role"] != "system" for m in self._state.messages) \
@@ -299,27 +301,43 @@ class RenderedCache:
             self._state.changes.n_kept_messages = history_count(self._state.messages)
             self._state.called_in_thought = self._open_turn_in_thought()
             self._state.begun = False
-            self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
             self._state.ahead, self._state.spliced_at = None, None
             self._attempt = self._request = None
             self._pin_opening()
+            # Compared with what the cache holds, which is decoded again only from where they
+            # differ, a stretch it holds no longer removed.
             if self.pending_calls:
-                self._sync(self._settled_while_owed(), logits=False)
+                self._sync(self._settled_while_owed(), logits=False, dropped=True)
             elif self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 prompted = self._prompted()
                 opening = self._prompt_text_start(prompted.tokens)
                 if opening < len(prompted.tokens) and self._memory.keeps_saved_states:
                     # A state saved before the template's text a reply follows, which a cache
                     # that cannot be cut goes back to where what follows is written otherwise.
-                    self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False)
+                    self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False,
+                               dropped=True)
                     self._memory.rest()
-                self._sync(prompted)
+                self._sync(prompted, dropped=True)
             else:
-                self._render_ahead()
+                self._render_ahead(dropped=True)
             self._memory.rest()
             self._state.begun = True
             self._log_begin(sum(m["role"] != "system" for m in history), generated_turns)
+
+    def _keep_newest_history(self, cached: list[dict]) -> None:
+        """Keep the newest of the history being begun that fits under the eviction threshold where the cache holds the oldest of it already, as a conversation this one goes on with, else within half the context; the rest is recorded as evicted."""
+        given, limit = list(self._state.messages), self._config.evict_above_tokens
+        if cached:
+            self._eviction.keep_newest_history(limit, self._refused_history)
+            history = [_without_turn(m) for m in self._state.messages if m["role"] != "system"]
+            if _goes_on_from(history, cached):
+                self._eviction.record(history_count(given), "room")
+                return
+            self._state.messages[:] = given
+        self._eviction.keep_newest_history(min(limit, self._config.context_size // 2),
+                                           self._refused_history)
+        self._eviction.record(history_count(given), "half_context")
 
     def _usable_turns(self, generated_turns: dict | None) -> list[dict]:
         """The saved turns of ``generated_turns`` whose tokens are this model's, every one of them; none where they are another model's."""
@@ -1008,40 +1026,6 @@ class RenderedCache:
             self._render_ahead()
             self._memory.rest()
 
-    def change_settings(self, tools: list[ToolSpec] | None, reasoning: bool, accept=None) -> None:
-        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept.
-
-        ``tools`` other than ``None``, even empty, writes it with the model's
-        template for tools. The cache is decoded again from where the new
-        render first differs. The oldest exchanges go only where the
-        conversation no longer fits.
-
-        Args:
-            accept: Called once the conversation is ready and before anything
-                changes; one that raises refuses the settings.
-
-        Raises:
-            OutOfOrderError: If no conversation was begun or a reply is open.
-            TemplateRefusedError: If the template under them writes an older
-                exchange otherwise once another follows, or a turn kept as
-                generated where it cannot be told apart.
-            ContextOverflowError: If the system prompt with the declarations
-                leaves no room under ``evict_above_tokens`` for a short question.
-        """
-        with self._action():
-            _ensure_ready(self, "change the settings", "change the settings of")
-            if accept is not None:
-                accept()
-            self._state.tools, self._state.reasoning = list(tools or []), reasoning
-            self._state.uses_tool_template = tools is not None
-            self._ensure_room_for_a_question("declare fewer tools")
-            limit = self._config.evict_above_tokens
-            self._state.checks = self._render_checks()
-            self._pin_opening()
-            dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
-            self._render_ahead(dropped=dropped)
-            self._memory.rest()
-
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
         self._memory.pin(self._rendering.opening_length(self._system_part())
@@ -1333,6 +1317,17 @@ _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked
 
 
 # ----- helpers ---------------------------------------------------------------------
+def _without_turn(message: dict) -> dict:
+    """``message`` without the kept turn it may end, for comparing what it says."""
+    return {key: value for key, value in message.items() if key != KEPT_TURN}
+
+
+def _goes_on_from(history: list[dict], cached: list[dict]) -> bool:
+    """Whether ``history`` opens with what ``cached`` ends with, so that a cache holding ``cached`` holds its oldest part."""
+    return bool(history) and any(history[:len(cached) - i] == cached[i:]
+                                 for i in range(len(cached)))
+
+
 def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     """The calls of the newest turn that no result after them answers yet."""
     calling = None
