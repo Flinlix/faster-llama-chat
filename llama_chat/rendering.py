@@ -12,7 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .messages import RESULT_AS_GIVEN, THOUGHT_KEY, exchange_starts, system_part
+from .messages import (CALL_AS_WRITTEN, RESULT_AS_GIVEN, THOUGHT_KEY, UNKNOWN_FUNCTION,
+                       exchange_starts, system_part)
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
@@ -105,10 +106,10 @@ class ConversationRendering:
             last = next((i for i, m in enumerate(messages) if m is kept.last), None)
             if first is not None and last is not None:
                 inside.update(range(first, last + 1))
-        if any(RESULT_AS_GIVEN in m for m in messages):
-            # What a caller gave is the conversation's to give back, not the template's to write.
-            messages = [{key: value for key, value in m.items() if key != RESULT_AS_GIVEN}
-                        if RESULT_AS_GIVEN in m else m for m in messages]
+        if any(RESULT_AS_GIVEN in m or _written_calls(m) for m in messages):
+            # What a caller gave is the conversation's to give back, and a call as the model
+            # wrote it is written in by :meth:`split`: neither is the template's to write.
+            messages = [_without_kept_texts(m) for m in messages]
         if not any(messages[i].get("tool_calls") and messages[i]["content"] for i in inside):
             return messages
         return [{**m, "content": ""} if i in inside and m.get("tool_calls") else m
@@ -121,16 +122,44 @@ class ConversationRendering:
             ValueError: If the template writes a text otherwise than as text in its place.
         """
         given = self._as_given(messages)
-        key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
+        written = {i: text for i, m in enumerate(messages) for text in _written_calls(m)}
+        key = ("split", json.dumps([given, generation_prompt, written], sort_keys=True, default=str))
         if key not in self._memo:
             declarations = self._declarations()
             # The render as it is is the one :meth:`render` makes, and shares its memo.
-            self._memo[key] = split_render(
+            split = split_render(
                 lambda m, declared: self._render_given(
                     m, generation_prompt, None if declared is declarations else declared),
                 given, self._template.fragments.content, declarations,
                 reads_clock=self._template.reads_clock)
+            self._memo[key] = self._calls_as_written(split, written) if split and written else split
         return self._memo[key]
+
+    def _calls_as_written(self, split: SplitRender, written: dict[int, str]) -> SplitRender:
+        """``split`` with each call that could not be read, of the message its index names, written as the model wrote it between the call's opening and closing."""
+        boundary = self._template.call_boundary()
+        if boundary.tool_tokens:
+            opening, closing = (self._reader.token_text(tag) for tag in boundary.tool_tokens)
+        elif boundary.call_texts:
+            opening, closing = (text.strip() for text in boundary.call_texts)
+        else:
+            return split
+        for index in sorted(written, reverse=True):     # the latest first, so earlier places stay
+            name_end = split.call_ends[index]
+            name_start = None if name_end is None else name_end - len(UNKNOWN_FUNCTION)
+            if name_start is None or split.text[name_start:name_end] != UNKNOWN_FUNCTION:
+                continue
+            start = split.text.rfind(opening, 0, name_start)
+            if start < 0:
+                # Named in the turn's header first: the call's own frame follows it.
+                start = split.text.find(opening, name_end)
+                if start < 0 or UNKNOWN_FUNCTION not in split.text[start:split.text.find(
+                        closing, start + len(opening))]:
+                    continue
+            end = split.text.find(closing, max(start + len(opening), name_end))
+            if end >= 0:
+                split = _with_text(split, start + len(opening), end, written[index])
+        return split
 
     def opening_render(self, system: list[dict]) -> str | None:
         """How the template opens a conversation on ``system``, which changes where it writes the date, say."""
@@ -356,3 +385,33 @@ class ConversationRendering:
                 if is_tag:
                     run = start
         return run
+
+
+def _written_calls(message: dict) -> list[str]:
+    """What the model wrote for each call of ``message`` that could not be read."""
+    return [call[CALL_AS_WRITTEN] for call in message.get("tool_calls") or () if CALL_AS_WRITTEN in call]
+
+
+def _without_kept_texts(message: dict) -> dict:
+    """``message`` without what the conversation keeps beside it for itself: a result as given, a call as written."""
+    if RESULT_AS_GIVEN not in message and not _written_calls(message):
+        return message
+    message = {key: value for key, value in message.items() if key != RESULT_AS_GIVEN}
+    if "tool_calls" in message:
+        message["tool_calls"] = [{key: value for key, value in call.items() if key != CALL_AS_WRITTEN}
+                                 for call in message["tool_calls"]]
+    return message
+
+
+def _with_text(split: SplitRender, start: int, end: int, text: str) -> SplitRender:
+    """``split`` with its text from ``start`` to ``end`` replaced by ``text``, the template's own, every place after it moved."""
+    moved = len(text) - (end - start)
+
+    def place(at: int) -> int:
+        return at + moved if at >= end else min(at, start + len(text)) if at > start else at
+
+    own = tuple((place(a), place(b)) for a, b in split.own if b <= start or a >= end)
+    contents = tuple(None if span is None or span[0] < end and span[1] > start
+                     else (place(span[0]), place(span[1])) for span in split.contents)
+    call_ends = tuple(None if at is None else place(at) for at in split.call_ends)
+    return SplitRender(split.text[:start] + text + split.text[end:], own, contents, call_ends)

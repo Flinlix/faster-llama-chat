@@ -44,10 +44,6 @@ from .tools import ToolCall, ToolSpec, result_text
 # How far the count of a question alone may fall short of its length in the system turn's render.
 _NEAR_THE_ROOM_TOKENS = 64
 
-# The name a result carries where no real one is to be had: answering a call
-# that could not be read that far. Which name is used does not change what a
-# template renders around it.
-UNKNOWN_FUNCTION = "unknown"
 # Returned where a window cannot stand for the whole render.
 _WHOLE = object()
 # Where the cache cannot shift, the fraction of the room under the eviction
@@ -615,7 +611,7 @@ class RenderedCache:
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False,
-                     in_thought: bool = False) -> int:
+                     in_thought: bool = False, call_written: str = "") -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -650,6 +646,8 @@ class RenderedCache:
                 generated from it on is no reply's.
             in_thought: Whether the generation ended inside a thought, so that
                 the turn its call leaves open goes on inside it.
+            call_written: What the model wrote for a call it stopped on, kept
+                for one that could not be read, as it is written back.
 
         Returns:
             How many history items were dropped.
@@ -664,7 +662,8 @@ class RenderedCache:
                 return 0
             saved, held = self._state.copied(), list(self._memory.tokens[:generated_from])
             try:
-                recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
+                recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped,
+                                                        call_written)
                 self._state.called_in_thought = called and in_thought
             except BaseException:
                 self._state = saved
@@ -682,7 +681,7 @@ class RenderedCache:
             self._publish()
 
     def _append_reply(self, answer: str, thought: str, calls: list[ToolCall], called: bool,
-                      stopped: bool) -> tuple[str, bool]:
+                      stopped: bool, call_written: str) -> tuple[str, bool]:
         """Add the newest generation's reply to the messages, its turn kept where it called tools.
 
         Returns:
@@ -697,7 +696,8 @@ class RenderedCache:
             answer = self._rendering.written_answer(
                 self._state.messages, answer, thought,
                 (tags.thought_close.strip(), tags.thought_open.strip())) or ""
-        asked = calls or ([ToolCall(UNKNOWN_FUNCTION, {})] if unreadable else [])
+        asked = calls or ([ToolCall("", {}, status="unreadable", text=call_written)]
+                          if unreadable else [])
         message = ({"role": "assistant", "content": answer} if not asked
                    else calling_message(answer, asked, self._state.n_calls))
         if thought:

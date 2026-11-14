@@ -1793,3 +1793,30 @@ def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_
                                                              ToolResult(WEATHER.name, "rainy")))],
                    tools=[WEATHER], reasoning=True)
     assert not run.chat._conversation.called_in_thought
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_conversation_restored_holds_an_unreadable_call_as_the_model_wrote_it(stem):
+    run = _Run(stem)
+    opener, _body, closer = _call_body(run, {"city": "Bonn"})
+    run.context.replies = [ScriptedCall("@@ not a call (("), "Sorry."]
+    run.begin(tools=[WEATHER])
+    reply = run.chat.reply("Weather?", tool_call_policy="yield").finish()
+    if not any(call.status == "unreadable" for call in reply.tool_calls):
+        pytest.skip("the model's text does not open a call on this template")
+    live = run.context.text_of(run.context.cache)
+    saved = run.chat.conversation()
+    unreadable = [step for turn in saved["messages"] if isinstance(turn, ToolTurn)
+                  for step in turn.steps if isinstance(step, ToolCall)]
+    assert [(call.status, call.text.strip()) for call in unreadable] == [("unreadable", "@@ not a call ((")]
+    run.chat.begin(**saved)
+    assert run.chat.conversation() == saved
+    # The call, from its opening to its closing, exactly as the model wrote it.
+    opening, closing = (text.strip() for text in call_marks(run.template, run.reader))
+    if opening not in run.render([{"role": "user", "content": "x"}, {
+            "role": "assistant", "content": "", "tool_calls": [{"id": "call00000", "type": "function",
+            "function": {"name": WEATHER.name, "arguments": {}}}]}], [WEATHER]):
+        pytest.skip("the template writes a past call in another frame than the model writes one")
+    at = live.find("@@ not a call ((")
+    written = live[live.rfind(opening, 0, at):live.find(closing, at) + len(closing)]
+    assert written and written in run.context.text_of(run.context.cache)

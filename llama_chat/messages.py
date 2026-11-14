@@ -170,12 +170,25 @@ _ID_LIMIT = 36 ** _ID_DIGITS
 _FREE_RUN = 1000
 
 
+# The name a call that could not be read is written under, and its result answered with.
+# Which name is used does not change what a template renders around it.
+UNKNOWN_FUNCTION = "unknown"
+# Where a call that could not be read keeps what the model wrote for it, which is written in its place.
+CALL_AS_WRITTEN = "call_as_written"
+
+
 def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:
-    """An assistant message holding ``text`` and ``calls``, each under the id it carries, or, where it carries none, numbered from ``first_id``."""
+    """An assistant message holding ``text`` and ``calls``, each under the id it carries, or, where it carries none, numbered from ``first_id``.
+
+    A call that could not be read is written under :data:`UNKNOWN_FUNCTION`,
+    its text as the model wrote it beside it.
+    """
     numbered = itertools.count(first_id)
     return {"role": "assistant", "content": text, "tool_calls": [
         {"id": call.id or call_id(next(numbered)), "type": "function",
-         "function": {"name": call.name, "arguments": copy.deepcopy(call.arguments)}}
+         "function": {"name": UNKNOWN_FUNCTION if call.status == "unreadable" else call.name,
+                      "arguments": copy.deepcopy(call.arguments)},
+         **({CALL_AS_WRITTEN: call.text} if call.status == "unreadable" else {})}
         for call in calls]}
 
 
@@ -233,7 +246,9 @@ def as_history(messages: list[dict]) -> list:
         thought = [Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []
         said = thought + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
-            steps += said + [ToolCall(c["function"]["name"],
+            steps += said + [ToolCall("", {}, c["id"], "unreadable", c[CALL_AS_WRITTEN])
+                             if CALL_AS_WRITTEN in c else
+                             ToolCall(c["function"]["name"],
                                       copy.deepcopy(c["function"]["arguments"]), c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":

@@ -235,7 +235,13 @@ and one the reply cap or a cancel cut short as `"unfinished"`, the last two
 without a name, arguments or id, and never handed over in the stream. The
 status is of the type `ToolCallStatus`. An
 unreadable call carries in `ToolCall.text` what the model wrote between the
-call's opening and its closing. A `ToolCall` may be kept in a set or used as a
+call's opening and its closing. The conversation keeps it so too: in
+`conversation()` it is a `ToolCall` with that status, that text and its id,
+followed by the failure the model was told, and beginning again writes that
+text between the call's opening and closing, as the model wrote it. A
+template that writes a past call in another frame than the model writes one,
+such as a call format an add-on file names, writes it there as it writes any
+past call. A `ToolCall` may be kept in a set or used as a
 dict key, and equals another only where every field does. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran

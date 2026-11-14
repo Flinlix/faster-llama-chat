@@ -4649,3 +4649,28 @@ only the reply is decoded again. That save would come before the first word:
 23 ms per question on Qwen 3.5 9B and about 65 ms on the 27B models, measured
 in the same run, to spare a decode that runs after the answer. Not built:
 it would make every first word later to save work nobody waits for.
+
+### A call the model wrote unreadably is restored as it wrote it (366.9, 390.2)
+
+366.9 (V4). A call that could not be read was kept as a call to a tool named
+`unknown` with no arguments. Beginning again from `conversation()` wrote that
+call, `fn:unknown{}` say, which the model never wrote, and a real tool named
+`unknown` would have looked as if it had been called. The user asked that a
+restored conversation hold exactly what the model wrote and was told (390.2),
+rather than leaving the call out or only marking it.
+
+The generation now keeps what the model wrote between a call's opening and
+its closing, whitespace included, beside what it reads; the conversation
+keeps it with the unreadable call, which `conversation()` gives back as a
+`ToolCall` with the status `"unreadable"`, that text and its id. The template
+is handed the call under `unknown`, so that it writes its frame and the
+failure the model was told, which names `unknown` as before; the text between
+the call's opening and closing in that render is then replaced by what the
+model wrote, as template text, so a tag the model wrote there is the tag. The
+call's frame is found around the name where the template first writes it,
+or after it where the template names the call in its turn's header first
+(Muse Glimmer). On a template that writes a past call in another frame than
+the model writes one, where no opening of the model's surrounds the name
+(gpt-oss), the call is written as the template writes any past call there,
+as a call that was read would be. The test check applies the same rule,
+worked out on its own from the fake model's call marks.
