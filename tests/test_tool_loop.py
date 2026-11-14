@@ -10,9 +10,10 @@ from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from llama_chat import ChatWrapper, ContextOverflowError, OutOfOrderError, UnsupportedError
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
+from tests.chat_messages import Result, tool_turn
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import FakeContext, ScriptedCall, written_call
 from tests.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
@@ -262,8 +263,8 @@ def test_a_result_resumes_the_same_turn():
 
     assert "".join(e for e in events if isinstance(e, str))
     assert not bool(wrapper.pending_calls)
-    # One assistant message for the whole exchange.
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+    # The call, its result and the reply after it, in one exchange.
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool", "assistant"]
 
 
 def test_a_reply_going_on_after_results_keeps_the_policy_its_turn_was_started_with():
@@ -288,8 +289,8 @@ def test_a_reply_going_on_after_results_keeps_the_policy_its_turn_was_started_wi
 
 def test_a_turn_a_history_left_open_goes_on_under_the_default_policy():
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", [("user", "los"), ToolTurn((ToolCall("clock", {}),
-                                                         ToolResult("clock", "09:00")))])
+    wrapper.begin("persona", [("user", "los"), *tool_turn(ToolCall("clock", {}),
+                                                         Result("clock", "09:00"))])
     fake.call_script = ["fn:other{}"]
     reply = wrapper.reply().finish()
     assert reply.text == "reply" and not wrapper.turn_open
@@ -310,7 +311,8 @@ def test_two_calls_in_a_row_stay_inside_one_turn():
     fake.call_script = []
     list(wrapper.reply(tool_call_policy="yield"))
 
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool",
+                                                  "assistant", "tool", "assistant"]
 
 
 def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
@@ -331,7 +333,8 @@ def test_an_open_turn_outgrows_the_exchange_limit_and_is_trimmed_on_close():
     wrapper.inject_tool_result(ToolCall("first", {}), "ok")
     fake.call_script = []
     list(wrapper.reply(tool_call_policy="yield"))
-    assert len(rows(wrapper)) - 1 == 2     # the newest exchange alone once closed
+    # the newest exchange alone once closed
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool", "assistant"]
     assert rows(wrapper)[0]["role"] == "system"
 
 
@@ -627,7 +630,8 @@ def test_a_running_reply_stops_calling_at_the_ceiling_and_closes_the_turn():
 
     assert len(runs) == 2
     assert not bool(wrapper.pending_calls)
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool",
+                                                  "assistant", "tool", "assistant"]
 
 
 def test_a_declaration_added_later_reaches_the_model():
@@ -843,7 +847,7 @@ def test_turn_open_outlasts_the_pending_calls():
 
     list(wrapper.reply(tool_call_policy="yield"))
     assert not wrapper.turn_open               # closed, and work is allowed again
-    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+    assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool", "assistant"]
     assert fake.cache == held_tokens(wrapper)
     wrapper.reply("weiter").finish()
 
@@ -1349,9 +1353,9 @@ def test_the_calls_owed_a_result_are_read_from_the_wrapper_oldest_first():
 def test_a_history_owes_the_calls_of_its_newest_turn_that_no_result_answers():
     wrapper, _ = tool_wrapper()
     clock, other = ToolCall("clock", {}), ToolCall("other", {})
-    wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other))])
+    wrapper.begin("persona", [("user", "los"), *tool_turn(clock, other)])
     assert without_ids(wrapper.pending_calls) == [clock, other]
-    wrapper.begin("persona", [("user", "los"), ToolTurn((clock, other, ToolResult("clock", "a")))])
+    wrapper.begin("persona", [("user", "los"), *tool_turn(clock, other, Result("clock", "a"))])
     assert without_ids(wrapper.pending_calls) == [other]
 
 
@@ -1460,8 +1464,7 @@ def test_a_batch_past_the_ceiling_is_answered_rather_than_run():
     list(wrapper.reply("frage", tool_call_policy=registry, max_calls=1))
 
     assert len(ran) == 1                       # only the permitted one ran
-    written = [step.result for step in wrapper.conversation()["messages"][-1].steps
-               if isinstance(step, ToolResult)]
+    written = [m["content"] for m in wrapper.conversation()["messages"] if m["role"] == "tool"]
     refusals = [str(result) for result in written if "tool_limit_reached" in str(result)]
     assert len(refusals) == 2                  # the other two were answered
     assert "the limit is 1" in refusals[0]     # and the count reads correctly
@@ -1970,8 +1973,8 @@ def test_a_model_whose_template_for_tools_calls_them_can_call_tools_though_its_d
 
 def test_a_tool_turn_in_a_history_begun_without_tools_is_refused_saying_to_pass_tools():
     chat, _fake = _with_a_template_for_tools()
-    turn = ToolTurn([ToolCall("clock", {}), ToolResult("clock", "12:00")])
-    history = [("user", "Wie spät?"), turn, ("user", "Danke")]
+    turn = tool_turn(ToolCall("clock", {}), Result("clock", "12:00"))
+    history = [("user", "Wie spät?"), *turn, ("user", "Danke")]
     with pytest.raises(UnsupportedError, match="pass tools") as refused:
         chat.begin("persona", history)
     assert refused.value.field == "messages"
@@ -2093,7 +2096,7 @@ def test_a_reply_given_no_policy_takes_the_policy_of_the_turn_open_when_it_runs(
 
 def test_a_turn_a_history_left_open_keeps_the_policy_of_the_first_reply_that_gives_one():
     wrapper, fake = tool_wrapper()
-    wrapper.begin("persona", [("user", "los"), ToolTurn((ToolCall("clock", {}),))],
+    wrapper.begin("persona", [("user", "los"), *tool_turn(ToolCall("clock", {}))],
                   tools=[ToolSpec(name="clock", description="Die Zeit.",
                                        parameters={"type": "object", "properties": {}})])
     wrapper.inject_tool_result(wrapper.pending_calls[0], "12:00")

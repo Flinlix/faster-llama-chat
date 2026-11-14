@@ -14,11 +14,12 @@ import typing
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
-from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from llama_chat.generation import generate
+from tests.chat_messages import Result, tool_turn
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
@@ -939,10 +940,10 @@ def test_what_the_model_cannot_do_is_refused_naming_the_parameter_that_asked_for
     assert not plain.capabilities(tools=True).can_call_tools
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
-    turn = ToolTurn([ToolCall("clock", {}), ToolResult("clock", "12:00")])
+    turn = tool_turn(ToolCall("clock", {}), Result("clock", "12:00"))
     refusals = [
         ("tools", lambda: plain.begin("s", tools=registry.specs())),
-        ("messages", lambda: plain.begin("s", [("user", "hi"), turn])),
+        ("messages", lambda: plain.begin("s", [("user", "hi"), *turn])),
         ("reasoning", lambda: plain.begin("s", reasoning=True)),
     ]
     plain.begin("s")

@@ -29,7 +29,7 @@ from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published, Snapshot,
                                  goes_on_from)
 from .messages import (UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages, calling_message,
-                       exchange_count, exchange_starts, history_count, kept_items,
+                       exchange_count, exchange_starts, history_count,
                        next_call_number, portable_digest, result_message, system_part,
                        with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
@@ -272,7 +272,7 @@ class RenderedCache:
             self._ensure_within(limit, "shorten the history")
             n_kept = len(self._state.messages) - len(system)
             self._leave_out_unreadable()
-            self._changes.n_kept_messages = kept_items(history, n_kept)
+            self._changes.n_kept_messages = n_kept
             self._log_begin(len(history), generated_turns)
             self._state.begun = False
             self._memory.reset()
@@ -404,7 +404,7 @@ class RenderedCache:
 
     # ----- adding messages --------------------------------------------------------------
     def ask(self, text: str, cancel: threading.Event | None = None) -> int:
-        """Decode ``text`` as the next question, with the generation prompt after it; how many history items were dropped for it.
+        """Decode ``text`` as the next question, with the generation prompt after it; how many history messages were dropped for it.
 
         Raises:
             ValueError: If no conversation was begun, a reply is open, or the
@@ -458,7 +458,7 @@ class RenderedCache:
 
     # ----- what an action changed beyond what was asked ------------------------------------
     def report(self, n_evicted_messages: int) -> Report:
-        """The changes since the caller last asked, the actions having evicted ``n_evicted_messages`` history items, and a fresh start for the next."""
+        """The changes since the caller last asked, the actions having evicted ``n_evicted_messages`` history messages, and a fresh start for the next."""
         changes, self._changes = self._changes, Changes()
         return Report(n_evicted_messages=n_evicted_messages,
                       evicted_for=changes.evicted_for if n_evicted_messages else None,
@@ -587,7 +587,7 @@ class RenderedCache:
         return True
 
     def add(self, role: str, text: str) -> int:
-        """Decode a message without a reply after it; returns how many history items were dropped for it.
+        """Decode a message without a reply after it; returns how many history messages were dropped for it.
 
         A question is put in the stand-in's place as :meth:`ask` puts one, the
         generation prompt after it: within the room left for a reply, the
@@ -638,7 +638,7 @@ class RenderedCache:
         return self._rendering.length(self._system_part() + [message], generation_prompt)
 
     def prompt(self) -> int:
-        """Decode the generation prompt after the newest message, a user message, for a reply to it; how many history items were dropped to leave room for the reply.
+        """Decode the generation prompt after the newest message, a user message, for a reply to it; how many history messages were dropped to leave room for the reply.
 
         Raises:
             OutOfOrderError: If no conversation was begun, a reply is open, or
@@ -732,7 +732,7 @@ class RenderedCache:
                 the turn its call leaves open goes on inside it.
 
         Returns:
-            How many history items were dropped.
+            How many history messages were dropped.
         """
         if not self._memory.is_known and not answer and not called:
             # It failed before it said anything the template writes: nothing changes.
@@ -796,7 +796,7 @@ class RenderedCache:
 
     def _after_reply(self, answer: str, called: bool, unreadable: bool, unplaced: bool,
                      rewritten: bool, unreadable_result: dict) -> int:
-        """Answer a call that could not be read, or close the turn and settle the cache; how many history items were dropped.
+        """Answer a call that could not be read, or close the turn and settle the cache; how many history messages were dropped.
 
         Args:
             rewritten: Whether ``answer`` was recorded otherwise than generated.
@@ -873,7 +873,7 @@ class RenderedCache:
             return False
 
     def _answer_unreadable_owed(self) -> int:
-        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; how many history items went for room."""
+        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; how many history messages went for room."""
         dropped = 0
         while self.pending_calls and self.pending_calls[0].status == "unreadable" \
                 and self._unreadable_result is not None:
@@ -920,7 +920,7 @@ class RenderedCache:
         return dropped
 
     def close_unanswered(self) -> int:
-        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history items were dropped.
+        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history messages were dropped.
 
         The newest reply is kept without those calls, its tokens as generated,
         and the results already written for them are taken out again; where the
@@ -945,7 +945,7 @@ class RenderedCache:
             return self._settle()
 
     def add_result(self, call: ToolCall, result) -> int:
-        """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply; how many history items were dropped for it.
+        """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply; how many history messages were dropped for it.
 
         A result too long for the room left drops the oldest exchanges first,
         as a question does, the turn it answers kept whole. Where it still
@@ -1067,7 +1067,7 @@ class RenderedCache:
             self._memory.rest()
 
     def change_settings(self, tools: list[ToolSpec] | None, reasoning: bool, accept=None) -> int:
-        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept; how many history items were dropped.
+        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept; how many history messages were dropped.
 
         ``tools`` other than ``None``, even empty, writes it with the model's
         template for tools. The cache is decoded again from where the new
@@ -1180,7 +1180,7 @@ class RenderedCache:
                 f"{remedy}, or {_RAISE_THE_ROOM}", needed, limit)
 
     def _remove_from(self, first: int) -> int:
-        """Take the messages from ``first`` on out again, then drop what is over the limits; how many history items were dropped."""
+        """Take the messages from ``first`` on out again, then drop what is over the limits; how many history messages were dropped."""
         with self._action():
             gone = self._state.messages[first:]
             del self._state.messages[first:]
@@ -1197,7 +1197,7 @@ class RenderedCache:
 
     # ----- after a reply ----------------------------------------------------------
     def _settle(self) -> int:
-        """Drop what is over the limits, then render and decode ahead for the next question; how many history items were dropped."""
+        """Drop what is over the limits, then render and decode ahead for the next question; how many history messages were dropped."""
         with self._action():
             n_before = history_count(self._state.messages)
             limit = self._config.evict_above_tokens

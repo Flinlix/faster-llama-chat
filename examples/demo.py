@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from llama_chat import ChatWrapper, Config, ToolTurn
+from llama_chat import ChatWrapper, Config
 
 
 def banner(title: str) -> None:
@@ -39,12 +39,8 @@ def load_bar(frac: float, width: int = 40) -> None:
 def show(w: ChatWrapper) -> None:
     history = w.conversation()["messages"]
     print(f"  cache: {w.total_tokens} tokens across {len(history)} messages after the system prompt")
-    for item in history:
-        if isinstance(item, ToolTurn):
-            role, text = "assistant", item.text
-        else:
-            role, text = item["role"], item["content"]
-        print(f"    {role:<10} ({len(text)} chars)")
+    for message in history:
+        print(f"    {message['role']:<10} ({len(str(message['content']))} chars)")
 
 
 def main() -> None:

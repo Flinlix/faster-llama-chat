@@ -25,7 +25,7 @@ from .cache_context import TOOL_USE_TEMPLATE, CacheContext
 from .config import Config, Sampling
 from .errors import (ContextOverflowError, EngineError, InvalidArgumentError, InvalidSettingError,
                      OutOfOrderError, RefusalError, TemplateRefusedError, UnsupportedError)
-from .tools import Thought, ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from .tools import ToolCall, ToolCallStatus, ToolRegistry, ToolSpec
 from .reply import (EVICTION_CAUSES, STOP_REASONS, TOOL_CALL_POLICIES, EvictionCause, Reply,
                     ReplyStream, Report, StopReason, ToolCallPolicy)
 from .resolved_template import Capabilities
@@ -55,9 +55,6 @@ __all__ = [
     "TOOL_CALL_POLICIES",
     "ToolCall",
     "ToolCallStatus",
-    "ToolResult",
-    "ToolTurn",
-    "Thought",
     "ToolSpec",
     "ToolRegistry",
     # For a cache context of one's own, ``ChatWrapper(context=...)``.

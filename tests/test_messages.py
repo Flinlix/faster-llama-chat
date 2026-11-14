@@ -1,11 +1,11 @@
 """A history as begin takes it, and as the messages a template is given."""
 
 import itertools
-from dataclasses import replace
 
 from llama_chat.messages import (as_history, as_messages, call_id, exchange_count,
                                  exchange_starts, next_call_number)
-from llama_chat.tools import ToolCall, ToolResult, ToolTurn
+from llama_chat.tools import ToolCall
+from tests.chat_messages import Result, tool_turn
 
 
 def test_kept_history_opens_on_each_user_turn():
@@ -35,15 +35,15 @@ def test_every_history_comes_back_as_it_went_in():
     histories = [
         [_QUESTION, {"role": "assistant", "content": "a"}],
         [_QUESTION, {"role": "assistant", "content": "a", "reasoning_content": "t"}],
-        [_QUESTION, ToolTurn(("Let me look.", ToolCall("a", {"x": 1}), ToolResult("a", "1"), "ok"))],
-        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
-                              ToolResult("b", "2"), "ok"))],
-        [_QUESTION, ToolTurn((ToolCall("a", {}),))],                  # still owed a result
-        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolResult("a", "1")))],    # open after it
+        [_QUESTION, *tool_turn("Let me look.", ToolCall("a", {"x": 1}), Result("a", "1"), "ok")],
+        [_QUESTION, *tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
+                              Result("b", "2"), "ok")],
+        [_QUESTION, *tool_turn(ToolCall("a", {}))],                  # still owed a result
+        [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1"))],    # open after it
         # Left without a result, or without a reply after it, before a later question.
-        [_QUESTION, ToolTurn((ToolCall("a", {}),)), _QUESTION, {"role": "assistant", "content": "a"}],
-        [_QUESTION, ToolTurn((ToolCall("a", {}), ToolResult("a", "1"))), _QUESTION,
-         ToolTurn((ToolCall("b", {}), ToolResult("b", "2"), "ok"))],
+        [_QUESTION, *tool_turn(ToolCall("a", {})), _QUESTION, {"role": "assistant", "content": "a"}],
+        [_QUESTION, *tool_turn(ToolCall("a", {}), Result("a", "1")), _QUESTION,
+         *tool_turn(ToolCall("b", {}), Result("b", "2"), "ok")],
     ]
     for history in histories:
         back = as_history(as_messages(history))
@@ -58,17 +58,20 @@ def test_a_message_given_as_a_pair_comes_back_as_its_dictionary():
     assert all(isinstance(item, dict) for item in as_history(as_messages(pairs)))
 
 
-def _without_ids(item):
-    if not isinstance(item, ToolTurn):
-        return item
-    return ToolTurn(tuple(replace(step, id="") if isinstance(step, ToolCall) else step
-                          for step in item.steps))
+def _without_ids(message):
+    """``message`` as it was given: its calls without the ids they were given, a result without the call and function it answers."""
+    if message["role"] == "tool":
+        return {key: value for key, value in message.items() if key not in ("tool_call_id", "name")}
+    if "tool_calls" not in message:
+        return message
+    return {**message, "tool_calls": [{key: value for key, value in call.items() if key != "id"}
+                                      for call in message["tool_calls"]]}
 
 
 def test_each_result_of_a_batch_answers_its_own_call():
-    turn = ToolTurn((ToolCall("a", {}), ToolCall("b", {}), ToolResult("a", "1"),
-                     ToolResult("b", "2"), "ok"))
-    messages = as_messages([("user", "q"), turn])
+    turn = tool_turn(ToolCall("a", {}), ToolCall("b", {}), Result("a", "1"),
+                     Result("b", "2"), "ok")
+    messages = as_messages([("user", "q"), *turn])
     calls = [call["id"] for m in messages for call in m.get("tool_calls", [])]
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == calls
 
@@ -89,7 +92,7 @@ def test_ids_from_a_history_never_push_the_next_one_past_nine_characters():
                                                                   "callbacks"}
 
 
-def test_the_count_of_history_items_is_what_reading_the_history_back_gives():
+def test_the_count_of_history_messages_is_what_reading_the_history_back_gives():
     import itertools
 
     from llama_chat.messages import as_history, history_count

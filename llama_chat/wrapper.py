@@ -29,7 +29,7 @@ from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingE
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
-from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_declarable,
+from .tools import (ToolCall, ToolRegistry, ToolSpec, ensure_declarable,
                     unwritable_failure)
 
 _log = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ class ChatWrapper:
         self._turn_budget = _CallBudget(None)
 
     def begin(self, system_prompt: str,
-              messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
+              messages: list[tuple[str, str] | dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False, generated_turns: dict | None = None) -> Report:
         """Reset the conversation: prefill the system prompt and recent history.
@@ -135,15 +135,20 @@ class ChatWrapper:
             system_prompt: Always kept, never evicted. Empty, it is no system
                 message at all, and the conversation opens as the template
                 opens one without.
-            messages: Optional history, oldest first: ``(role, text)`` pairs
-                or ``{"role": role, "content": text}`` dictionaries, the role
-                ``"user"`` or ``"assistant"``, a reply's dictionary with its
-                thought under ``"reasoning_content"`` where it has one, and a
-                :class:`~llama_chat.tools.ToolTurn` for an assistant turn that
-                called tools, written as this model's template writes one.
-                A history that ends on a tool turn's result leaves that turn
-                open, as a result written into a live turn does, for
-                :meth:`reply` to go on with. Only the most recent are kept,
+            messages: Optional history, oldest first, as chat messages:
+                ``{"role": "user", "content": text}``; a reply,
+                ``{"role": "assistant", "content": text}``, with its thought
+                under ``"reasoning_content"`` and its calls under
+                ``"tool_calls"`` where it has them, each call
+                ``{"id": id, "type": "function", "function": {"name": name,
+                "arguments": dict}}``; and a call's result,
+                ``{"role": "tool", "tool_call_id": id, "content": result}``,
+                the result text or anything JSON writes, given in the order
+                of the calls. A ``(role, text)`` pair stands for a question
+                or a reply without calls. A call without an id is given one.
+                A history that ends on a call or a result leaves that turn
+                open, as a live turn is left, for :meth:`reply` to go on
+                with. Only the most recent are kept,
                 from a user turn on: those that fit with the system prompt in
                 half the context, at least the newest exchange, and no more
                 than ``max_history_exchanges``. Older ones are dropped
@@ -184,10 +189,10 @@ class ChatWrapper:
                 on, cannot fit beside them, or ``messages`` hold no user
                 message and cannot fit beside them either.
             TypeError: If the system prompt or a history message's text is
-                not a ``str``, a history item is of another form, or
+                not a ``str``, a history message is of another form, or
                 ``tools`` holds anything but tool specs.
             UnsupportedError: If ``tools`` names anything, or the history
-                holds a tool turn, and the template this conversation is
+                holds a call or a result, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
                 that template cannot reason; or if a system prompt is given and
                 it has no system turn.
@@ -195,8 +200,9 @@ class ChatWrapper:
                 ``reasoning`` or ``system_prompt``. :meth:`capabilities` says
                 beforehand what is accepted.
             InvalidArgumentError: If a history message has another role, or
-                a dictionary other keys; if ``tools`` names one tool twice; or
-                if two calls of the history carry one id.
+                a dictionary other keys; if ``tools`` names one tool twice; if
+                two calls of the history carry one id; or if a result answers
+                no call owed one, or not the oldest.
             TemplateRefusedError: If the template refuses to write the
                 conversation.
             RuntimeError: If the wrapper is closed, or this thread is still
@@ -214,7 +220,7 @@ class ChatWrapper:
             specs = None if tools is None else list(tools)
             ensure_declarable(specs or [])
             template = self._templates.for_conversation(specs is not None)
-            if specs or any(isinstance(item, ToolTurn) for item in messages):
+            if specs or any(_calls_tools(item) for item in messages):
                 if specs is None and not template.can_call_tools \
                         and self._templates.capabilities(True).can_call_tools:
                     raise UnsupportedError(
@@ -254,8 +260,8 @@ class ChatWrapper:
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
 
         Returns:
-            What it changed beyond what was asked: the history items evicted
-            to make room, a tool turn counting as one, and why; a turn it
+            What it changed beyond what was asked: the history messages evicted
+            to make room, and why; a turn it
             closed or a question it joined.
 
         Raises:
@@ -515,7 +521,7 @@ class ChatWrapper:
                 tool's would be, and a warning is logged.
 
         Returns:
-            What it changed beyond what was asked: the history items evicted
+            What it changed beyond what was asked: the history messages evicted
             for it, the results cut to fit, and whether the turn closed for
             want of room instead, its result dropped.
 
@@ -597,8 +603,8 @@ class ChatWrapper:
                 on; left out, unchanged.
 
         Returns:
-            What it changed beyond what was asked: the history items evicted
-            to make room, a tool turn counting as one, and why.
+            What it changed beyond what was asked: the history messages evicted
+            to make room, and why.
 
         Raises:
             TypeError: If ``tools`` is not an iterable of
@@ -716,12 +722,11 @@ class ChatWrapper:
         ``generated_turns`` is ``None`` where no turn is kept as generated; it is a
         JSON-ready dictionary, only meaningful to this model, and the
         messages alone begin any model again. ``messages`` is every message after the
-        system prompt, oldest first: each message a ``{"role", "content"}``
-        dictionary, with ``"reasoning_content"`` where the template keeps a
-        reply's thought, and a :class:`~llama_chat.tools.ToolTurn` for
-        an assistant turn that called tools, with its thoughts, calls and
-        results; a call the model wrote unreadably is a call with the status
-        ``"unreadable"`` and no text. ``tools`` is every declaration, those of
+        system prompt, oldest first, as the chat messages :meth:`begin` takes:
+        a reply with ``"reasoning_content"`` where the template keeps its
+        thought and ``"tool_calls"`` where it called tools, and each result
+        as its caller gave it; a call the model wrote unreadably holds
+        ``"unreadable": True``, no name and no arguments. ``tools`` is every declaration, those of
         :meth:`change_settings` gave included, and ``None`` where the conversation
         was begun without tools and declares none. Safe from any thread, including while
         another is mid-generation: all of it is read as the newest finished
@@ -1026,7 +1031,7 @@ class ChatWrapper:
         return settled
 
     def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> int:
-        """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history items were evicted for them."""
+        """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
         return sum(self._conversation.add_result(call, _explain_failure(result, may_call_again))
                    for call, result in settled)
 
@@ -1182,7 +1187,7 @@ class ChatWrapper:
 
     def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
                       may_call_again: bool) -> int:
-        """Record what one generation left and settle the cache after it; how many history items were evicted.
+        """Record what one generation left and settle the cache after it; how many history messages were evicted.
 
         A call that could not be read ends the generation as
         ``"unreadable_tool_call"``, and is answered with a failure that says
@@ -1347,3 +1352,8 @@ def _explain_failure(result, may_call_again: bool):
     return {**result,
             "message": f"the tool call failed: {reason}. "
                        + ("try again" if may_call_again else "do not call again")}
+
+
+def _calls_tools(item) -> bool:
+    """Whether the history item ``item`` holds a call or a call's result."""
+    return isinstance(item, dict) and (item.get("role") == "tool" or bool(item.get("tool_calls")))

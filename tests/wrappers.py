@@ -420,21 +420,14 @@ def rendered_close(fake, reasoning=False) -> str:
 
 def rows(wrapper) -> list[dict]:
     """The conversation as ``{"role", "text"}`` rows, the system prompt first, read from what the wrapper publishes."""
-    from llama_chat.tools import ToolTurn
     saved = wrapper.conversation()
     system = saved["system_prompt"]
     found = [{"role": "system", "text": system}] if system else []
-    for item in saved["messages"]:
-        if isinstance(item, ToolTurn):
-            role, text = "assistant", item.text
-        else:
-            role, text = item["role"], item["content"]
-        found.append({"role": role, "text": text})
-    return found
+    return found + [{"role": m["role"], "text": m["content"]} for m in saved["messages"]]
 
 
 def add_tools(wrapper, specs) -> int:
-    """Declare ``specs`` beside the tools the conversation declares already, as one that adds tools does; how many history items went."""
+    """Declare ``specs`` beside the tools the conversation declares already, as one that adds tools does; how many history messages went."""
     held = wrapper.conversation()["tools"] or []
     known = {spec.name for spec in held}
     return wrapper.change_settings(

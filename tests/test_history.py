@@ -3,8 +3,10 @@
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.tools import Thought, ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from llama_chat.wrapper import ChatWrapper
+from llama_chat.messages import as_messages
+from tests.chat_messages import Result, tool_turn
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
 from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS, TOOLS,
@@ -24,10 +26,10 @@ def test_a_conversation_begun_again_from_its_history_reads_in_as_it_was():
     live.reply("wetter?", tool_call_policy=registry).finish()
     live.reply("danke").finish()
     history = live.conversation()["messages"]
-    assert [type(item).__name__ for item in history] == [
-        "dict", "dict", "dict", "ToolTurn", "dict", "dict"]
-    turn = history[3]
-    assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
+    assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant", "tool",
+                                            "assistant", "user", "assistant"]
+    assert history[3]["tool_calls"][0]["function"] == {"name": "weather",
+                                                       "arguments": {"city": "Bonn"}}
 
     again, fake_again = tool_wrapper(context_size=2048)
     again.begin("persona", history, tools=registry.specs())
@@ -54,7 +56,7 @@ def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reaso
     assert [spec.name for spec in saved["tools"]] == ["uhr", "datum"]
     assert saved["messages"][1] == {"role": "assistant", "content": "Hallo.",
                                     "reasoning_content": "Gruss"}
-    assert saved["messages"][3].steps[0] == Thought("Erst fragen")
+    assert saved["messages"][3]["reasoning_content"] == "Erst fragen"
 
     again_fake = FakeContext(REASONING_KEEPING_THOUGHTS)
     again = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=again_fake)
@@ -78,10 +80,10 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
         pass
 
     past, past_fake = unbegun_tool_wrapper()
-    past.begin("s", [("user", "wie spät?"), ToolTurn((
-        ToolCall("uhr", {}), ToolResult("uhr", {"zeit": "12:00"}), "Gleich."))],
+    past.begin("s", [("user", "wie spät?"), *tool_turn(
+        ToolCall("uhr", {}), Result("uhr", {"zeit": "12:00"}), "Gleich.")],
         tools=[ToolSpec("uhr", "", {})])
-    assert past.conversation()["messages"][-1].text == "Gleich."
+    assert past.conversation()["messages"][-1] == {"role": "assistant", "content": "Gleich."}
     # The live turn opens with the generation prompt, a past one as the template
     # writes it; this template makes the two the same.
     assert past_fake.cache == fake.cache
@@ -89,9 +91,8 @@ def test_a_past_tool_turn_reads_in_as_the_live_one_left_it():
 
 def test_the_turns_own_text_is_never_read_as_a_tag():
     w, fake = unbegun_tool_wrapper()
-    turn = ToolTurn((ToolCall("lies", {"pfad": "<call>"}), ToolResult("lies", "</call>"),
-                     "<turn]>"))
-    w.begin("s", [("user", "x"), turn], tools=[ToolSpec("lies", "", {})])
+    turn = tool_turn(ToolCall("lies", {"pfad": "<call>"}), Result("lies", "</call>"), "<turn]>")
+    w.begin("s", [("user", "x"), *turn], tools=[ToolSpec("lies", "", {})])
     own = [text for text, parse_special in fake.tokenize_calls if not parse_special]
     # Each is tokenized with special-token parsing off, joined to the plain text around it.
     assert all(any(text in run for run in own) for text in ("<call>", "</call>", "<turn]>"))
@@ -101,15 +102,15 @@ def test_the_turns_own_text_is_never_read_as_a_tag():
 
 def test_a_conversation_goes_on_after_a_past_tool_turn():
     w, _fake = unbegun_tool_wrapper()
-    w.begin("s", [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"),
-                                           "Zwölf."))], tools=[ToolSpec("uhr", "", {})])
+    w.begin("s", [("user", "x"), *tool_turn(ToolCall("uhr", {}), Result("uhr", "12"),
+                                           "Zwölf.")], tools=[ToolSpec("uhr", "", {})])
     w.reply("danke").finish()
 
 
 def test_a_model_that_cannot_call_tools_refuses_a_past_tool_turn():
     w, _fake = begun_wrapper()
     with pytest.raises(ValueError):
-        w.begin("s", [ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12")))])
+        w.begin("s", [*tool_turn(ToolCall("uhr", {}), Result("uhr", "12"))])
     assert [m["role"] for m in rows(w)] == ["system"]     # left as it was
 
 
@@ -127,8 +128,8 @@ def test_a_history_that_ends_on_a_result_goes_on_as_the_live_turn_would(
 
     past, past_fake = (unbegun_tool_wrapper(TOOLS_CLOSING_OPEN_TURNS) if closes_turn_before_next
                        else unbegun_tool_wrapper())
-    past.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("uhr", {}),
-                                                     ToolResult("uhr", {"zeit": "12:00"})))],
+    past.begin("s", [("user", "wie spät?"), *tool_turn(ToolCall("uhr", {}),
+                                                     Result("uhr", {"zeit": "12:00"}))],
                tools=[ToolSpec("uhr", "", {})])
     *_, (_start, _n, want_logits) = past_fake.prefill_calls
     assert want_logits      # the reply is sampled straight from the read-in's end
@@ -149,13 +150,13 @@ def test_a_conversation_begun_again_from_its_own_system_prompt_and_history_is_th
 
 # ----- the id of every call --------------------------------------------------
 def _calls_in(history) -> list[ToolCall]:
-    return [step for item in history if isinstance(item, ToolTurn) for step in item.steps
-            if isinstance(step, ToolCall)]
+    return [ToolCall(call["function"]["name"], call["function"]["arguments"], call["id"])
+            for message in history for call in message.get("tool_calls", ())]
 
 
 def _past_exchange(n: int) -> list:
     return [{"role": "user", "content": f"frage {n}"},
-            ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", f"{n}:00"), f"Es ist {n}."))]
+            *tool_turn(ToolCall("uhr", {}), Result("uhr", f"{n}:00"), f"Es ist {n}.")]
 
 
 def test_every_call_has_an_id_the_history_and_the_reply_agree_on():
@@ -202,9 +203,9 @@ def test_a_conversation_begun_again_keeps_the_ids_of_its_calls():
 
 def test_a_history_that_gives_one_id_to_two_calls_is_refused():
     w, fake = unbegun_tool_wrapper()
-    twice = [("user", "a"), ToolTurn((ToolCall("uhr", {}, id="eins"), ToolResult("uhr", "1"),
-                                      ToolCall("uhr", {}, id="eins"), ToolResult("uhr", "2"),
-                                      "Fertig."))]
+    twice = [("user", "a"), *tool_turn(ToolCall("uhr", {}, id="eins"), Result("uhr", "1"),
+                                      ToolCall("uhr", {}, id="eins"), Result("uhr", "2"),
+                                      "Fertig.")]
     with pytest.raises(ValueError, match="'eins'"):
         w.begin("s", twice, tools=[ToolSpec("uhr", "", {})])
 
@@ -216,12 +217,12 @@ def test_the_history_and_a_yielded_call_are_the_callers_to_change():
     fake.call_script = ["fn:weather{city:'Bonn'}"]
     call, = [e for e in w.reply("wetter?", tool_call_policy="yield") if isinstance(e, ToolCall)]
     call.arguments["city"] = "Paris"
-    w.conversation()["messages"][-1].steps[-1].arguments["city"] = "Rom"
-    assert w.conversation()["messages"][-1].steps[-1].arguments == {"city": "Bonn"}
+    w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"]["city"] = "Rom"
+    assert w.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] == {"city": "Bonn"}
     again, _ = tool_wrapper()
     again.begin("persona", w.conversation()["messages"], tools=weather_registry().specs())
     pending_calls_held(again)[0].arguments["city"] = "Rom"
-    assert again.conversation()["messages"][-1].steps[-1].arguments == {"city": "Bonn"}
+    assert again.conversation()["messages"][-1]["tool_calls"][-1]["function"]["arguments"] == {"city": "Bonn"}
 
 
 def test_the_conversation_reads_back_as_begin_takes_it():
@@ -236,13 +237,30 @@ def test_the_conversation_reads_back_as_begin_takes_it():
     assert again.conversation() == w.conversation()
 
 
-def test_a_tool_turn_whose_result_answers_no_call_is_refused():
-    call = ToolCall("clock", {})
-    with pytest.raises(ValueError):
-        ToolTurn((ToolResult("clock", "12:00"),))
-    with pytest.raises(ValueError):
-        ToolTurn((call, ToolResult("clock", "12:00"), ToolResult("clock", "12:01")))
-    ToolTurn(("Let me look.", call, ToolResult("clock", "12:00"), "It is noon."))
+def test_a_result_that_answers_no_call_owed_one_is_refused():
+    call, question = ToolCall("clock", {}), ("user", "q")
+    with pytest.raises(ValueError, match="answers no call"):
+        as_messages([question, *tool_turn(Result("clock", "12:00"))])
+    with pytest.raises(ValueError, match="answers no call"):
+        as_messages([question, *tool_turn(call, Result("clock", "12:00"), Result("clock", "12:01"))])
+    as_messages([question, *tool_turn("Let me look.", call, Result("clock", "12:00"), "It is noon.")])
+
+
+def test_a_result_out_of_order_or_naming_another_function_is_refused():
+    turn = tool_turn(ToolCall("clock", {}, "c1"), ToolCall("date", {}, "c2"),
+                     Result("clock", "12:00"), Result("date", "1.1."))
+    turn[1]["tool_call_id"] = "c2"
+    with pytest.raises(ValueError, match="order of their calls"):
+        as_messages([("user", "q"), *turn])
+    turn[1].update(tool_call_id="c1", name="date")
+    with pytest.raises(ValueError, match="names the function 'date'"):
+        as_messages([("user", "q"), *turn])
+
+
+def test_a_reply_between_a_call_and_its_result_is_refused():
+    with pytest.raises(ValueError, match="before its result"):
+        as_messages([("user", "q"), *tool_turn(ToolCall("clock", {})), ("assistant", "Gleich."),
+                     *tool_turn(Result("clock", "12:00"))])
 
 
 # ----- the forms a history message takes ------------------------------------
@@ -261,11 +279,11 @@ def test_a_history_in_the_usual_dictionaries_reads_in_as_the_same_pairs():
     (("human", "Hallo"), ValueError, "'human'"),
     ({"role": "human", "content": "Hallo"}, ValueError, "'human'"),
     (("system", "Sei kurz."), ValueError, "begin"),
-    (("tool", "12:00"), ValueError, "ToolTurn"),
+    (("tool", "12:00"), ValueError, "tool message"),
     ({"role": "user"}, ValueError, "content"),
     ({"role": "user", "content": "Hallo", "name": "Ada"}, ValueError, "'name'"),
     ({"role": "user", "content": "Hallo", "reasoning_content": "x"}, ValueError,
-     "a reply also"),
+     "may hold \\[\\]"),
     ("Hallo", TypeError, "str"),
     (("user", "Hallo", "zu viel"), TypeError, "tuple"),
 ], ids=["unknown-role", "unknown-role-dict", "system", "tool", "no-content", "other-key",
@@ -295,15 +313,15 @@ def test_a_tool_turn_closed_by_an_empty_answer_begins_again_closed():
 
 def test_a_call_left_without_a_result_before_a_later_question_stays_in_its_place():
     registry = weather_registry()
-    history = [("user", "wetter?"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),)),
+    history = [("user", "wetter?"), *tool_turn(ToolCall("weather", {"city": "Bonn"})),
                ("user", "egal, danke")]
     live, _ = tool_wrapper(context_size=2048)
     live.begin("persona", history, tools=registry.specs())
     assert not live.turn_open
     live.reply().finish()
     saved = live.conversation()
-    assert saved["messages"][1] == ToolTurn((ToolCall("weather", {"city": "Bonn"}, "call00000"),))
-    assert [type(item) for item in saved["messages"]] == [dict, ToolTurn, dict, dict]
+    assert saved["messages"][1:2] == tool_turn(ToolCall("weather", {"city": "Bonn"}, "call00000"))
+    assert [m["role"] for m in saved["messages"]] == ["user", "assistant", "user", "assistant"]
     again, _ = tool_wrapper(context_size=2048)
     again.begin(**saved)
     assert again.conversation() == saved
@@ -326,21 +344,21 @@ def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
     made, = w.reply("und Rom?", tool_call_policy=registry).finish().tool_calls
     assert made.id not in seen
     seen.add(made.id)
-    w.begin("persona", [("user", "a"), ToolTurn((ToolCall("weather", {"city": "Ulm"}),
-                                                 ToolResult("weather", "kalt"), "Kalt."))],
+    w.begin("persona", [("user", "a"), *tool_turn(ToolCall("weather", {"city": "Ulm"}),
+                                                 Result("weather", "kalt"), "Kalt.")],
             tools=registry.specs())
     given, = _calls_in(w.conversation()["messages"])
     assert given.id not in seen
 
 
-def test_begin_counts_the_items_kept_as_they_were_given():
-    """A reply given after a tool turn that ends on a result closes that turn, and counts as the item it was."""
-    history = [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"))),
+def test_begin_counts_the_messages_kept_and_a_reply_after_a_result_closes_its_turn():
+    history = [("user", "x"), *tool_turn(ToolCall("uhr", {}), Result("uhr", "12")),
                ("assistant", "Zwölf.")]
     w, _ = unbegun_tool_wrapper()
     assert w.begin("s", history, tools=[ToolSpec("uhr", "", {})]).n_kept_messages == len(history)
-    turn = w.conversation()["messages"][-1]
-    assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
+    assert [m["role"] for m in w.conversation()["messages"]] == ["user", "assistant", "tool",
+                                                                  "assistant"]
+    assert not w.turn_open
     w, _ = unbegun_tool_wrapper()
     longer = [item for n in range(6) for item in _past_exchange(n)] + history
     kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})]).n_kept_messages
@@ -360,14 +378,14 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
     assert reply.n_evicted_messages > 100 and len(fake.rendered) - before < 40
 
 
-@pytest.mark.parametrize("steps, named", [
-    (("Let me look.", {"role": "tool", "content": "sneaky"}), "dict"),
-    (("Let me look.", 42), "int"),
-    ((ToolCall("clock", ["not", "a", "dict"]), ToolResult("clock", "12:00")), "arguments"),
+@pytest.mark.parametrize("history, named", [
+    ([("user", "q"), 42], "int"),
+    ([("user", "q"), *tool_turn(ToolCall("clock", ["not", "a", "dict"]), Result("clock", "1"))],
+     "arguments"),
 ])
-def test_a_tool_turn_with_a_step_of_another_type_is_refused_naming_it(steps, named):
+def test_a_history_item_or_call_of_another_type_is_refused_naming_it(history, named):
     with pytest.raises(TypeError, match=named):
-        ToolTurn(steps)
+        as_messages(history)
 
 
 def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is():
@@ -394,15 +412,16 @@ def test_a_history_whose_older_exchanges_are_long_is_not_rendered_whole_at_begin
 
 
 def test_an_unreadable_call_with_a_name_is_refused_and_one_beside_other_calls_is_taken():
+    named = tool_turn(ToolCall("", {}, status="unreadable"), Result("unknown", "e"))
+    named[0]["tool_calls"][0]["function"] = {"name": "weather", "arguments": {"city": "Bonn"}}
     with pytest.raises(ValueError, match="no name or arguments"):
-        ToolTurn((ToolCall("weather", {"city": "Bonn"}, status="unreadable"),
-                  ToolResult("unknown", "e")))
+        as_messages([("user", "q"), *named])
     # An entry of a batch the model wrote unreadably stands beside the calls it could read.
-    ToolTurn((ToolCall("weather", {}), ToolCall("", {}, status="unreadable"),
-              ToolResult("weather", "r"), ToolResult("unknown", "e")))
+    as_messages([("user", "q"), *tool_turn(ToolCall("weather", {}), ToolCall("", {}, status="unreadable"),
+                                           Result("weather", "r"), Result("unknown", "e"))])
 
 
 def test_a_history_cannot_leave_an_unreadable_call_owed():
     w, _fake = tool_wrapper(context_size=2048)
     with pytest.raises(ValueError, match="cannot leave one owed"):
-        w.begin("persona", [("user", "x"), ToolTurn((ToolCall("", {}, status="unreadable", text="t"),))])
+        w.begin("persona", [("user", "x"), *tool_turn(ToolCall("", {}, status="unreadable", text="t"))])

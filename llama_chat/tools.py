@@ -19,8 +19,7 @@ from typing import Any, Literal
 
 from .errors import InvalidArgumentError
 
-__all__ = ["Thought", "ToolCall", "ToolCallStatus", "ToolRegistry", "ToolResult", "ToolSpec",
-           "ToolTurn"]
+__all__ = ["ToolCall", "ToolCallStatus", "ToolRegistry", "ToolSpec"]
 
 # Whether a call the model wrote was read: whole, not readable, or cut short by the
 # reply cap or a cancel.
@@ -131,79 +130,6 @@ def unwritable_failure(result) -> dict | None:
     except ValueError as e:
         return {"error": "unwritable_result", "message": str(e)}
     return None
-
-
-@dataclass(frozen=True)
-class Thought:
-    """What the model thought in a tool turn before the text and the calls after it, as the template keeps a past reply's thought.
-
-    Attributes:
-        text: The thought, without its tags.
-    """
-
-    text: str
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    """What one call returned, as the conversation already holds it.
-
-    Attributes:
-        name: The function that was called.
-        result: What it returned: text as it is, anything else as JSON.
-    """
-
-    name: str
-    result: object
-
-
-@dataclass(frozen=True)
-class ToolTurn:
-    """One assistant turn of a history that called tools, for ``begin``.
-
-    Attributes:
-        steps: The turn in the order it was written: the model's text as a
-            ``str``, its thought as a :class:`Thought`, each call as a
-            :class:`ToolCall`, and each result as a :class:`ToolResult`, each
-            result after the call it answers.
-
-    A call with the status ``"unreadable"`` has no name and no arguments, as a
-    conversation keeps one.
-
-    Raises:
-        ValueError: If a step is none of these, a call's arguments are not a
-            ``dict``, an unreadable call does not stand alone, or a result
-            answers no call made before it in the turn.
-    """
-
-    steps: tuple
-
-    def __post_init__(self) -> None:
-        owed = 0
-        for step in self.steps:
-            if isinstance(step, ToolCall) and step.status == "unreadable" and (
-                    step.name or step.arguments):
-                raise InvalidArgumentError("steps", "an unreadable call in a ToolTurn has no name "
-                                                    f"or arguments, as a conversation keeps one, "
-                                                    f"not {step!r}")
-            if not isinstance(step, (str, Thought, ToolCall, ToolResult)):
-                raise TypeError(f"a ToolTurn's step is a str, a Thought, a ToolCall or a "
-                                 f"ToolResult, not {type(step).__name__}: {step!r}")
-            if isinstance(step, ToolCall):
-                if not isinstance(step.arguments, dict):
-                    raise TypeError(f"the call to {step.name!r} in a ToolTurn has arguments "
-                                     f"that are not a dict: {step.arguments!r}")
-                owed += 1
-            elif isinstance(step, ToolResult):
-                if not owed:
-                    raise InvalidArgumentError("steps", f"the result for {step.name!r} answers no call made "
-                                     "before it in its ToolTurn")
-                owed -= 1
-
-    @property
-    def text(self) -> str:
-        """What the model wrote in this turn, its calls and results left out."""
-        return "".join(step for step in self.steps if isinstance(step, str))
 
 
 @dataclass

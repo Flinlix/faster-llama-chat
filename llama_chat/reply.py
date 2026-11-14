@@ -100,12 +100,12 @@ class Report:
     """What an action changed beyond what was asked for, each such change also logged once.
 
     Attributes:
-        n_evicted_messages: History items that went, a tool turn counting as
-            one.
+        n_evicted_messages: History messages that went, each call's result
+            counting as one.
         evicted_for: One of :data:`EVICTION_CAUSES`, why they went; ``None``
             where none did.
-        n_kept_messages: Of a history given to ``begin``, how many items it
-            kept; ``None`` for any other action.
+        n_kept_messages: Of a history given to ``begin``, how many messages
+            it kept; ``None`` for any other action.
         n_left_out_calls: Calls the model wrote unreadably that ``begin`` left
             out with their error result, no generated turn holding them.
         n_turns_restored: Turns ``begin`` restored as generated, from the

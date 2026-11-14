@@ -202,4 +202,4 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     assert "09:00" not in row["text"]               # nor is the result
     held = fake.text_of(fake.cache)
     assert "clock" in held and "09:00" in held      # yet both reached the cache
-    assert wrapper.conversation()["messages"][-1].steps[-1] == resumed   # and that is what is read back
+    assert wrapper.conversation()["messages"][-1]["content"] == resumed   # and that is what is read back

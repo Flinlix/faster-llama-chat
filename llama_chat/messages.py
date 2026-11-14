@@ -1,4 +1,4 @@
-"""A conversation's history as :meth:`~llama_chat.wrapper.ChatWrapper.begin` takes it, and as the messages a chat template is given."""
+"""A conversation's history as :meth:`~llama_chat.wrapper.ChatWrapper.begin` takes it and :meth:`~llama_chat.wrapper.ChatWrapper.conversation` gives it, and as the messages a chat template is given."""
 
 from __future__ import annotations
 
@@ -8,107 +8,190 @@ import hashlib
 import itertools
 import json
 import re
-from dataclasses import replace
 
 from .errors import InvalidArgumentError
-from .tools import Thought, ToolCall, ToolResult, ToolTurn, result_text
+from .tools import ToolCall, result_text
 
 
 # The roles a message of the caller's takes: a question and a reply.
 MESSAGE_ROLES = ("user", "assistant")
 # Where a message holds a reply's thought, which the template is handed in the form it reads.
 THOUGHT_KEY = "reasoning_content"
+# The name a call that could not be read is written under, and its result answered with.
+# Which name is used does not change what a template renders around it.
+UNKNOWN_FUNCTION = "unknown"
+# The mark of a call that could not be read: written only as a kept turn's tokens hold it,
+# else left out at a begin.
+UNREADABLE_CALL = "unreadable"
 
 
 def as_messages(history, min_call_number: int = 0) -> list[dict]:
     """``begin``'s history as the messages a template is given.
 
-    A tool turn becomes its assistant messages, each holding the calls made
-    before a result and the thought before them, and the results after them,
-    each answering its own call. A call keeps the id it carries; one without
-    takes the next id this library writes after every id of the history, and
-    numbered from ``min_call_number`` at least, so no two calls share one.
+    Each item is a ``(role, text)`` pair or a chat message: a question, a
+    reply with its thought under :data:`THOUGHT_KEY` and its calls under
+    ``tool_calls``, or a call's result. A call keeps the id it carries; one
+    without takes the next id this library writes after every id of the
+    history, and numbered from ``min_call_number`` at least, so no two calls
+    share one. A result answers the oldest call still owed one since the
+    newest question, in the order the calls were made.
 
     Raises:
-        TypeError: If an item is neither a ``(role, text)`` pair, a message
-            dictionary nor a :class:`~llama_chat.tools.ToolTurn`, or a text
-            or a thought is not a ``str``.
-        ValueError: If a dictionary holds other keys than ``role``,
-            ``content`` and, for a reply, :data:`THOUGHT_KEY`, if a role is
-            not one of :data:`MESSAGE_ROLES`, or if two calls of the history
-            carry the same id.
+        TypeError: If an item is neither a pair nor a dictionary, or a text,
+            a thought or a call's arguments are of another type.
+        ValueError: If a message holds keys its role does not take, if a role
+            is not ``user``, ``assistant`` or ``tool``, if two calls carry one
+            id, if a result answers no call owed one or another than the
+            oldest, or if a reply follows a call before its result.
     """
-    given = [step.id for item in history if isinstance(item, ToolTurn)
-             for step in item.steps if isinstance(step, ToolCall) and step.id]
+    items = [_history_message(item) for item in history]
+    given = [call["id"] for m in items for call in m.get("tool_calls", ()) if call["id"]]
     repeated = next((given_id for given_id, n in collections.Counter(given).items() if n > 1), None)
     if repeated is not None:
         raise InvalidArgumentError("messages", f"two calls of the history carry the id "
-                                           f"{repeated!r}; give each call an id of its own")
+                                               f"{repeated!r}; give each call an id of its own")
     numbered = itertools.count(max(min_call_number, next_call_number(given)))
-    messages = []
-    for item in history:
-        if not isinstance(item, ToolTurn):
-            messages.append(_history_message(item))
+    owed: list[dict] = []           # the calls still to be answered, oldest first
+    for message in items:
+        if message["role"] == "tool":
+            _answer_oldest(message, owed)
             continue
-        text, thought, calls, owed = "", "", [], []    # owed: the ids of the calls still to be answered
-        for step in item.steps:
-            if isinstance(step, str):
-                text += step
-            elif isinstance(step, Thought):
-                ensure_text(step.text, "a thought")
-                thought += step.text
-            elif isinstance(step, ToolCall):
-                calls.append(step if step.id else replace(step, id=call_id(next(numbered))))
-            elif isinstance(step, ToolResult):
-                if calls:
-                    messages.append(_with_thought(calling_message(text, calls), thought))
-                    owed += [call.id for call in calls]
-                    text, thought, calls = "", "", []
-                # A ToolTurn holds no result before the call it answers.
-                messages.append(result_message(step.name, owed.pop(0), result_text(step.result),
-                                               step.result))
-        if calls:                       # called, and not answered yet
-            if any(call.status == "unreadable" for call in calls):
-                raise InvalidArgumentError(
-                    "messages", "a call that could not be read was answered when it was "
-                    "written; a history cannot leave one owed a result")
-            messages.append(_with_thought(calling_message(text, calls), thought))
-        elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
-            messages.append(_with_thought({"role": "assistant", "content": text},  # a result ends it open
-                                          thought))
-    return messages
-
-
-def kept_items(history, n_messages: int) -> int:
-    """How many of the newest items of ``history`` its newest ``n_messages`` messages, as :func:`as_messages` writes them, come from."""
-    items = 0
-    for item in reversed(history):
-        if n_messages <= 0:
-            break
-        n_messages -= len(as_messages([item]))
-        items += 1
-    assert n_messages == 0, "the kept messages begin inside an item of the history"
+        _ensure_unreadable_answered(owed)
+        if message["role"] == "user":
+            owed = []
+        elif owed:
+            raise InvalidArgumentError(
+                "messages", f"a reply follows the call {owed[0]['id']!r} before its result; "
+                "give each call's result before the next reply")
+        for call in message.get("tool_calls", ()):
+            call["id"] = call["id"] or call_id(next(numbered))
+            owed.append(call)
+    _ensure_unreadable_answered(owed)
     return items
 
 
+def _answer_oldest(result: dict, owed: list[dict]) -> None:
+    """Make ``result`` answer the oldest of the ``owed`` calls, taking it off them.
+
+    Raises:
+        ValueError: If no call is owed a result, or the result names another
+            call or another function.
+    """
+    if not owed:
+        raise InvalidArgumentError("messages", "a tool result answers no call made before it "
+                                               "since the newest question")
+    call = owed.pop(0)
+    named = result.get("tool_call_id") or call["id"]
+    if named != call["id"]:
+        raise InvalidArgumentError(
+            "messages", f"the result for {named!r} is given before the result of the call "
+                        f"{call['id']!r}; give results in the order of their calls")
+    name = call["function"]["name"]
+    if result.get("name", name) != name:
+        raise InvalidArgumentError(
+            "messages", f"the result of the call {call['id']!r} names the function "
+                        f"{result['name']!r}, but the call named {name!r}")
+    result.update(name=name, tool_call_id=call["id"])
+
+
+def _ensure_unreadable_answered(owed: list[dict]) -> None:
+    """Refuse a call that could not be read and is left without its result.
+
+    Raises:
+        ValueError: If one of ``owed`` is such a call.
+    """
+    if any(UNREADABLE_CALL in call for call in owed):
+        raise InvalidArgumentError(
+            "messages", "a call that could not be read was answered when it was written; "
+                        "a history cannot leave one owed a result")
+
+
+# The keys each role's message may hold beside ``role``.
+_KEYS = {"user": {"content"}, "assistant": {"content", THOUGHT_KEY, "tool_calls"},
+         "tool": {"content", "tool_call_id", "name"}}
+# The keys a call of a reply may hold.
+_CALL_KEYS = {"id", "type", "function", UNREADABLE_CALL}
+
+
 def _history_message(item) -> dict:
-    """A history message from a ``(role, text)`` pair or a ``{"role", "content"}`` dictionary, a reply's thought included."""
-    if isinstance(item, dict):
-        allowed = {"role", "content"} | ({THOUGHT_KEY} if item.get("role") == "assistant" else set())
-        if set(item) - allowed or "content" not in item:
-            raise InvalidArgumentError("messages", f"a history message holds 'role' and 'content', and a reply also "
-                             f"{THOUGHT_KEY!r}, but nothing else, not {sorted(item)}; a turn "
-                             "that called tools is a ToolTurn")
-        role, text, thought = item.get("role"), item["content"], item.get(THOUGHT_KEY, "")
-    elif isinstance(item, (tuple, list)) and len(item) == 2:
-        (role, text), thought = item, ""
-    else:
-        raise TypeError(f"a history message is a (role, text) pair, a dict with 'role' and "
-                        f"'content', or a ToolTurn, not the {type(item).__name__} {item!r}")
-    ensure_role(role)
-    ensure_text(text, "a history message's text")
-    ensure_text(thought, "a thought")
-    return _with_thought({"role": role, "content": text}, thought)
+    """A history message from a ``(role, text)`` pair or a chat message, validated and copied.
+
+    Raises:
+        TypeError: If ``item`` is neither, or a text is not a ``str``.
+        ValueError: If its role is not one of ``user``, ``assistant`` and
+            ``tool``, or it holds keys its role does not take.
+    """
+    if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[0], str):
+        role, text = item
+        ensure_role(role)
+        ensure_text(text, "a history message's text")
+        return {"role": role, "content": text}
+    if not isinstance(item, dict):
+        raise TypeError(f"a history message is a (role, text) pair or a chat message "
+                        f"dictionary, not the {type(item).__name__} {item!r}")
+    role = item.get("role")
+    if role != "tool":
+        ensure_role(role)
+    if set(item) - _KEYS[role] - {"role"} or "content" not in item:
+        raise InvalidArgumentError(
+            "messages", f"a {role} message holds 'role' and 'content', and may hold "
+                        f"{sorted(_KEYS[role] - {'content'})}, not {sorted(item)}")
+    if role == "tool":
+        return _result_of(item)
+    ensure_text(item["content"], "a history message's text")
+    message = {"role": role, "content": item["content"]}
+    if role == "assistant":
+        thought = item.get(THOUGHT_KEY, "")
+        ensure_text(thought, "a thought")
+        message = _with_thought(message, thought)
+        if item.get("tool_calls"):
+            message["tool_calls"] = [_call_of(call) for call in item["tool_calls"]]
+    return message
+
+
+def _result_of(item: dict) -> dict:
+    """A tool message from the result ``item``, its content written as the model reads it."""
+    for key in ("name", "tool_call_id"):
+        if key in item:
+            ensure_text(item[key], f"a tool result's {key}")
+    message = result_message(item.get("name", ""), item.get("tool_call_id", ""),
+                             result_text(item["content"]), item["content"])
+    for key in ("name", "tool_call_id"):
+        if key not in item:
+            del message[key]
+    return message
+
+
+def _call_of(call) -> dict:
+    """One call of a reply's ``tool_calls``, validated and copied.
+
+    Raises:
+        TypeError: If its id or name is not a ``str``, or its arguments are
+            not a ``dict``.
+        ValueError: If it is no dictionary of the keys a call holds, or an
+            unreadable call holds a name or arguments.
+    """
+    if not isinstance(call, dict) or set(call) - _CALL_KEYS or "function" not in call \
+            or not isinstance(call["function"], dict) \
+            or set(call["function"]) - {"name", "arguments"}:
+        raise InvalidArgumentError(
+            "messages", f"a call holds 'id', 'type' and 'function' with its 'name' and "
+                        f"'arguments', not {call!r}")
+    function, given_id = call["function"], call.get("id", "")
+    ensure_text(given_id, "a call's id")
+    if call.get(UNREADABLE_CALL):
+        if function.get("name", UNKNOWN_FUNCTION) != UNKNOWN_FUNCTION or function.get("arguments"):
+            raise InvalidArgumentError(
+                "messages", f"a call that could not be read has no name or arguments, as a "
+                            f"conversation keeps one, not {call!r}")
+        return {"id": given_id, "type": "function",
+                "function": {"name": UNKNOWN_FUNCTION, "arguments": {}}, UNREADABLE_CALL: True}
+    name, arguments = function.get("name"), function.get("arguments", {})
+    ensure_text(name, "a call's name")
+    if not isinstance(arguments, dict):
+        raise TypeError(f"the call to {name!r} has arguments that are not a dict: {arguments!r}")
+    return {"id": given_id, "type": "function",
+            "function": {"name": name, "arguments": copy.deepcopy(arguments)}}
 
 
 def _with_thought(message: dict, thought: str) -> dict:
@@ -137,7 +220,7 @@ def ensure_role(role) -> None:
                                            "takes as its first argument")
     if role == "tool":
         raise InvalidArgumentError("role", "a tool result is written by inject_tool_result(), and "
-                                           "given to begin() as a ToolResult inside a ToolTurn")
+                                           "given to begin() as a tool message after its call")
     if role not in MESSAGE_ROLES:
         raise InvalidArgumentError(
             "role", f"a message's role is {' or '.join(map(repr, MESSAGE_ROLES))}, not {role!r}")
@@ -176,14 +259,6 @@ _CALL_ID = re.compile(r"call([0-9a-z]{5})")
 # is given at once where it starts again from the lowest.
 _ID_LIMIT = 36 ** _ID_DIGITS
 _FREE_RUN = 1000
-
-
-# The name a call that could not be read is written under, and its result answered with.
-# Which name is used does not change what a template renders around it.
-UNKNOWN_FUNCTION = "unknown"
-# The mark of a call that could not be read: written only as a kept turn's tokens hold it,
-# else left out at a begin.
-UNREADABLE_CALL = "unreadable"
 
 
 def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:
@@ -254,57 +329,28 @@ def with_thought_as(message: dict, form: str) -> dict:
                                 {"type": "text", "text": message["content"]}]}
 
 
-def as_history(messages: list[dict]) -> list:
-    """The messages back as ``begin`` takes them: each as a dictionary, a reply's thought under ``reasoning_content``, a tool turn's thoughts as its steps.
+def as_history(messages: list[dict]) -> list[dict]:
+    """The messages after the system message as ``begin`` takes them back: chat messages holding only what a caller gave, a result as its caller gave it.
 
-    A tool turn that was closed ends on the text of the reply that closed it,
-    empty where that reply wrote none; one still open, or left open before a
-    later question, ends on a call or a result.
+    A tool turn that was closed ends on the reply that closed it, its text
+    empty where that reply wrote none; one still open ends on a call or a
+    result.
     """
-    history, steps = [], []
+    history = []
     for message in messages:
         role = message["role"]
         if role == "system":
             continue
-        if role == "user" and steps:
-            history.append(ToolTurn(tuple(steps)))
-            steps = []
-        thought = [Thought(message[THOUGHT_KEY])] if message.get(THOUGHT_KEY) else []
-        said = thought + ([message["content"]] if message["content"] else [])
-        if role == "assistant" and message.get("tool_calls"):
-            steps += said + [ToolCall("", {}, c["id"], "unreadable")
-                             if UNREADABLE_CALL in c else
-                             ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
-                             for c in message["tool_calls"]]
-        elif role == "tool":
-            steps.append(ToolResult(message["name"], message.get(RESULT_AS_GIVEN, message["content"])))
-        elif role == "assistant" and steps:
-            history.append(ToolTurn(tuple(steps + thought + [message["content"]])))
-            steps = []
-        else:
-            history.append({"role": role, "content": message["content"],
-                            **({THOUGHT_KEY: message[THOUGHT_KEY]} if thought else {})})
-    if steps:                           # a turn still open
-        history.append(ToolTurn(tuple(steps)))
+        kept = {key: copy.deepcopy(message[key]) for key in _KEYS[role] | {"role"} if key in message}
+        if role == "tool":
+            kept["content"] = copy.deepcopy(message.get(RESULT_AS_GIVEN, message["content"]))
+        history.append(kept)
     return history
 
 
 def history_count(messages: list[dict]) -> int:
-    """How many items :func:`as_history` gives back for ``messages``, without building them."""
-    count, in_turn = 0, False
-    for message in messages:
-        role = message["role"]
-        if role == "system":
-            continue
-        if role == "user" and in_turn:
-            count, in_turn = count + 1, False
-        if role == "assistant" and message.get("tool_calls") or role == "tool":
-            in_turn = True
-        elif role == "assistant" and in_turn:
-            count, in_turn = count + 1, False
-        else:
-            count += 1
-    return count + in_turn
+    """How many messages :func:`as_history` gives back for ``messages``, without building them."""
+    return sum(message["role"] != "system" for message in messages)
 
 
 def exchange_starts(messages: list[dict]) -> list[int]:

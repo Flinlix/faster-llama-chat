@@ -5088,3 +5088,31 @@ the render is made only where that count comes within 64 tokens of the
 limit. A count that misses a template's own text further from the limit is
 still caught by the checks after the message is placed, inside the same
 action, which is then put back as a whole.
+
+### One message form: chat messages in and out (405.5A)
+
+A history went into `begin` in three forms, `(role, text)` pairs, message
+dictionaries, and a `ToolTurn` of steps (`str`, `Thought`, `ToolCall`,
+`ToolResult`) for a turn that called tools, and came back from
+`conversation()` with the same `ToolTurn`s. Inside, the library always held
+flat chat messages, so it converted on the way in and out, and the server
+converted its own flat messages to steps and back.
+
+Now a history is chat messages, as `conversation()` gives them: a question; a
+reply with `reasoning_content` and `tool_calls` where it has them, each call
+`{"id", "type": "function", "function": {"name", "arguments"}}`; and a
+result, `{"role": "tool", "tool_call_id", "content"}`, its content as the
+caller gave it. `Thought`, `ToolResult` and `ToolTurn` are gone from the
+interface. A `(role, text)` pair stays as the short form of a question or a
+reply without calls; whether it goes too is on the round's decision list.
+
+What the steps form checked by its construction is checked on the way in, in
+one place (`messages.as_messages`): a result answers the oldest call still
+owed one since the newest question, named by its id or not at all, and one
+out of order, naming another function, or answering no call is refused; a
+reply between a call and its result is refused; an unreadable call holds no
+name or arguments and is not left owed. Counts change with the form: a
+count of messages (`n_evicted_messages`, `n_kept_messages`) counts each
+message, a result included, where a whole tool turn counted as one.
+Rejected: accepting results out of order and reordering them, which would
+write a conversation the caller did not send.

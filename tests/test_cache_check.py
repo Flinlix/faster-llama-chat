@@ -2,7 +2,8 @@
 
 import pytest
 
-from llama_chat.tools import ToolCall, ToolTurn
+from llama_chat.tools import ToolCall
+from tests.chat_messages import tool_turn
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)
@@ -35,7 +36,7 @@ def _with_a_kept_turn():
 
 def _owed_from_a_history():
     w, fake = tool_wrapper()
-    w.begin("persona", [("user", "wie spät?"), ToolTurn((ToolCall("clock", {}),))])
+    w.begin("persona", [("user", "wie spät?"), *tool_turn(ToolCall("clock", {}))])
     assert w.pending_calls
     return w, fake
 
@@ -159,7 +160,7 @@ def test_a_cache_missing_an_exchange_after_a_kept_turn_is_caught_where_replies_r
     w.reply("noch?").finish()
     sound = list(fake.cache)
     replies = [m["content"] for m in w.conversation()["messages"]
-               if isinstance(m, dict) and m["role"] == "assistant"]
+               if m["role"] == "assistant" and "tool_calls" not in m]
     assert len(replies) >= 2 and len(set(replies)) == 1     # every reply repeats one text
     # The cache without the exchange the question "und?" opened.
     starts, text = [], ""

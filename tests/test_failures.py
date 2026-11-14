@@ -9,7 +9,8 @@ import pytest
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError, eviction,
                         rendered_cache)
 from llama_chat.rendering import ConversationRendering
-from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
+from tests.chat_messages import Result, tool_turn
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests import internals
@@ -158,10 +159,12 @@ def _state(w):
 
 
 def _steps(history):
-    """A history as one list: each message, and each step of a tool turn, its text as the assistant's."""
-    return [step for item in history for step in (
-        [{"role": "assistant", "content": s} if isinstance(s, str) else s for s in item.steps]
-        if isinstance(item, ToolTurn) else [item])]
+    """A history as one list: each message, a reply that called tools as its text, then each call as a ToolCall."""
+    return [step for message in history for step in (
+        [{"role": "assistant", "content": message["content"]},
+         *(ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
+           for c in message["tool_calls"])]
+        if message.get("tool_calls") else [message])]
 
 
 def _assert_kept_only_what_it_produced(before, after, shown, calls):
@@ -179,7 +182,8 @@ def _assert_kept_only_what_it_produced(before, after, shown, calls):
     made = [dataclasses.replace(step, id="") for step in added if isinstance(step, ToolCall)]
     assert made == calls[:len(made)]
     last = added[-1] if added else None
-    assert not isinstance(last, dict) or (last["role"] == "assistant" and last["content"]), \
+    assert not isinstance(last, dict) or last["role"] == "tool" \
+        or (last["role"] == "assistant" and last["content"]), \
         "the failed reply left a question or an empty reply behind"
 
 
@@ -485,7 +489,7 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
     monkeypatch.setattr(ConversationRendering, "split", reading)
     fake.prefill = failing
     with pytest.raises(RuntimeError):
-        w.begin("persona", [("user", "x"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),))],
+        w.begin("persona", [("user", "x"), *tool_turn(ToolCall("weather", {"city": "Bonn"}))],
                 tools=weather_registry().specs())
     del fake.prefill
     assert seen and set(seen) == {before}
@@ -718,8 +722,8 @@ def test_a_reply_that_fails_before_writing_anything_leaves_its_turns_policy_as_i
     def turn_opened_by_its_history():
         fake = _Flaky(TOOLS, gen_tokens=3)
         w = ChatWrapper(Config(context_size=800, evict_above_fraction=1.0), context=fake)
-        w.begin("s", [("user", "x"), ToolTurn((ToolCall("weather", {"city": "Bonn"}),
-                                               ToolResult("weather", "18")))],
+        w.begin("s", [("user", "x"), *tool_turn(ToolCall("weather", {"city": "Bonn"}),
+                                               Result("weather", "18"))],
                 tools=weather_registry().specs())
         return w, fake
 
@@ -868,8 +872,8 @@ def test_a_cancel_at_the_first_draw_after_an_injected_question_keeps_that_questi
 def test_a_cancel_at_the_first_draw_of_a_turn_going_on_leaves_it_open_with_its_results():
     fake = _CancelAtTheFirstDraw(TOOLS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("clock", {}),
-                                                   ToolResult("clock", "12:00")))])
+    w.begin("s", [("user", "wie spät?"), *tool_turn(ToolCall("clock", {}),
+                                                   Result("clock", "12:00"))])
     assert w.turn_open
     before = w.conversation()
     fake.cancel = threading.Event()
