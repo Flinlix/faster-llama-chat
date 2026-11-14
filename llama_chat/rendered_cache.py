@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, fields, replace
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
-from .messages import (CALL_AS_WRITTEN, THOUGHT_KEY, as_history, as_messages, calling_message,
+from .messages import (THOUGHT_KEY, UNREADABLE_CALL, as_history, as_messages, calling_message,
                        exchange_count, exchange_starts, history_count, kept_items,
                        next_call_number, portable_digest, result_message, system_part,
                        with_result_text)
@@ -455,10 +455,10 @@ class RenderedCache:
         kept, gone, joins = [], set(), False
         for message in self._state.messages:
             calls = message.get("tool_calls") or ()
-            if id(message) not in held and any(CALL_AS_WRITTEN in c for c in calls):
-                self._changes.n_left_out_calls += sum(CALL_AS_WRITTEN in c for c in calls)
-                gone |= {c["id"] for c in calls if CALL_AS_WRITTEN in c}
-                left = [c for c in calls if CALL_AS_WRITTEN not in c]
+            if id(message) not in held and any(UNREADABLE_CALL in c for c in calls):
+                self._changes.n_left_out_calls += sum(UNREADABLE_CALL in c for c in calls)
+                gone |= {c["id"] for c in calls if UNREADABLE_CALL in c}
+                left = [c for c in calls if UNREADABLE_CALL not in c]
                 message = ({**message, "tool_calls": left} if left
                            else {k: v for k, v in message.items() if k != "tool_calls"})
                 joins = not left            # the reply after the call goes on with this one
@@ -846,7 +846,7 @@ class RenderedCache:
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False,
-                     in_thought: bool = False, call_written: str = "") -> int:
+                     in_thought: bool = False) -> int:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -882,8 +882,6 @@ class RenderedCache:
                 generated from it on is no reply's.
             in_thought: Whether the generation ended inside a thought, so that
                 the turn its call leaves open goes on inside it.
-            call_written: What the model wrote for a call it stopped on, kept
-                for one that could not be read, as it is written back.
 
         Returns:
             How many history items were dropped.
@@ -893,8 +891,7 @@ class RenderedCache:
             self.roll_back()
             return 0
         try:
-            recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped,
-                                                    call_written)
+            recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
             self._state.called_in_thought = called and in_thought
             if recorded != answer:
                 self._changes.kept_text = recorded
@@ -909,7 +906,7 @@ class RenderedCache:
             self._publish()
 
     def _append_reply(self, answer: str, thought: str, calls: list[ToolCall], called: bool,
-                      stopped: bool, call_written: str) -> tuple[str, bool]:
+                      stopped: bool) -> tuple[str, bool]:
         """Add the newest generation's reply to the messages, its turn kept where it called tools.
 
         Returns:
@@ -924,7 +921,7 @@ class RenderedCache:
             answer = self._rendering.written_answer(
                 self._state.messages, answer, thought,
                 (tags.thought_close.strip(), tags.thought_open.strip())) or ""
-        asked = calls or ([ToolCall("", {}, status="unreadable", text=call_written)]
+        asked = calls or ([ToolCall("", {}, status="unreadable")]
                           if unreadable else [])
         message = ({"role": "assistant", "content": answer} if not asked
                    else calling_message(answer, asked, self._state.n_calls))

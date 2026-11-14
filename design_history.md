@@ -5016,3 +5016,17 @@ before). `begin` logs one line only where it left something out or could not
 use the generated turns it was given (409.4A), for example "begin kept 120 of
 200 history messages; left out the 80 oldest so that half of the 8192-token
 context stays free".
+
+### The call-as-written code goes (403.3A)
+
+With the generated turns (393.2) restoring an unreadable call exactly on the
+same model, and a begin without them leaving it out with its error result,
+nothing writes the model's text between a template's call tags any more. Gone
+with it: the search for the call's frame and the text splice in the renderer,
+which needed a rule per template shape and failed on two templates (393.1);
+the text kept in the conversation beside an unreadable call, now a mark alone;
+the copy of the text kept while a reply is recorded; and the test check's
+helper that patched the expected render the same way. A reply still reports
+what the model wrote for an unreadable call, in its `tool_calls`, for the
+caller to see; the conversation keeps no copy of it. The earlier risk of a
+tag's letters in that text turning into the tag went with the splice.

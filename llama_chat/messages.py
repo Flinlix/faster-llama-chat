@@ -181,22 +181,23 @@ _FREE_RUN = 1000
 # The name a call that could not be read is written under, and its result answered with.
 # Which name is used does not change what a template renders around it.
 UNKNOWN_FUNCTION = "unknown"
-# Where a call that could not be read keeps what the model wrote for it, which is written in its place.
-CALL_AS_WRITTEN = "call_as_written"
+# The mark of a call that could not be read: written only as a kept turn's tokens hold it,
+# else left out at a begin.
+UNREADABLE_CALL = "unreadable"
 
 
 def calling_message(text: str, calls: list[ToolCall], first_id: int = 0) -> dict:
     """An assistant message holding ``text`` and ``calls``, each under the id it carries, or, where it carries none, numbered from ``first_id``.
 
     A call that could not be read is written under :data:`UNKNOWN_FUNCTION`,
-    its text as the model wrote it beside it.
+    marked as one.
     """
     numbered = itertools.count(first_id)
     return {"role": "assistant", "content": text, "tool_calls": [
         {"id": call.id or call_id(next(numbered)), "type": "function",
          "function": {"name": UNKNOWN_FUNCTION if call.status == "unreadable" else call.name,
                       "arguments": copy.deepcopy(call.arguments)},
-         **({CALL_AS_WRITTEN: call.text} if call.status == "unreadable" else {})}
+         **({UNREADABLE_CALL: True} if call.status == "unreadable" else {})}
         for call in calls]}
 
 
@@ -206,7 +207,7 @@ def portable_digest(messages: list[dict]) -> str:
         kept = {"role": message["role"], "content": message.get("content"),
                 THOUGHT_KEY: message.get(THOUGHT_KEY)}
         if message.get("tool_calls"):
-            kept["calls"] = [{"id": c["id"], "unreadable": True} if CALL_AS_WRITTEN in c else
+            kept["calls"] = [{"id": c["id"], "unreadable": True} if UNREADABLE_CALL in c else
                              {"id": c["id"], "name": c["function"]["name"],
                               "arguments": c["function"]["arguments"]}
                              for c in message["tool_calls"]]
@@ -272,7 +273,7 @@ def as_history(messages: list[dict]) -> list:
         said = thought + ([message["content"]] if message["content"] else [])
         if role == "assistant" and message.get("tool_calls"):
             steps += said + [ToolCall("", {}, c["id"], "unreadable")
-                             if CALL_AS_WRITTEN in c else
+                             if UNREADABLE_CALL in c else
                              ToolCall(c["function"]["name"], c["function"]["arguments"], c["id"])
                              for c in message["tool_calls"]]
         elif role == "tool":

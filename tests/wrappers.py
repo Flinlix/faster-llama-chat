@@ -6,7 +6,7 @@ import os
 import re
 
 from llama_chat.config import Config
-from llama_chat.messages import CALL_AS_WRITTEN, result_message
+from llama_chat.messages import UNREADABLE_CALL, result_message
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tools import ToolRegistry
 from llama_chat.wrapper import ChatWrapper
@@ -139,9 +139,8 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
         return context.stated_render(messages, declared, generation_prompt=generation_prompt,
                                      reasoning=reasoning, for_tools=for_tools)
 
-    # A call the model wrote unreadably is written as it wrote it, not as the template writes one.
-    as_written = [call.get(CALL_AS_WRITTEN) for m in messages for call in m.get("tool_calls") or ()]
-    messages = [{**m, "tool_calls": [{k: v for k, v in call.items() if k != CALL_AS_WRITTEN}
+    # The mark of a call that could not be read is the conversation's, not the template's.
+    messages = [{**m, "tool_calls": [{k: v for k, v in call.items() if k != UNREADABLE_CALL}
                                      for call in m["tool_calls"]]} if m.get("tool_calls") else m
                 for m in messages]
     real = render(messages, declarations)
@@ -174,45 +173,7 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
             pieces.append((real[at:end], True, frozenset(run)))
             at, run = end, set()
     assert at == len(real), "the render does not match its marked render"
-    written_calls = [written for written in as_written if written is not None]
-    if written_calls:
-        pieces = _written_calls(context, pieces, written_calls)
     return [piece if owned else piece[:2] for piece in pieces if piece[0]]
-
-
-def _written_calls(context, pieces, written_calls):
-    """``pieces`` with each call to the unknown function written between its opening and closing as the model wrote it, in order."""
-    from llama_chat.messages import UNKNOWN_FUNCTION
-    from tests.fake_context import call_marks
-
-    opening, closing = (text.strip() for text in call_marks(context._fixture))
-    text = "".join(piece[0] for piece in pieces)
-    regions, at = [], 0
-    while (start := text.find(opening, at)) >= 0 and len(regions) < len(written_calls):
-        end = text.find(closing, start + len(opening))
-        if end < 0:
-            break
-        if UNKNOWN_FUNCTION in text[start + len(opening):end]:
-            regions.append((start + len(opening), end))
-        at = start + len(opening)
-    if len(regions) != len(written_calls):
-        return pieces       # the template writes a call in another frame than the model: its own way
-    for (start, end), written in reversed(list(zip(regions, written_calls))):
-        pieces = _written_in(pieces, start, end, written)
-    return pieces
-
-
-def _written_in(pieces, start, end, written):
-    """``pieces`` with their text from ``start`` to ``end`` replaced by ``written``, the caller's own."""
-    rebuilt, at = [], 0
-    for piece, own, owners in pieces:
-        before, after = piece[:max(0, start - at)], piece[max(0, end - at):]
-        rebuilt += [(before, own, owners)] if at < start else []
-        if at <= start < at + len(piece):
-            rebuilt.append((written, True, owners))
-        rebuilt += [(after, own, owners)] if at + len(piece) > end else []
-        at += len(piece)
-    return rebuilt
 
 
 def _written_forms(text: str) -> list[str]:

@@ -39,8 +39,6 @@ class GenerationAccumulator:
         tool_call: What the model generated between its call tags, tags
             excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
             ``text``.
-        call_written: The same, whitespace around it included, as the model
-            wrote it.
         cached_beyond: Tokens decoded into the cache after ``token_ids`` that
             belong to no reply, such as the first tokens of a closing written
             whole later; the caller cuts them away again.
@@ -54,7 +52,6 @@ class GenerationAccumulator:
     text_pieces: list[str] = field(default_factory=list)
     stop_reason: str = "token_limit"
     tool_call: str = ""
-    call_written: str = ""
     cached_beyond: int = 0
     cut_inside_call: bool = False
     tag_spans: list[tuple[int, int]] = field(default_factory=list)

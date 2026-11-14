@@ -175,9 +175,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             pos += len(closing)
             generated.token_ids.extend(closing)
             generated.stop_reason = "tool_call"
-            generated.call_written = "".join(call)
-            generated.tool_call = generated.call_written if close_text is None \
-                else generated.call_written.strip()
+            generated.tool_call = "".join(call) if close_text is None else "".join(call).strip()
             break
         if ends and not closes_call:
             generated.stop_reason = "end_of_turn"
@@ -192,15 +190,14 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         if call is not None:
             if tok == call_close:
                 generated.stop_reason = "tool_call"
-                generated.tool_call = generated.call_written = "".join(call)
+                generated.tool_call = "".join(call)
                 break
             call.append(piece)
             if close_text is not None:
                 call_tail += piece
                 if close_text in call_tail:
                     generated.stop_reason = "tool_call"
-                    generated.call_written = "".join(call).split(close_text, 1)[0]
-                    generated.tool_call = generated.call_written.strip()
+                    generated.tool_call = "".join(call).split(close_text, 1)[0].strip()
                     break
                 call_tail = call_tail[max(0, len(call_tail) - len(close_text) + 1):]
             continue

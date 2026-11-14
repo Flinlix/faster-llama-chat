@@ -1197,8 +1197,7 @@ class ChatWrapper:
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         return self._conversation.record_reply(
             answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again),
-            stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought,
-            call_written=generated.call_written)
+            stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
@@ -1263,7 +1262,7 @@ class _CallBudget:
 def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
     """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
     if generated.stop_reason == "unreadable_tool_call":
-        return [ToolCall("", {}, status="unreadable", text=generated.call_written)]
+        return [ToolCall("", {}, status="unreadable", text=generated.tool_call)]
     if generated.cut_inside_call:
         return [ToolCall("", {}, status="unfinished")]
     return pending
