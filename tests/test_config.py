@@ -156,7 +156,7 @@ def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
 
 
 def test_how_far_an_eviction_drops_without_a_shift_is_fixed_and_no_setting():
-    from llama_chat.rendered_cache import EVICT_TO_FRACTION_WITHOUT_SHIFT
+    from llama_chat.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
     assert "evict_to_fraction_without_shift" not in {f.name for f in fields(Config)}
     assert 0.0 < EVICT_TO_FRACTION_WITHOUT_SHIFT <= 1.0
 

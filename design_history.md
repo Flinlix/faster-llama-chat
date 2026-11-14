@@ -5054,3 +5054,25 @@ field, on every test template. The loose fields stay where the load builds
 them, since later steps of the load read earlier ones; the record is what
 everything after the load reads. Not done: splitting the call boundary into
 its load facts and its per-generation options, which only moves code.
+
+### The conversation split into parts without state (400.6A)
+
+The conversation's module had grown to about 1900 lines, holding its state
+types, beginning, questions, replies, results, eviction, result cutting,
+publishing and windows in one class. It is now split into parts that hold no
+state of their own; each is given the conversation's state and changes it
+there, so that one snapshot and one rollback still cover everything an action
+did (see "One undo path").
+
+| Module | Holds |
+|---|---|
+| `conversation_state.py` | the state types, the snapshot, the published copy, the record of unasked changes, and whether the conversation goes on from a record made ahead |
+| `eviction.py` | which oldest exchanges go at a begin and once over a limit; returns why they went, and the conversation records it |
+| `result_cutting.py` | cutting a result, or an earlier one of the same round, to the room left, and the note the model reads |
+| `publishing.py` | the copy readers without the lock see, and the generated turns it carries |
+| `windows.py` | decoding ahead from the newest exchanges alone, and dropping in such windows (last, as planned) |
+
+The conversation keeps the order of an action: the lock, the attempt and its
+rollback, the cache sync, and logging what the caller did not ask for. The
+parts are reached only through it. Rejected: giving each part its own copy of
+the state, which would need a second rollback path.
