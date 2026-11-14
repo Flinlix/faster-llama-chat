@@ -14,6 +14,7 @@ import pytest
 
 from llama_chat import ChatWrapper, Config
 from llama_chat.addon_files import addon_file, template_fingerprint
+from llama_chat.cache_context import TOOL_USE_TEMPLATE
 from llama_chat.reply_text import ReplyText, begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tokenizing import first_special_token
@@ -31,11 +32,13 @@ _ADDON_CALL_STEMS = [stem for stem in _TOOL_STEMS if shipped_addon_call(fixture(
 
 
 def _load(stem):
+    """The test template ``stem`` as a conversation with tools is written with: its template for tools where its file holds one."""
     context = FakeContext(fixture(stem))
     # Construction runs the check every model meets at load: a system
     # prompt, a past reply and a newest turn, in each reasoning mode.
     text = fixture(stem)["chat_template"]
-    return context, ResolvedTemplate(context, shipped_addon_call(text),
+    name = TOOL_USE_TEMPLATE if "tool_use_template" in fixture(stem) else None
+    return context, ResolvedTemplate(context, shipped_addon_call(text), template_name=name,
                                      reasoning_on=shipped_addon_reasoning_on(text))
 
 
@@ -259,9 +262,11 @@ def test_an_add_on_files_call_format_wins_where_the_template_shows_one_and_is_ch
         stem):
     # The file's call is taken over the template's own, and so refused where the template
     # never writes its closing.
+    name = TOOL_USE_TEMPLATE if "tool_use_template" in fixture(stem) else None
     with pytest.raises(ValueError, match="add-on file closes a call"):
         ResolvedTemplate(FakeContext(fixture(stem)),
-                         {"opening": "CALL:", "name_close": " ", "closing": "QQNEVERQQ"})
+                         {"opening": "CALL:", "name_close": " ", "closing": "QQNEVERQQ"},
+                         template_name=name)
 
 
 @pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)

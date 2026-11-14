@@ -135,7 +135,7 @@ def written_call(template, context, name: str, arguments: dict) -> tuple[str, st
         [{"role": "user", "content": "x"},
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
-              "function": {"name": name, "arguments": arguments}}]}])
+              "function": {"name": name, "arguments": arguments}}]}], for_tools=True)
     opener, closer = call_marks(context._fixture)
     # The last call: a declaration may show an example call first.
     return opener, rendered.rsplit(opener, 1)[1].split(closer, 1)[0], closer
@@ -322,6 +322,8 @@ class FakeContext:
         """
         for_tools = bool(tools) if for_tools is None else for_tools
         model = self._models.get(TOOL_USE_TEMPLATE if for_tools else None, self._model)
+        if model is not self._model and tools is None:
+            tools = []              # a template for tools is given a list of them, as the library gives one
         return model.render(messages, tools, generation_prompt=generation_prompt,
                             reasoning=None, variables=self._stated["on" if reasoning else "off"])
 

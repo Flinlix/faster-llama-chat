@@ -1680,7 +1680,7 @@ def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_
 
     fake = Bounded(_FIXTURES[stem])
     chat = ChatWrapper(Config(context_size=size, min_reply_tokens=32), context=fake)
-    chat.begin("")
+    chat.begin("", tools=[])
     opening = fake._call_marks()[0]
 
     def filling_the_room(_text):
@@ -1848,7 +1848,7 @@ def test_beginning_again_from_the_conversation_holds_each_turn_as_generated(stem
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_turns_read_earlier_serve_messages_added_and_dropped_later(stem):
     run = _Run(stem, context_size=16384)
-    run.begin()
+    run.begin(tools=[])
     run.chat.reply(QUESTIONS[0]).finish()           # an exchange before the turn, dropped below
     body = _call_body(run, {"city": "Bonn"})[1]
     run.context.replies = [ScriptedCall(body), "Fine."]

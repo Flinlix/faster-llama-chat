@@ -5178,3 +5178,30 @@ Seven changes without a change in behaviour:
   generation, which always follows a begun conversation.
 
 All seven are in one change, since several touch the same lines.
+
+### A real model with a template for tools of its own (404.13A)
+
+The support for a GGUF's further template for tools
+(`tokenizer.chat_template.tool_use`) was tested on an invented template
+only. Hermes 2 Pro (NousResearch/Hermes-2-Pro-Llama-3-8B) ships one beside a
+plain default template, and is now the test template `hermes-2-pro`, with
+both templates as its tokenizer configuration holds them.
+
+It found a defect: the library could not load such a model at all. Its
+template for tools loops over `tools` without a test for none, so every
+render without declarations failed, and the load reads a template's turns
+from renders without declarations first. A template for tools is written for
+a list of tools, so it is now always given one, empty where none is
+declared (`with_tool_list` in `resolved_template.py`); the default template
+still gets none, as before. The tests' stand-in render does the same.
+
+The tests that read a template's call properties
+(`tests/test_real_templates.py`) now read the template a conversation with
+tools is written with, the one for tools where a file holds one; three tests
+that relied on a conversation without tools being able to call now begin
+with an empty list of tools.
+
+Still so: where the template for tools cannot be read, the whole model is
+refused at load, though its default template would serve every
+conversation without tools. Whether that should refuse only tools is on the
+round's decision list.

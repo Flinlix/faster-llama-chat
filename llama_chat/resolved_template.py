@@ -85,8 +85,12 @@ class ResolvedTemplate:
             raise ValueError("the model ships no chat template, which this library writes every "
                              "conversation with")
         self._model = ModelTemplate(text, context.eos_token_text())
-        self._model_render = with_reasoning_on(self._model.render, dict(reasoning_on or {}))
-        self._model_refusal = with_reasoning_on(self._model.refusal_reason, dict(reasoning_on or {}))
+        # A template for tools is written for a list of them, so it is given one, empty where none is declared.
+        listed = template_name == TOOL_USE_TEMPLATE
+        self._model_render = with_reasoning_on(with_tool_list(self._model.render, listed),
+                                               dict(reasoning_on or {}))
+        self._model_refusal = with_reasoning_on(with_tool_list(self._model.refusal_reason, listed),
+                                                dict(reasoning_on or {}))
         self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
         self._read_as_probes_for: tuple | None = None   # the variables it was made for
@@ -809,6 +813,16 @@ class ResolvedTemplate:
                 rendered is not None and plain is not None and _PROMPT in rendered
                 and _PROMPT in plain and rendered != plain)
         return self._declares_in_system_turn_for[key]
+
+
+def with_tool_list(render, listed: bool):
+    """``render``, given an empty list of tools in place of none where ``listed``."""
+    if not listed:
+        return render
+
+    def rendered(messages, tools=None, **options):
+        return render(messages, [] if tools is None else tools, **options)
+    return rendered
 
 
 def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
