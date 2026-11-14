@@ -240,6 +240,16 @@ class RenderedCache:
         return self._state.reasoning
 
     @property
+    def tools_declared(self) -> bool:
+        """Whether the conversation is written as one that declares tools, even none."""
+        return self._state.uses_tool_template
+
+    @property
+    def has_system_prompt(self) -> bool:
+        """Whether the conversation holds a system prompt."""
+        return bool(self._system_part())
+
+    @property
     def turn_open(self) -> bool:
         """Whether the newest turn called tools and is not closed: a call is owed a result, or a result waits for the reply after it."""
         return bool(self.pending_calls) or self._ends_on_result()
@@ -1110,33 +1120,32 @@ class RenderedCache:
             self._render_ahead()
             self._memory.rest()
 
-    def declare(self, specs: list[ToolSpec], accept=None) -> int:
-        """Add ``specs`` where the template declares tools; how many history items were dropped.
+    def change_settings(self, tools: list[ToolSpec] | None, reasoning: bool, accept=None) -> int:
+        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept; how many history items were dropped.
+
+        ``tools`` other than ``None``, even empty, writes it with the model's
+        template for tools. The cache is decoded again from where the new
+        render first differs. The oldest exchanges go only where the
+        conversation no longer fits.
 
         Args:
             accept: Called once the conversation is ready and before anything
-                is written; one that raises refuses the declarations.
+                changes; one that raises refuses the settings.
 
         Raises:
-            ValueError: If no conversation was begun or a reply is open, if the
-                model writes a conversation with tools in a template of its
-                own and this one was begun without tools, or if the template
-                with them writes an older exchange otherwise once another
-                follows.
-            ContextOverflowError: If the system prompt with them leaves no room
-                under ``evict_above_tokens`` for a short question.
+            OutOfOrderError: If no conversation was begun or a reply is open.
+            TemplateRefusedError: If the template under them writes an older
+                exchange otherwise once another follows, or a turn kept as
+                generated where it cannot be told apart.
+            ContextOverflowError: If the system prompt with the declarations
+                leaves no room under ``evict_above_tokens`` for a short question.
         """
         with self._action():
-            _ensure_ready(self, "declare tools", "declare into")
-            if not self._state.uses_tool_template and self._templates.has_template_for_tools:
-                raise OutOfOrderError(
-                    "tools", "this model writes a conversation with tools in a template of its own, "
-                    "and this conversation was begun without tools; begin again with the "
-                    "tools, begin(..., tools=...), to declare them")
+            _ensure_ready(self, "change the settings", "change the settings of")
             if accept is not None:
                 accept()
-            self._state.tools = self._state.tools + list(specs)
-            self._state.uses_tool_template = True
+            self._state.tools, self._state.reasoning = list(tools or []), reasoning
+            self._state.uses_tool_template = tools is not None
             self._rendering.forget_renders()
             self._ensure_room_for_a_question("declare fewer tools")
             limit = self._config.evict_above_tokens

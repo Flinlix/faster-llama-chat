@@ -30,7 +30,7 @@ from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from .fake_context import (FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
-from .wrappers import assert_cache_reads_as_rendered, rendered_pieces
+from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -942,7 +942,7 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
     if calls:
         clock = ToolSpec(name="get_time", description="The time",
                          parameters={"type": "object", "properties": {}})
-        run.chat.declare_tools([clock])
+        add_tools(run.chat, [clock])
         _assert_begins_again_the_same(run.chat)
         saved = run.chat.conversation()
         unanswered = ToolTurn((ToolCall(WEATHER.name, {"city": "Rom"}),))
@@ -1065,7 +1065,7 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
     run.chat.reply(QUESTIONS[0]).finish()
     both = ["ensure_history_stays_written", "windows_are_exact"]
     assert checked == both
-    run.chat.declare_tools([WEATHER])
+    add_tools(run.chat, [WEATHER])
     # Declarations that move with each question leave no windows to check.
     declared = both[:1] if internals.template(run.chat).declares_before_newest_turn else both
     assert checked == both + declared
@@ -1186,7 +1186,7 @@ def test_tools_declared_mid_conversation_are_written_where_the_template_writes_t
     assert run.chat.capabilities(tools=True).can_call_tools
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    run.chat.declare_tools([WEATHER])
+    add_tools(run.chat, [WEATHER])
     run.chat.reply(QUESTIONS[1]).finish()
     sent = sum(_exchanges(QUESTIONS[:1], ANSWERS[:1]), [])
     assert run.seen[-1] == run.render(sent + [{"role": "user", "content": QUESTIONS[1]}], [WEATHER])
@@ -1226,7 +1226,7 @@ def test_a_past_tool_turn_and_a_later_declaration_are_written_as_the_template_wr
         run.chat.reply(QUESTIONS[0]).finish()
         assert run.seen[0] == run.render(
             messages + [{"role": "user", "content": QUESTIONS[0]}], [WEATHER]), result
-        run.chat.declare_tools([clock])
+        add_tools(run.chat, [clock])
         run.chat.reply(QUESTIONS[1]).finish()
         kept = _THOUGHT if reasoning and run.template.reasoning.past_keeps_thought else None
         sent = messages + sum(_exchanges(QUESTIONS[:1], ANSWERS[:1], kept), [])
@@ -1917,3 +1917,19 @@ def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
     # The turn stays, its call told it was not run, where the template writes the question
     # after it; else the turn goes and the question joins the one before it.
     assert messages[0]["content"] in ("Weather?", f"Weather?\n\n{QUESTIONS[0]}")
+
+
+# ----- changing tools and reasoning on the running conversation -----------------------
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+def test_a_change_of_tools_and_reasoning_keeps_every_message(stem):
+    run = _Run(stem, context_size=16384)
+    run.begin()
+    for question in QUESTIONS[:3]:
+        run.chat.reply(question).finish()
+    messages = run.chat.conversation()["messages"]
+    assert run.chat.change_settings(tools=[WEATHER], reasoning=True) == 0
+    held = run.chat.conversation()
+    assert held["messages"] == messages and held["tools"] == [WEATHER] and held["reasoning"]
+    assert run.chat.change_settings(tools=None, reasoning=False) == 0
+    assert run.chat.conversation()["messages"] == messages
+    assert run.chat.reply(QUESTIONS[3]).finish().text == ANSWERS[3]

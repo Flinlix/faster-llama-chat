@@ -8,7 +8,8 @@ The core actions, each prefilling as little as possible:
 * :meth:`ChatWrapper.reply`: prefill the request text, then stream the reply,
   refusing, handing over or running the tool calls the model makes.
 * :meth:`ChatWrapper.inject_tool_result`: answer a call handed over.
-* :meth:`ChatWrapper.declare_tools`: tell the model about more tools.
+* :meth:`ChatWrapper.change_settings`: run the conversation under other tools
+  or another reasoning setting.
 * :meth:`ChatWrapper.truncate_last_reply`: shorten the newest reply to what was
   read or heard of it.
 * :meth:`ChatWrapper.conversation`: everything :meth:`ChatWrapper.begin`

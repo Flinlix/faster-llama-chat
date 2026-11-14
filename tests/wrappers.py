@@ -470,3 +470,10 @@ def rows(wrapper) -> list[dict]:
             role, text = item["role"], item["content"]
         found.append({"role": role, "text": text})
     return found
+
+
+def add_tools(wrapper, specs) -> int:
+    """Declare ``specs`` beside the tools the conversation declares already, as one that adds tools does; how many history items went."""
+    held = wrapper.conversation()["tools"] or []
+    known = {spec.name for spec in held}
+    return wrapper.change_settings(tools=held + [s for s in specs if s.name not in known])

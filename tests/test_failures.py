@@ -14,7 +14,7 @@ from tests.fake_context import FakeContext
 from tests import internals
 from tests.internals import kept_turns
 from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
-from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
+from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
 
 
@@ -139,7 +139,7 @@ _ACTIONS = {
     "inject_tool_result": (_owing, lambda w, f, s: w.inject_tool_result(w.pending_calls[0], "sonnig"),
                            None),
     "truncate_last_reply": (_exchanged, lambda w, f, s: w.truncate_last_reply("Ge"), None),
-    "declare_tools": (_exchanged, lambda w, f, s: w.declare_tools([_CALENDAR]), None),
+    "declare_tools": (_exchanged, lambda w, f, s: add_tools(w, [_CALENDAR]), None),
     "reply": (_exchanged, _replying("zwei"), []),
     "reply to the first question": (_begin(), _replying("zwei"), []),
     "reply to an injected question": (_injected, _replying(), []),
@@ -419,9 +419,9 @@ def test_an_action_whose_render_cannot_place_a_kept_turn_is_refused_and_changes_
         # templates does.
         patched.setattr(ConversationRendering, "place", lambda *_args: None)
         with pytest.raises(ValueError, match="turn that called tools"):
-            w.declare_tools([ToolSpec("uhr", "Die Uhrzeit.", {})])
+            add_tools(w, [ToolSpec("uhr", "Die Uhrzeit.", {})])
     assert w.conversation() == before and fake.cache == held
-    w.declare_tools([ToolSpec("uhr", "Die Uhrzeit.", {})])
+    add_tools(w, [ToolSpec("uhr", "Die Uhrzeit.", {})])
 
 
 # ----- questions --------------------------------------------------------------------

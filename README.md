@@ -134,9 +134,9 @@ on, so the refusal follows it there.
 | adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
 | asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str`, a `max_reply_tokens` of 0 or less, a `tool_call_policy` that is none of `TOOL_CALL_POLICIES`, `None` or a `ToolRegistry`, a `stop` that is neither a `str` nor an iterable of `str`, a `cancel` that is no event and a `sampling` that is no `Sampling`; the rest is checked when the stream is first read |
 | answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
-| telling the model about more tools | `declare_tools(tools)`. Where the model ships a [template of its own for tools](#tool-calling), only into a conversation begun with `tools` |
+| changing the tools or the reasoning | `change_settings(*, tools=..., reasoning=...)`: the conversation runs under the tools given, in place of those before, or under the reasoning setting given, from now on, every message kept; a setting left out stays. The cache is decoded again only from where the conversation is first written otherwise. Refused while a tool call has left a reply open, and where a turn kept as generated could no longer be told apart; `begin` again then |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
-| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `declare_tools` added included, `None` where `begin` was given none and none were declared), `reasoning` and `generated_turns` (each turn the model generated with a call, as its tokens, for the same model; see [Keeping a conversation](#keeping-a-conversation)), so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
+| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (each message a `{"role": ..., "content": ...}` dictionary, with `"reasoning_content"` where the template keeps a reply's thought, each tool turn a `ToolTurn`), `tools` (those `change_settings` gave included, `None` where the conversation declares none), `reasoning` and `generated_turns` (each turn the model generated with a call, as its tokens, for the same model; see [Keeping a conversation](#keeping-a-conversation)), so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
 | where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `generated_turns()`, `wait_idle(timeout_s)`. `capabilities(tools=False)` and `capabilities(tools=True)` each give a `Capabilities` record of what `begin` accepts for a conversation begun without tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt`. Both are settled when the model loads, never change, and are safe from any thread. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
 | ending | `close()` |
 
@@ -273,7 +273,7 @@ generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran
 out.
 
 **Tools a model could not use are refused where you hand them over**, by
-`begin(tools=...)`, `declare_tools` and a running `reply`, naming what
+`begin(tools=...)`, `change_settings` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
 readable argument spelling, and a block for the result, with an
 `UnsupportedError` whose `field` names the parameter the tools came in.
@@ -303,23 +303,21 @@ refused when it is registered. A registry lists its tools, so
 declares a tool that this process does not run.
 
 **When the model is told.** `begin(tools=...)` declares the specs it is given
-when it writes the conversation, and `declare_tools` adds more later, skipping
-those already declared; a tool to be declared later is left out of the list
-`begin` is given. Either way the declaration goes where the template writes
-declarations. Where that is the system turn, a later declaration decodes the
-conversation after it again once. Neither keeps a registry: a request whose
-calls are to run is handed one.
+when it writes the conversation, and `change_settings(tools=...)` declares
+another list later, in place of the one before. Either way the declaration
+goes where the template writes declarations. Where that is the system turn, a
+later declaration decodes the conversation after it again once. Neither keeps
+a registry: a request whose calls are to run is handed one.
 
 **A template of its own for tools.** A GGUF may ship, beside its default chat
 template, one for a conversation that declares tools
 (`tokenizer.chat_template.tool_use`). Where it does, both pass the check a
 model meets at load, `capabilities(tools=True)` answers for that one and
 `capabilities(tools=False)` for the default, and a conversation
-is written with it when `begin` is given `tools`, a registry or a list, even
-an empty one, so that `declare_tools` can add tools later; with `tools=None`
-it is written with the default template. A `declare_tools` that would move a
-conversation begun without tools to the template for tools is refused, with
-a `ValueError` that says to begin again with the tools.
+is written with it when `begin` or `change_settings` is given `tools`, a
+registry or a list, even an empty one; with `tools=None` it is written with
+the default template. `change_settings` moves a running conversation from one
+to the other, its messages kept.
 
 **Every failure is told to the model** in its own result block, and the reply
 goes on: an unreadable call, a call under `"refuse"`, an unknown name,
@@ -396,8 +394,8 @@ reply.thought               # what the model thought before it, without its tags
 reply.n_reasoning_tokens    # about how many tokens the thought took
 ```
 
-Reasoning is chosen per conversation, at `begin`, because a template may switch
-it in the system turn. `capabilities(tools=...).can_reason` says whether `begin` accepts
+Reasoning is chosen per conversation, at `begin` or with `change_settings`,
+because a template may switch it in the system turn. `capabilities(tools=...).can_reason` says whether `begin` accepts
 `reasoning=True`, which it does where the template marks a thought and its
 prompt with reasoning on leaves that thought open. Reasoning
 off is the template's own off: `can_turn_off_reasoning` in the same record says whether the

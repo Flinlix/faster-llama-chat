@@ -224,7 +224,7 @@ class ToolRegistry:
     """The tools this process can run, by the name the model calls them.
 
     Registering makes a tool runnable at once. Iterating the registry, or
-    :meth:`specs`, gives the declarations that ``begin`` and ``declare_tools``
+    :meth:`specs`, gives the declarations that ``begin`` and ``change_settings``
     tell the model. Nothing here writes to a model, so nothing here learns what
     the conversation still holds. See the README, "Tool calling".
     """

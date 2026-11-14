@@ -10,7 +10,7 @@ from tests.internals import pending_calls_held
 from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS)
 
-from tests.wrappers import (begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
+from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
 
 
@@ -47,7 +47,7 @@ def test_begin_from_the_conversation_alone_restores_its_thoughts_tools_and_reaso
     live = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=live_fake)
     live.begin("persona", tools=registry.specs(), reasoning=True)
     live.reply("hallo").finish()
-    live.declare_tools([later])
+    add_tools(live, [later])
     live.reply("wie spät?", tool_call_policy=registry).finish()
     saved = live.conversation()
     assert saved["system_prompt"] == "persona" and saved["reasoning"] is True

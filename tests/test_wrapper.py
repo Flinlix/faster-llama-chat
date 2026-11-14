@@ -24,7 +24,7 @@ from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
-from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, begun_wrapper,
+from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, begun_wrapper,
                             held_text,
                             tool_wrapper, rows)
 def _n_kept(wrapper):
@@ -756,7 +756,7 @@ def test_close_is_idempotent_and_blocks_actions():
     with pytest.raises(RuntimeError, match="closed"):
         w.reply("hi").finish()
     with pytest.raises(RuntimeError, match="closed"):
-        w.declare_tools([])     # even with nothing to declare
+        add_tools(w, [])     # even with nothing to declare
 
 
 @pytest.mark.parametrize("failing", ["ResolvedTemplates", "RenderedCache"])
@@ -947,7 +947,7 @@ def test_what_the_model_cannot_do_is_refused_naming_the_parameter_that_asked_for
     ]
     plain.begin("s")
     refusals += [
-        ("tools", lambda: plain.declare_tools(registry.specs())),
+        ("tools", lambda: add_tools(plain, registry.specs())),
         ("tool_call_policy", lambda: plain.reply("hi", tool_call_policy=registry).finish()),
     ]
     for field, refused_action in refusals:
@@ -1250,7 +1250,7 @@ def test_tools_of_another_shape_are_refused_before_anything_changes(tools):
     with pytest.raises(TypeError):
         w.begin("t", tools=tools)
     with pytest.raises(TypeError):
-        w.declare_tools(tools)
+        w.change_settings(tools=tools)
     assert fake.cache == before
 
 

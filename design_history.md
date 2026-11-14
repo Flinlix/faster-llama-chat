@@ -4949,3 +4949,28 @@ generated turns, and finds each turn written the template's way with the
 unreadable call left out; and gives generated turns read earlier messages
 added to and dropped from since. The unreadable-call tests no longer skip on seven templates: each
 template is given a call body it truly cannot read (399.5).
+
+### One action changes the tools and the reasoning of a running conversation (405.1A)
+
+`declare_tools` could only add tools, and only into a conversation begun
+with tools where the model ships a template of its own for them; reasoning
+changed only at `begin`. A server that switched either began again from its
+own copy of the conversation: a begin empties the cache and keeps only half
+the context, while a running conversation fills three quarters, so each
+switch lost history and decoded everything again (measured on a 2,000-token
+context after 30 turns: 24 messages fell to 16, about 960 tokens decoded
+again, on two templates).
+
+`change_settings(tools=..., reasoning=...)` now sets either on the running
+conversation, in place of what it ran under, every message kept: the cache is
+decoded again from where the new render first differs, the oldest exchanges
+go only where it no longer fits, and it moves the conversation between a
+model's two templates where it ships one for tools. `declare_tools` is gone,
+so there is one way to change the tools. This reopens "one way to do each
+thing" (a public call renamed) and "reasoning changes only in begin", both by
+the user's pick.
+
+It keeps the contract's rule that a turn kept as generated keeps its tokens
+during a conversation: where the new settings write such a turn where it
+cannot be told apart, the change is refused, as a declaration was; a `begin`
+then writes it as the template does.
