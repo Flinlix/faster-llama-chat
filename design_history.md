@@ -5317,9 +5317,11 @@ A fresh review of this round's changes found these, each fixed and tested:
   unreadable call; it now says what `conversation()` gives and what a begin
   does with it.
 
-Left open as a decision: the server's messages hold no thought and no mark
-of an unreadable call, so turns holding either are not restored through the
-server.
+The server's messages hold no thought and no mark of an unreadable call, so
+turns holding either are not restored through the server. The user chose to
+leave thoughts so and to have the server leave unreadable calls out with
+their results, as the library does for another model (the server's design
+notes, "Calls the model wrote unreadably stay with the engine").
 
 ### The `(role, text)` pair goes as well
 
