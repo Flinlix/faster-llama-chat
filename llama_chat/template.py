@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 
 from dataclasses import dataclass
 
 from .messages import THOUGHT_FORMS
+from .sequences import common_prefix_length
 
 
 @dataclass(frozen=True)
@@ -201,23 +201,6 @@ class Reasoning:
     past_keeps_thought: bool = False
     past_thought_form: str = THOUGHT_FORMS[0]
     can_turn_off: bool = False
-
-
-def common_prefix_length(one: Sequence, other: Sequence) -> int:
-    """How long a beginning two sequences of the same type share."""
-    low, high = 0, min(len(one), len(other))
-    while low < high:
-        middle = (low + high + 1) // 2
-        if one[:middle] == other[:middle]:
-            low = middle
-        else:
-            high = middle - 1
-    return low
-
-
-def common_suffix_length(one: Sequence, other: Sequence) -> int:
-    """How long an ending two sequences of the same type share."""
-    return common_prefix_length(one[::-1], other[::-1])
 
 
 def _ends_a_tag(text: str, at: int, tags: tuple[str, ...]) -> bool:

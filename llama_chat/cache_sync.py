@@ -9,7 +9,7 @@ import threading
 from .cache_context import CacheContext
 from .generation import GenerationAccumulator
 from .generation import generate
-from .template import common_prefix_length
+from .sequences import common_prefix_length
 
 # Maps a token id to one character, so token lists search as strings.
 _TOKEN_OFFSET = 0x10000

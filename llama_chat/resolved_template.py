@@ -20,8 +20,9 @@ from .call_parsing import parse_calls
 from .errors import UnsupportedError
 from .messages import call_id, calling_message, result_message, with_thought_as
 from .model_template import RENDERER_VARIABLES, ModelTemplate, names_read
+from .sequences import common_prefix_length
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
-                       ToolCallFragments, common_prefix_length, shared_tags_length)
+                       ToolCallFragments, shared_tags_length)
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
                                extract_fragments, extract_reasoning, extract_removed_thought,
                                refusing)
@@ -915,11 +916,6 @@ class ResolvedTemplates:
                 self._tools_refused = str(refused)
                 _log.warning("the model's template for tools cannot be used, so no "
                              "conversation can call tools: %s", refused)
-
-    @property
-    def has_template_for_tools(self) -> bool:
-        """Whether the model ships a template of its own for a conversation with tools."""
-        return self._for_tools is not self._default
 
     def for_conversation(self, uses_tools: bool) -> ResolvedTemplate:
         """The template a conversation is written with: the one for tools where it is begun with tools."""

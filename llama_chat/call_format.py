@@ -12,8 +12,9 @@ import dataclasses
 import json
 
 from .messages import calling_message
-from .template import (CallBody, TemplateFragments, ToolCallFragments, common_prefix_length,
-                       common_suffix_length, json_arguments, shared_tags_length)
+from .sequences import common_prefix_length, common_suffix_length
+from .template import (CallBody, TemplateFragments, ToolCallFragments, json_arguments,
+                       shared_tags_length)
 from .template_extract import (ASSISTANT_SENTINEL, TOOL_SENTINEL, USER_SENTINEL, Render,
                                as_probes_read)
 from .tools import ToolCall

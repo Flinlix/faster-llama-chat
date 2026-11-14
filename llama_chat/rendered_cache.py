@@ -44,7 +44,7 @@ from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError
                      TemplateRefusedError, UnsupportedError, with_template_reason)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
-from .template import common_prefix_length
+from .sequences import common_prefix_length
 from .reply import Report
 from .tools import ToolCall, ToolSpec, result_text
 

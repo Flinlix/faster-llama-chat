@@ -7,7 +7,8 @@ import codecs
 from collections.abc import Callable
 
 from .reply import StopReason
-from .template import Reasoning, common_prefix_length, common_suffix_length
+from .sequences import common_prefix_length, common_suffix_length
+from .template import Reasoning
 
 
 class ReplyText:

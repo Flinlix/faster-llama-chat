@@ -10,7 +10,7 @@ from .cache_sync import CacheSync
 from .conversation_state import ConversationState, goes_on_from
 from .messages import exchange_starts, system_part
 from .render_checks import STAND_IN
-from .template import common_prefix_length
+from .sequences import common_prefix_length
 
 # Returned where a window cannot stand for the whole render.
 WHOLE = object()

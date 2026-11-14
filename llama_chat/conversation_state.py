@@ -59,9 +59,6 @@ class ConversationState:
     # Where a spliced question's run begins, the tokens decoded there, and what they were
     # decoded for: the conversation with the question newest, and the cache after them.
     spliced_at: tuple[int, list[int], MadeFor] | None = None
-    # The tokens before the question the newest ask added, and the conversation and the
-    # cache that ask left, until a generation follows.
-    asked: tuple[list[int], MadeFor] | None = None
     begun: bool = False
     opening: str | None = None            # how the conversation opens, to see a clock move on
 

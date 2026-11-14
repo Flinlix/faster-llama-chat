@@ -18,7 +18,7 @@ from .messages import (RESULT_AS_GIVEN, THOUGHT_KEY, UNREADABLE_CALL,
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender, split_render
-from .template import common_prefix_length
+from .sequences import common_prefix_length
 from .tokenizing import MemoTokenizer, split_at_tags, tokenize_pieces
 from .tools import ToolSpec
 
