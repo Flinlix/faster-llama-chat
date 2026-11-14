@@ -5205,3 +5205,16 @@ Still so: where the template for tools cannot be read, the whole model is
 refused at load, though its default template would serve every
 conversation without tools. Whether that should refuse only tools is on the
 round's decision list.
+
+### The contract names its tests; invariant 2 is traced (405.20A)
+
+The contract's principles 6, 7 and 8 named no test, and invariant 2's rule
+that no reply pays for a property the loaded template does not have was
+verified by reading changes only. Each principle now names its tests, and
+`tests/test_wrapper.py` traces a whole exchange on a template without
+reasoning, tools or a clock, with the interpreter's profile hook, and fails
+where any of the code that serves one of them is entered: the thought filter,
+the reading and running of calls, and the clock's renders. The checks that
+decide whether that code is needed (a property read, an early return) are
+allowed; the work behind them is not. The same trace on a template that
+reasons or calls tools does enter that code, so the test can fail.

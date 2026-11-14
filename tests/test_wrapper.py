@@ -1373,3 +1373,39 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
         w.inject("x " * limit, role="assistant")
     assert ["s", "x " * limit] in seen
     assert refused.value.available_tokens == limit and refused.value.needed_tokens > limit
+
+
+# ----- what only some templates need --------------------------------------------------
+# The code that serves a property only some templates have: reasoning, tools and the clock.
+_PROPERTY_CODE = {
+    "reasoning": lambda where: where.startswith("reply_text.py:_ThoughtFilter."),
+    "tools": lambda where: where.split(":")[0] in ("call_parsing.py", "call_format.py",
+                                                   "tool_registry.py")
+    or where == "resolved_template.py:ResolvedTemplate.read_calls",
+    "clock": lambda where: where in ("rendering.py:ConversationRendering.forget_renders",
+                                     "rendering.py:ConversationRendering.opening_render"),
+}
+
+
+def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code():
+    """Invariant 2: no question, reply or token pays for a property the loaded template does not have."""
+    import sys
+    w = ChatWrapper(Config(context_size=1000), context=FakeContext(PLAIN, replies=["Gut.", "Ja."]))
+    w.begin("s")
+    entered = set()
+
+    def note(frame, event, _arg):
+        if event == "call" and "llama_chat/" in frame.f_code.co_filename:
+            entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
+                        + frame.f_code.co_qualname)
+
+    sys.setprofile(note)
+    try:
+        w.reply("Wie geht es?").finish()
+        w.inject("Noch etwas.")
+        w.reply().finish()
+    finally:
+        sys.setprofile(None)
+    assert entered                  # the profile saw the library at work
+    for name, serves in _PROPERTY_CODE.items():
+        assert not sorted(where for where in entered if serves(where)), name
