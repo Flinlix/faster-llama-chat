@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "call_marks": {"opening": "\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"", "closing": "</｜DSML｜ invoke>", "tags": false},
+ "call_follows_text": true,
  "render_variables": {
   "off": {
    "enable_thinking": false

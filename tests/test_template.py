@@ -48,9 +48,9 @@ def test_a_split_render_takes_time_in_proportion_to_the_messages():
                     for i in range(n)]
         times = []
         for _ in range(3):
-            started = time.perf_counter()
+            started = time.thread_time()        # this thread's own processor time
             split = split_render(render, messages, lambda text: text, reads_clock=False)
-            times.append(time.perf_counter() - started)
+            times.append(time.thread_time() - started)
         assert len(split.own) == n
         return min(times)
 

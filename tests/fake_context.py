@@ -16,7 +16,6 @@ import sys
 from llama_chat.addon_files import addon_file
 from llama_chat.cache_context import TOOL_USE_TEMPLATE
 from llama_chat.model_template import ModelTemplate
-from llama_chat.resolved_template import ResolvedTemplates
 
 from .chat_templates import expected
 
@@ -101,13 +100,10 @@ def shipped_addon_call(template_text: str) -> dict:
     return addon_file(None, template_text)["call"]
 
 
-def call_marks(template, context) -> tuple[str, str]:
-    """The texts a call opens and closes with in a render: its own texts, else its tags' text."""
-    boundary = template.call_boundary()
-    if boundary.call_texts is not None:
-        return boundary.call_texts
-    opener, closer = boundary.tool_tokens
-    return context.token_text(opener), context.token_text(closer)
+def call_marks(known: dict) -> tuple[str, str]:
+    """The texts a call opens and closes with in a render, as the test template ``known`` states them."""
+    marks = known["call_marks"]
+    return marks["opening"], marks["closing"]
 
 
 def written_call(template, context, name: str, arguments: dict) -> tuple[str, str, str]:
@@ -117,7 +113,7 @@ def written_call(template, context, name: str, arguments: dict) -> tuple[str, st
          {"role": "assistant", "content": "", "tool_calls": [
              {"id": "call00000", "type": "function",
               "function": {"name": name, "arguments": arguments}}]}])
-    opener, closer = call_marks(template, context)
+    opener, closer = call_marks(context._fixture)
     # The last call: a declaration may show an example call first.
     return opener, rendered.rsplit(opener, 1)[1].split(closer, 1)[0], closer
 
@@ -390,13 +386,9 @@ class FakeContext:
     def _call_marks(self) -> tuple[list[int], list[int]]:
         """The template's own call tags as tokens, else its call texts as characters."""
         if self._call_mark_tokens is None:
-            reader = FakeContext(self._fixture)
-            template = ResolvedTemplates(
-                reader, shipped_addon_call(self._template)).for_conversation(True)
-            marks = call_marks(template, reader)
-            by_tags = template.call_boundary().tool_tokens is not None
+            by_tags = self._fixture["call_marks"]["tags"]
             self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)
-                                           for text in marks)
+                                           for text in call_marks(self._fixture))
         return self._call_mark_tokens
 
     def _written(self, text: str) -> list[int]:

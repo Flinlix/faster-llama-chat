@@ -4755,3 +4755,23 @@ with no template text between them read as one, so such a run counts as the
 turn's where any of its messages is. Every placement of the kept turns in the
 cache is tried. `tests/test_cache_check.py` removes an exchange after a kept
 turn and expects the check to fail.
+
+### Tests that choose their cases from the template files (405.10 to 405.14)
+
+Many parametrized tests returned early or skipped where a template lacked
+the property they test, so they passed without checking anything, 38 skips
+among them. The properties they turned on (what a call opens and closes with,
+whether a call may follow text, whether arguments are written as one JSON
+object, whether a text that reads as a number is written as the number, and
+whether a history may open with a tool turn) are now stated in each test
+template's file, and the tests take their cases from those lists;
+`tests/test_real_templates.py` checks each stated value against what the
+library reads. The fake model and the check every test ends with take a call's
+tags from the file too, no longer from the library's own reading of the
+template. Two weaker copies of that check in single test files are gone, and
+the tests read the library's private state only through `tests/internals.py`.
+Three tests that bounded clock time count template renders instead, or the
+test thread's own processor time where they measure growth, so a busy machine
+no longer fails them. Where a conversation holds no thought, the check no
+longer renders it three times in three identical forms, which saved about a
+tenth of the suite's time.

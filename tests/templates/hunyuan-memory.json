@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "call_marks": {"opening": "<tool_calls>", "closing": "</tool_call>", "tags": true},
+ "writes_text_and_number_alike": true,
  "render_variables": {
   "off": {
    "reasoning_effort": "no_think"

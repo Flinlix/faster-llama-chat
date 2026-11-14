@@ -295,7 +295,7 @@ def test_a_question_that_repeats_an_earlier_reply_is_refused_before_its_reply_wh
 def test_a_conversation_whose_declarations_move_with_each_question_renders_no_windows(stem):
     run = _Run(stem)
     run.begin(tools=[WEATHER])
-    moving = run.chat._conversation.template.declares_before_newest_turn
+    moving = internals.template(run.chat).declares_before_newest_turn
     assert not (moving and internals.renders_in_windows(run.chat))
 
 
@@ -340,17 +340,23 @@ def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_
 def test_many_past_calls_whose_text_the_template_wraps_are_placed_in_little_time(stem):
     """A text the template writes otherwise than as it is (escaped, wrapped) is still placed, and fast."""
     city = 'Is "<b> & c\'s" café\nfine?'
-    history = []
-    for n in range(20):
-        history += [("user", f"Weather {n}?"),
-                    ToolTurn((ToolCall(WEATHER.name, {"city": city}),
-                              ToolResult(WEATHER.name, "sunny"), f"Sunny {n}."))]
-    run = _Run(stem, context_size=32768)
-    started = time.perf_counter()
-    run.begin(history, tools=[WEATHER])
-    run.chat.reply(QUESTIONS[0]).finish()
-    assert time.perf_counter() - started < 5
-    assert_cache_reads_as_rendered(run.chat, run.context)
+    def renders(turns):
+        """How many renders beginning with ``turns`` past calls and replying once takes."""
+        history = []
+        for n in range(turns):
+            history += [("user", f"Weather {n}?"),
+                        ToolTurn((ToolCall(WEATHER.name, {"city": city}),
+                                  ToolResult(WEATHER.name, "sunny"), f"Sunny {n}."))]
+        run = _Run(stem, context_size=65536)
+        before = len(run.context.rendered)
+        started = time.thread_time()            # this thread's own processor time
+        run.begin(history, tools=[WEATHER])
+        run.chat.reply(QUESTIONS[0]).finish()
+        assert time.thread_time() - started < 5
+        assert_cache_reads_as_rendered(run.chat, run.context)
+        return len(run.context.rendered) - before
+    # The search for the history that fits takes at most two renders more per doubling.
+    assert renders(80) <= renders(20) + 4
 
 
 # ----- evictions: whole exchanges, in place --------------------------------------
@@ -1059,7 +1065,7 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
     assert checked == both
     run.chat.declare_tools([WEATHER])
     # Declarations that move with each question leave no windows to check.
-    declared = both[:1] if run.chat._conversation.template.declares_before_newest_turn else both
+    declared = both[:1] if internals.template(run.chat).declares_before_newest_turn else both
     assert checked == both + declared
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.chat.reply(QUESTIONS[1]).finish()
@@ -1246,7 +1252,7 @@ def _call_body(run, arguments):
     addon_call = shipped_addon_call(run.fixture["chat_template"])
     if addon_call:
         # The template shows no call it could be read from; the model writes the add-on file's.
-        opener, closer = call_marks(run.template, run.reader)
+        opener, closer = call_marks(run.fixture)
         return opener, WEATHER.name + addon_call["name_close"] + json.dumps(arguments), closer
     return written_call(run.template, run.reader, WEATHER.name, arguments)
 
@@ -1459,13 +1465,13 @@ def test_an_empty_description_of_a_tool_or_a_parameter_is_written_as_the_templat
 _TEXT_OPENED = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_opening_text")]
 
 
-@pytest.mark.parametrize("stem", _TEXT_OPENED)
+# Where a call may follow text, its opening there opens one.
+@pytest.mark.parametrize("stem", [stem for stem in _TEXT_OPENED
+                                  if not expected(_FIXTURES[stem], "call_follows_text")])
 def test_a_reply_that_mentions_a_calls_opening_in_prose_holds_no_call(stem):
     # The template opens a call with plain text; a reply quoting it is still prose.
     opener = expected(_FIXTURES[stem], "call_opening_text")
     run = _Run(stem, replies=[f"Write {opener}x in the file."])
-    if run.template.call_boundary().follows_text:
-        pytest.skip("the template writes a call after text, so its opening there opens one")
     run.begin()
     run.chat.reply("How do I name it?").finish()
     run.chat.truncate_last_reply("Write")
@@ -1633,11 +1639,10 @@ def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more
         assert renders[True] == renders[False]
 
 
-@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]
+                                  and expected(_FIXTURES[stem], "call_follows_text")])
 def test_a_call_quoted_in_a_thought_stays_the_thoughts_where_the_template_writes_a_call_after_text(stem):
     run = _Run(stem, reasoning=True)
-    if not run.template.call_boundary().follows_text:
-        pytest.skip("a call opening as text counts here only at the start or after a tag")
     opener, body, closer = _call_body(run, {"city": "Bonn"})
     reply, = _as_generated(run.template, ["It is sunny."], True)
     run.context.replies = [reply.replace(_THOUGHT, f"I could write {opener}{body}{closer} but I know.")]
@@ -1674,7 +1679,7 @@ def test_a_turn_that_ends_inside_a_call_at_the_last_free_token_has_room_for_the_
     opening = fake._call_marks()[0]
 
     def filling_the_room(_text):
-        room = size - len(fake.cache) - chat._conversation.template.n_closing_tokens
+        room = size - len(fake.cache) - internals.template(chat).n_closing_tokens
         fake.replies = [ScriptedCall("x" * (room - 1 - len(opening)), closes=False)]
 
     fake.before_reply = filling_the_room
@@ -1739,12 +1744,15 @@ def test_a_result_given_as_a_value_comes_back_as_that_value(stem):
     assert kept and kept == saved["messages"][-len(kept):]
 
 
-@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+# A call inside a thought is a mention where a call may follow text.
+_CALLING_IN_THOUGHTS = [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]
+                        and not expected(_FIXTURES[stem], "call_follows_text")]
+
+
+@pytest.mark.parametrize("stem", _CALLING_IN_THOUGHTS)
 def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
     run = _Run(stem, reasoning=True)
     tags = run.template.reasoning
-    if run.template.call_boundary().follows_text:
-        pytest.skip("a call inside a thought is a mention on this template")
     _opener, body, _closer = _call_body(run, {"city": "Bonn"})
     opens = begins_in_thought(tags, run.template.generation_prompt(True))
     run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I will check ")]
@@ -1757,24 +1765,24 @@ def test_a_thought_a_call_left_open_goes_on_hidden_after_the_result(stem):
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_a_result_owed_to_a_history_with_no_question_is_written(stem):
+def test_a_result_owed_to_a_history_with_no_question_is_written_where_the_template_writes_one(stem):
     run = _Run(stem)
-    try:
-        run.begin([ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}),))], tools=[WEATHER])
-    except ValueError:
-        pytest.skip("the template writes no history without a question")
+    history = [ToolTurn((ToolCall(WEATHER.name, {"city": "Bonn"}),))]
+    if not expected(run.fixture, "writes_history_without_question"):
+        with pytest.raises(ValueError):
+            run.begin(history, tools=[WEATHER])
+        return
+    run.begin(history, tools=[WEATHER])
     run.chat.inject_tool_result(run.chat.pending_calls[0], "sunny")
     assert not run.chat.pending_calls
 
 
 @pytest.mark.parametrize("readable", [True, False], ids=["read", "unreadable"])
-@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
+@pytest.mark.parametrize("stem", _CALLING_IN_THOUGHTS)
 def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_starts_outside_it(
         stem, readable):
     run = _Run(stem, reasoning=True)
     tags = run.template.reasoning
-    if run.template.call_boundary().follows_text:
-        pytest.skip("a call inside a thought is a mention on this template")
     opens = begins_in_thought(tags, run.template.generation_prompt(True))
     body = _call_body(run, {"city": "Bonn"})[1] if readable else "@@@ not a call @@@"
     run.context.replies = [ScriptedCall(body, before=("" if opens else tags.thought_open) + "I check "),
@@ -1794,7 +1802,7 @@ def test_after_a_call_inside_a_thought_the_thought_stays_hidden_and_a_new_begin_
     run.chat.begin(run.system, [("user", "Köln?"), ToolTurn((ToolCall(WEATHER.name, {"city": "Köln"}),
                                                              ToolResult(WEATHER.name, "rainy")))],
                    tools=[WEATHER], reasoning=True)
-    assert not run.chat._conversation.called_in_thought
+    assert not internals.called_in_thought(run.chat)
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
@@ -1814,7 +1822,7 @@ def test_a_conversation_restored_holds_an_unreadable_call_as_the_model_wrote_it(
     run.chat.begin(**saved)
     assert run.chat.conversation() == saved
     # The call, from its opening to its closing, exactly as the model wrote it.
-    opening, closing = (text.strip() for text in call_marks(run.template, run.reader))
+    opening, closing = (text.strip() for text in call_marks(run.fixture))
     if opening not in run.render([{"role": "user", "content": "x"}, {
             "role": "assistant", "content": "", "tool_calls": [{"id": "call00000", "type": "function",
             "function": {"name": WEATHER.name, "arguments": {}}}]}], [WEATHER]):

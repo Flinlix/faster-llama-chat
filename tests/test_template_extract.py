@@ -8,7 +8,6 @@ import ast
 import functools
 import itertools
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -464,11 +463,17 @@ def test_a_render_that_loses_a_texts_place_reads_no_rewrites():
 
 
 def test_the_rewrites_of_many_texts_are_read_in_one_pass_over_the_render():
-    texts = [f"<tag{n}>" for n in range(20_000)]
-    started = time.perf_counter()
-    rewrites = extract_content_rewrites(_escaping_render, texts, ())
-    assert time.perf_counter() - started < 0.5
-    assert len(rewrites) == len(texts)
+    def renders(n):
+        """How many renders reading the rewrites of ``n`` texts takes."""
+        made = []
+
+        def counted(messages, **options):
+            made.append(messages)
+            return _escaping_render(messages, **options)
+        texts = [f"<tag{k}>" for k in range(n)]
+        assert len(extract_content_rewrites(counted, texts, ())) == n
+        return len(made)
+    assert renders(20_000) == renders(20)
 
 
 # ----- probe sentinels -----------------------------------------------------

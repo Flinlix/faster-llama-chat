@@ -37,6 +37,11 @@ _UNSTATED = {
     "everyday_words": [],               # those of its names that are also everyday words
     "chat_format": None,                # the name the template's chat format goes by
     "ends_generation": [],              # the tags beside its end-of-sequence tag that end a generation in the engine
+    "call_marks": None,                 # what a call opens and closes with in a render, and whether those are tags
+    "call_follows_text": False,         # a call may follow text in a reply
+    "writes_arguments_as_json": False,  # a call's arguments are written as one JSON object
+    "writes_text_and_number_alike": False,  # a text that reads as a number is written as the number is
+    "writes_history_without_question": True,  # a history may open with a turn that called tools
 }
 
 
@@ -72,5 +77,7 @@ def in_each_thought_form(messages: list[dict]) -> list[list[dict]]:
             return {**rest, "thinking": thought}
         return {**rest, "content": [{"type": "thinking", "thinking": thought},
                                     {"type": "text", "text": message["content"]}]}
+    if not any(message.get("reasoning_content") for message in messages):
+        return [list(messages)]             # each other form would be the same messages
     return [list(messages)] + [[moved(message, form) for message in messages]
                                for form in ("field", "block")]

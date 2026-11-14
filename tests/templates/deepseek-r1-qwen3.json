@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "call_marks": {"opening": "<｜tool▁calls▁begin｜>", "closing": "<｜tool▁call▁end｜>", "tags": true},
+ "writes_arguments_as_json": true,
  "render_variables": {
   "off": {},
   "on": {}

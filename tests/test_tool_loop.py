@@ -20,8 +20,9 @@ from tests.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CAL
                                       RESULT_LINES, TOOLS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
-from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_renders, held_text, newest_turn, system_turn,
-                            tool_wrapper, weather_registry, without_ids, rows)
+from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
+                            newest_turn, system_turn, tool_wrapper, weather_registry,
+                            without_ids, rows)
 
 
 def _result_of(fake):
@@ -39,14 +40,6 @@ def _moving(**fake_kw):
     fake = FakeContext(TOOLS_DECLARED_IN_THE_NEWEST_TURN, **fake_kw)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     return w, fake
-
-
-def _as_rendered_with(w, fake, specs):
-    """The cache equals the template's render of the conversation, ``specs`` declared."""
-    assert_consistent(w, fake)
-    rendered = held_renders(fake, [{"role": r["role"], "content": r["text"]} for r in rows(w)],
-                            tools=[spec.as_declaration() for spec in specs])
-    assert fake.text_of(fake.cache) in rendered
 
 
 # ----- declaring -----------------------------------------------------------
@@ -1843,12 +1836,12 @@ def test_declarations_move_on_with_the_newest_user_turn(can_shift):
     assert ResolvedTemplate(FakeContext(TOOLS_DECLARED_IN_THE_NEWEST_TURN)).declares_before_newest_turn
     assert w.capabilities(tools=True).can_call_tools
     w.begin("s", tools=specs)
-    _as_rendered_with(w, fake, specs)
+    assert_cache_reads_as_rendered(w, fake)
     for text in ("eins", "zwei", "drei"):
         w.reply(text).finish()
-        _as_rendered_with(w, fake, specs)
+        assert_cache_reads_as_rendered(w, fake)
     w.inject("vier")
-    _as_rendered_with(w, fake, specs)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_history_carries_its_declarations_on_its_last_user_turn():
@@ -1856,9 +1849,9 @@ def test_a_history_carries_its_declarations_on_its_last_user_turn():
     specs = [ToolSpec("uhr", "", {})]
     w.begin("s", [("user", "eins"), ("assistant", "zwei"), ("user", "drei"),
                   ("assistant", "vier")], tools=specs)
-    _as_rendered_with(w, fake, specs)
+    assert_cache_reads_as_rendered(w, fake)
     w.reply("fünf").finish()
-    _as_rendered_with(w, fake, specs)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_later_declaration_joins_the_newest_user_turn():
@@ -1866,10 +1859,9 @@ def test_a_later_declaration_joins_the_newest_user_turn():
     w.begin("s", tools=[ToolSpec("uhr", "", {})])
     w.reply("eins").finish()
     assert w.declare_tools([ToolSpec("wetter", "", {})]) == 0
-    both = [ToolSpec("uhr", "", {}), ToolSpec("wetter", "", {})]
-    _as_rendered_with(w, fake, both)
+    assert_cache_reads_as_rendered(w, fake)
     w.reply("zwei").finish()
-    _as_rendered_with(w, fake, both)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_running_exchange_holds_the_wrapper_while_its_tool_runs():

@@ -24,7 +24,8 @@ from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
-from tests.wrappers import (assert_consistent, begun_wrapper, held_renders, held_text,
+from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, begun_wrapper,
+                            held_text,
                             tool_wrapper, rows)
 def _n_kept(wrapper):
     """Messages kept: everything but the system prompt."""
@@ -35,14 +36,6 @@ def _n_exchanges(wrapper):
     """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
     history = [row["role"] for row in rows(wrapper) if row["role"] != "system"]
     return history.count("user") + (1 if history and history[0] != "user" else 0)
-
-
-def _as_rendered(w, fake):
-    """The cache equals the template's own render of the conversation."""
-    assert_consistent(w, fake)
-    found = rows(w)
-    rendered = held_renders(fake, [{"role": r["role"], "content": r["text"]} for r in found])
-    assert fake.text_of(fake.cache) in rendered
 
 
 # ----- a reply without text, and the tool call policy ----------------------
@@ -1031,7 +1024,7 @@ def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_t
     assert [m["role"] for m in rows(w)] == ["system", "user"]
     fake.gen_tokens = 5
     w.reply("zwei").finish()
-    _as_rendered(w, fake)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer():
@@ -1041,7 +1034,7 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
     assert found[1:] == [("user", "eins"), ("assistant", "")]
     fake.gen_tokens = 5
     w.reply("zwei").finish()
-    _as_rendered(w, fake)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS
@@ -1094,7 +1087,7 @@ def test_an_injected_user_turn_after_a_user_turn_is_joined_or_refused():
     w, fake = begun_wrapper(JOINS_USER_TURNS)
     w.inject("eins")
     w.inject("zwei")
-    _as_rendered(w, fake)
+    assert_cache_reads_as_rendered(w, fake)
     w, fake = begun_wrapper(REFUSES_TWO_USER_TURNS)
     w.inject("eins")
     before = list(fake.cache)
@@ -1107,7 +1100,7 @@ def test_a_history_with_two_user_turns_in_a_row_is_joined_or_refused():
     fake = FakeContext(JOINS_USER_TURNS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s", [("user", "eins"), ("user", "zwei"), ("assistant", "drei")])
-    _as_rendered(w, fake)
+    assert_cache_reads_as_rendered(w, fake)
     fake = FakeContext(REFUSES_TWO_USER_TURNS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     with pytest.raises(ValueError, match="two user turns"):
@@ -1131,7 +1124,7 @@ def test_evicting_the_first_of_two_user_turns_takes_its_join_with_it():
     w.inject("eins")
     w.inject("zwei")
     assert [m["text"] for m in rows(w)] == ["s", "zwei"]
-    _as_rendered(w, fake)
+    assert_cache_reads_as_rendered(w, fake)
 
 
 def test_a_config_larger_than_the_cache_context_is_refused_at_the_start():

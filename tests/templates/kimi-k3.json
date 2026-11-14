@@ -5,6 +5,7 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "call_marks": {"opening": "<|close|>response<|sep|><|open|>tools<|sep|><|open|>call tool=\"", "closing": "<|sep|><|close|>call<|sep|>", "tags": false},
  "render_variables": {
   "off": {
    "enable_thinking": false

@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "call_marks": {"opening": "<|message|><atem:function_calls>\n<atem:invoke name=\"", "closing": "</atem:invoke>\n</atem:function_calls>", "tags": false},
+ "writes_text_and_number_alike": true,
  "render_variables": {
   "off": {},
   "on": {}

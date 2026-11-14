@@ -204,24 +204,33 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
                  {"id": "call00000", "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
             tools=[WEATHER.as_declaration()])
-        opener, closer = call_marks(template, context)
+        opener, closer = call_marks(fixture(stem))
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
     assert template.read_calls(body) == [ToolCall("get_weather", {"city": "Berlin"})]
 
 
 @pytest.mark.parametrize("stem", _TOOL_STEMS)
-def test_a_call_is_read_by_its_texts_only_where_no_tag_of_its_own_marks_it(stem):
+def test_a_call_is_marked_as_the_templates_file_says(stem):
     context, template = _load(stem)
-    boundary = template.call_boundary()
-    opening = expected(fixture(stem), "call_opening_text")
+    boundary, known = template.call_boundary(), fixture(stem)
+    marks = expected(known, "call_marks")
+    read = boundary.call_texts or tuple(context.token_text(tag) for tag in boundary.tool_tokens)
+    assert read == (marks["opening"], marks["closing"])
+    assert (boundary.tool_tokens is not None) == marks["tags"]
+    assert (boundary.call_texts is None) == marks["tags"]
+    assert boundary.follows_text == expected(known, "call_follows_text")
+    opening = expected(known, "call_opening_text")
     assert boundary.opens_as_text == (opening is not None)
     assert opening is None or boundary.call_texts[0] == opening
-    if boundary.call_texts is None:
-        return
-    assert boundary.tool_tokens is None
-    if boundary.opens_as_text:
-        return                          # no tag at all
+
+
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_STEMS
+                                  if not expected(fixture(stem), "call_marks")["tags"]
+                                  and expected(fixture(stem), "call_opening_text") is None])
+def test_a_call_marked_by_its_texts_opens_with_a_tag_of_the_reply(stem):
+    context, template = _load(stem)
+    boundary = template.call_boundary()
     tag = context.token_text(first_special_token(context, boundary.call_texts[0]))
     reply = template.fragments
     assert tag in reply.assistant_prefix + reply.assistant_suffix + reply.generation_prompt
@@ -317,6 +326,7 @@ def test_arguments_written_as_one_json_object_read_back_however_they_are_spaced(
     context, template = _load(stem)
     arguments = {"city": "Bonn", "days": 2}
     written = _call_body(context, template, arguments)
+    assert (json.dumps(arguments) in written) == expected(fixture(stem), "writes_arguments_as_json")
     if json.dumps(arguments) not in written:
         return                          # it writes its arguments as no JSON object
     compact = written.replace(json.dumps(arguments), json.dumps(arguments, separators=(",", ":")))
@@ -336,7 +346,9 @@ def test_every_argument_shape_reads_back_in_the_spelling_an_add_on_file_gives(st
 def test_a_text_that_reads_as_a_number_reads_back_as_text_where_the_template_writes_it_as_one(stem):
     context, template = _load(stem)
     as_text = _call_body(context, template, {"city": "42"})
-    if as_text == _call_body(context, template, {"city": 42}):
+    alike = as_text == _call_body(context, template, {"city": 42})
+    assert alike == expected(fixture(stem), "writes_text_and_number_alike")
+    if alike:
         return                          # written alike, so it cannot be told from the number
     assert template.read_calls(as_text) == [ToolCall("fn", {"city": "42"})]
 

@@ -11,6 +11,7 @@ from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
+from tests import internals
 from tests.internals import kept_turns
 from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
 from tests.wrappers import (assert_cache_reads_as_rendered, assert_consistent, held_text,
@@ -636,7 +637,7 @@ def test_a_generation_failing_after_an_answer_that_spells_its_thought_closing_le
     fake = _Flaky(fixture(stem))
     w = ChatWrapper(Config(context_size=2048), context=fake)
     w.begin("")
-    closing = w._templates.for_conversation(False).reasoning.thought_close.strip()
+    closing = internals.template(w).reasoning.thought_close.strip()
     said = f"Close it with {closing} and more words follow here."
     fake.replies = [said, "Gern."]
     sampled = fake.sampled_tokens

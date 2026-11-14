@@ -121,6 +121,8 @@ def _invented(**switches) -> dict:
         "source": "invented for the tests", "eos_token": "<turn]>", "adds_bos": True,
         "marks_thought": can_reason, "can_reason": can_reason,
         "calls_tools": set_to["calls_tools"],
+        **({"call_marks": {"opening": "<call>", "closing": "</call>", "tags": True}}
+           if set_to["calls_tools"] else {}),
         "render_variables": ({"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}
                              if can_reason else {"off": {}}),
         "chat_template": header + _TEXT.lstrip("\n"),

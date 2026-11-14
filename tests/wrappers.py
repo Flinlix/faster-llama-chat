@@ -183,13 +183,9 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
 def _written_calls(context, pieces, written_calls):
     """``pieces`` with each call to the unknown function written between its opening and closing as the model wrote it, in order."""
     from llama_chat.messages import UNKNOWN_FUNCTION
-    from llama_chat.resolved_template import ResolvedTemplates
+    from tests.fake_context import call_marks
 
-    from tests.fake_context import call_marks, shipped_addon_call
-
-    reader = FakeContext(context._fixture)
-    template = ResolvedTemplates(reader, shipped_addon_call(context._template)).for_conversation(True)
-    opening, closing = (text.strip() for text in call_marks(template, reader))
+    opening, closing = (text.strip() for text in call_marks(context._fixture))
     text = "".join(piece[0] for piece in pieces)
     regions, at = [], 0
     while (start := text.find(opening, at)) >= 0 and len(regions) < len(written_calls):

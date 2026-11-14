@@ -129,6 +129,16 @@ def read_fragments_as(monkeypatch, **changes) -> None:
                         lambda self: dataclasses.replace(read(self), **changes))
 
 
+def template(wrapper):
+    """The template the conversation is written with now."""
+    return wrapper._conversation.template
+
+
+def called_in_thought(wrapper) -> bool:
+    """Whether the open turn's newest call was made inside a thought the model had not closed."""
+    return wrapper._conversation.called_in_thought
+
+
 def tool_turns_stay(wrapper) -> bool:
     """Whether the conversation's template keeps a past turn that called tools as written once another exchange follows."""
     return wrapper._conversation._state.tool_turns_stay
