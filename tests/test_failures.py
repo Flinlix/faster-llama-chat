@@ -18,7 +18,8 @@ from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests import internals
 from tests.internals import kept_turns
-from tests.invented_templates import PLAIN, REFUSES_TWO_USER_TURNS, TOOLS, TOOLS_REFUSING_TWO_USER_TURNS
+from tests.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
+                                      TOOLS_REFUSING_TWO_USER_TURNS)
 from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
 
@@ -103,7 +104,8 @@ _CLOCK.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
 def _begin(*history):
     """A step that begins the conversation on ``history``, a clock its one tool."""
     def begin(w, fake):
-        w.begin(opened("persona", list(history)), tools=_CLOCK.specs())
+        w.begin(opened("persona", list(history)), tools=_CLOCK.specs(),
+                reasoning=getattr(fake, "reasons", False))
     return begin
 
 
@@ -154,6 +156,11 @@ _ACTIONS = {
     "reply running a call": (_exchanged, _replying("Wetter?", _CALL, tool_call_policy=_CLOCK), [_CALLED]),
     "reply yielding a call": (_exchanged, _replying("Wetter?", _CALL, tool_call_policy="yield"), [_CALLED]),
     "reply going on after a result": (_answered, _replying(tool_call_policy="yield"), []),
+    "a question closing an open turn": (_owing, _replying("Neu?"), []),
+    "inject an assistant message": (_exchanged, lambda w, f, s: w.inject("Gesagt.", role="assistant"),
+                                    None),
+    "begin again from the conversation": (_answered, lambda w, f, s: w.begin(**w.conversation()),
+                                          None),
 }
 
 
@@ -241,9 +248,12 @@ def test_nothing_an_action_failing_at_any_point_leaves_blocks_a_question(cache, 
 def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(cache, action):
     """A reply keeps what it produced before the failure and nothing else; any other action changes nothing."""
     prepare, act, calls = _ACTIONS[action]
-    for refuses_two_user_turns, template in ((False, TOOLS), (True, TOOLS_REFUSING_TWO_USER_TURNS)):
+    for refuses_two_user_turns, template, reasons in (
+            (False, TOOLS, False), (True, TOOLS_REFUSING_TWO_USER_TURNS, False),
+            (False, REASONING, True)):
         def prepared():
             fake = _Flaky(template, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
+            fake.reasons = reasons
             w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
                                    min_reply_tokens=20), context=fake)
             _begin({"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"})(w, fake)

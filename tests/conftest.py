@@ -1,4 +1,4 @@
-"""Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it.
+"""Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it; and with a conversation that is its two history forms, which begin takes back.
 
 A test that asks for ``clock`` sets the time a template that reads the clock is rendered at.
 """
@@ -11,7 +11,7 @@ from llama_chat.wrapper import ChatWrapper
 
 from .fake_context import RecordedTemplate
 from .internals import context_of, is_closed
-from .wrappers import assert_cache_reads_as_rendered
+from .wrappers import assert_cache_reads_as_rendered, assert_conversation_is_its_forms
 
 
 def pytest_configure(config):
@@ -37,6 +37,7 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
     for wrapper, context in zip(built, contexts):
         if not is_closed(wrapper):
             assert_cache_reads_as_rendered(wrapper, context)
+            assert_conversation_is_its_forms(wrapper)
 
 
 @pytest.fixture

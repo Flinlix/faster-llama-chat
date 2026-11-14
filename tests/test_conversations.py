@@ -960,14 +960,20 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
         _assert_begins_again_the_same(run.chat)
         saved = run.chat.conversation()
         unanswered = tool_turn(ToolCall(WEATHER.name, {"city": "Rom"}))
+        given = opened("", saved["messages"] + [
+            {"role": "user", "content": "Weather in Rome?"}, *unanswered,
+            {"role": "user", "content": "Never mind."}])
+        # Refused exactly where the template itself writes no call without its result.
+        writes = run.context.stated_render(
+            answer_in_order(read_messages(given), ""),
+            [spec.as_declaration() for spec in saved["tools"]], reasoning=reasoning,
+            for_tools=True) is not None
         try:
-            run.chat.begin(opened("", saved["messages"] + [
-                {"role": "user", "content": "Weather in Rome?"}, *unanswered,
-                {"role": "user", "content": "Never mind."}]), tools=saved["tools"],
-                reasoning=reasoning)
-        except ValueError as refused:       # a template that writes no call without its result
-            assert "refuses" in str(refused) and run.chat.conversation() == saved
+            run.chat.begin(given, tools=saved["tools"], reasoning=reasoning)
+        except ValueError as refused:
+            assert not writes and "refuses" in str(refused) and run.chat.conversation() == saved
         else:
+            assert writes
             _assert_begins_again_the_same(run.chat)
             run.chat.reply().finish()
             _assert_begins_again_the_same(run.chat)
@@ -2066,13 +2072,18 @@ def _costs(stem, cache, n_exchanges):
 
     def measured(name, action):
         before = run.context.total_prefilled()
-        try:
-            action()
-        except TemplateRefusedError:
-            return                      # a template that writes no two replies in a row
+        action()
         decoded[name] = run.context.total_prefilled() - before
 
-    measured("injected reply", lambda: chat.inject("Said too.", role="assistant"))
+    injected = {"role": "assistant", "content": "Said too."}
+    if run.context.stated_render(_sent(chat) + [injected],
+                                 [WEATHER.as_declaration()] if calls else None,
+                                 for_tools=calls) is None:
+        # Refused exactly where the template writes no two replies in a row.
+        with pytest.raises(TemplateRefusedError):
+            chat.inject(injected["content"], role="assistant")
+    else:
+        measured("injected reply", lambda: chat.inject(injected["content"], role="assistant"))
     measured("question", lambda: chat.reply("Again?").finish())
     measured("shortened reply", lambda: chat.truncate_last_reply(
         chat.conversation()["messages"][-1]["content"][:3]))

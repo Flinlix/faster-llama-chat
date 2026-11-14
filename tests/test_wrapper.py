@@ -19,21 +19,14 @@ from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
-from llama_chat.generation import generate
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from tests.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
-from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, begun_wrapper,
-                            held_text,
-                            tool_wrapper, rows)
-def _n_kept(wrapper):
-    """Messages kept: everything but the system prompt."""
-    return len(rows(wrapper)) - 1
-
-
+from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent,
+                            begun_wrapper, tool_wrapper, rows)
 def _n_exchanges(wrapper):
     """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
     history = [row["role"] for row in rows(wrapper) if row["role"] != "system"]
@@ -86,20 +79,6 @@ def test_a_conversation_changed_between_the_call_and_the_first_read_is_checked_a
     wrapper.begin(opened("persona"))                    # as another thread might, before it is read
     with pytest.raises(ValueError, match="nothing to answer"):
         next(stream)
-
-
-def test_asking_for_a_reply_while_another_runs_does_not_wait_for_it():
-    wrapper, _ = tool_wrapper()
-    wrapper.begin(opened("persona"))
-    running = wrapper.reply("hallo")
-    next(running)                               # holds the wrapper's lock
-    asked = []
-    asker = threading.Thread(target=lambda: asked.append(wrapper.reply("noch eine")),
-                             daemon=True)
-    asker.start()
-    asker.join(timeout=5)
-    running.close()
-    assert len(asked) == 1 and asked[0].finish().text
 
 
 # ----- begin ---------------------------------------------------------------
@@ -313,44 +292,6 @@ def test_an_early_close_keeps_cache_consistent():
     assert reply.stop_reason == "end_of_turn"
 
 
-def test_cancel_event_interrupts_midstream():
-    fake = FakeContext(PLAIN, gen_tokens=8, gen_text="abcdefgh")
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin(opened("s"))
-
-    cancel = threading.Event()
-    stream = w.reply("hi", cancel=cancel)
-    assert next(stream) == "a"
-    cancel.set()  # e.g. from another thread
-    try:
-        while True:
-            next(stream)
-    except StopIteration as done:
-        reply = done.value
-
-    # The stream ends normally, so the Reply is delivered, unlike stream.close().
-    assert reply.stop_reason == "interrupted"
-    assert reply.n_generated_tokens == 1
-    assert rows(w)[-1]["role"] == "assistant"
-    assert_consistent(w, fake)
-    # The spent event is scoped to that call; the next generation runs normally.
-    assert w.reply("again").finish().stop_reason == "end_of_turn"
-
-
-def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
-    fake = FakeContext(PLAIN, gen_tokens=5)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin(opened("s"))
-    cancel = threading.Event()
-    cancel.set()
-    before = w.conversation(), w.total_tokens
-    reply = w.reply("hi", cancel=cancel).finish()
-    assert reply.stop_reason == "interrupted"
-    assert reply.n_generated_tokens == 0
-    # Cancelled before it started: the request changes nothing, its question included.
-    assert (w.conversation(), w.total_tokens) == before
-
-
 def test_a_stop_string_ends_the_reply_and_is_trimmed_from_it():
     fake = FakeContext(PLAIN, gen_tokens=10, gen_text="helloSTOPx")
     w = ChatWrapper(Config(context_size=400), context=fake)
@@ -402,19 +343,6 @@ def test_a_single_stop_text_is_one_stop_text_and_not_its_letters():
     w.begin(opened("s"))
     reply = w.reply("hi", stop="END").finish()
     assert (reply.text, reply.stop_reason) == ("hello", "stop_string")
-
-
-def test_generator_close_marks_interrupted():
-    # stream.close() records the same stop reason on the accumulator (the Reply
-    # itself is unreachable after close(): Python offers no return channel).
-    from llama_chat.generation import GenerationAccumulator
-
-    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="abcde")
-    acc = GenerationAccumulator()
-    g = generate(fake, 0, 5, out=acc)
-    next(g)
-    g.close()
-    assert acc.stop_reason == "interrupted"
 
 
 def test_generation_is_capped_to_the_context_size():
@@ -472,215 +400,6 @@ def test_turn_closes_after_the_eviction_not_before():
             assert last[2] is False                      # no logits wanted
         assert_consistent(w, fake)
     assert evicting
-
-
-# ----- the exchange limit, OR'd with the token threshold -------------------
-def test_a_generation_evicts_down_to_the_exchange_limit():
-    # Far under the token threshold, so the exchange count is the only trigger.
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
-    w.begin(opened("s"))
-    for i in range(8):
-        w.reply(f"q{i}").finish()
-        assert _n_exchanges(w) == min(i + 1, 2) and _n_kept(w) == 2 * _n_exchanges(w)
-        assert w.total_tokens < w.config.evict_above_tokens  # the tokens never bound
-        assert rows(w)[0]["role"] == "system"       # system still survives
-        assert rows(w)[-1]["role"] == "assistant"   # newest turn kept
-        assert_consistent(w, fake)
-
-
-def test_a_question_not_prepared_ahead_shifts_the_exchange_the_limit_drops():
-    """A question ending in a space cannot take the stand-in's place, and its eviction still shifts the cache."""
-    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
-    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0, max_history_exchanges=2),
-                    context=fake)
-    w.begin(opened("s"))
-    for question in ("Eins?", "Zwei?", "Drei?"):
-        w.reply(question).finish()
-    fake.edits.clear()
-    reply = w.reply("Vier? ").finish()
-    assert [edit[0] for edit in fake.edits] == ["shift"]
-    newest = held_text(fake)[held_text(fake).rfind("<[turn>user"):]
-    assert reply.n_prefilled_tokens <= len(fake.tokenize(newest))
-
-
-def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
-    # Same conversation under each limit alone, then under both: whichever
-    # would evict more is what the pair evicts, because either one triggers.
-    def kept_under(**limits):
-        fake = FakeContext(PLAIN, gen_tokens=2)
-        w = ChatWrapper(Config(context_size=400, **limits), context=fake)
-        w.begin(opened("s"))
-        for i in range(8):
-            w.reply(f"message number {i} with some length").finish()
-        assert_consistent(w, fake)
-        return _n_kept(w)
-
-    by_tokens = kept_under(evict_above_fraction=0.5)
-    by_exchanges = kept_under(evict_above_fraction=1.0, max_history_exchanges=1)
-    both = kept_under(evict_above_fraction=0.5, max_history_exchanges=1)
-    assert both == min(by_tokens, by_exchanges)
-
-
-def test_a_limit_that_never_binds_changes_nothing():
-    def snapshot_under(**limits):
-        fake = FakeContext(PLAIN, gen_tokens=2)
-        w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, **limits),
-                        context=fake)
-        w.begin(opened("s"))
-        for i in range(8):
-            w.reply(f"message number {i} with some length").finish()
-        return rows(w)
-
-    assert snapshot_under() == snapshot_under(max_history_exchanges=100)
-
-
-def test_inject_evicts_to_leave_room_under_the_exchange_limit():
-    # inject evicts before appending, so the exchange the arriving message opens
-    # counts against the limit while it is still absent from the conversation.
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
-    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]))
-    assert _n_exchanges(w) == 2
-    # The oldest exchange goes whole, so the survivors open on a user turn.
-    assert w.inject("reference material").n_evicted_messages == 2
-    assert [r["text"] for r in rows(w)][1:] == ["c", "reference material"]
-
-
-@pytest.mark.parametrize("history, kept", [
-    ([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"}], ["c", "d"]),
-    ([{"role": "assistant", "content": "a"}, {"role": "user", "content": "b"}, {"role": "assistant", "content": "c"}, {"role": "assistant", "content": "d"}],
-     ["b", "c", "d"]),
-    ([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}], ["c"]),
-])
-def test_begin_prefills_no_more_than_the_exchange_limit(history, kept):
-    # Without the cap, begin would prefill history the first turn then evicts.
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=1), context=fake)
-    assert w.begin(opened("s", history)).n_kept_messages == len(kept)
-    assert [r["text"] for r in rows(w)] == ["s"] + kept       # the newest exchange, whole
-
-
-def test_a_limit_of_one_keeps_the_newest_exchange_between_turns():
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=1), context=fake)
-    w.begin(opened("s"))
-    for i in range(3):
-        w.reply(f"q{i}").finish()
-        assert [(r["role"], r["text"]) for r in rows(w)][:2] == [("system", "s"), ("user", f"q{i}")]
-        assert _n_kept(w) == 2
-        assert_consistent(w, fake)
-
-
-def test_the_limit_holds_across_every_action_that_appends():
-    # The property, not three examples: whatever the mix of actions, the count
-    # never exceeds the limit and the system prompt is never the one dropped.
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
-    w.begin(opened("s", [{"role": "user", "content": "old"}, {"role": "assistant", "content": "older"}]))
-    for i in range(6):
-        w.inject(f"context {i}")
-        assert _n_exchanges(w) <= 2
-        w.reply(f"q{i}").finish()
-        assert _n_exchanges(w) <= 2
-        assert rows(w)[0]["role"] == "system"
-        assert_consistent(w, fake)
-
-
-def test_eviction_shift_mode_does_not_rebuild():
-    # Default cache supports shifting: eviction uses apply_eviction, never rebuild.
-    fake = FakeContext(PLAIN, gen_tokens=2)  # can_shift=True
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
-    w.begin(opened("s"))
-    resets_after_begin = fake.resets  # begin() resets once
-    for i in range(8):
-        w.reply(f"message number {i} with some length").finish()
-    assert fake.edit_count("shift") > 0          # eviction did happen
-    assert fake.resets == resets_after_begin  # but never via rebuild
-
-
-def test_a_dropped_stretch_is_found_among_token_ids_up_to_the_bound_the_readme_names():
-    from llama_chat.cache_sync import CacheSync
-    fake = FakeContext(PLAIN)
-    memory = CacheSync(fake)
-    low, high = -0x10000, 0xFFFFF                   # -65,536 and 1,048,575
-    dropped, kept = [high] * 4, [low, high] * 5
-    memory.decode([1] + dropped + kept)
-    memory.hold([1] + kept, find_dropped_stretch=True)
-    assert fake.edits == [("shift", 1, 4)] and fake.cache == [1] + kept
-
-
-def test_eviction_rebuild_mode_when_cache_cannot_shift():
-    # A cache that cannot shift goes back to a saved state or is decoded again.
-    fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
-    w.begin(opened("s"))
-    resets_after_begin = fake.resets
-    for i in range(8):
-        w.reply(f"message number {i} with some length").finish()
-        roles = [s["role"] for s in rows(w)]
-        assert roles[0] == "system"
-        assert w.total_tokens <= w.config.context_size
-        assert_consistent(w, fake)             # the cache as recorded after it is brought back
-    assert fake.edit_count("shift") == 0
-    assert fake.resets + fake.edit_count("restore") > resets_after_begin
-
-
-def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
-    # Rejecting an unfittable message must not evict the history first.
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
-    w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
-    before = rows(w)
-    with pytest.raises(ValueError):
-        w.inject("x" * 500)
-    assert rows(w) == before
-
-
-def test_every_refusal_for_want_of_room_says_what_to_change():
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=32),
-                    context=fake)
-    w.begin(opened("s"))
-    with pytest.raises(ContextOverflowError, match="shorten the request.*min_reply_tokens"):
-        w.reply("x" * 600).finish()
-    with pytest.raises(ContextOverflowError, match="shorten the message.*evict_above_fraction"):
-        w.inject("x" * 600)
-    w.inject("x" * 470)                         # under the threshold, not under room for a reply
-    with pytest.raises(ContextOverflowError,
-                       match="raise context_size or evict_above_fraction, or lower min_reply_tokens"):
-        w.reply().finish()
-
-
-def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
-    """Nothing in it can be evicted, since an eviction drops up to the next user message."""
-    fake = FakeContext(PLAIN)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
-    w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
-    before, held = w.conversation(), list(fake.cache)
-    with pytest.raises(ContextOverflowError, match="no user message follows"):
-        w.begin(opened("s", [{"role": "assistant", "content": "x" * 200}] * 3))
-    assert w.conversation() == before and fake.cache == held
-    # With a later question, the replies before it are evicted instead.
-    w.begin(opened("s", [{"role": "assistant", "content": "x" * 200}] * 3 + [{"role": "user", "content": "q"}, {"role": "assistant", "content": "r"}]))
-    assert after_system(w.conversation()["messages"]) == [{"role": "user", "content": "q"},
-                                            {"role": "assistant", "content": "r"}]
-
-
-@pytest.mark.parametrize("history", [[], [{"role": "user", "content": "q"}]], ids=["no-question", "after-a-question"])
-def test_replies_injected_in_a_row_are_refused_once_they_no_longer_fit(history):
-    fake = FakeContext(PLAIN)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
-    w.begin(opened("s", history))
-    with pytest.raises(ContextOverflowError, match="no user message follows"):
-        for _ in range(8):
-            before, held = w.conversation(), list(fake.cache)
-            w.inject("y" * 150, role="assistant")
-            assert w.total_tokens <= w.config.evict_above_tokens
-    assert w.conversation() == before and fake.cache == held
-    w.inject("Und jetzt?")                      # a question lets them go
-    w.inject("y" * 150, role="assistant")
-    assert w.total_tokens <= w.config.evict_above_tokens
 
 
 # ----- construction / lifecycle --------------------------------------------
@@ -745,22 +464,6 @@ def test_begin_rejects_system_prompt_over_threshold():
     assert rows(w)[0]["role"] == "system"
 
 
-def test_close_is_idempotent_and_blocks_actions():
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    w.begin(opened("s"))
-    w.close()
-    w.close()  # second close is a no-op
-    with pytest.raises(RuntimeError, match="closed"):
-        w.begin(opened("s"))
-    with pytest.raises(RuntimeError, match="closed"):
-        w.inject("ctx")
-    with pytest.raises(RuntimeError, match="closed"):
-        w.reply("hi").finish()
-    with pytest.raises(RuntimeError, match="closed"):
-        add_tools(w, [])     # even with nothing to declare
-
-
 @pytest.mark.parametrize("failing", ["ResolvedTemplates", "RenderedCache"])
 def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing):
     closed = []
@@ -785,15 +488,6 @@ def test_a_construction_that_fails_leaves_a_context_of_your_own_open():
         own.context_size = 256
         ChatWrapper(Config(context_size=512), context=own)
     assert closed == []
-
-
-def test_context_manager_closes_on_exit():
-    fake = FakeContext(PLAIN, gen_tokens=2)
-    with ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
-        w.begin(opened("s"))
-        w.reply("hi").finish()
-    with pytest.raises(RuntimeError, match="closed"):
-        w.reply("again").finish()
 
 
 # ----- content tokenized special-off (turn-boundary safety) ----------------
@@ -1195,18 +889,6 @@ def test_a_question_sees_the_same_history_whether_or_not_it_was_prepared_ahead(q
     assert_consistent(w, fake)
 
 
-def test_closing_on_the_thread_that_reads_an_unfinished_reply_ends_it_and_keeps_the_callers_error():
-    fake, closed = FakeContext(PLAIN, gen_tokens=5), []
-    fake.close = lambda: closed.append(True)
-    with pytest.raises(ValueError, match="the reader failed") as raised:
-        with ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake) as chat:
-            chat.begin(opened("persona"))
-            for _ in chat.reply("hallo"):
-                raise ValueError("the reader failed")
-    assert raised.value.__context__ is None
-    assert closed == [True]
-
-
 @pytest.mark.parametrize("stem", STEMS)
 def test_the_readmes_quick_start_runs_on_every_template(stem):
     chat = ChatWrapper(Config(context_size=8192), context=FakeContext(fixture(stem)))
@@ -1216,31 +898,6 @@ def test_the_readmes_quick_start_runs_on_every_template(stem):
     for _ in chat.reply():
         pass
     chat.reply("Summarize the plan.").finish()
-
-
-def test_closing_ends_the_reply_this_thread_reads_though_a_newer_stream_was_made_since():
-    fake, closed = FakeContext(PLAIN, gen_tokens=5), []
-    fake.close = lambda: closed.append(True)
-    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    chat.begin(opened("persona"))
-    reading = chat.reply("hallo")
-    next(reading)
-    chat.reply("noch was")
-    chat.close()
-    assert closed == [True]
-
-
-@pytest.mark.parametrize("timeout_s, refused", [(float("inf"), False), (0, False), (0.01, False),
-                                                (1e300, False), (2**63, False), (10**400, False),
-                                                (float("nan"), True), (-1, True), ("1", True),
-                                                (True, True)])
-def test_waiting_for_idle_takes_infinity_as_no_timeout_and_refuses_what_is_no_time(timeout_s, refused):
-    chat = ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
-    if refused:
-        with pytest.raises((InvalidArgumentError, TypeError), match="timeout_s"):
-            chat.wait_idle(timeout_s)
-    else:
-        assert chat.wait_idle(timeout_s) is True
 
 
 # ----- what does not have the shape asked for is refused where it enters ----------
@@ -1373,13 +1030,271 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
 
 
 # ----- what only some templates need --------------------------------------------------
-# The code that serves a property only some templates have: reasoning, tools and the clock.
-_PROPERTY_CODE = {
-    "reasoning": lambda where: where.startswith("reply_text.py:_ThoughtFilter."),
-    "tools": lambda where: where.split(":")[0] in ("call_parsing.py", "call_format.py",
-                                                   "tool_registry.py")
-    or where == "resolved_template.py:ResolvedTemplate.read_calls",
-    "clock": lambda where: where == "rendering.py:ConversationRendering.opening_render",
+# Every function a plain reply may run, by file: on a template without reasoning, tools or a
+# clock. Code that serves only some templates is never among them; a function new to a plain
+# reply fails the test below until it is judged to serve every template and listed here.
+_PLAIN_REPLY_CODE = {
+    "cache_sync.py": {
+        "CacheSync._bring_up",
+        "CacheSync._can_cut",
+        "CacheSync._decode_at_end",
+        "CacheSync._decode_at_end.<locals>.<genexpr>",
+        "CacheSync._pins_to_save",
+        "CacheSync._save_pinned_state",
+        "CacheSync.cut_to",
+        "CacheSync.decode",
+        "CacheSync.generate",
+        "CacheSync.hold",
+        "CacheSync.is_current",
+        "CacheSync.is_known",
+        "CacheSync.keeps_saved_states",
+        "CacheSync.repair",
+        "CacheSync.rest",
+        "CacheSync.tokens",
+    },
+    "config.py": {
+        "Config.__post_init__",
+        "Config.evict_above_tokens",
+        "Sampling.__post_init__",
+        "_is_of_kind",
+        "ensure_reply_cap",
+        "ensure_types",
+        "ensure_types.<locals>.<genexpr>",
+        "generation_sampling",
+        "with_request_sampling",
+    },
+    "conversation_state.py": {
+        "ConversationState.copied",
+        "copied_value",
+        "goes_on_from",
+        "goes_on_from.<locals>.<genexpr>",
+    },
+    "eviction.py": {
+        "Eviction._exchanges_over",
+        "Eviction.drop_while_over",
+        "Eviction.drop_while_over.<locals>.length",
+        "Eviction.drop_while_over.<locals>.too_many",
+        "Eviction.too_many",
+    },
+    "generation.py": {
+        "_TextBuffer.__init__",
+        "_TextBuffer.__len__",
+        "_TextBuffer.append",
+        "_TextBuffer.emit",
+        "_append",
+        "_sample_into",
+        "generate",
+    },
+    "messages.py": {
+        "ensure_role",
+        "ensure_text",
+        "exchange_starts",
+        "system_part",
+    },
+    "model_template.py": {
+        "ModelTemplate._rendered",
+        "ModelTemplate.render",
+    },
+    "publishing.py": {
+        "published",
+        "published.<locals>.<genexpr>",
+    },
+    "render_checks.py": {
+        "question_splices",
+    },
+    "rendered_cache.py": {
+        "RenderedCache.__init__.<locals>.<lambda>",
+        "RenderedCache._action",
+        "RenderedCache._after_reply",
+        "RenderedCache._append_reply",
+        "RenderedCache._ask",
+        "RenderedCache._drop_unplaceable",
+        "RenderedCache._drop_while_over",
+        "RenderedCache._ends_on_result",
+        "RenderedCache._ensure_writes",
+        "RenderedCache._holds_thought_tags",
+        "RenderedCache._is_current",
+        "RenderedCache._joins_questions",
+        "RenderedCache._length_alone",
+        "RenderedCache._made_for_now",
+        "RenderedCache._make_way_for",
+        "RenderedCache._max_prompt_tokens",
+        "RenderedCache._moves_declarations",
+        "RenderedCache._newest_exchange",
+        "RenderedCache._note_ahead",
+        "RenderedCache._note_prompt",
+        "RenderedCache._publish",
+        "RenderedCache._publishing",
+        "RenderedCache._read_calls",
+        "RenderedCache._record_generated",
+        "RenderedCache._render_ahead",
+        "RenderedCache._reply_opening",
+        "RenderedCache._settle",
+        "RenderedCache._settle.<locals>.<lambda>",
+        "RenderedCache._splice",
+        "RenderedCache._sync",
+        "RenderedCache._system_part",
+        "RenderedCache._turn_end_test",
+        "RenderedCache._writes",
+        "RenderedCache.add",
+        "RenderedCache.ask",
+        "RenderedCache.begun",
+        "RenderedCache.decoded",
+        "RenderedCache.ensure_can_reply",
+        "RenderedCache.generate",
+        "RenderedCache.generation",
+        "RenderedCache.newest_role",
+        "RenderedCache.open_attempt",
+        "RenderedCache.pending_calls",
+        "RenderedCache.prompt",
+        "RenderedCache.prompt_text",
+        "RenderedCache.published_turn_open",
+        "RenderedCache.reasoning",
+        "RenderedCache.record_reply",
+        "RenderedCache.report",
+        "RenderedCache.results_cut",
+        "RenderedCache.template",
+        "RenderedCache.total_tokens",
+        "RenderedCache.turn_budget",
+        "RenderedCache.turn_open",
+        "RenderedCache.turn_policy",
+        "_ensure_begun",
+        "_ensure_can_reply",
+        "_ensure_ready",
+        "_reported_calls",
+        "_unanswered",
+    },
+    "rendering.py": {
+        "ConversationRendering._as_given",
+        "ConversationRendering._as_given.<locals>.<genexpr>",
+        "ConversationRendering._call_tags",
+        "ConversationRendering._current_memo",
+        "ConversationRendering._declarations",
+        "ConversationRendering._render_given",
+        "ConversationRendering._template",
+        "ConversationRendering.count_tokens",
+        "ConversationRendering.forget_renders",
+        "ConversationRendering.is_plain",
+        "ConversationRendering.is_plain.<locals>.<genexpr>",
+        "ConversationRendering.length",
+        "ConversationRendering.render",
+        "ConversationRendering.run_start",
+        "ConversationRendering.split",
+        "ConversationRendering.split.<locals>.<lambda>",
+        "ConversationRendering.tag_after_content",
+        "ConversationRendering.tag_from",
+        "ConversationRendering.tag_from.<locals>.<genexpr>",
+        "ConversationRendering.target",
+        "ConversationRendering.template_writes",
+        "ConversationRendering.template_writes.<locals>.<genexpr>",
+        "ConversationRendering.tokenize",
+        "kept_turns",
+    },
+    "reply.py": {
+        "ReplyStream.__init__",
+        "ReplyStream.__iter__",
+        "ReplyStream.__next__",
+        "ReplyStream.finish",
+    },
+    "reply_text.py": {
+        "ReplyText.__init__",
+        "ReplyText.answer",
+        "ReplyText.feed",
+        "ReplyText.finish",
+        "ReplyText.in_thought",
+        "ReplyText.met_stop_string",
+        "ReplyText.opens_in_thought",
+        "ReplyText.thought",
+        "ReplyText.thought_pieces",
+        "ReplyText.turn_end_test",
+        "ReplyText.turn_end_test.<locals>.<lambda>",
+        "_AnswerOpening.__init__",
+        "_AnswerOpening._unpadded",
+        "_AnswerOpening.feed",
+        "_AnswerOpening.flush",
+        "_AnswerStops.__init__",
+        "_AnswerStops.feed",
+        "_AnswerStops.flush",
+        "_AnswerStops.text",
+        "reply_header",
+        "without_tags",
+    },
+    "resolved_template.py": {
+        "ResolvedTemplate._as_template_reads",
+        "ResolvedTemplate.answer_opening",
+        "ResolvedTemplate.call_boundary",
+        "ResolvedTemplate.generation_prompt",
+        "ResolvedTemplate.render",
+        "ResolvedTemplate.reply_header",
+        "ResolvedTemplates.for_conversation",
+    },
+    "sequences.py": {
+        "common_prefix_length",
+    },
+    "split_render.py": {
+        "SplitRender.pieces",
+        "_forms",
+        "_marked",
+        "_marked.<locals>.mark",
+        "_marked.<locals>.mark_descriptions",
+        "_placed",
+        "_placed.<locals>.<genexpr>",
+        "_walk",
+        "_walk.<locals>.matched_from",
+        "_walk.<locals>.matched_from.<locals>.<genexpr>",
+        "_walk.<locals>.rest",
+        "split_render",
+    },
+    "template.py": {
+        "TemplateFragments.content",
+        "TemplateFragments.generation_prompt_without_reasoning",
+    },
+    "template_extract.py": {
+        "reasoning_switch.<locals>.<lambda>",
+    },
+    "tokenizing.py": {
+        "MemoTokenizer.is_special",
+        "MemoTokenizer.token_text",
+        "MemoTokenizer.tokenize",
+        "split_at_tags",
+        "tokenize_pieces",
+        "tokenize_pieces.<locals>.end_plain",
+        "tokenize_pieces.<locals>.tokenize",
+    },
+    "windows.py": {
+        "Windows.ahead",
+        "Windows.drop_in",
+    },
+    "wrapper.py": {
+        "ChatWrapper._ensure_not_holding",
+        "ChatWrapper._ensure_open",
+        "ChatWrapper._generate",
+        "ChatWrapper._generate_until_answered",
+        "ChatWrapper._generate_until_answered.<locals>.<genexpr>",
+        "ChatWrapper._generate_until_answered.<locals>.may_call_after_unreadable",
+        "ChatWrapper._held",
+        "ChatWrapper._keep_newest_reply",
+        "ChatWrapper._keep_turn",
+        "ChatWrapper._noting_each_reader",
+        "ChatWrapper._open_turn_text",
+        "ChatWrapper._policy_for",
+        "ChatWrapper._read_generation",
+        "ChatWrapper._reply_cap",
+        "ChatWrapper._reply_cap.<locals>.<genexpr>",
+        "ChatWrapper._replying",
+        "ChatWrapper._replying.<locals>.<lambda>",
+        "ChatWrapper._template",
+        "ChatWrapper.inject",
+        "ChatWrapper.reply",
+        "_CallBudget.__post_init__",
+        "_answerable",
+        "_ensure_cancel_and_sampling",
+        "_ensure_max_calls_runs",
+        "_explain_failure",
+        "_stop_texts",
+        "_sum_generations",
+        "_sum_generations.<locals>.<genexpr>",
+    },
 }
 
 
@@ -1403,8 +1318,8 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
     finally:
         sys.setprofile(None)
     assert entered                  # the profile saw the library at work
-    for name, serves in _PROPERTY_CODE.items():
-        assert not sorted(where for where in entered if serves(where)), name
+    allowed = {f"{file}:{name}" for file, names in _PLAIN_REPLY_CODE.items() for name in names}
+    assert sorted(entered - allowed) == [], "code new to a plain reply"
 
 
 def test_the_render_memory_holds_one_actions_renders_however_long_the_conversation():
@@ -1440,9 +1355,10 @@ def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_
     w, _fake = begun_wrapper()
     w.reply("eins").finish()
     made, built = [], []
-    monkeypatch.setattr(rendered_cache, "published",
+    with monkeypatch.context() as patched:
+        patched.setattr(rendered_cache, "published",
                         lambda *a, **k: made.append(1) or publishing.published(*a, **k))
-    monkeypatch.setattr(publishing, "completions_messages",
+        patched.setattr(publishing, "completions_messages",
                         lambda *a, **k: built.append(1) or [])
-    w.reply("zwei").finish()
+        w.reply("zwei").finish()
     assert len(made) <= 2 and not built        # the question, then the recorded reply

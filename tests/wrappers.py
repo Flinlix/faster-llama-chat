@@ -6,7 +6,10 @@ import os
 import re
 
 from llama_chat.config import Config
-from llama_chat.messages import UNREADABLE_CALL, result_message
+from llama_chat.history_forms import (answer_in_order, ensure_saved_turns, read_messages,
+                                      with_saved_turns, without_unreadable)
+from llama_chat.messages import KEPT_TURN, UNREADABLE_CALL, result_message
+from llama_chat.rendering import kept_turns
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tool_registry import ToolRegistry
 from tests.chat_messages import opened
@@ -431,3 +434,27 @@ def add_tools(wrapper, specs) -> int:
     return wrapper.begin(**{**wrapper.conversation(),
                             "tools": held + [s for s in specs if s.name not in known]}
                          ).n_evicted_messages
+
+
+def assert_conversation_is_its_forms(wrapper):
+    """What ``conversation()`` gives, begin takes, and the conversation the wrapper holds is its Chat Completions messages with each saved turn put back, nothing else needed to go on with it."""
+    if not internals.is_begun(wrapper):
+        return
+    saved = wrapper.conversation()
+    ensure_saved_turns(saved["generated_turns"])
+    joins = internals.joins_questions(wrapper)
+    turns = (saved["generated_turns"] or {}).get("turns", [])
+    messages, n_found = with_saved_turns(read_messages(saved["messages"]), turns, joins)
+    held = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
+    messages, _gone = without_unreadable(messages, held, joins)
+    rebuilt = answer_in_order(messages, internals.unreadable_result_text(wrapper))
+    assert n_found == len(turns), "a saved turn is not found among the messages it was saved with"
+    assert [_comparable(m) for m in rebuilt] \
+        == [_comparable(m) for m in internals.rendered_messages(wrapper)], \
+        "the conversation is not its messages with each saved turn put back"
+
+
+def _comparable(message: dict) -> dict:
+    """``message`` with the turn it may end as its tokens and span, to compare by value."""
+    turn = message.get(KEPT_TURN)
+    return {**message, KEPT_TURN: (turn.tokens, turn.span, turn.on_call)} if turn else message

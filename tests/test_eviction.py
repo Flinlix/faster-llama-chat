@@ -1,0 +1,230 @@
+"""The two eviction limits, the token threshold and the exchange limit: which exchanges go, when, and what a cache that cannot shift does instead."""
+
+
+import pytest
+
+from llama_chat.config import Config
+from llama_chat import ChatWrapper, ContextOverflowError
+from tests.chat_messages import opened, after_system
+from tests.fake_context import FakeContext
+from tests.invented_templates import PLAIN
+from tests.wrappers import assert_consistent, held_text, rows
+
+
+def _n_kept(wrapper):
+    """Messages kept: everything but the system prompt."""
+    return len(rows(wrapper)) - 1
+
+
+def _n_exchanges(wrapper):
+    """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
+    history = [row["role"] for row in rows(wrapper) if row["role"] != "system"]
+    return history.count("user") + (1 if history and history[0] != "user" else 0)
+
+
+def test_a_generation_evicts_down_to_the_exchange_limit():
+    # Far under the token threshold, so the exchange count is the only trigger.
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
+    w.begin(opened("s"))
+    for i in range(8):
+        w.reply(f"q{i}").finish()
+        assert _n_exchanges(w) == min(i + 1, 2) and _n_kept(w) == 2 * _n_exchanges(w)
+        assert w.total_tokens < w.config.evict_above_tokens  # the tokens never bound
+        assert rows(w)[0]["role"] == "system"       # system still survives
+        assert rows(w)[-1]["role"] == "assistant"   # newest turn kept
+        assert_consistent(w, fake)
+
+
+def test_a_question_not_prepared_ahead_shifts_the_exchange_the_limit_drops():
+    """A question ending in a space cannot take the stand-in's place, and its eviction still shifts the cache."""
+    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0, max_history_exchanges=2),
+                    context=fake)
+    w.begin(opened("s"))
+    for question in ("Eins?", "Zwei?", "Drei?"):
+        w.reply(question).finish()
+    fake.edits.clear()
+    reply = w.reply("Vier? ").finish()
+    assert [edit[0] for edit in fake.edits] == ["shift"]
+    newest = held_text(fake)[held_text(fake).rfind("<[turn>user"):]
+    assert reply.n_prefilled_tokens <= len(fake.tokenize(newest))
+
+
+def test_the_tighter_of_the_two_limits_is_the_one_that_binds():
+    # Same conversation under each limit alone, then under both: whichever
+    # would evict more is what the pair evicts, because either one triggers.
+    def kept_under(**limits):
+        fake = FakeContext(PLAIN, gen_tokens=2)
+        w = ChatWrapper(Config(context_size=400, **limits), context=fake)
+        w.begin(opened("s"))
+        for i in range(8):
+            w.reply(f"message number {i} with some length").finish()
+        assert_consistent(w, fake)
+        return _n_kept(w)
+
+    by_tokens = kept_under(evict_above_fraction=0.5)
+    by_exchanges = kept_under(evict_above_fraction=1.0, max_history_exchanges=1)
+    both = kept_under(evict_above_fraction=0.5, max_history_exchanges=1)
+    assert both == min(by_tokens, by_exchanges)
+
+
+def test_a_limit_that_never_binds_changes_nothing():
+    def snapshot_under(**limits):
+        fake = FakeContext(PLAIN, gen_tokens=2)
+        w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5, **limits),
+                        context=fake)
+        w.begin(opened("s"))
+        for i in range(8):
+            w.reply(f"message number {i} with some length").finish()
+        return rows(w)
+
+    assert snapshot_under() == snapshot_under(max_history_exchanges=100)
+
+
+def test_inject_evicts_to_leave_room_under_the_exchange_limit():
+    # inject evicts before appending, so the exchange the arriving message opens
+    # counts against the limit while it is still absent from the conversation.
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]))
+    assert _n_exchanges(w) == 2
+    # The oldest exchange goes whole, so the survivors open on a user turn.
+    assert w.inject("reference material").n_evicted_messages == 2
+    assert [r["text"] for r in rows(w)][1:] == ["c", "reference material"]
+
+
+@pytest.mark.parametrize("history, kept", [
+    ([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"}], ["c", "d"]),
+    ([{"role": "assistant", "content": "a"}, {"role": "user", "content": "b"}, {"role": "assistant", "content": "c"}, {"role": "assistant", "content": "d"}],
+     ["b", "c", "d"]),
+    ([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}], ["c"]),
+])
+def test_begin_prefills_no_more_than_the_exchange_limit(history, kept):
+    # Without the cap, begin would prefill history the first turn then evicts.
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=1), context=fake)
+    assert w.begin(opened("s", history)).n_kept_messages == len(kept)
+    assert [r["text"] for r in rows(w)] == ["s"] + kept       # the newest exchange, whole
+
+
+def test_a_limit_of_one_keeps_the_newest_exchange_between_turns():
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=1), context=fake)
+    w.begin(opened("s"))
+    for i in range(3):
+        w.reply(f"q{i}").finish()
+        assert [(r["role"], r["text"]) for r in rows(w)][:2] == [("system", "s"), ("user", f"q{i}")]
+        assert _n_kept(w) == 2
+        assert_consistent(w, fake)
+
+
+def test_the_limit_holds_across_every_action_that_appends():
+    # The property, not three examples: whatever the mix of actions, the count
+    # never exceeds the limit and the system prompt is never the one dropped.
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=2), context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "old"}, {"role": "assistant", "content": "older"}]))
+    for i in range(6):
+        w.inject(f"context {i}")
+        assert _n_exchanges(w) <= 2
+        w.reply(f"q{i}").finish()
+        assert _n_exchanges(w) <= 2
+        assert rows(w)[0]["role"] == "system"
+        assert_consistent(w, fake)
+
+
+def test_eviction_shift_mode_does_not_rebuild():
+    # Default cache supports shifting: eviction uses apply_eviction, never rebuild.
+    fake = FakeContext(PLAIN, gen_tokens=2)  # can_shift=True
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
+    w.begin(opened("s"))
+    resets_after_begin = fake.resets  # begin() resets once
+    for i in range(8):
+        w.reply(f"message number {i} with some length").finish()
+    assert fake.edit_count("shift") > 0          # eviction did happen
+    assert fake.resets == resets_after_begin  # but never via rebuild
+
+
+def test_a_dropped_stretch_is_found_among_token_ids_up_to_the_bound_the_readme_names():
+    from llama_chat.cache_sync import CacheSync
+    fake = FakeContext(PLAIN)
+    memory = CacheSync(fake)
+    low, high = -0x10000, 0xFFFFF                   # -65,536 and 1,048,575
+    dropped, kept = [high] * 4, [low, high] * 5
+    memory.decode([1] + dropped + kept)
+    memory.hold([1] + kept, find_dropped_stretch=True)
+    assert fake.edits == [("shift", 1, 4)] and fake.cache == [1] + kept
+
+
+def test_eviction_rebuild_mode_when_cache_cannot_shift():
+    # A cache that cannot shift goes back to a saved state or is decoded again.
+    fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
+    w.begin(opened("s"))
+    resets_after_begin = fake.resets
+    for i in range(8):
+        w.reply(f"message number {i} with some length").finish()
+        roles = [s["role"] for s in rows(w)]
+        assert roles[0] == "system"
+        assert w.total_tokens <= w.config.context_size
+        assert_consistent(w, fake)             # the cache as recorded after it is brought back
+    assert fake.edit_count("shift") == 0
+    assert fake.resets + fake.edit_count("restore") > resets_after_begin
+
+
+def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
+    # Rejecting an unfittable message must not evict the history first.
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
+    before = rows(w)
+    with pytest.raises(ValueError):
+        w.inject("x" * 500)
+    assert rows(w) == before
+
+
+def test_every_refusal_for_want_of_room_says_what_to_change():
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=32),
+                    context=fake)
+    w.begin(opened("s"))
+    with pytest.raises(ContextOverflowError, match="shorten the request.*min_reply_tokens"):
+        w.reply("x" * 600).finish()
+    with pytest.raises(ContextOverflowError, match="shorten the message.*evict_above_fraction"):
+        w.inject("x" * 600)
+    w.inject("x" * 470)                         # under the threshold, not under room for a reply
+    with pytest.raises(ContextOverflowError,
+                       match="raise context_size or evict_above_fraction, or lower min_reply_tokens"):
+        w.reply().finish()
+
+
+def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
+    """Nothing in it can be evicted, since an eviction drops up to the next user message."""
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ContextOverflowError, match="no user message follows"):
+        w.begin(opened("s", [{"role": "assistant", "content": "x" * 200}] * 3))
+    assert w.conversation() == before and fake.cache == held
+    # With a later question, the replies before it are evicted instead.
+    w.begin(opened("s", [{"role": "assistant", "content": "x" * 200}] * 3 + [{"role": "user", "content": "q"}, {"role": "assistant", "content": "r"}]))
+    assert after_system(w.conversation()["messages"]) == [{"role": "user", "content": "q"},
+                                            {"role": "assistant", "content": "r"}]
+
+
+@pytest.mark.parametrize("history", [[], [{"role": "user", "content": "q"}]], ids=["no-question", "after-a-question"])
+def test_replies_injected_in_a_row_are_refused_once_they_no_longer_fit(history):
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
+    w.begin(opened("s", history))
+    with pytest.raises(ContextOverflowError, match="no user message follows"):
+        for _ in range(8):
+            before, held = w.conversation(), list(fake.cache)
+            w.inject("y" * 150, role="assistant")
+            assert w.total_tokens <= w.config.evict_above_tokens
+    assert w.conversation() == before and fake.cache == held
+    w.inject("Und jetzt?")                      # a question lets them go
+    w.inject("y" * 150, role="assistant")
+    assert w.total_tokens <= w.config.evict_above_tokens

@@ -141,3 +141,14 @@ def called_in_thought(wrapper) -> bool:
 def tool_turns_stay(wrapper) -> bool:
     """Whether the conversation's template keeps a past turn that called tools as written once another exchange follows."""
     return wrapper._conversation._state.checks.tool_turns_stay
+
+
+def joins_questions(wrapper) -> bool:
+    """Whether the conversation writes two questions in a row as one."""
+    return wrapper._conversation._joins_questions
+
+
+def unreadable_result_text(wrapper) -> str:
+    """The text a call that could not be read is answered with now."""
+    from llama_chat.tools import result_text
+    return result_text(wrapper._conversation._state.unreadable_result)
