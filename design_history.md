@@ -5207,3 +5207,12 @@ the reading and running of calls, and the clock's renders. The checks that
 decide whether that code is needed (a property read, an early return) are
 allowed; the work behind them is not. The same trace on a template that
 reasons or calls tools does enter that code, so the test can fail.
+
+### The README's call table holds one line per call
+
+The table "What to call, by task" held a paragraph in each cell, one of
+about 150 words. It now names each call in one line, and each call's details
+follow it as a paragraph of its own. Two passages that docstrings point to by
+name, "Special tokens in message content" and its neighbour "A template that
+writes the date", were bold leads and are now headings, so the pointer leads
+to a heading.

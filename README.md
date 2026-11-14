@@ -130,15 +130,89 @@ on, so the refusal follows it there.
 
 | doing what | call |
 |------|------|
-| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False, generated_turns=None)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns a `Report` of what it kept and left out. A history message is a chat message: a question, a reply with its thought under `"reasoning_content"` and its calls under `"tool_calls"` where it has them, or a call's result with the role `"tool"`; a `(role, text)` pair stands for a question or a reply without calls (see [Tool calling](#tool-calling)). Any other form or role is refused, naming it. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question, where the newest exchange cannot fit, or a history with no user message, which nothing can be evicted from, cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
-| adding context | `inject(text, role="user")`: adds one message without a reply, and returns a `Report` of the older messages evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
-| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str`, a `max_reply_tokens` of 0 or less, a `tool_call_policy` that is none of `TOOL_CALL_POLICIES`, `None` or a `ToolRegistry`, a `stop` that is neither a `str` nor an iterable of `str`, a `cancel` that is no event and a `sampling` that is no `Sampling`; the rest is checked when the stream is first read |
-| answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
-| changing the tools or the reasoning | `change_settings(*, tools=..., reasoning=...)`: the conversation runs under the tools given, in place of those before, or under the reasoning setting given, from now on, every message kept; a setting left out stays. The cache is decoded again only from where the conversation is first written otherwise. Refused while a tool call has left a reply open, and where a turn kept as generated could no longer be told apart; `begin` again then |
-| shortening the newest reply to what was heard | `truncate_last_reply(keep_text)`. Refused where the template does not write the reply shortened to `keep_text`, as a template that writes no empty reply does not write it shortened to `""` |
-| reading the conversation back | `conversation()`: everything `begin` takes, by its parameter names: `system_prompt`, `messages` (the chat messages `begin` takes, with `"reasoning_content"` where the template keeps a reply's thought), `tools` (those `change_settings` gave included, `None` where the conversation declares none), `reasoning` and `generated_turns` (each turn the model generated with a call, as its tokens, for the same model; see [Keeping a conversation](#keeping-a-conversation)), so `begin(**chat.conversation())` begins again as it was. Safe from any thread, while a reply runs too: it reads all of it as the newest finished change left it |
-| where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `awaits_reply`, `generated_turns()`, `wait_idle(timeout_s)`. `awaits_reply` says whether `reply()` without text would answer something: a question, or a turn whose results are all in. `capabilities(tools=False)` and `capabilities(tools=True)` each give a `Capabilities` record of what `begin` accepts for a conversation begun without tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning` and `can_take_system_prompt`. Both are settled when the model loads, never change, and are safe from any thread. `total_tokens`, `turn_open` and `pending_calls` are safe from any thread, as `conversation()` is: each is read as the newest finished change left it, so a count read while a reply streams is the one from before that reply |
+| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False, generated_turns=None)` |
+| adding context | `inject(text, role="user")` |
+| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)` |
+| answering a call yourself | `inject_tool_result(call, result)`, then `reply()` |
+| changing the tools or the reasoning | `change_settings(*, tools=..., reasoning=...)` |
+| shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
+| reading the conversation back | `conversation()` |
+| where it stands | `total_tokens`, `config`, `can_shift`, `capabilities(tools=...)`, `turn_open`, `pending_calls`, `awaits_reply`, `generated_turns()`, `wait_idle(timeout_s)` |
 | ending | `close()` |
+
+**Starting, or starting again.** A reset. Prefills the pinned system prompt and
+the newest history that fits with it in half the context, from a user turn on,
+at least the newest exchange and no more than `max_history_exchanges`
+exchanges, and returns a `Report` of what it kept and left out. A history
+message is a chat message: a question, a reply with its thought under
+`"reasoning_content"` and its calls under `"tool_calls"` where it has them, or
+a call's result with the role `"tool"`; a `(role, text)` pair stands for a
+question or a reply without calls (see [Tool calling](#tool-calling)). Any
+other form or role is refused, naming it. Older history is dropped without
+being rendered. A history that ends on a call keeps it owed a result. Refused
+where the system prompt and its declarations leave no room for a short
+question, where the newest exchange cannot fit, or a history with no user
+message, which nothing can be evicted from, cannot fit, and where the template
+writes a system prompt where later questions move it; a refused or failed
+`begin` leaves the conversation it would have replaced as it was.
+
+**Adding context.** Adds one message without a reply, and returns a `Report` of
+the older messages evicted for it. A user message is added as `reply(text)`
+adds its question, so `inject(text)` followed by `reply()` waits no longer than
+`reply(text)`; the eviction it needs may come after the reply instead, and is
+then counted in that reply's `n_evicted_messages`. An assistant message, or a
+user message once `max_history_exchanges` is reached, evicts first. An eviction
+drops up to the next user message, so the messages after the newest one stay;
+an assistant message with which they no longer fit under the threshold is
+refused. `role` is `"user"` or `"assistant"`: a system message is refused,
+since the system prompt is `begin`'s, and so is a tool result, which
+`inject_tool_result` writes.
+
+**Asking.** Without `text`, it answers the newest user message already written,
+or goes on with a turn a tool call left open. A conversation that cannot take
+the reply (none begun, a request while a reply is open, a result still owed,
+nothing to answer) is refused when `reply` is called, and so are a `text` that
+is not a `str`, a `max_reply_tokens` of 0 or less, a `tool_call_policy` that is
+none of `TOOL_CALL_POLICIES`, `None` or a `ToolRegistry`, a `stop` that is
+neither a `str` nor an iterable of `str`, a `cancel` that is no event and a
+`sampling` that is no `Sampling`; the rest is checked when the stream is first
+read.
+
+**Answering a call yourself.** Call `inject_tool_result` for each of
+`pending_calls`, oldest first, then `reply()`, which keeps the turn's
+`tool_call_policy`.
+
+**Changing the tools or the reasoning.** The conversation runs under the tools
+given, in place of those before, or under the reasoning setting given, from now
+on, every message kept; a setting left out stays. The cache is decoded again
+only from where the conversation is first written otherwise. Refused while a
+tool call has left a reply open, and where a turn kept as generated could no
+longer be told apart; `begin` again then.
+
+**Shortening the newest reply to what was heard.** Refused where the template
+does not write the reply shortened to `keep_text`, as a template that writes no
+empty reply does not write it shortened to `""`.
+
+**Reading the conversation back.** Everything `begin` takes, by its parameter
+names: `system_prompt`, `messages` (the chat messages `begin` takes, with
+`"reasoning_content"` where the template keeps a reply's thought), `tools`
+(those `change_settings` gave included, `None` where the conversation declares
+none), `reasoning` and `generated_turns` (each turn the model generated with a
+call, as its tokens, for the same model; see [Keeping a
+conversation](#keeping-a-conversation)), so `begin(**chat.conversation())`
+begins again as it was. Safe from any thread, while a reply runs too: it reads
+all of it as the newest finished change left it.
+
+**Where it stands.** `awaits_reply` says whether `reply()` without text would
+answer something: a question, or a turn whose results are all in.
+`capabilities(tools=False)` and `capabilities(tools=True)` each give a
+`Capabilities` record of what `begin` accepts for a conversation begun without
+tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning`
+and `can_take_system_prompt`. Both are settled when the model loads, never
+change, and are safe from any thread. `total_tokens`, `turn_open` and
+`pending_calls` are safe from any thread, as `conversation()` is: each is read
+as the newest finished change left it, so a count read while a reply streams is
+the one from before that reply.
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
 
@@ -616,7 +690,9 @@ that writes nothing after a reply is used only where the tag that opens the
 next turn ends a generation for the model, since the reply ends where the
 model draws that tag.
 
-**Special tokens in message content.** A caller's text (a message, a thought, a
+### Special tokens in message content
+
+A caller's text (a message, a thought, a
 call's name and arguments, and each description of a declared tool) is
 tokenized with special-token parsing off, and the template's tags with it on,
 so a literal tag typed into a message or a tool's description stays text and
@@ -626,7 +702,9 @@ the text's length, or something it writes only when the text holds a certain
 word. The plain text between two tags, the template's and the caller's alike,
 is tokenized as one run, as a render of the whole conversation tokenizes it.
 
-**A template that writes the date** follows the clock: a conversation that runs
+### A template that writes the date
+
+A template that writes the date follows the clock: a conversation that runs
 past midnight is decoded again once, from the date on.
 
 ## Your own cache context
