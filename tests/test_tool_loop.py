@@ -2208,3 +2208,17 @@ def test_a_call_that_spends_the_reply_cap_is_reported_by_its_name_though_not_run
     w, run = reply(clock, cap)
     assert run.stop_reason == "token_limit" and not w.turn_open
     assert [(call.name, call.status) for call in run.tool_calls] == [("uhr", "unfinished")]
+
+
+def test_a_batch_with_one_entry_that_is_no_call_runs_the_others_and_tells_the_model_of_that_one():
+    """Each call of a batch is judged on its own: the good ones are answered, the bad one told it could not be read."""
+    registry, ran = _counting_clock()
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin("persona", tools=registry)
+    fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"}, '
+                        '{"name": "clock", "arguments": {}}]']
+    reply = w.reply("wie spät?", tool_call_policy=registry).finish()
+    assert len(ran) == 2
+    assert [call.status for call in reply.tool_calls] == ["complete", "unreadable", "complete"]
+    assert "could not be read" in held_text(fake) and not w.turn_open

@@ -393,15 +393,13 @@ def test_a_history_whose_older_exchanges_are_long_is_not_rendered_whole_at_begin
     assert max(fake.rendered[before:]) < 100     # never near the 604 messages of the whole
 
 
-@pytest.mark.parametrize("steps", [
-    (ToolCall("weather", {"city": "Bonn"}, status="unreadable", text="t"), ToolResult("unknown", "e")),
-    (ToolCall("weather", {}), ToolCall("", {}, status="unreadable", text="t"),
-     ToolResult("weather", "r"), ToolResult("unknown", "e")),
-    (ToolCall("", {}, status="unreadable", text="t"), ToolCall("weather", {}), ToolResult("unknown", "e")),
-], ids=["named", "after-a-call", "before-a-call"])
-def test_an_unreadable_call_that_does_not_stand_alone_is_refused(steps):
-    with pytest.raises(ValueError, match="stands alone"):
-        ToolTurn(steps)
+def test_an_unreadable_call_with_a_name_is_refused_and_one_beside_other_calls_is_taken():
+    with pytest.raises(ValueError, match="no name or arguments"):
+        ToolTurn((ToolCall("weather", {"city": "Bonn"}, status="unreadable"),
+                  ToolResult("unknown", "e")))
+    # An entry of a batch the model wrote unreadably stands beside the calls it could read.
+    ToolTurn((ToolCall("weather", {}), ToolCall("", {}, status="unreadable"),
+              ToolResult("weather", "r"), ToolResult("unknown", "e")))
 
 
 def test_a_history_cannot_leave_an_unreadable_call_owed():

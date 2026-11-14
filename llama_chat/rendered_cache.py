@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, fields, replace
 from .cache_context import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
-from .messages import (THOUGHT_KEY, UNREADABLE_CALL, as_history, as_messages, calling_message,
+from .messages import (THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_history, as_messages, calling_message,
                        exchange_count, exchange_starts, history_count, kept_items,
                        next_call_number, portable_digest, result_message, system_part,
                        with_result_text)
@@ -194,6 +194,8 @@ class RenderedCache:
         self._request: _Snapshot | None = None
         self._rolled_back = False
         self._changes = _Changes()
+        # What a call that could not be read is answered with, as the newest reply was told.
+        self._unreadable_result: dict | None = None
         self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
@@ -964,6 +966,7 @@ class RenderedCache:
                 self._memory.replace(
                     self._rendering.target(self._state.messages, generation_prompt=False).tokens)
             return 0
+        self._unreadable_result = unreadable_result
         if unreadable:
             try:
                 written = self._write_unreadable(unreadable_result)
@@ -972,6 +975,8 @@ class RenderedCache:
                 raise
             if not written:
                 self._forget_calls()
+        elif self.turn_open:
+            self._answer_unreadable_owed()  # an entry of a batch that could not be read
         if self.turn_open:
             if unplaced:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
@@ -1012,13 +1017,25 @@ class RenderedCache:
     def _write_unreadable(self, result: dict) -> bool:
         """Answer a call that could not be read with ``result``, where the template writes a result and the context has room; whether it was."""
         call = self.pending_calls[0]
-        if not self._renders_result(result_message(call.name, call.id, result_text(result))):
+        if not self._renders_result(result_message(call.name or UNKNOWN_FUNCTION, call.id,
+                                                   result_text(result))):
             return False
         try:
-            self.add_result(call, result)
+            self._add_result(call, result)
             return True
         except ContextOverflowError:
             return False
+
+    def _answer_unreadable_owed(self) -> int:
+        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; how many history items went for room."""
+        dropped = 0
+        while self.pending_calls and self.pending_calls[0].status == "unreadable" \
+                and self._unreadable_result is not None:
+            n_before = history_count(self._state.messages)
+            if not self._write_unreadable(self._unreadable_result):
+                break
+            dropped += max(0, n_before - history_count(self._state.messages))
+        return dropped
 
     def _renders_result(self, message: dict) -> bool:
         """Whether the template writes ``message``, a result, after the conversation.
@@ -1099,6 +1116,11 @@ class RenderedCache:
             ContextOverflowError: If not even a result cut to nothing leaves
                 room for the reply.
         """
+        dropped = self._add_result(call, result)
+        return dropped + self._answer_unreadable_owed()
+
+    def _add_result(self, call: ToolCall, result) -> int:
+        """:meth:`add_result`'s work for one call."""
         with self._action():
             if not self._state.begun:
                 raise OutOfOrderError(None, "no conversation to answer a call in; call begin() first")
@@ -1111,7 +1133,7 @@ class RenderedCache:
                     "call", f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
-            message = result_message(owed.name, owed_id, text, result)
+            message = result_message(owed.name or UNKNOWN_FUNCTION, owed_id, text, result)
             if not self._renders_result(message):
                 raise UnsupportedError("result", "this model's template renders no tool result, "
                                                  "so a call's result cannot be written")
@@ -1853,7 +1875,8 @@ def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     if calling is None:
         return []
     answered = len(messages) - calling - 1
-    return [(ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
+    return [(ToolCall("", {}, c["id"], "unreadable") if UNREADABLE_CALL in c else
+             ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
              c["id"]) for c in messages[calling]["tool_calls"][answered:]]
 
 

@@ -4788,10 +4788,13 @@ nested ones included. Not covered: a nested value that a template writes as a
 Python literal, read by `ast.literal_eval`, still takes the last of two equal
 keys.
 
-The second half of the rule, judging each call of a batch on its own instead
-of refusing the whole batch for one bad entry, waits for the removal of the
-call-as-written code (403.3A): until then an unreadable call must stand alone
-in its turn.
+The second half of the rule, judging each call of a batch on its own, came
+after the removal of the call-as-written code (403.3A), which had needed an
+unreadable call to stand alone in its turn: an entry of a batch that is no
+call is now an unreadable call of its own, answered with its failure in its
+place in the turn, while the entries that are calls are handed over or run.
+A turn may hold an unreadable call beside others; it still has no name or
+arguments.
 
 ### One undo path (402.5A, 402.6A, 402.7A, 415.6A)
 

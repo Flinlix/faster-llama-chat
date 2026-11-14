@@ -167,9 +167,8 @@ class ToolTurn:
             :class:`ToolCall`, and each result as a :class:`ToolResult`, each
             result after the call it answers.
 
-    A call with the status ``"unreadable"`` stands alone, as a conversation
-    keeps one: no name, no arguments, no other call beside it, and nothing
-    but its result after it.
+    A call with the status ``"unreadable"`` has no name and no arguments, as a
+    conversation keeps one.
 
     Raises:
         ValueError: If a step is none of these, a call's arguments are not a
@@ -181,15 +180,12 @@ class ToolTurn:
 
     def __post_init__(self) -> None:
         owed = 0
-        for at, step in enumerate(self.steps):
-            following = self.steps[at + 1] if at + 1 < len(self.steps) else None
+        for step in self.steps:
             if isinstance(step, ToolCall) and step.status == "unreadable" and (
-                    step.name or step.arguments
-                    or at and isinstance(self.steps[at - 1], ToolCall)
-                    or following is not None and not isinstance(following, ToolResult)):
-                raise InvalidArgumentError("steps", "an unreadable call in a ToolTurn stands alone, with no name or "
-                                 "arguments and nothing but its result after it, as a "
-                                 f"conversation keeps one, not {step!r}")
+                    step.name or step.arguments):
+                raise InvalidArgumentError("steps", "an unreadable call in a ToolTurn has no name "
+                                                    f"or arguments, as a conversation keeps one, "
+                                                    f"not {step!r}")
             if not isinstance(step, (str, Thought, ToolCall, ToolResult)):
                 raise TypeError(f"a ToolTurn's step is a str, a Thought, a ToolCall or a "
                                  f"ToolResult, not {type(step).__name__}: {step!r}")

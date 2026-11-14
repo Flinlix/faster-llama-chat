@@ -105,7 +105,11 @@ def _as_json_calls(text: str, keys: tuple[str, ...]) -> list[ToolCall]:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
     calls = [_one_json_call(item, keys) for item in batch]
-    return calls if calls and None not in calls else []
+    if not calls or all(call is None for call in calls):
+        return []
+    # Each entry of a batch is judged on its own: one that is no call is unreadable alone.
+    return [call or ToolCall("", {}, status="unreadable", text=json.dumps(item))
+            for call, item in zip(calls, batch)]
 
 
 def _one_json_call(decoded, keys: tuple[str, ...]) -> ToolCall | None:

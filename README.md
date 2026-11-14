@@ -327,10 +327,13 @@ is read, else `do not call again`, as under `"refuse"`, once `max_calls` is
 spent, or after the third call in a row that could not be read, under every
 policy. A result that a registered tool returns as a dict carrying
 `error` counts as a failure too, and so does one that JSON cannot write, `NaN`
-and infinity included. A result handed to `inject_tool_result` is written as
-given, a dict carrying `error` included, with nothing added to it; one that
-JSON cannot write is answered with the same `unwritable_result` failure, and a
-warning on the logger `llama_chat` says so.
+and infinity included. A result handed to `inject_tool_result` is told the
+same way, a dict carrying `error` included; one that JSON cannot write is
+answered with the same `unwritable_result` failure, and a warning on the
+logger `llama_chat` says so. A call is read only where all of its text is
+read: text left after it, a blank pair or a key written twice makes it
+unreadable. Each call of a batch is judged on its own, so one entry that is no
+call is told so in its place while the others are answered.
 A call whose arguments are no object, such as a list or `null`, or nest
 deeper than 100 levels of lists and objects, is unreadable, and its tool does
 not run.
