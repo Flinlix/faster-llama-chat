@@ -2066,3 +2066,23 @@ def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cac
     assert short.keys() == long.keys()
     assert {name: (short[name], long[name]) for name in short
             if long[name] > short[name] + 8} == {}
+
+
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_question_is_refused_only_where_the_template_does_not_write_it_and_the_next_is_answered(stem):
+    """Invariant 4's second refusal: an empty question, and one asked twice, on every template."""
+    run = _Run(stem, replies=["Gladly."] * 6)
+    run.begin()
+    run.chat.reply("Thanks!").finish()
+    for question in ("Thanks!", ""):
+        sent = _sent(run.chat)
+        writes = run.context.stated_render(sent + [{"role": "user", "content": question}],
+                                           generation_prompt=True) is not None
+        try:
+            run.chat.reply(question).finish()
+        except TemplateRefusedError as refused:
+            assert not writes or "otherwise than as text" in str(refused), question
+            assert _sent(run.chat) == sent          # refused before anything changed
+        else:
+            assert writes, question
+        assert run.chat.reply("And now?").finish().text == "Gladly."

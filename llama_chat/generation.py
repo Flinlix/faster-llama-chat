@@ -37,7 +37,8 @@ class GenerationAccumulator:
             belong to no reply, such as the first tokens of a closing written
             whole later; the caller cuts them away again.
         cut_inside_call: Whether the reply cap or a cancel ended it inside a
-            call, which is then dropped.
+            call, or a call's plain opening ended it where calls are withheld;
+            the call is then dropped.
         tag_spans: Where each of the model's own tags it wrote stands in the
             visible text, as its start and end there.
     """
@@ -184,6 +185,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     opening_owns_space = open_text is not None and boundary.call_texts[0][:1].isspace()
     starts = []            # where each token's text begins in ``visible``
     ended_at_text = False
+    withheld_call = False           # whether a withheld call's plain opening ended the reply
     marks_from = 0         # where the next search for a mark begins
     held_tag = None        # where a tag a call may follow begins and ends, not shown yet
 
@@ -266,7 +268,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                     call_tail = call[0]
                 else:
                     generated.stop_reason = "end_of_turn"
-                    ended_at_text = True
+                    ended_at_text, withheld_call = True, opens_call
                     # Its tokens leave the reply, and the caller cuts them
                     # from the cache: the closing is written whole.
                     kept = bisect.bisect_left(starts, upto)
@@ -308,7 +310,8 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             break
     else:
         generated.stop_reason = "token_limit"
-    generated.cut_inside_call = call is not None and generated.stop_reason != "tool_call"
+    generated.cut_inside_call = withheld_call or (call is not None
+                                                  and generated.stop_reason != "tool_call")
 
     # Flush the held-back tail unless the reply ended in a call or at its text.
     in_text_call = call is not None and close_text is not None

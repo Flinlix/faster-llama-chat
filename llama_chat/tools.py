@@ -59,7 +59,8 @@ class ToolCall:
         status: ``"complete"`` for a call that was read. ``"unreadable"``
             for one that was written but could not be read, which the library
             answers itself, and ``"unfinished"`` for one the reply cap or a
-            cancel cut short, which nothing answers: either is only reported,
+            cancel cut short, or one whose plain opening ended a reply that
+            withholds calls, which nothing answers: either is only reported,
             with no name or arguments, and an unfinished one with no id.
         text: What the model wrote for a call that could not be read, where
             the reply stopped on it, between the call's opening and its

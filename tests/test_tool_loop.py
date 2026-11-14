@@ -1858,7 +1858,7 @@ def test_withheld_calls_cannot_be_written_and_nothing_is_told_about_them():
 
 
 @pytest.mark.parametrize("stem", [stem for stem in STEMS if expected(fixture(stem), "call_opening_text")])
-def test_a_call_that_opens_with_plain_text_ends_a_reply_that_reads_no_call_where_it_opens(stem):
+def test_a_call_that_opens_with_plain_text_ends_a_reply_that_reads_no_call_and_is_reported_unfinished(stem):
     """No token opens it, so none can be kept from being drawn; the reply ends there instead."""
     fake = FakeContext(fixture(stem))
     wrapper = ChatWrapper(Config(context_size=8192), context=fake)
@@ -1868,7 +1868,8 @@ def test_a_call_that_opens_with_plain_text_ends_a_reply_that_reads_no_call_where
     fake.replies = [ScriptedCall(body)]
     reply = wrapper.reply("Wetter?", tool_call_policy="withhold").finish()
     assert (reply.text, reply.stop_reason) == ("", "end_of_turn")
-    assert (reply.tool_calls, wrapper.turn_open) == ([], False)
+    # Reported as a call cut short is, so that no call the model made goes unreported.
+    assert ([call.status for call in reply.tool_calls], wrapper.turn_open) == (["unfinished"], False)
     assert WEATHER.name not in after_system(wrapper.conversation()["messages"])[-1]["content"]
 
 
