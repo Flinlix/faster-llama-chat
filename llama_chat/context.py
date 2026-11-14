@@ -15,7 +15,9 @@ from pathlib import Path
 
 from ._backend import Backend
 from .cache_context import TOOL_USE_TEMPLATE
-from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, InvalidSettingError, Sampling
+from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, Sampling
+from .errors import EngineError
+from .errors import InvalidSettingError
 from .model_template import ModelTemplate
 
 SEQ = 0  # the one sequence id, there being one conversation
@@ -213,7 +215,8 @@ class KVContext:
                 can shift does only when it is corrupted.
         """
         if not self._backend.kv_seq_rm(self._engine_context, SEQ, start, end):
-            raise RuntimeError(f"the cache refused to remove tokens {start} to {end}")
+            raise EngineError(f"the cache refused to remove tokens {start} to {end}; the next "
+                              "action decodes the conversation again")
         self._backend.kv_seq_add(self._engine_context, SEQ, end, -1, start - end)
 
     def save_state(self):
@@ -236,7 +239,8 @@ class KVContext:
             RuntimeError: If the cache refuses a partial removal.
         """
         if not self._backend.kv_seq_rm(self._engine_context, SEQ, pos, -1):
-            raise RuntimeError(f"the cache refused to remove its tokens from {pos} on")
+            raise EngineError(f"the cache refused to remove its tokens from {pos} on; the next "
+                              "action decodes the conversation again")
 
     # ----- the steps a generation takes ----------------------------------
     def sampled_tokens(self, sampling: Sampling, withheld_tokens: tuple[int, ...]):

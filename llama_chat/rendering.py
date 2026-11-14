@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from .errors import TemplateRefusedError
 from .messages import (CALL_AS_WRITTEN, RESULT_AS_GIVEN, THOUGHT_KEY, UNKNOWN_FUNCTION,
                        exchange_starts, system_part)
 from .render_checks import STAND_IN
@@ -185,7 +186,7 @@ class ConversationRendering:
             return Target(self.tokenize([], add_special=True), {})     # the opener alone
         split = self.split(messages, generation_prompt)
         if split is None:
-            raise ValueError("the template refuses to write this conversation")
+            raise TemplateRefusedError("messages", "the template refuses to write this conversation")
         end = len(split.text) if upto is None else upto
         turns = self._inputs().kept
         placed = []
@@ -194,7 +195,7 @@ class ConversationRendering:
                 continue            # a turn these messages do not hold
             found = self.place(kept, messages, split)
             if found is None:
-                raise ValueError("this model's template writes a turn that called tools where "
+                raise TemplateRefusedError("messages", "this model's template writes a turn that called tools where "
                                  "it cannot be told apart, so the turn could not keep the tokens "
                                  "it was generated as")
             if found[1] <= end:

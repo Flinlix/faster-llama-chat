@@ -196,6 +196,38 @@ def _go_on(w, fake):
 
 @pytest.mark.parametrize("action", sorted(_ACTIONS))
 @pytest.mark.parametrize("cache", sorted(_CACHES))
+def test_nothing_an_action_failing_at_any_point_leaves_blocks_a_question(cache, action):
+    """Whatever state a failure leaves, owed calls and open turns included, the next question is answered at once."""
+    prepare, act, _calls = _ACTIONS[action]
+    for template in (TOOLS, TOOLS_REFUSING_TWO_USER_TURNS):
+        def prepared():
+            fake = _Flaky(template, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
+            w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
+                                   min_reply_tokens=20), context=fake)
+            _begin(("user", "alt"), ("assistant", "älter"))(w, fake)
+            prepare(w, fake)
+            fake.operations = 0
+            return w, fake
+
+        w, fake = prepared()
+        act(w, fake, [])
+        points = fake.operations
+        for at in range(points + 1):
+            w, fake = prepared()
+            fake.fail_at = at if at < points else None
+            try:
+                act(w, fake, [])
+            except RuntimeError:
+                pass
+            fake.call_script = []
+            reply = w.reply("Und jetzt?").finish()
+            assert reply.text == "Gern." and not w.turn_open, (template is TOOLS, at)
+            assert_cache_reads_as_rendered(w, fake)
+            w.close()
+
+
+@pytest.mark.parametrize("action", sorted(_ACTIONS))
+@pytest.mark.parametrize("cache", sorted(_CACHES))
 def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(cache, action):
     """A reply keeps what it produced before the failure and nothing else; any other action changes nothing."""
     prepare, act, calls = _ACTIONS[action]
@@ -566,8 +598,8 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
     fake = FakeContext(REFUSES_TWO_USER_TURNS, can_shift=False, can_cut_tail=False, gen_tokens=3)
     w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
     w.begin("s", [("user", "a"), ("assistant", "b")] * 10 + [("user", "q")])
-    with pytest.raises(ValueError, match="two user turns"):
-        w.inject("noch eine Frage")
+    with pytest.raises(ContextOverflowError):
+        w.inject("x" * 3000)                    # refused before anything is dropped
     resets, decoded = fake.resets, fake.total_prefilled()
     w.reply().finish()
     assert fake.resets == resets and fake.total_prefilled() - decoded < 100

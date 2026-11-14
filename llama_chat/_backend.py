@@ -29,6 +29,8 @@ except ImportError as exc:  # pragma: no cover
         '"llama-cpp-python>=0.3.23"'
     ) from exc
 
+from .errors import EngineError  # noqa: E402  (after the dependency's own check)
+
 # The C API's floor on how many candidates a truncating stage may leave.
 _MIN_CANDIDATES = 1
 
@@ -293,7 +295,7 @@ class Backend:
             buf = (self._llama_cpp.llama_token * n_max)()
             n = self._llama_cpp.llama_tokenize(vocab, raw, len(raw), buf, n_max, add_special, parse_special)
             if n < 0:
-                raise RuntimeError(f"llama_tokenize failed: required {-n} tokens")
+                raise EngineError(f"the engine could not tokenize a text: it needs {-n} tokens")
         return list(buf[:n])
 
     def token_to_piece_bytes(self, vocab, token: int) -> bytes:
@@ -308,7 +310,7 @@ class Backend:
             buf = (ctypes.c_char * (-n))()
             n = self._token_to_piece(vocab, token, buf, len(buf), 0, True)
             if n < 0:
-                raise RuntimeError(f"llama_token_to_piece failed for token {token}")
+                raise EngineError(f"the engine could not spell token {token}")
         return bytes(buf[:n])
 
     def token_to_piece(self, vocab, token: int) -> str:
@@ -423,7 +425,7 @@ class Backend:
         size = self._state_size(ctx, seq, self._state_flags)
         buffer = (ctypes.c_uint8 * size)()
         if self._state_get(ctx, buffer, size, seq, self._state_flags) != size:
-            raise RuntimeError("the cache did not save its state")
+            raise EngineError("the engine did not save the cache's state")
         return buffer
 
     def restore_state(self, ctx, seq: int, buffer) -> None:
@@ -433,7 +435,7 @@ class Backend:
             RuntimeError: If the cache refuses it.
         """
         if self._state_set(ctx, buffer, len(buffer), seq, self._state_flags) == 0:
-            raise RuntimeError("the cache refused the saved state")
+            raise EngineError("the engine refused the cache's saved state")
 
     def can_shift(self, ctx) -> bool:
         """Whether the cache supports in-place position shifting after removal."""
@@ -467,6 +469,7 @@ class Backend:
                 batch.n_tokens = m
                 rc = self._llama_cpp.llama_decode(ctx, batch)
                 if rc != 0:
-                    raise RuntimeError(f"llama_decode failed (rc={rc})")
+                    raise EngineError(f"the engine failed to decode (llama_decode returned {rc}); the next "
+                                      "action decodes the conversation again")
         finally:
             self._llama_cpp.llama_batch_free(batch)

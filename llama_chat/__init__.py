@@ -21,10 +21,12 @@ argument spelling being recovered from that template.
 """
 
 from .cache_context import TOOL_USE_TEMPLATE, CacheContext
-from .config import Config, InvalidSettingError, Sampling
+from .config import Config, Sampling
+from .errors import (ContextOverflowError, EngineError, InvalidArgumentError, InvalidSettingError,
+                     OutOfOrderError, RefusalError, TemplateRefusedError, UnsupportedError)
 from .tools import Thought, ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream,
-                    StopReason, ToolCallPolicy, UnsupportedError)
+from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, Reply, ReplyStream, StopReason,
+                    ToolCallPolicy)
 from .resolved_template import Capabilities
 from .wrapper import ChatWrapper
 
@@ -33,8 +35,13 @@ __all__ = [
     "InvalidSettingError",
     "Sampling",
     "ChatWrapper",
-    "ContextOverflowError",
+    "RefusalError",
+    "InvalidArgumentError",
     "UnsupportedError",
+    "TemplateRefusedError",
+    "OutOfOrderError",
+    "ContextOverflowError",
+    "EngineError",
     "Capabilities",
     "Reply",
     "ReplyStream",

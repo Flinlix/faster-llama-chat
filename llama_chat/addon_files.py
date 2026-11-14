@@ -14,7 +14,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from .config import Config, InvalidSettingError
+from .config import Config
+from .errors import InvalidSettingError
 
 _log = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
         ValueError: If a value the model recommends, which neither ``config``
             nor the add-on file replaces, is one the settings refuse, or names
             no model sampling field. Not an
-            :class:`~llama_chat.config.InvalidSettingError`, since no setting
+            :class:`~llama_chat.errors.InvalidSettingError`, since no setting
             of the caller's is at fault.
     """
     unknown = sorted(set(recommended) - set(SAMPLING_FIELDS))

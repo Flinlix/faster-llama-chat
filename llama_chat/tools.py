@@ -17,6 +17,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from .errors import InvalidArgumentError
+
 __all__ = ["Thought", "ToolCall", "ToolCallStatus", "ToolRegistry", "ToolResult", "ToolSpec",
            "ToolTurn"]
 
@@ -81,17 +83,28 @@ class ToolCall:
         return hash((self.name, self.id))
 
 
-def ensure_names_unique(specs: list[ToolSpec]) -> None:
-    """Refuse a declaration that names one tool twice.
+def ensure_declarable(specs: list[ToolSpec]) -> None:
+    """Refuse a declaration of anything but tool specs, or one that names a tool twice.
 
     Raises:
-        ValueError: Naming the first name given twice.
+        TypeError: If an entry is no :class:`ToolSpec`, or one of its fields
+            is of another type than it states.
+        InvalidArgumentError: Naming the first tool named twice, or a tool
+            without a name.
     """
     seen = set()
     for spec in specs:
+        if not isinstance(spec, ToolSpec):
+            raise TypeError(f"a declaration holds ToolSpecs or is a ToolRegistry, not {spec!r}")
+        if not isinstance(spec.name, str) or not isinstance(spec.description, str) \
+                or not isinstance(spec.parameters, dict):
+            raise TypeError(f"a ToolSpec holds a str name, a str description and a dict of "
+                            f"parameters, not {spec!r}")
+        if not spec.name:
+            raise InvalidArgumentError("tools", "a declared tool needs a name to be called by")
         if spec.name in seen:
-            raise ValueError(f"the declaration names the tool {spec.name!r} twice; "
-                             "declare each name once")
+            raise InvalidArgumentError("tools", f"the declaration names the tool {spec.name!r} "
+                                                "twice; declare each name once")
         seen.add(spec.name)
 
 
@@ -107,7 +120,8 @@ def result_text(result) -> str:
     try:
         return json.dumps(result, allow_nan=False)
     except (TypeError, ValueError) as e:
-        raise ValueError(f"a tool result must be text or what JSON can write: {e}") from e
+        raise InvalidArgumentError("result", f"a tool result must be text or what JSON can "
+                                             f"write: {e}") from e
 
 
 def unwritable_failure(result) -> dict | None:
@@ -173,20 +187,20 @@ class ToolTurn:
                     step.name or step.arguments
                     or at and isinstance(self.steps[at - 1], ToolCall)
                     or following is not None and not isinstance(following, ToolResult)):
-                raise ValueError("an unreadable call in a ToolTurn stands alone, with no name or "
+                raise InvalidArgumentError("steps", "an unreadable call in a ToolTurn stands alone, with no name or "
                                  "arguments and nothing but its result after it, as a "
                                  f"conversation keeps one, not {step!r}")
             if not isinstance(step, (str, Thought, ToolCall, ToolResult)):
-                raise ValueError(f"a ToolTurn's step is a str, a Thought, a ToolCall or a "
+                raise TypeError(f"a ToolTurn's step is a str, a Thought, a ToolCall or a "
                                  f"ToolResult, not {type(step).__name__}: {step!r}")
             if isinstance(step, ToolCall):
                 if not isinstance(step.arguments, dict):
-                    raise ValueError(f"the call to {step.name!r} in a ToolTurn has arguments "
+                    raise TypeError(f"the call to {step.name!r} in a ToolTurn has arguments "
                                      f"that are not a dict: {step.arguments!r}")
                 owed += 1
             elif isinstance(step, ToolResult):
                 if not owed:
-                    raise ValueError(f"the result for {step.name!r} answers no call made "
+                    raise InvalidArgumentError("steps", f"the result for {step.name!r} answers no call made "
                                      "before it in its ToolTurn")
                 owed -= 1
 

@@ -9,7 +9,8 @@ from llama_chat import addon_files
 from llama_chat.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
-from llama_chat.config import Config, InvalidSettingError
+from llama_chat import InvalidSettingError
+from llama_chat.config import Config
 from tests.chat_templates import STEMS, expected, fixture
 
 _TEMPLATE = "{{ messages }}"

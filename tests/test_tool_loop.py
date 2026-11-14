@@ -11,7 +11,7 @@ from llama_chat.config import Config
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from llama_chat import ChatWrapper, ContextOverflowError, UnsupportedError
+from llama_chat import ChatWrapper, ContextOverflowError, OutOfOrderError, UnsupportedError
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import FakeContext, ScriptedCall, written_call
@@ -353,15 +353,16 @@ def test_a_result_under_the_wrong_name_is_refused():
     list(wrapper.reply(tool_call_policy="yield"))
 
 
-@pytest.mark.parametrize("not_the_call", ["clock", ToolCall("clock", {"city": "Bonn"})])
-def test_a_result_answers_the_call_itself_not_its_name(not_the_call):
+@pytest.mark.parametrize("not_the_call, refusal", [
+    ("clock", TypeError), (ToolCall("clock", {"city": "Bonn"}), OutOfOrderError)])
+def test_a_result_answers_the_call_itself_not_its_name(not_the_call, refusal):
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona")
     fake.call_script = ["fn:clock{}"]
     list(wrapper.reply("wie spät?", tool_call_policy="yield"))
     before = list(fake.cache)
 
-    with pytest.raises(ValueError, match="the waiting call is"):
+    with pytest.raises(refusal, match="the waiting call is|must be the ToolCall"):
         wrapper.inject_tool_result(not_the_call, "ok")
 
     assert fake.cache == before
@@ -409,7 +410,7 @@ def test_a_running_reply_with_no_room_to_answer_its_call_closes_the_turn_as_the_
             reply = wrapper.reply("wie spät?", tool_call_policy=(
                 registry if policy == "registry" else policy)).finish()
         except ContextOverflowError as refused:
-            if "only" in str(refused):
+            if "the request needs" in str(refused) or "the reply needs" in str(refused):
                 continue                # too small for the question itself
             raise
         if reply.stop_reason != "token_limit" or "<result>" in held_text(fake):
@@ -837,12 +838,8 @@ def test_turn_open_outlasts_the_pending_calls():
     wrapper.inject_tool_result(ToolCall("clock", {}), {"time": "09:00"})
     assert not bool(wrapper.pending_calls)     # nothing is owed any more
     assert wrapper.turn_open                   # but the turn has not closed
-    for action in (lambda: wrapper.reply("weiter").finish(),
-                   lambda: wrapper.inject("kontext"),
-                   lambda: wrapper.declare_tools(
-                       [ToolSpec("x", "d", {"type": "object", "properties": {}})])):
-        with pytest.raises(ValueError, match="while a reply is open"):
-            action()
+    with pytest.raises(OutOfOrderError, match="while a reply is open"):
+        wrapper.declare_tools([ToolSpec("x", "d", {"type": "object", "properties": {}})])
 
     list(wrapper.reply(tool_call_policy="yield"))
     assert not wrapper.turn_open               # closed, and work is allowed again
@@ -1496,12 +1493,7 @@ def test_a_template_that_declares_nothing_refuses_to_be_told_about_tools():
 
 
 def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
-    """Telling the model is best effort; keeping the cache consistent is not.
-
-    Recording runs in a ``finally`` and is what leaves the cache and the conversation
-    agreeing, so a template that renders no result block must make it fall back
-    to closing the turn, not raise out of it.
-    """
+    """A template that renders no result block could never answer a call, so under the default none is read: the reply closes its turn."""
     fake = FakeContext(NO_RESULT_BLOCK)
     wrapper = ChatWrapper(Config(context_size=512), context=fake)
     wrapper.begin("persona")
@@ -1509,10 +1501,8 @@ def test_recording_a_reply_survives_a_template_with_nowhere_to_tell_it():
 
     reply = wrapper.reply("wie spät?").finish()          # must not raise
 
-    assert reply.stop_reason == "unreadable_tool_call"
+    assert reply.stop_reason not in ("tool_call", "unreadable_tool_call")
     assert not wrapper.turn_open
-    turn = newest_turn(fake)
-    assert "</call><turn]>\n" in turn             # the closing still landed
     assert fake.cache == held_tokens(wrapper)
     assert wrapper.reply("weiter").finish().stop_reason == "end_of_turn"
 
@@ -1936,7 +1926,7 @@ def test_the_answer_to_an_unreadable_call_says_not_to_call_again_where_no_call_i
     assert "the call could not be read" in told and "do not call again" in told
 
 
-def test_an_error_result_of_the_callers_own_is_written_as_given():
+def test_an_error_result_of_the_callers_own_is_told_as_a_registered_tools_is():
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona", tools=weather_registry().specs())
     fake.call_script = ["fn:weather{city:'Bonn'}"]
@@ -1944,8 +1934,7 @@ def test_an_error_result_of_the_callers_own_is_written_as_given():
              if isinstance(e, ToolCall)]
     own = {"error": "offline", "message": "kein Netz"}
     wrapper.inject_tool_result(call, own)
-    turn = newest_turn(fake)
-    assert json.dumps(own) in turn and "the tool call failed" not in turn
+    assert "the tool call failed: kein Netz. try again" in newest_turn(fake)
     wrapper.reply(tool_call_policy="yield").finish()
 
 
@@ -2063,21 +2052,19 @@ def _counting_clock():
     return registry, ran
 
 
-def test_the_policy_a_turn_keeps_is_the_one_of_the_reply_that_started_it():
-    """Two replies asked for before either runs: the turn keeps the policy of the one that opened it."""
+def test_a_question_asked_while_a_turn_is_open_closes_it_and_runs_under_its_own_policy():
+    """Two replies asked for before either runs: the second question closes the first one's turn, whose call is told it was not run."""
     registry, ran = _counting_clock()
     wrapper, fake = tool_wrapper()
     wrapper.begin("persona", tools=registry)
     fake.call_script = ["fn:clock{}"]
     opening = wrapper.reply("wie spät?", tool_call_policy="yield")
-    refused = wrapper.reply("und jetzt?", tool_call_policy=registry)
+    later = wrapper.reply("und jetzt?", tool_call_policy=registry)
     call, = [event for event in opening if isinstance(event, ToolCall)]
-    with pytest.raises(ValueError):
-        refused.finish()                        # the turn is open
-    wrapper.inject_tool_result(call, "12:00")
-    fake.call_script = ["fn:clock{}"]
-    handed = [event for event in wrapper.reply() if isinstance(event, ToolCall)]
-    assert ran == [] and handed and wrapper.pending_calls == handed     # yielded again, not run
+    assert later.finish().text and not wrapper.turn_open and ran == []
+    assert "not run" in held_text(fake)
+    with pytest.raises(OutOfOrderError):
+        wrapper.inject_tool_result(call, "12:00")       # the call was answered as not run
 
 
 def test_a_turn_going_on_with_its_registry_keeps_what_is_left_of_its_max_calls():
@@ -2194,3 +2181,33 @@ def test_writing_a_result_renders_the_whole_conversation_only_to_measure_it():
     wrapper.inject_tool_result(call, "sonnig")
     # One split of the whole conversation, two renders, to see the result fits; the rest is the newest turn's.
     assert sum(1 for messages in fake.rendered[before:] if messages > 100) <= 2
+
+
+
+def test_a_model_that_marks_calls_but_writes_no_result_reads_no_call_under_the_default():
+    """Its call could never be answered, so it stays text, and the next question is answered."""
+    fake = FakeContext(NO_RESULT_BLOCK)
+    w = ChatWrapper(Config(context_size=512), context=fake)
+    w.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    reply = w.reply("wie spät?").finish()
+    assert reply.stop_reason != "tool_call" and not w.turn_open and not w.pending_calls
+    assert w.reply("und jetzt?").finish().stop_reason == "end_of_turn"
+
+
+def test_a_call_that_spends_the_reply_cap_is_reported_by_its_name_though_not_run():
+    clock = ToolRegistry()
+    clock.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
+
+    def reply(policy, cap):
+        fake = FakeContext(TOOLS)
+        w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+        w.begin("s", tools=clock.specs())
+        fake.call_script = ["fn:uhr{}"]
+        return w, w.reply("Zeit?", tool_call_policy=policy, max_reply_tokens=cap).finish()
+    # The cap the whole call takes: handed over complete under "yield" with nothing left.
+    cap = next(cap for cap in range(4, 40)
+               if (r := reply("yield", cap)[1]).tool_calls and r.tool_calls[0].status == "complete")
+    w, run = reply(clock, cap)
+    assert run.stop_reason == "token_limit" and not w.turn_open
+    assert [(call.name, call.status) for call in run.tool_calls] == [("uhr", "unfinished")]

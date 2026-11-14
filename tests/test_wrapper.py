@@ -14,9 +14,9 @@ import typing
 import pytest
 
 from llama_chat.config import Config, Sampling, generation_sampling
-from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolTurn
-from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError, ToolCallPolicy,
-                        UnsupportedError)
+from llama_chat.tools import ToolCall, ToolRegistry, ToolResult, ToolSpec, ToolTurn
+from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
+                        InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from llama_chat.generation import generate
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
@@ -69,8 +69,8 @@ def test_a_reply_the_conversation_cannot_take_is_refused_when_it_is_asked_for():
     for tool_call_policy in ("yield", "refuse"):
         with pytest.raises(ValueError, match="1 call"):
             wrapper.reply(tool_call_policy=tool_call_policy)
-    with pytest.raises(ValueError, match="while a reply is open"):
-        wrapper.reply("etwas anderes")
+    wrapper.reply("etwas anderes").finish()     # a question closes the open turn itself
+    assert not wrapper.turn_open and not wrapper.pending_calls
     wrapper.close()
     with pytest.raises(RuntimeError, match="closed"):
         wrapper.reply("hallo")
@@ -646,7 +646,7 @@ def test_every_refusal_for_want_of_room_says_what_to_change():
         w.inject("x" * 600)
     w.inject("x" * 470)                         # under the threshold, not under room for a reply
     with pytest.raises(ContextOverflowError,
-                       match="lower evict_above_fraction or min_reply_tokens"):
+                       match="raise context_size or evict_above_fraction, or lower min_reply_tokens"):
         w.reply().finish()
 
 
@@ -700,8 +700,10 @@ def test_the_package_exports_the_one_protocol_a_wrapper_takes():
 def test_a_negative_wait_is_refused_naming_its_setting(timeout_s):
     """Threading reads -1 as waiting for ever and other negatives as an error of its own."""
     w = ChatWrapper(Config(context_size=800), context=FakeContext(PLAIN))
-    with pytest.raises(ValueError, match="timeout_s must be None or a number of seconds of at least 0"):
+    with pytest.raises(InvalidArgumentError, match="timeout_s must be a number of seconds of at least 0") \
+            as refused:
         w.wait_idle(timeout_s)
+    assert refused.value.field == "timeout_s"
     assert w.wait_idle(0) is True
 
 
@@ -979,11 +981,12 @@ def test_a_message_that_is_not_text_is_refused_where_it_enters_naming_it():
     assert w.conversation() == before and fake.cache == held
 
 
-@pytest.mark.parametrize("max_calls", [-1, 1.5, True])
-def test_a_ceiling_on_calls_that_is_no_count_is_refused(max_calls):
+@pytest.mark.parametrize("max_calls, refusal", [(-1, InvalidArgumentError), (1.5, TypeError),
+                                                (True, TypeError)])
+def test_a_ceiling_on_calls_that_is_no_count_is_refused(max_calls, refusal):
     w, _ = tool_wrapper()
     w.begin("s")
-    with pytest.raises(ValueError, match="max_calls"):
+    with pytest.raises(refusal, match="max_calls"):
         w.reply("x", tool_call_policy=ToolRegistry(), max_calls=max_calls)
 
 
@@ -1089,17 +1092,16 @@ def test_a_reply_the_template_refuses_to_write_takes_its_question_back():
     assert [m["text"] for m in rows(w)][-2:] == ["next?", "fine"]
 
 
-def test_an_injected_user_turn_after_a_user_turn_is_joined_or_refused():
+def test_an_injected_user_turn_after_a_user_turn_is_written_or_joined():
     w, fake = begun_wrapper(JOINS_USER_TURNS)
     w.inject("eins")
     w.inject("zwei")
     assert_cache_reads_as_rendered(w, fake)
     w, fake = begun_wrapper(REFUSES_TWO_USER_TURNS)
     w.inject("eins")
-    before = list(fake.cache)
-    with pytest.raises(ValueError, match="two user turns"):
-        w.inject("zwei")
-    assert fake.cache == before and len(rows(w)) == 2
+    w.inject("zwei")
+    assert [r["text"] for r in rows(w)][1:] == ["eins\n\nzwei"]
+    assert w.reply().finish().text
 
 
 def test_a_history_with_two_user_turns_in_a_row_is_joined_or_refused():
@@ -1232,7 +1234,47 @@ def test_closing_ends_the_reply_this_thread_reads_though_a_newer_stream_was_made
 def test_waiting_for_idle_takes_infinity_as_no_timeout_and_refuses_what_is_no_time(timeout_s, refused):
     chat = ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
     if refused:
-        with pytest.raises(ValueError, match="timeout_s"):
+        with pytest.raises((InvalidArgumentError, TypeError), match="timeout_s"):
             chat.wait_idle(timeout_s)
     else:
         assert chat.wait_idle(timeout_s) is True
+
+
+# ----- what does not have the shape asked for is refused where it enters ----------
+@pytest.mark.parametrize("tools", [[{"name": "clock"}], ["clock"], [ToolSpec(1, None, None)], 5],
+                         ids=["dict", "str", "fields", "no-list"])
+def test_tools_of_another_shape_are_refused_before_anything_changes(tools):
+    w, fake = tool_wrapper()
+    w.begin("s")
+    before = list(fake.cache)
+    with pytest.raises(TypeError):
+        w.begin("t", tools=tools)
+    with pytest.raises(TypeError):
+        w.declare_tools(tools)
+    assert fake.cache == before
+
+
+def test_a_history_given_as_a_generator_is_read_once():
+    w, _ = begun_wrapper()
+    w.begin("s", (item for item in [("user", "hallo"), ("assistant", "hi")]))
+    assert [m["content"] for m in w.conversation()["messages"]] == ["hallo", "hi"]
+
+
+def test_a_reply_shortened_to_no_text_is_refused_naming_keep_text():
+    w, _ = begun_wrapper()
+    w.reply("hi").finish()
+    with pytest.raises(TypeError, match="keep_text"):
+        w.truncate_last_reply(("tuple",))
+
+
+def test_a_reply_to_an_injected_question_evicts_down_to_the_room_its_reply_needs():
+    """Where the eviction threshold lies above the room a reply needs, the reply still gets that room."""
+    fake = FakeContext(PLAIN, gen_tokens=5)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=100),
+                    context=fake)
+    w.begin("s", [("user", "a" * 80), ("assistant", "b" * 80), ("user", "c" * 80),
+                  ("assistant", "d" * 80)])
+    w.inject("q" * 230)
+    assert 400 < w.total_tokens <= 500          # over the room, under the threshold
+    reply = w.reply().finish()
+    assert reply.n_evicted_messages > 0 and reply.stop_reason == "end_of_turn"

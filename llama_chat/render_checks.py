@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .errors import TemplateRefusedError
 from .messages import THOUGHT_KEY, call_id, calling_message, result_message
 from .tools import ToolCall
 
@@ -105,12 +106,12 @@ def ensure_history_stays_written(render: Render, system: list[dict]) -> None:
     two = render(system + exchanges[0] + exchanges[1], False)
     three = render(system + exchanges[0] + exchanges[1] + exchanges[2], False)
     if two is None or three is None or "QQREPLY0QQ" not in two:
-        raise ValueError("this model's template refuses a plain conversation of three "
+        raise TemplateRefusedError(None, "this model's template refuses a plain conversation of three "
                          "exchanges, so whether it keeps older exchanges as written cannot "
                          "be told")
     kept = two.index("QQREPLY0QQ") + len("QQREPLY0QQ")
     if two[:kept] != three[:kept]:
-        raise ValueError("this model's template writes an older exchange otherwise once "
+        raise TemplateRefusedError(None, "this model's template writes an older exchange otherwise once "
                          "another follows, which a rolling memory cannot keep")
 
 

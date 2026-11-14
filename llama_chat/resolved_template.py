@@ -17,6 +17,7 @@ from .call_format import (extract_call_body, extract_call_close_text, extract_ca
                           extract_json_call_keys, extract_named_twice_opening,
                           extract_tool_fragments)
 from .call_parsing import parse_calls
+from .errors import UnsupportedError
 from .messages import call_id, calling_message, result_message, with_thought_as
 from .model_template import names_read
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
@@ -24,7 +25,6 @@ from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
                                extract_fragments, extract_reasoning, extract_removed_thought,
                                refusing)
-from .reply import UnsupportedError
 from .reply_text import reply_header
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
@@ -288,6 +288,11 @@ class ResolvedTemplate:
     def n_closing_tokens(self) -> int:
         """How many tokens the closing after a reply's text, or after a call its turn ends inside, takes at most."""
         return self._n_closing_tokens
+
+    @property
+    def can_write_results(self) -> bool:
+        """Whether the template renders a block a call's result, or the failure it is told, goes in."""
+        return self._can_write_results
 
     @property
     def can_call_tools(self) -> bool:

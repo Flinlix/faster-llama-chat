@@ -24,11 +24,12 @@ from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
-from .reply import (TOOL_CALL_POLICIES, ContextOverflowError, Reply, ReplyStream, ToolCallPolicy,
-                    UnsupportedError)
+from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
+                     UnsupportedError)
+from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
-from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_names_unique,
+from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_declarable,
                     unwritable_failure)
 
 _log = logging.getLogger(__name__)
@@ -88,7 +89,8 @@ class ChatWrapper:
         try:
             ensure_answers(self._context, CACHE_CONTEXT)
             if config.context_size > self._context.context_size:
-                raise ValueError(
+                raise InvalidSettingError(
+                    "context_size",
                     f"context_size is {config.context_size} but the cache context holds "
                     f"{self._context.context_size} tokens; give both the same size")
             if not owns_context:
@@ -165,7 +167,8 @@ class ChatWrapper:
                 on, cannot fit beside them, or ``messages`` hold no user
                 message and cannot fit beside them either.
             TypeError: If the system prompt or a history message's text is
-                not a ``str``, or a history item is of another form.
+                not a ``str``, a history item is of another form, or
+                ``tools`` holds anything but tool specs.
             UnsupportedError: If ``tools`` names anything, or the history
                 holds a tool turn, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
@@ -174,20 +177,25 @@ class ChatWrapper:
                 Its ``field`` names the parameter: ``tools``, ``messages``,
                 ``reasoning`` or ``system_prompt``. :meth:`capabilities` says
                 beforehand what is accepted.
-            ValueError: If a history message has another role, or a
-                dictionary other keys; if ``tools`` names one tool twice; if
-                two calls of the history carry one id; or if the template
-                refuses to write the conversation. The previous conversation
-                is left intact either way, as on every refusal here.
+            InvalidArgumentError: If a history message has another role, or
+                a dictionary other keys; if ``tools`` names one tool twice; or
+                if two calls of the history carry one id.
+            TemplateRefusedError: If the template refuses to write the
+                conversation.
+            RuntimeError: If the wrapper is closed, or this thread is still
+                reading a reply.
+            The previous conversation is left intact on every refusal here.
         """
         ensure_text(system_prompt, "the system prompt")
-        messages = messages or []
+        if tools is not None and not isinstance(tools, Iterable):
+            raise TypeError(f"tools must be ToolSpecs or a ToolRegistry, not {tools!r}")
+        messages = list(messages or [])         # read once, a generator included
         with self._held():
             self._ensure_open()
             # Validate before resetting: a failed begin must not destroy the
             # conversation it was about to replace.
             specs = None if tools is None else list(tools)
-            ensure_names_unique(specs or [])
+            ensure_declarable(specs or [])
             template = self._templates.for_conversation(specs is not None)
             if specs or any(isinstance(item, ToolTurn) for item in messages):
                 if specs is None and not template.can_call_tools \
@@ -217,6 +225,9 @@ class ChatWrapper:
         puts one, and the oldest exchanges are evicted for it after its reply.
         An assistant message, or a question once ``max_history_exchanges`` is
         reached, evicts them first, until it fits inside both eviction limits.
+        A question closes a turn a call left open first, as :meth:`reply`
+        with ``text`` does, and joins a question no reply follows where the
+        template writes no two in a row.
 
         Args:
             text: The message's text.
@@ -229,9 +240,14 @@ class ChatWrapper:
 
         Raises:
             TypeError: If ``text`` is not a ``str``.
-            ValueError: If ``role`` is another one, if no conversation has
-                been begun, if a tool call has left a reply open, or if the
-                template does not write such a message here.
+            InvalidArgumentError: If ``role`` is another one.
+            OutOfOrderError: If no conversation has been begun, or an
+                assistant message is given while a tool call has left a reply
+                open.
+            TemplateRefusedError: If the template does not write an assistant
+                message here.
+            RuntimeError: If the wrapper is closed, or this thread is still
+                reading a reply.
             ContextOverflowError: If the message cannot fit even after
                 evicting every non-system message, raised before anything is
                 evicted; or if the conversation with it cannot fit once every
@@ -326,22 +342,31 @@ class ChatWrapper:
             its ``reply`` is the :class:`Reply` once it has ended, summing
             every generation where calls were run.
 
+        A question, ``text`` given, is never refused for the state the
+        conversation is in: a turn a call left open is closed first, each call
+        still owed told it was not run and an empty reply added where the
+        template needs one (or, where the template writes neither, the turn
+        taken out), and a question no reply follows is joined to it where the
+        template writes no two in a row. See design_history.md, "Nothing
+        blocks a question".
+
         Raises:
-            ValueError: At once, if no conversation has been begun; if a tool
-                call has left a reply open and ``text`` is given, or a result
-                is still owed; if ``text`` is ``None`` with nothing to answer;
-                if ``tool_call_policy`` is neither one of
-                :data:`~llama_chat.reply.TOOL_CALL_POLICIES`, ``None`` nor a
-                registry; or if ``max_calls`` is given without a registry or
-                is not a whole number of at least 0. At the first
-                iteration, if ``max_calls`` is given and the turn the reply
-                goes on with by then runs no call.
+            OutOfOrderError: At once, if no conversation has been begun; or,
+                without ``text``, if a result is still owed or there is
+                nothing to answer.
+            InvalidArgumentError: At once, if ``tool_call_policy`` is a text
+                that is none of :data:`~llama_chat.reply.TOOL_CALL_POLICIES`,
+                or ``max_calls`` is below 0 or given without a registry; at
+                the first iteration, if ``max_calls`` is given and the turn the
+                reply goes on with by then runs no call.
             UnsupportedError: At the first iteration, if a registry holding
                 tools is given to a model that could never call one, naming
                 ``tool_call_policy``.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
-                ``stop`` is neither a ``str`` nor an iterable of ``str``, ``cancel``
-                has no ``is_set``, or ``sampling`` is neither ``None`` nor a
+                ``tool_call_policy`` is neither a text nor a registry,
+                ``max_calls`` is no whole number, ``stop`` is neither a
+                ``str`` nor an iterable of ``str``, ``cancel`` has no
+                ``is_set``, or ``sampling`` is neither ``None`` nor a
                 :class:`~llama_chat.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
             RuntimeError: At once, if the wrapper is closed; at the first
@@ -358,15 +383,18 @@ class ChatWrapper:
         _ensure_cancel_and_sampling(cancel, sampling)
         options = dict(max_reply_tokens=max_reply_tokens, stop=stop_texts, cancel=cancel,
                        sampling=generation_sampling(self._config, sampling))
-        if tool_call_policy is not None and not isinstance(tool_call_policy, ToolRegistry) \
-                and tool_call_policy not in TOOL_CALL_POLICIES:
-            raise ValueError(f"tool_call_policy must be "
-                             f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a "
-                             f"ToolRegistry, not {tool_call_policy!r}")
-        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)
-                                      or max_calls < 0):
-            raise ValueError(f"max_calls must be None or a whole number of at least 0, "
-                             f"not {max_calls!r}")
+        if tool_call_policy is not None and not isinstance(tool_call_policy, (str, ToolRegistry)):
+            raise TypeError(f"tool_call_policy must be one of "
+                            f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a ToolRegistry, "
+                            f"not {tool_call_policy!r}")
+        if isinstance(tool_call_policy, str) and tool_call_policy not in TOOL_CALL_POLICIES:
+            raise InvalidArgumentError(
+                "tool_call_policy", f"tool_call_policy must be one of "
+                f"{', '.join(map(repr, TOOL_CALL_POLICIES))}, not {tool_call_policy!r}")
+        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)):
+            raise TypeError(f"max_calls must be None or a whole number, not {max_calls!r}")
+        if max_calls is not None and max_calls < 0:
+            raise InvalidArgumentError("max_calls", f"max_calls must be at least 0, not {max_calls}")
         # Read from what the newest change published, so it never waits for the lock; the
         # policy is chosen again under the lock, from the turn open when the reply runs.
         _ensure_max_calls_runs(self._policy_for(
@@ -416,7 +444,7 @@ class ChatWrapper:
                 generation = yield from self._read_generation(
                     self._generate(text, recognizes_calls=False, may_call_again=False,
                                    withhold=True, **options),
-                    after=self._open_turn_text())
+                    after=self._open_turn_text() if text is None else "")
         # The lock is released before the calls: a caller answers each while reading the stream.
         yield from _answerable(generation.tool_calls)
         return generation
@@ -464,14 +492,22 @@ class ChatWrapper:
                 tool's would be, and a warning is logged.
 
         Raises:
-            ValueError: If no call is waiting, this is not the one owed, or
-                this model's template writes no result. The call stays owed.
+            TypeError: If ``call`` is no :class:`~llama_chat.tools.ToolCall`.
+            OutOfOrderError: If no conversation has been begun, no call is
+                waiting, or this is not the one owed. The call stays owed.
+            UnsupportedError: If this model's template writes no result,
+                naming ``result``.
+            RuntimeError: If the wrapper is closed, or this thread is still
+                reading a reply.
         """
+        if not isinstance(call, ToolCall):
+            raise TypeError(f"call must be the ToolCall being answered, not {call!r}")
         failure = unwritable_failure(result)
         with self._held():
             self._ensure_open()
-            written = result if failure is None else _explain_failure(
-                failure, may_call_again=self._turn_policy == "yield")
+            # A failure is told as a failure a registered tool's is, whoever ran the tool.
+            written = _explain_failure(result if failure is None else failure,
+                                       may_call_again=self._turn_policy == "yield")
             try:
                 evicted = self._conversation.add_result(call, written)
             except ContextOverflowError:
@@ -494,13 +530,18 @@ class ChatWrapper:
                 text changes nothing.
 
         Raises:
-            ValueError: If no conversation has been begun, if a reply is open,
-                if the newest message is not the assistant's or holds a tool
-                call, one that could not be read included, if ``keep_text``
-                is not a prefix of its text, or if the template does not write
-                the reply shortened to it, as one that writes no empty reply
-                does not write it shortened to ``""``.
+            TypeError: If ``keep_text`` is not a ``str``.
+            OutOfOrderError: If no conversation has been begun, if a reply is
+                open, or if the newest message is not the assistant's or holds
+                a tool call, one that could not be read included.
+            InvalidArgumentError: If ``keep_text`` is not a prefix of its text.
+            TemplateRefusedError: If the template does not write the reply
+                shortened to it, as one that writes no empty reply does not
+                write it shortened to ``""``.
+            RuntimeError: If the wrapper is closed, or this thread is still
+                reading a reply.
         """
+        ensure_text(keep_text, "keep_text")
         with self._held():
             self._ensure_open()
             self._conversation.truncate_newest(keep_text)
@@ -523,22 +564,30 @@ class ChatWrapper:
             counting as one.
 
         Raises:
+            TypeError: If ``tools`` is not an iterable of
+                :class:`~llama_chat.tools.ToolSpec`, or a spec's fields are of
+                other types than it states.
+            InvalidArgumentError: If ``tools`` names one tool twice, or a tool
+                without a name.
             UnsupportedError: If this model cannot call tools at all, naming
                 ``tools``.
-            ValueError: If ``tools`` names one tool twice, if no conversation
-                has been begun, if a tool call has left a reply open, if the
-                model ships a template for tools and the conversation was
-                begun without ``tools``, or if the template with the
-                declarations writes an older exchange otherwise once another
-                follows.
+            OutOfOrderError: If no conversation has been begun, if a tool call
+                has left a reply open, or if the model ships a template for
+                tools and the conversation was begun without ``tools``.
+            TemplateRefusedError: If the template with the declarations writes
+                an older exchange otherwise once another follows.
+            RuntimeError: If the wrapper is closed, or this thread is still
+                reading a reply.
             ContextOverflowError: If the system turn with the declarations
                 would leave no room under ``evict_above_tokens`` for a short
                 question.
         """
+        if not isinstance(tools, Iterable):
+            raise TypeError(f"tools must be ToolSpecs or a ToolRegistry, not {tools!r}")
+        tools = list(tools)
+        ensure_declarable(tools)
         with self._held():
             self._ensure_open()
-            tools = list(tools)
-            ensure_names_unique(tools)
             known = {spec.name for spec in self._conversation.tools}
             specs = [spec for spec in tools if spec.name not in known]
             if not specs:
@@ -588,11 +637,11 @@ class ChatWrapper:
                 end while it waits.
         """
         if timeout_s is not None and (isinstance(timeout_s, bool)
-                                      or not isinstance(timeout_s, (int, float))
-                                      or isinstance(timeout_s, float) and math.isnan(timeout_s)
-                                      or timeout_s < 0):
-            raise ValueError(f"timeout_s must be None or a number of seconds of at least 0, "
-                             f"not {timeout_s!r}")
+                                      or not isinstance(timeout_s, (int, float))):
+            raise TypeError(f"timeout_s must be None or a number of seconds, not {timeout_s!r}")
+        if timeout_s is not None and (timeout_s != timeout_s or timeout_s < 0):    # NaN is unequal
+            raise InvalidArgumentError(
+                "timeout_s", f"timeout_s must be a number of seconds of at least 0, not {timeout_s}")
         self._ensure_not_holding()
         # Longer than the lock can wait is waiting indefinitely, infinity included.
         waits = timeout_s is None or timeout_s > threading.TIMEOUT_MAX
@@ -709,8 +758,9 @@ class ChatWrapper:
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
             self._template.ensure_tools_usable("tool_call_policy")
-        any_call_asked = self._conversation.turn_open      # a turn going on has called
-        open_turn_text = self._open_turn_text()
+        # A turn going on has called; a question closes it first.
+        any_call_asked = text is None and self._conversation.turn_open
+        open_turn_text = self._open_turn_text() if text is None else ""
         reply_cap = self._reply_cap(max_reply_tokens)
         generations: list[Reply] = []
 
@@ -725,7 +775,8 @@ class ChatWrapper:
             """What the reply cap leaves the next generation."""
             return max(0, reply_cap - sum(g.n_generated_tokens for g in generations))
 
-        deltas = self._generate(text, recognizes_calls=True,
+        # A call no result could answer is not read, so it cannot leave its turn open for good.
+        deltas = self._generate(text, recognizes_calls=self._template.can_write_results,
                                 may_call_again=may_call_after_unreadable(),
                                 max_reply_tokens=reply_cap, on_started=on_started, **kwargs)
         try:
@@ -760,7 +811,7 @@ class ChatWrapper:
                     generations[-1] = replace(
                         generations[-1], stop_reason="token_limit",
                         tool_calls=[call if call.status != "complete"
-                                    else ToolCall("", {}, status="unfinished")
+                                    else replace(call, status="unfinished")
                                     for call in generations[-1].tool_calls],
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
@@ -953,7 +1004,7 @@ class ChatWrapper:
             if text is not None:
                 n_evicted_messages = conversation.ask(text, cancel)
             elif not conversation.turn_open:
-                conversation.prompt()
+                n_evicted_messages = conversation.prompt()
         except Cancelled:
             roll_back()
             return interrupted()
@@ -1164,8 +1215,8 @@ def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int
         ValueError: If ``max_calls`` is given and ``policy`` is no registry.
     """
     if max_calls is not None and not isinstance(policy, ToolRegistry):
-        raise ValueError(f"max_calls limits calls that are run, and "
-                         f"tool_call_policy={policy!r} runs none")
+        raise InvalidArgumentError("max_calls", f"max_calls limits calls that are run, and "
+                                                f"tool_call_policy={policy!r} runs none")
 
 
 def _answerable(calls: list[ToolCall]) -> list[ToolCall]:

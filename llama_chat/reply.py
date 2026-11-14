@@ -1,4 +1,4 @@
-"""What one request produces: its stream of deltas, the summary it ends with, and the refusals for want of room and for what the model cannot do."""
+"""What one request produces: its stream of deltas and the summary it ends with."""
 
 from __future__ import annotations
 
@@ -17,23 +17,6 @@ STOP_REASONS: tuple[str, ...] = get_args(StopReason)
 # What becomes of a call the model makes, where a request names it rather than passing a registry.
 ToolCallPolicy = Literal["withhold", "refuse", "yield"]
 TOOL_CALL_POLICIES: tuple[str, ...] = get_args(ToolCallPolicy)
-
-
-class ContextOverflowError(ValueError):
-    """What was asked for does not fit the context: a message, a history, a declaration, or room for the reply."""
-
-
-class UnsupportedError(ValueError):
-    """What this model cannot do: call tools, reason, or keep a system prompt in place.
-
-    Attributes:
-        field: The parameter that asked for it, as the call it was given to
-            spells it.
-    """
-
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(message)
-        self.field = field
 
 
 @dataclass

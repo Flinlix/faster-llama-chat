@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, fields, replace
 
+from .errors import InvalidSettingError
+
 # The quantizations a caller may name. Which type id each one is worth is
 # llama.cpp's own numbering, resolved where llama.cpp is named.
 KV_CACHE_TYPES = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
@@ -12,19 +14,6 @@ KV_CACHE_TYPES = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
 # The one type here that is not quantized, and so the only one usable without
 # flash attention. It is kv_cache_type's default.
 UNQUANTIZED_KV_CACHE_TYPE = "f16"
-
-
-class InvalidSettingError(ValueError):
-    """A setting the configuration refuses.
-
-    Attributes:
-        field: The name of the setting, as :class:`Config` and
-            :class:`Sampling` spell it.
-    """
-
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(message)
-        self.field = field
 
 
 @dataclass(frozen=True)
@@ -72,7 +61,7 @@ class Config:
             of it together, a thought included. ``None`` sets none, so a reply may run until the context is full;
             generation never crosses ``context_size`` either way.
         min_reply_tokens: Refuse a request with
-            :class:`~llama_chat.reply.ContextOverflowError` when fewer than
+            :class:`~llama_chat.errors.ContextOverflowError` when fewer than
             this many tokens would be left for the reply. ``0`` disables it,
             and it must stay below ``context_size``, which no request can leave
             entirely free.

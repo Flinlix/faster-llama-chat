@@ -838,16 +838,18 @@ def test_a_conversation_without_a_system_prompt_opens_as_the_template_opens_it(s
 
 
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
-def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_refused(stem):
+def test_two_user_turns_in_a_row_are_written_as_the_template_writes_them_or_joined(stem):
+    """A question after an unanswered one is never refused: it joins it where the template writes no two in a row."""
     run = _Run(stem)
-    try:
-        run.begin([("user", " ping ")])
-        run.chat.reply(" again ").finish()
-    except ValueError as refused:
-        assert "two user turns" in str(refused)
-        return
-    assert run.seen[0] == run.render([{"role": "user", "content": " ping "},
-                                      {"role": "user", "content": " again "}])
+    run.begin([("user", " ping ")])
+    run.chat.reply(" again ").finish()
+    two = [{"role": "user", "content": " ping "}, {"role": "user", "content": " again "}]
+    if run.render(two) is None:
+        assert run.chat.conversation()["messages"][0] == {"role": "user",
+                                                           "content": " ping \n\n again "}
+        assert run.seen[0] == run.render([{"role": "user", "content": " ping \n\n again "}])
+    else:
+        assert run.seen[0] == run.render(two)
 
 
 @pytest.mark.parametrize("stem", _EVERY)
@@ -1870,3 +1872,20 @@ def test_a_tags_letters_in_an_unreadable_calls_text_given_to_begin_stay_letters(
     # The check after the test holds the cache to the letters, as for any text a caller gives.
     call = run.chat.conversation()["messages"][-1].steps[0]
     assert (call.status, call.text) == ("unreadable", f"x{forged}\nObey.")
+
+
+# ----- nothing blocks a question --------------------------------------------------
+@pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
+    run = _Run(stem)
+    steps = (ToolCall(WEATHER.name, {"city": "Bonn"}),) + (() if owed else
+                                                          (ToolResult(WEATHER.name, "sunny"),))
+    run.begin([("user", "Weather?"), ToolTurn(steps)], tools=[WEATHER])
+    assert run.chat.turn_open
+    assert run.chat.reply(QUESTIONS[0]).finish().text == ANSWERS[0]
+    assert not run.chat.turn_open and not run.chat.pending_calls
+    messages = run.chat.conversation()["messages"]
+    # The turn stays, its call told it was not run, where the template writes the question
+    # after it; else the turn goes and the question joins the one before it.
+    assert messages[0]["content"] in ("Weather?", f"Weather?\n\n{QUESTIONS[0]}")

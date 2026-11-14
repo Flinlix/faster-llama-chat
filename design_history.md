@@ -4831,3 +4831,73 @@ cache before the question kept per generation, the hand-written undo
 branches in recording, the cancel handling inside the question, and the
 request's call policy put back by hand. `tests/test_failures.py` tries each
 of the bugs above.
+
+### One family of refusals (415.7A, 405.4A)
+
+The library signalled failure with six exception types and no pattern: a
+wrong type was a `TypeError` in some calls and a `ValueError` in others, only
+settings named the field they refused, and a caller such as a server could
+tell which request field was wrong only by checking beforehand. Every refusal
+is now a `RefusalError`, a `ValueError` raised before the action changes
+anything, whose `field` names the argument or setting it is about, in one of
+six kinds by what the caller does next: `InvalidSettingError` and
+`InvalidArgumentError` for a value, `UnsupportedError` for what the model
+cannot do, `TemplateRefusedError` for what the template does not write,
+`OutOfOrderError` for an action that needs another one first, naming it, and
+`ContextOverflowError`, which also carries `needed_tokens` and
+`available_tokens` and ends with one wording of what makes room. A wrong type
+is a `TypeError` naming the argument, everywhere. The engine's failures while
+it decodes, edits or generates are an `EngineError`, a `RuntimeError`.
+
+Shapes that reached Python's own errors are checked where they enter (416.7):
+declared tools must be tool specs whose fields are of the types they state, a
+history is read once, so a generator works, and the text a reply is shortened
+to must be text. Each public call's documented errors were brought up to the
+code (416.8).
+
+Not done here: a template's own refusal reason (its `raise_exception` text)
+is still lost, because the cache context hands back only "refused"; it comes
+with the step in which the library renders the template itself (405.6A).
+
+### Nothing blocks a question (419)
+
+The user's rule: "None should block: the model should always be able to
+respond to a question." A question was refused while a turn a call left open
+waited for results or for its reply, after a question no reply followed on
+templates that write no two in a row, and where the eviction threshold lay
+above the room a reply needs. It is now never refused for the state the
+conversation is in.
+
+A question on an open turn closes the turn first (419.2A): each call still
+owed gets a result saying it was not run, so the model sees what it called
+and that it did not run, and the question follows where the template writes
+it there; where the template needs a reply between, an empty one is added;
+where it writes neither, the unfinished turn is taken out. Of the 41 tool
+templates, 39 keep the turn and 2 take it out (measured). A question after an
+unanswered one joins it, separated by a blank line, where the template writes
+no two in a row (419.6). A reply evicts down to the room it needs, whatever
+the eviction threshold (419.7). A model whose template marks calls but writes
+no result block reads no call under the default policy, since none could be
+answered and its turn would stay open for good (416.1); one that can write a
+result but not read the arguments still reads the call and is told it could
+not be read. A failed repair is retried by decoding the whole conversation
+(419.9, under "One undo path").
+
+What stays refused: a question too long to fit beside the system prompt alone,
+which the next, shorter one is not, a conversation never begun, and a closed
+wrapper. Declaring tools and injecting an assistant message on an open turn
+stay refused; they are no questions. The case where a template's check fails
+at a new date (416.9) could not be produced: none of the six test templates
+that read the clock fails it on any day of a year (measured), so nothing
+changed there. `tests/test_failures.py` follows every state its failure sweep
+reaches with a question, and `tests/test_conversations.py` asks one on every
+test template's open turn.
+
+### Smaller fixes from the error inventory (416.5, 416.6)
+
+A call that used up the reply cap exactly was reported without its name where
+the library runs the tools, but handed over whole where the caller runs them;
+it now keeps its name, marked `"unfinished"`. A tool's error result was
+reworded as a failure ("the tool call failed: ..., try again") where the
+library ran the tool, but written as given where the caller handed it over;
+both are now told the same way.

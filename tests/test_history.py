@@ -365,8 +365,8 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
     (("Let me look.", 42), "int"),
     ((ToolCall("clock", ["not", "a", "dict"]), ToolResult("clock", "12:00")), "arguments"),
 ])
-def test_a_tool_turn_with_a_step_it_cannot_hold_is_refused_naming_it(steps, named):
-    with pytest.raises(ValueError, match=named):
+def test_a_tool_turn_with_a_step_of_another_type_is_refused_naming_it(steps, named):
+    with pytest.raises(TypeError, match=named):
         ToolTurn(steps)
 
 

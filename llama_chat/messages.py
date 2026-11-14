@@ -8,6 +8,7 @@ import itertools
 import re
 from dataclasses import replace
 
+from .errors import InvalidArgumentError
 from .tools import Thought, ToolCall, ToolResult, ToolTurn, result_text
 
 
@@ -39,8 +40,8 @@ def as_messages(history, min_call_number: int = 0) -> list[dict]:
              for step in item.steps if isinstance(step, ToolCall) and step.id]
     repeated = next((given_id for given_id, n in collections.Counter(given).items() if n > 1), None)
     if repeated is not None:
-        raise ValueError(f"two calls of the history carry the id {repeated!r}; "
-                         "give each call an id of its own")
+        raise InvalidArgumentError("messages", f"two calls of the history carry the id "
+                                           f"{repeated!r}; give each call an id of its own")
     numbered = itertools.count(max(min_call_number, next_call_number(given)))
     messages = []
     for item in history:
@@ -66,8 +67,9 @@ def as_messages(history, min_call_number: int = 0) -> list[dict]:
                                                step.result))
         if calls:                       # called, and not answered yet
             if any(call.status == "unreadable" for call in calls):
-                raise ValueError("a call that could not be read was answered when it was "
-                                 "written; a history cannot leave one owed a result")
+                raise InvalidArgumentError(
+                    "messages", "a call that could not be read was answered when it was "
+                    "written; a history cannot leave one owed a result")
             messages.append(_with_thought(calling_message(text, calls), thought))
         elif text or thought or not (item.steps and isinstance(item.steps[-1], ToolResult)):
             messages.append(_with_thought({"role": "assistant", "content": text},  # a result ends it open
@@ -92,7 +94,7 @@ def _history_message(item) -> dict:
     if isinstance(item, dict):
         allowed = {"role", "content"} | ({THOUGHT_KEY} if item.get("role") == "assistant" else set())
         if set(item) - allowed or "content" not in item:
-            raise ValueError(f"a history message holds 'role' and 'content', and a reply also "
+            raise InvalidArgumentError("messages", f"a history message holds 'role' and 'content', and a reply also "
                              f"{THOUGHT_KEY!r}, but nothing else, not {sorted(item)}; a turn "
                              "that called tools is a ToolTurn")
         role, text, thought = item.get("role"), item["content"], item.get(THOUGHT_KEY, "")
@@ -129,13 +131,14 @@ def ensure_role(role) -> None:
         ValueError: For every other role.
     """
     if role == "system":
-        raise ValueError("a system message is the system prompt, which begin() takes as its "
-                         "first argument")
+        raise InvalidArgumentError("role", "a system message is the system prompt, which begin() "
+                                           "takes as its first argument")
     if role == "tool":
-        raise ValueError("a tool result is written by inject_tool_result(), and given to "
-                         "begin() as a ToolResult inside a ToolTurn")
+        raise InvalidArgumentError("role", "a tool result is written by inject_tool_result(), and "
+                                           "given to begin() as a ToolResult inside a ToolTurn")
     if role not in MESSAGE_ROLES:
-        raise ValueError(f"a message's role is {' or '.join(map(repr, MESSAGE_ROLES))}, not {role!r}")
+        raise InvalidArgumentError(
+            "role", f"a message's role is {' or '.join(map(repr, MESSAGE_ROLES))}, not {role!r}")
 
 
 def call_id(n: int) -> str:

@@ -34,7 +34,8 @@ from .render_checks import (STAND_IN, ensure_history_stays_written, question_spl
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact, writes_two_user_turns)
 from .rendering import ConversationRendering, KeptTurn, Target
-from .reply import ContextOverflowError
+from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError,
+                     TemplateRefusedError, UnsupportedError)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
@@ -303,12 +304,13 @@ class RenderedCache:
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
             self._check_renders()
+            needed = self._rendering.length(self._state.messages, False)
             if asks and (not any(m["role"] == "user" for m in self._state.messages)
-                         or self._rendering.length(self._state.messages, False) > limit):
+                         or needed > limit):
                 raise ContextOverflowError(
-                    "the newest exchange of the history, from its user message on, does not "
-                    "fit beside the system prompt; shorten it or raise "
-                    "context_size/evict_above_fraction")
+                    f"the newest exchange of the history, from its user message on, needs "
+                    f"{needed} tokens beside the system prompt but {limit} fit; shorten it, "
+                    f"{_RAISE_THE_ROOM}", needed, limit)
             self._drop_while_over(limit, generation_prompt=False)
             self._ensure_within(limit, "shorten the history")
             self._state.begun = False
@@ -396,10 +398,10 @@ class RenderedCache:
             kept, more = (middle, more) if fits(middle) else (kept, middle)
         self._state.messages = self._state.messages[:first] + self._state.messages[opens[-kept]:]
 
-    def _refused_history(self, messages: list[dict]) -> ValueError:
+    def _refused_history(self, messages: list[dict]) -> TemplateRefusedError:
         """The refusal of ``messages``, a history this model's template will not write."""
         roles = [m["role"] for m in messages]
-        return ValueError(self._refusal("user") if ["user", "user"] in [
+        return TemplateRefusedError("messages", self._refusal("user") if ["user", "user"] in [
             roles[i:i + 2] for i in range(len(roles) - 1)]
             else "this model's template refuses to write this conversation")
 
@@ -439,7 +441,7 @@ class RenderedCache:
     def _ask(self, text: str) -> int:
         """:meth:`ask`'s work."""
         with self._action():
-            _ensure_ready(self, "start a request", "generate into")
+            _ensure_begun(self, "generate into")
             room = self._max_prompt_tokens
             question = {"role": "user", "content": text}
             # Counted alone first, beside the system turn measured once: only a question near the
@@ -451,22 +453,24 @@ class RenderedCache:
                                                generation_prompt=True)
             if alone > room:
                 raise ContextOverflowError(
-                    f"request needs {alone} tokens but only {room} fit beside room for the reply; "
-                    "shorten the request or the system prompt, or raise context_size or lower "
-                    "min_reply_tokens")
-            self._ensure_writes("user", text, generation_prompt=True)
-            n_before = history_count(self._state.messages)
-            if not self._splice(question, room):
-                self._state.messages.append(question)
+                    f"the request needs {alone} tokens but {room} fit beside room for the "
+                    f"reply; shorten the request or the system prompt, or {_RAISE_THE_ROOM}",
+                    alone, room)
+            joined = self._make_way_for(question)
+            n_before = history_count(self._state.messages) + (joined is not None)
+            if joined is None:
+                self._ensure_writes("user", text, generation_prompt=True)
+            if joined is not None or not self._splice(question, room):
+                self._state.messages.append(joined or question)
                 # As a spliced one, the question may open one exchange more until its reply settles.
                 dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True)
                 self._sync(self._fitting_prompt(), dropped=dropped)
             free = self._config.context_size - len(self._memory.tokens)
             if free < self._config.min_reply_tokens:
                 raise ContextOverflowError(
-                    f"only {free} tokens free for the reply "
-                    f"(min_reply_tokens={self._config.min_reply_tokens}); shorten "
-                    "the request or lower evict_above_fraction")
+                    f"the reply needs {self._config.min_reply_tokens} tokens but {free} are "
+                    f"free; shorten the request, or {_RAISE_THE_ROOM}",
+                    self._config.min_reply_tokens, free)
             if self._memory.cancel is not None:
                 # Decoded now, in the parts a cancel is read between, not deferred to the
                 # generation; one set by the end takes the whole question back.
@@ -474,6 +478,45 @@ class RenderedCache:
                 if self._memory.cancel.is_set():
                     raise Cancelled("cancelled while the question was decoded")
             return n_before + 1 - history_count(self._state.messages)
+
+    # ----- nothing blocks a question ------------------------------------------------------
+    def _make_way_for(self, question: dict) -> dict | None:
+        """Close a turn a call left open, and join ``question`` to an unanswered one the template writes no second question after; the joined question, taken out to be added again, or ``None``.
+
+        See design_history.md, "Nothing blocks a question".
+        """
+        if self.turn_open:
+            self._close_open_turn(question)
+        newest = self._state.messages[-1] if self._state.messages else None
+        if newest is None or newest["role"] != "user" or self._writes_after(question):
+            return None
+        self._state.messages.pop()
+        return {**newest, "content": f"{newest['content']}\n\n{question['content']}"}
+
+    def _close_open_turn(self, question: dict) -> None:
+        """Close the open turn ahead of ``question``: each call still owed is told it was not run, and a turn waiting for its reply gets an empty one where the template needs it; the turn is taken out where the template writes neither."""
+        start = len(self._state.messages)
+        self._state.messages += [result_message(call.name, call_id, result_text(_NOT_RUN), _NOT_RUN)
+                                 for call, call_id in _unanswered(self._state.messages)]
+        self._state.results_cut, self._state.called_in_thought = [], False
+        if self._writes_after(question):
+            return
+        self._state.messages.append({"role": "assistant", "content": ""})
+        if self._writes_after(question):
+            return
+        del self._state.messages[start:]
+        # Neither is written: the turn goes, from its first message after the newest question.
+        asked = max(i for i, m in enumerate(self._state.messages) if m["role"] == "user")
+        gone = self._state.messages[asked + 1:]
+        del self._state.messages[asked + 1:]
+        self._state.kept = [k for k in self._state.kept
+                            if not any(k.last is m or k.first is m for m in gone)]
+        self._state.kept_at = {k: at for k, at in self._state.kept_at.items()
+                               if k in self._state.kept}
+
+    def _writes_after(self, question: dict) -> bool:
+        """Whether the template writes ``question`` after the newest exchange as it stands."""
+        return self._rendering.render(self._newest_exchange() + [question], True) is not None
 
     # ----- one attempt per generation ---------------------------------------------------
     def open_attempt(self, starts_request: bool, asks: bool) -> None:
@@ -552,22 +595,27 @@ class RenderedCache:
                 alone, checked before anything is dropped.
         """
         with self._action():
-            _ensure_ready(self, "inject", "inject into")
+            if role == "user":
+                _ensure_begun(self, "inject into")
+            else:
+                _ensure_ready(self, "inject", "inject into")
             message = {"role": role, "content": text}
             limit = self._config.evict_above_tokens
             alone = self._rendering.length(self._system_part() + [message], generation_prompt=False)
             if alone > limit:
                 raise ContextOverflowError(
-                    f"injected message needs {alone} tokens but only {limit} fit beside the "
-                    "system prompt; shorten the message or the system prompt, or raise "
-                    "context_size/evict_above_fraction")
-            self._ensure_writes(role, text, generation_prompt=False)
-            n_before = history_count(self._state.messages)
+                    f"the injected message needs {alone} tokens but {limit} fit beside the "
+                    f"system prompt; shorten the message or the system prompt, or {_RAISE_THE_ROOM}",
+                    alone, limit)
+            joined = self._make_way_for(message) if role == "user" else None
+            n_before = history_count(self._state.messages) + (joined is not None)
+            if joined is None:
+                self._ensure_writes(role, text, generation_prompt=False)
             room = self._max_prompt_tokens
             fits = (self._config.max_history_exchanges is None
                     or exchange_count(self._state.messages) < self._config.max_history_exchanges)
-            if role != "user" or not fits or not self._splice(message, room):
-                self._state.messages.append(message)
+            if role != "user" or joined is not None or not fits or not self._splice(message, room):
+                self._state.messages.append(joined or message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
                 self._ensure_within(limit, "shorten the message or inject a user message first")
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
@@ -575,22 +623,26 @@ class RenderedCache:
             self._memory.rest()
             return n_before + 1 - history_count(self._state.messages)
 
-    def prompt(self) -> None:
-        """Decode the generation prompt after the newest message, a user message, for a reply to it.
+    def prompt(self) -> int:
+        """Decode the generation prompt after the newest message, a user message, for a reply to it; how many history items were dropped to leave room for the reply.
 
         Raises:
-            ValueError: If no conversation was begun, a reply is open, or the
-                newest message is not a user message.
-            ContextOverflowError: If the conversation with it leaves too little
-                room for a reply.
+            OutOfOrderError: If no conversation was begun, a reply is open, or
+                the newest message is not a user message.
+            ContextOverflowError: If the conversation leaves too little room for
+                a reply once every exchange that can go is dropped.
         """
         with self._action():
             _ensure_ready(self, "start a request", "generate into")
             _ensure_can_reply(self, asks_question=False)
             spliced_at = self._state.spliced_at
             if spliced_at is not None and self._is_current(spliced_at[2]):
-                return          # spliced with the generation prompt after it, within the room
-            self._sync(self._fitting_prompt())
+                return 0        # spliced with the generation prompt after it, within the room
+            n_before = history_count(self._state.messages)
+            dropped = self._drop_while_over(self._max_prompt_tokens, generation_prompt=True,
+                                            tokens_only=True)
+            self._sync(self._fitting_prompt(), dropped=dropped)
+            return n_before - history_count(self._state.messages)
 
     def _fitting_prompt(self) -> Target:
         """The conversation with the generation prompt after it.
@@ -602,9 +654,8 @@ class RenderedCache:
         room = self._max_prompt_tokens
         if len(target.tokens) > room:
             raise ContextOverflowError(
-                f"the conversation needs {len(target.tokens)} tokens but only {room} leave "
-                "room for the reply; lower evict_above_fraction or min_reply_tokens, so that "
-                "an eviction leaves that room, or raise context_size")
+                f"the conversation needs {len(target.tokens)} tokens but {room} leave room "
+                f"for the reply; {_RAISE_THE_ROOM}", len(target.tokens), room)
         return target
 
     # ----- generating -------------------------------------------------------------------
@@ -874,20 +925,20 @@ class RenderedCache:
         """
         with self._action():
             if not self._state.begun:
-                raise ValueError("no conversation to answer a call in; call begin() first")
+                raise OutOfOrderError(None, "no conversation to answer a call in; call begin() first")
             waiting = _unanswered(self._state.messages)
             if not waiting:
-                raise ValueError("no tool call is waiting for a result")
+                raise OutOfOrderError("call", "no tool call is waiting for a result")
             owed, owed_id = waiting[0]
-            if not isinstance(call, ToolCall) or replace(call, id=call.id or owed.id) != owed:
-                raise ValueError(
-                    f"the waiting call is {owed!r}, not {call!r}; results "
+            if replace(call, id=call.id or owed.id) != owed:
+                raise OutOfOrderError(
+                    "call", f"the waiting call is {owed!r}, not {call!r}; results "
                     "are owed in the order the model asked for them")
             text = result_text(result)
             message = result_message(owed.name, owed_id, text, result)
             if not self._renders_result(message):
-                raise ValueError("this model's template renders no tool result, so a call's "
-                                 "result cannot be written")
+                raise UnsupportedError("result", "this model's template renders no tool result, "
+                                                 "so a call's result cannot be written")
             room = self._max_prompt_tokens
             n_before = history_count(self._state.messages)
             # Each result still owed after this one is held empty, so that this one is
@@ -913,7 +964,7 @@ class RenderedCache:
                     if not text or not self._fits(at, _cut(text, 0), room):
                         raise ContextOverflowError(
                             "not even the result cut to nothing leaves room for the reply in "
-                            "what is left of the context")
+                            f"what is left of the context; {_RAISE_THE_ROOM}")
                     low, high = 0, len(text)
                     while low < high:
                         middle = (low + high + 1) // 2
@@ -977,19 +1028,21 @@ class RenderedCache:
             _ensure_ready(self, "truncate a reply", "truncate in")
             newest = self._state.messages[-1] if self._state.messages else None
             if newest is None or newest["role"] != "assistant":
-                raise ValueError("the newest message is not an assistant reply")
+                raise OutOfOrderError(None, "the newest message is not an assistant reply")
             if any(m["role"] == "tool" or m.get("tool_calls") for m in self._state.messages[-2:]) \
                     or any(k.last is newest for k in self._state.kept):
-                raise ValueError("the newest reply holds a tool call, which would "
-                                 "be separated from its result")
+                raise OutOfOrderError(None, "the newest reply holds a tool call, which would "
+                                            "be separated from its result")
             if not newest["content"].startswith(keep_text):
-                raise ValueError("keep_text is not a prefix of the newest reply")
+                raise InvalidArgumentError("keep_text",
+                                           "keep_text is not a prefix of the newest reply")
             if keep_text == newest["content"]:
                 return
             self._state.messages[-1] = {**newest, "content": keep_text}
             if not self._writes(self._state.messages):
-                raise ValueError(f"this model's template does not write the newest reply "
-                                 f"shortened to {keep_text!r}; keep more of its text")
+                raise TemplateRefusedError(
+                    "keep_text", f"this model's template does not write the newest reply "
+                    f"shortened to {keep_text!r}; keep more of its text")
             self._render_ahead()
             self._memory.rest()
 
@@ -1012,8 +1065,8 @@ class RenderedCache:
         with self._action():
             _ensure_ready(self, "declare tools", "declare into")
             if not self._state.uses_tool_template and self._templates.has_template_for_tools:
-                raise ValueError(
-                    "this model writes a conversation with tools in a template of its own, "
+                raise OutOfOrderError(
+                    "tools", "this model writes a conversation with tools in a template of its own, "
                     "and this conversation was begun without tools; begin again with the "
                     "tools, begin(..., tools=...), to declare them")
             if accept is not None:
@@ -1068,7 +1121,7 @@ class RenderedCache:
         # they are read from the newest exchange, not from a render of the whole conversation.
         if self._rendering.render(self._newest_exchange() + [{"role": role, "content": text}],
                                   generation_prompt) is None:
-            raise ValueError(self._refusal(role))
+            raise TemplateRefusedError("text", self._refusal(role))
 
     def _refusal(self, role: str) -> str:
         """Why the template will not write a ``role`` message next."""
@@ -1088,8 +1141,8 @@ class RenderedCache:
         if needed > limit:
             raise ContextOverflowError(
                 f"the system prompt and its declarations need {needed} tokens with a short "
-                f"question but the eviction threshold is {limit}; {remedy}, or raise "
-                "context_size/evict_above_fraction")
+                f"question but the eviction threshold is {limit}; {remedy}, or {_RAISE_THE_ROOM}",
+                needed, limit)
 
     def _ensure_within(self, limit: int, remedy: str) -> None:
         """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped.
@@ -1105,7 +1158,7 @@ class RenderedCache:
             raise ContextOverflowError(
                 f"the conversation needs {needed} tokens but the eviction threshold is "
                 f"{limit}, and the messages no user message follows cannot be evicted; "
-                f"{remedy}, or raise context_size/evict_above_fraction")
+                f"{remedy}, or {_RAISE_THE_ROOM}", needed, limit)
 
     def _with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
@@ -1534,6 +1587,12 @@ class RenderedCache:
 
 
 # ----- what an action may start from -------------------------------------------------
+def _ensure_begun(conversation, into: str) -> None:
+    """Refuse an action before a conversation was begun, which alone holds the sequence opener and the system prompt."""
+    if not conversation.begun:
+        raise OutOfOrderError(None, f"no conversation to {into}; call begin() first")
+
+
 def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
     """Refuse an action before a conversation was begun, or inside a turn a call left open.
 
@@ -1543,23 +1602,34 @@ def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
     and no model was trained on.
     """
     if not conversation.begun:
-        raise ValueError(f"no conversation to {into or action}; call begin() first")
+        raise OutOfOrderError(None, f"no conversation to {into or action}; call begin() first")
     if conversation.turn_open:
-        raise ValueError(
+        raise OutOfOrderError(
+            None,
             f"cannot {action} while a reply is open: it stopped on a tool "
             "call and its turn is unclosed. Finish it with "
             "reply(), or discard it with begin().")
 
 
 def _ensure_can_reply(conversation, asks_question: bool) -> None:
-    """Refuse a reply ``conversation`` cannot take: a question while a reply is open, or, without one, a result still owed or nothing to answer."""
-    if asks_question or not conversation.turn_open:
+    """Refuse a reply ``conversation`` cannot take: a question before a conversation was begun, or, without one, a result still owed or nothing to answer."""
+    if asks_question:
+        _ensure_begun(conversation, "generate into")    # a question closes an open turn itself
+    elif not conversation.turn_open:
         _ensure_ready(conversation, "start a request", "generate into")
-        if not asks_question and conversation.newest_role != "user":
-            raise ValueError("there is nothing to answer: the newest message "
-                             "is not a user message")
+        if conversation.newest_role != "user":
+            raise OutOfOrderError("text", "there is nothing to answer: the newest message "
+                                          "is not a user message; give the question as text")
     elif conversation.pending_calls:
-        raise ValueError(f"{len(conversation.pending_calls)} call(s) still owe a result")
+        raise OutOfOrderError(None, f"{len(conversation.pending_calls)} call(s) still owe a "
+                                    "result; answer each with inject_tool_result()")
+
+
+# What a call still owed is told when a question closes its turn.
+_NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}
+
+# The one wording of what makes more room, at the end of every ContextOverflowError.
+_RAISE_THE_ROOM = "raise context_size or evict_above_fraction, or lower min_reply_tokens"
 
 
 # ----- helpers ---------------------------------------------------------------------

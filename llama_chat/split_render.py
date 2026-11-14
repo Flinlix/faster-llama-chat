@@ -18,6 +18,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .errors import TemplateRefusedError
+
 # A marker: letters and digits only, so that trimming, escaping and quoting leave it whole.
 _MARKER = re.compile(r"(QQ\d+MQQ)")
 
@@ -84,7 +86,7 @@ def split_render(render: Callable[[list[dict], list[dict] | None], str | None],
         if split is not None:
             return split
         # Once more, for a render that read the clock as it moved on between the two.
-    raise ValueError("this model's template writes a message's text otherwise than as "
+    raise TemplateRefusedError("messages", "this model's template writes a message's text otherwise than as "
                      "text in its place, so it could not be kept apart from the "
                      "template's own tags; the conversation cannot be written")
 

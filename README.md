@@ -180,6 +180,23 @@ refused is an `InvalidSettingError`, a `ValueError` whose `field` names it.
 What the model cannot do (call tools, reason, keep a system prompt in place)
 is refused where it is asked for with an `UnsupportedError`, a `ValueError`
 whose `field` names the parameter that asked for it.
+
+**What a refusal tells you.** Every refusal is raised before the action
+changes anything. Each is a `RefusalError`, a `ValueError` whose `field` names
+the argument or setting it is about, where it is about one:
+
+| Refusal | What it means |
+|---|---|
+| `InvalidSettingError` | a setting of `Config`, `Sampling` or a request holds a value it refuses |
+| `InvalidArgumentError` | an argument of a call holds a value it refuses |
+| `UnsupportedError` | the model cannot do what was asked: call tools, reason, keep a system prompt |
+| `TemplateRefusedError` | the model's template does not write what was asked |
+| `OutOfOrderError` | the action needs another one first, which the message names |
+| `ContextOverflowError` | it does not fit; `needed_tokens` and `available_tokens` say by how much |
+
+A wrong type is a `TypeError` that names the argument. An `EngineError`, a
+`RuntimeError`, says the engine failed while it decoded, edited or generated;
+the next action brings the cache back first.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
 or reply that does not), whether the model calls a tool that exists, and what
