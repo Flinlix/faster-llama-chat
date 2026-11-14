@@ -24,7 +24,7 @@ from tests.chat_messages import Result, tool_turn
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
-from tests.invented_templates import (JOINS_USER_TURNS, PLAIN, REFUSES_A_TEXT,
+from tests.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
 from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, begun_wrapper,
                             held_text,
@@ -1307,14 +1307,13 @@ def test_begin_says_how_many_history_messages_it_left_out_and_why(caplog):
         report = w.begin("s", history)
     assert report.n_kept_messages < len(history) and report.evicted_for == "half_context"
     assert report.n_evicted_messages == len(history) - report.n_kept_messages
-    said, = [r.getMessage() for r in caplog.records if r.getMessage().startswith("begin kept")]
-    assert said == (f"begin kept {report.n_kept_messages} of {len(history)} history messages; "
-                    f"left out the {report.n_evicted_messages} oldest so that half of the "
-                    "400-token context stays free")
+    said, = [r.getMessage() for r in caplog.records]
+    assert said == (f"the {report.n_evicted_messages} oldest history message(s) went so that "
+                    "half of the 400-token context stays free at a begin")
     caplog.clear()
     with caplog.at_level("INFO", logger="llama_chat"):
         w.begin("s", history[-2:])          # kept whole: nothing to say
-    assert not [r for r in caplog.records if r.getMessage().startswith("begin kept")]
+    assert not caplog.records
 
 
 def test_generated_turns_of_another_model_are_reported_as_unused(caplog):
@@ -1419,3 +1418,20 @@ def test_the_render_memory_holds_one_actions_renders_however_long_the_conversati
         w.reply(f"Frage {n}?").finish()
         sizes.append(len(w._conversation._rendering._memo))
     assert max(sizes[30:]) <= max(sizes[:30])
+
+
+def test_every_action_reports_no_eviction_where_nothing_went():
+    """Evictions are recorded where they happen, so an action that drops nothing reports none."""
+    clock = ToolSpec("clock", "time", {"type": "object", "properties": {}})
+    fake = FakeContext(JSON_TOOLS, replies=["Gut.", "Es ist zwölf.", "Ja."])
+    w = ChatWrapper(Config(context_size=4096), context=fake)
+    reports = [w.begin("s", [{"role": "user", "content": "Hallo?"},
+                             {"role": "assistant", "content": "Hallo."}], tools=[clock])]
+    reports.append(w.reply("Wie geht es?").finish())
+    fake.call_script = ['[{"name": "clock", "arguments": {}}]']
+    reports.append(w.reply("Wie spät?", tool_call_policy="yield").finish())
+    reports.append(w.inject_tool_result(w.pending_calls[0], "12:00"))
+    reports.append(w.reply().finish())
+    reports.append(w.inject("Danke.", role="user"))
+    reports.append(w.change_settings(reasoning=False))
+    assert [(r.n_evicted_messages, r.evicted_for) for r in reports] == [(0, None)] * len(reports)

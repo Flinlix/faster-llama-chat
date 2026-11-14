@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import functools
 import logging
 import threading
 from dataclasses import replace
@@ -29,19 +28,19 @@ from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
 from .messages import (THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages, calling_message,
-                       exchange_count, exchange_starts, history_count,
-                       next_call_number, portable_digest, result_message, system_part,
-                       with_result_text)
+                       exchange_count, exchange_starts, next_call_number, portable_digest,
+                       result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
                             windows_are_exact)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .eviction import Eviction
-from .result_cutting import ResultCutting, cut_result
+from .result_cutting import ResultCutting
 from .windows import WHOLE, Windows
 from .publishing import published
-from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError,
-                     TemplateRefusedError, UnsupportedError, with_template_reason)
+from .errors import (RAISE_THE_ROOM, ContextOverflowError, InvalidArgumentError,
+                     OutOfOrderError, TemplateRefusedError, UnsupportedError,
+                     with_template_reason)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .sequences import common_prefix_length
@@ -73,12 +72,12 @@ class RenderedCache:
         self._templates = templates
         self._config = config
         self._memory = CacheSync(context)
+        # The one state object every part reads and changes; an action put back fills it in place.
         self._state = ConversationState()
-        self._rendering = ConversationRendering(context, lambda: self.template,
-                                                lambda: self._state)
-        self._eviction = Eviction(self._rendering, config, context.can_shift)
-        self._cutting = ResultCutting(self._rendering)
-        self._windows = Windows(self._rendering, self._eviction, config)
+        self._rendering = ConversationRendering(context, lambda: self.template, self._state)
+        self._eviction = Eviction(self._rendering, config, context.can_shift, self._state)
+        self._cutting = ResultCutting(self._rendering, self._state)
+        self._windows = Windows(self._rendering, self._eviction, config, self._state)
         # Where the newest generation's turn starts in the cache, and whether it went on
         # with an open turn; left as they are by a failed action.
         self._generation: tuple[int, bool] = (0, False)
@@ -87,7 +86,6 @@ class RenderedCache:
         self._attempt: Snapshot | None = None
         self._request: Snapshot | None = None
         self._rolled_back = False
-        self._changes = Changes()
         # What a call that could not be read is answered with, as the newest reply was told.
         self._unreadable_result: dict | None = None
         self._published = Published()
@@ -210,8 +208,8 @@ class RenderedCache:
 
     # ----- beginning ------------------------------------------------------------------
     def start(self, system_prompt: str, history, tools: list[ToolSpec] | None,
-              reasoning: bool, generated_turns: dict | None = None) -> int:
-        """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context; how many items were kept.
+              reasoning: bool, generated_turns: dict | None = None) -> None:
+        """Begin again from ``system_prompt`` and the newest of ``history`` that fits in half the context.
 
         A history that ends on a call keeps it owed a result, and the cache
         holds the render only as far as the results cannot change it.
@@ -245,16 +243,15 @@ class RenderedCache:
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
             self._restore_generated(generated_turns)
-            n_left_out = self._leave_out_unreadable()
+            self._leave_out_unreadable()
             given = len(self._state.messages)
-            self._eviction.keep_newest_history(self._state, min(limit, self._config.context_size // 2),
+            self._eviction.keep_newest_history(min(limit, self._config.context_size // 2),
                                                self._refused_history)
             if len(self._state.messages) < given:
-                self._changes.evicted_for = "half_context"
                 held = {id(m) for m in self._state.messages}
                 self._state.kept = [k for k in self._state.kept if id(k.first) in held]
             self._drop_unplaceable()
-            self._changes.n_turns_restored = len(self._state.kept)
+            self._state.changes.n_turns_restored = len(self._state.kept)
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
@@ -265,10 +262,10 @@ class RenderedCache:
                 raise ContextOverflowError(
                     f"the newest exchange of the history, from its user message on, needs "
                     f"{needed} tokens beside the system prompt but {limit} fit; shorten it, "
-                    f"{_RAISE_THE_ROOM}", needed, limit)
+                    f"{RAISE_THE_ROOM}", needed, limit)
             self._drop_while_over(limit, generation_prompt=False)
             self._ensure_within(limit, "shorten the history")
-            self._changes.n_kept_messages = len(self._state.messages) - len(system)
+            self._state.changes.n_kept_messages = len(self._state.messages) - len(system)
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -290,15 +287,14 @@ class RenderedCache:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
-            self._log_begin(len(history), n_left_out, generated_turns)
-            return self._changes.n_kept_messages
+            self._log_begin(len(history), generated_turns)
 
     def _restore_generated(self, generated_turns: dict | None) -> None:
         """Hold each of ``generated_turns`` whose messages stand unchanged as the tokens it was generated as, where they are this model's; whether each can be placed is read once the history is trimmed."""
         if not generated_turns:
             return
         if generated_turns.get("model") != self._context.model_fingerprint():
-            self._changes.generated_turns_ignored = True
+            self._state.changes.generated_turns_ignored = True
             return
         messages = self._state.messages
         # A kept turn opens on a reply that calls, so only spans that start on one are tried.
@@ -316,17 +312,9 @@ class RenderedCache:
                                              messages[last], bool(messages[last].get("tool_calls"))))
         self._state.kept.sort(key=lambda k: next(i for i, m in enumerate(messages) if m is k.first))
 
-    def _log_begin(self, n_given: int, n_left_out: int, generated_turns: dict | None) -> None:
-        """Say once what ``begin`` left out of a history of ``n_given`` messages, ``n_left_out`` of them with unreadable calls, or of the generated turns it was given; nothing where it kept all of them as given. See design_history.md, "One report of what an action changed"."""
-        changes, said = self._changes, []
-        n_oldest = n_given - n_left_out - changes.n_kept_messages
-        if n_oldest > 0:
-            why = {"half_context": f"so that half of the {self._config.context_size}-token "
-                                   "context stays free",
-                   "exchange_limit": "to keep max_history_exchanges="
-                                     f"{self._config.max_history_exchanges}",
-                   "room": "to fit beside the system prompt"}[changes.evicted_for or "room"]
-            said.append(f"left out the {n_oldest} oldest {why}")
+    def _log_begin(self, n_given: int, generated_turns: dict | None) -> None:
+        """Say once what ``begin`` left out of a history of ``n_given`` messages beyond the oldest, which the eviction says, and of the generated turns it was given; nothing where it kept them all as given. See design_history.md, "One report of what an action changed"."""
+        changes, said = self._state.changes, []
         if changes.n_left_out_calls:
             said.append(f"left out {changes.n_left_out_calls} call(s) the model wrote "
                         "unreadably, with their error results")
@@ -341,8 +329,8 @@ class RenderedCache:
             _log.info("begin kept %d of %d history messages; %s", changes.n_kept_messages,
                       n_given, "; ".join(said))
 
-    def _leave_out_unreadable(self) -> int:
-        """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result; how many messages went.
+    def _leave_out_unreadable(self) -> None:
+        """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result.
 
         A reply left with no call goes on in the next reply of its turn,
         where that one is not kept as generated; else it stays where it says
@@ -355,7 +343,7 @@ class RenderedCache:
         for message in self._state.messages:
             calls = message.get("tool_calls") or ()
             if id(message) not in held and any(UNREADABLE_CALL in c for c in calls):
-                self._changes.n_left_out_calls += sum(UNREADABLE_CALL in c for c in calls)
+                self._state.changes.n_left_out_calls += sum(UNREADABLE_CALL in c for c in calls)
                 gone |= {c["id"] for c in calls if UNREADABLE_CALL in c}
                 left = [c for c in calls if UNREADABLE_CALL not in c]
                 if left:
@@ -379,9 +367,7 @@ class RenderedCache:
         self._ends_reply(emptied, kept)
         if not self.template.properties.writes_two_user_turns:
             kept = _questions_joined(kept, self._state.messages)
-        n_gone = len(self._state.messages) - len(kept)
-        self._state.messages = kept
-        return n_gone
+        self._state.messages[:] = kept
 
     @staticmethod
     def _ends_reply(emptied: dict | None, kept: list[dict]) -> None:
@@ -422,8 +408,8 @@ class RenderedCache:
         return bool(self._state.messages) and self._state.messages[-1]["role"] == "tool"
 
     # ----- adding messages --------------------------------------------------------------
-    def ask(self, text: str, cancel: threading.Event | None = None) -> int:
-        """Decode ``text`` as the next question, with the generation prompt after it; how many history messages were dropped for it.
+    def ask(self, text: str, cancel: threading.Event | None = None) -> None:
+        """Decode ``text`` as the next question, with the generation prompt after it, the oldest exchanges dropped for it where needed.
 
         Raises:
             ValueError: If no conversation was begun, a reply is open, or the
@@ -436,11 +422,11 @@ class RenderedCache:
         """
         self._memory.cancel = cancel
         try:
-            return self._ask(text)
+            self._ask(text)
         finally:
             self._memory.cancel = None
 
-    def _ask(self, text: str) -> int:
+    def _ask(self, text: str) -> None:
         """:meth:`ask`'s work."""
         with self._action():
             _ensure_begun(self, "generate into")
@@ -450,10 +436,9 @@ class RenderedCache:
             if alone > room:
                 raise ContextOverflowError(
                     f"the request needs {alone} tokens but {room} fit beside room for the "
-                    f"reply; shorten the request or the system prompt, or {_RAISE_THE_ROOM}",
+                    f"reply; shorten the request or the system prompt, or {RAISE_THE_ROOM}",
                     alone, room)
             joined = self._make_way_for(question)
-            n_before = history_count(self._state.messages) + (joined is not None)
             if joined is None:
                 self._ensure_writes("user", text, generation_prompt=True)
             if joined is not None or not self._splice(question, room):
@@ -465,7 +450,7 @@ class RenderedCache:
             if free < self._config.min_reply_tokens:
                 raise ContextOverflowError(
                     f"the reply needs {self._config.min_reply_tokens} tokens but {free} are "
-                    f"free; shorten the request, or {_RAISE_THE_ROOM}",
+                    f"free; shorten the request, or {RAISE_THE_ROOM}",
                     self._config.min_reply_tokens, free)
             if self._memory.cancel is not None:
                 # Decoded now, in the parts a cancel is read between, not deferred to the
@@ -473,14 +458,13 @@ class RenderedCache:
                 self._memory.repair()
                 if self._memory.cancel.is_set():
                     raise Cancelled("cancelled while the question was decoded")
-            return n_before + 1 - history_count(self._state.messages)
 
     # ----- what an action changed beyond what was asked ------------------------------------
-    def report(self, n_evicted_messages: int) -> Report:
-        """The changes since the caller last asked, the actions having evicted ``n_evicted_messages`` history messages, and a fresh start for the next."""
-        changes, self._changes = self._changes, Changes()
-        return Report(n_evicted_messages=n_evicted_messages,
-                      evicted_for=changes.evicted_for if n_evicted_messages else None,
+    def report(self) -> Report:
+        """The changes since the caller last asked, and a fresh start for the next."""
+        changes, self._state.changes = self._state.changes, Changes()
+        return Report(n_evicted_messages=changes.n_evicted,
+                      evicted_for=changes.evicted_for if changes.n_evicted else None,
                       n_kept_messages=changes.n_kept_messages,
                       n_left_out_calls=changes.n_left_out_calls,
                       n_turns_restored=changes.n_turns_restored,
@@ -491,7 +475,7 @@ class RenderedCache:
 
     def changes_so_far(self) -> Changes:
         """What the actions changed since the caller last asked for a :meth:`report`, left to be asked for still."""
-        return replace(self._changes, tool_results_cut=list(self._changes.tool_results_cut))
+        return replace(self._state.changes, tool_results_cut=list(self._state.changes.tool_results_cut))
 
     # ----- nothing blocks a question ------------------------------------------------------
     def _make_way_for(self, question: dict) -> dict | None:
@@ -505,7 +489,7 @@ class RenderedCache:
         if newest is None or newest["role"] != "user" or self._writes_after(question):
             return None
         self._state.messages.pop()
-        self._changes.question_joined = True
+        self._state.changes.question_joined = True
         _log.info("a question was joined to the one before it, which no reply followed: "
                   "the template writes no two in a row")
         return _joined(newest, question)
@@ -518,7 +502,7 @@ class RenderedCache:
                                                 result_text(_NOT_RUN), _NOT_RUN)
                                  for call, call_id in owed]
         self._state.results_cut, self._state.called_in_thought = [], False
-        self._changes.turn_closed = True
+        self._state.changes.turn_closed = True
         if self._writes_after(question):
             _log.info("a question closed the open turn, %d call(s) told they were not run",
                       len(owed))
@@ -574,7 +558,7 @@ class RenderedCache:
 
     def _go_back_to(self, snapshot: Snapshot) -> None:
         """Hold the conversation and the cache's tokens of ``snapshot``, ending the attempt."""
-        self._state = snapshot.state.copied()
+        self._state.put_back(snapshot.state)
         self._memory.replace(snapshot.tokens)
         self._attempt, self._rolled_back = None, True
         if self._memory.is_known:
@@ -606,8 +590,8 @@ class RenderedCache:
         self._note_prompt(ahead.after_question, ahead.reply_opening, self._memory.tokens)
         return True
 
-    def add(self, role: str, text: str) -> int:
-        """Decode a message without a reply after it; returns how many history messages were dropped for it.
+    def add(self, role: str, text: str) -> None:
+        """Decode a message without a reply after it, the oldest exchanges dropped for it where needed.
 
         A question is put in the stand-in's place as :meth:`ask` puts one, the
         generation prompt after it: within the room left for a reply, the
@@ -631,10 +615,9 @@ class RenderedCache:
             if alone > limit:
                 raise ContextOverflowError(
                     f"the injected message needs {alone} tokens but {limit} fit beside the "
-                    f"system prompt; shorten the message or the system prompt, or {_RAISE_THE_ROOM}",
+                    f"system prompt; shorten the message or the system prompt, or {RAISE_THE_ROOM}",
                     alone, limit)
             joined = self._make_way_for(message) if role == "user" else None
-            n_before = history_count(self._state.messages) + (joined is not None)
             if joined is None:
                 self._ensure_writes(role, text, generation_prompt=False)
             room = self._max_prompt_tokens
@@ -647,7 +630,6 @@ class RenderedCache:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
-            return n_before + 1 - history_count(self._state.messages)
 
     def _length_alone(self, message: dict, limit: int, generation_prompt: bool) -> int:
         """How many tokens ``message`` takes beside the system turn alone, measured in their render only where its count comes within :data:`_NEAR_THE_ROOM_TOKENS` of ``limit``."""
@@ -657,8 +639,8 @@ class RenderedCache:
             return counted
         return self._rendering.length(self._system_part() + [message], generation_prompt)
 
-    def prompt(self) -> int:
-        """Decode the generation prompt after the newest message, a user message, for a reply to it; how many history messages were dropped to leave room for the reply.
+    def prompt(self) -> None:
+        """Decode the generation prompt after the newest message, a user message, for a reply to it, the oldest exchanges dropped to leave room for the reply where needed.
 
         Raises:
             OutOfOrderError: If no conversation was begun, a reply is open, or
@@ -671,12 +653,10 @@ class RenderedCache:
             _ensure_can_reply(self, asks_question=False)
             spliced_at = self._state.spliced_at
             if spliced_at is not None and self._is_current(spliced_at[2]):
-                return 0        # spliced with the generation prompt after it, within the room
-            n_before = history_count(self._state.messages)
+                return          # spliced with the generation prompt after it, within the room
             dropped = self._drop_while_over(self._max_prompt_tokens, generation_prompt=True,
                                             tokens_only=True)
             self._sync(self._fitting_prompt(), dropped=dropped)
-            return n_before - history_count(self._state.messages)
 
     def _fitting_prompt(self) -> Target:
         """The conversation with the generation prompt after it.
@@ -689,7 +669,7 @@ class RenderedCache:
         if len(target.tokens) > room:
             raise ContextOverflowError(
                 f"the conversation needs {len(target.tokens)} tokens but {room} leave room "
-                f"for the reply; {_RAISE_THE_ROOM}", len(target.tokens), room)
+                f"for the reply; {RAISE_THE_ROOM}", len(target.tokens), room)
         return target
 
     # ----- generating -------------------------------------------------------------------
@@ -714,7 +694,7 @@ class RenderedCache:
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False,
-                     in_thought: bool = False) -> int:
+                     in_thought: bool = False) -> None:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
@@ -737,24 +717,21 @@ class RenderedCache:
                 generated from it on is no reply's.
             in_thought: Whether the generation ended inside a thought, so that
                 the turn its call leaves open goes on inside it.
-
-        Returns:
-            How many history messages were dropped.
         """
         if not self._memory.is_known and not answer and not called:
             # It failed before it said anything the template writes: nothing changes.
             self.roll_back()
-            return 0
+            return
         try:
             recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped)
             self._state.called_in_thought = called and in_thought
             if recorded != answer:
-                self._changes.kept_text = recorded
+                self._state.changes.kept_text = recorded
                 _log.info("a reply's answer holds the template's thought tags; the part the "
                           "template writes is kept: %r", recorded)
             try:
-                return self._after_reply(recorded, called, called and not calls, unplaced,
-                                         recorded != answer, unreadable_result)
+                self._after_reply(recorded, called, called and not calls, unplaced,
+                                  recorded != answer, unreadable_result)
             finally:
                 self._attempt = None        # recorded: a fault after it keeps the reply
         finally:
@@ -802,8 +779,8 @@ class RenderedCache:
         return answer, moves_kept and self._drop_unplaceable()
 
     def _after_reply(self, answer: str, called: bool, unreadable: bool, unplaced: bool,
-                     rewritten: bool, unreadable_result: dict) -> int:
-        """Answer a call that could not be read, or close the turn and settle the cache; how many history messages were dropped.
+                     rewritten: bool, unreadable_result: dict) -> None:
+        """Answer a call that could not be read, or close the turn and settle the cache.
 
         Args:
             rewritten: Whether ``answer`` was recorded otherwise than generated.
@@ -818,7 +795,7 @@ class RenderedCache:
             elif rewritten:
                 self._memory.replace(
                     self._rendering.target(self._state.messages, generation_prompt=False).tokens)
-            return 0
+            return
         self._unreadable_result = unreadable_result
         if unreadable:
             try:
@@ -834,26 +811,30 @@ class RenderedCache:
             if unplaced:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
                            logits=False)
-            return 0
+            return
         # A reply whose call was withdrawn, for want of room for its answer, is a reply too.
         replied = not self._state.messages[-1].get("tool_calls")
         if replied and not self._writes(self._state.messages if not answer
                                         else self._newest_exchange()):
-            self._changes.taken_back = True
             _log.info("a reply the template does not write, nor an empty one in its place, "
                       "was taken back with its request")
             if self._request is not None:
                 # Taken back with the question this request asked, and what it evicted.
                 self._go_back_to(self._request)
-                return 0
+                self._state.changes.taken_back = True
+                self._publish()
+                return
+            self._state.changes.taken_back = True
             starts = exchange_starts(self._state.messages)
-            return self._remove_from(starts[-1] if starts else len(self._system_part()))
+            self._remove_from(starts[-1] if starts else len(self._system_part()))
+            return
         if not answer and not called and not resumed \
                 and self.template.properties.writes_two_user_turns:
             # A reply all thought or cut before its answer leaves the question
             # unanswered, as the next question then follows it.
-            return self._remove_from(len(self._state.messages) - 1)
-        return self._settle()
+            self._remove_from(len(self._state.messages) - 1)
+            return
+        self._settle()
 
     def _holds_thought_tags(self, text: str) -> bool:
         """Whether ``text`` holds the template's thought opening or closing, which a template may cut a past reply at."""
@@ -879,16 +860,12 @@ class RenderedCache:
         except ContextOverflowError:
             return False
 
-    def _answer_unreadable_owed(self) -> int:
-        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; how many history messages went for room."""
-        dropped = 0
+    def _answer_unreadable_owed(self) -> None:
+        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told."""
         while self.pending_calls and self.pending_calls[0].status == "unreadable" \
                 and self._unreadable_result is not None:
-            n_before = history_count(self._state.messages)
             if not self._write_unreadable(self._unreadable_result):
                 break
-            dropped += max(0, n_before - history_count(self._state.messages))
-        return dropped
 
     def _renders_result(self, message: dict) -> bool:
         """Whether the template writes ``message``, a result, after the conversation."""
@@ -922,8 +899,8 @@ class RenderedCache:
         self._state.kept_at = {k: at for k, at in self._state.kept_at.items() if k in kept}
         return dropped
 
-    def close_unanswered(self) -> int:
-        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one; how many history messages were dropped.
+    def close_unanswered(self) -> None:
+        """Close the open turn where no room is left to answer its newest calls, as the reply cap closes one.
 
         The newest reply is kept without those calls, its tokens as generated,
         and the results already written for them are taken out again; where the
@@ -935,20 +912,21 @@ class RenderedCache:
             del self._state.messages[calling + 1:]
             self._state.results_cut = []
             self._forget_calls()
-            self._changes.turn_closed = True
+            self._state.changes.turn_closed = True
             if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
                 # Nothing the template writes is left of the reply: taken back with its request.
-                self._changes.taken_back = True
+                self._state.changes.taken_back = True
                 _log.info("no room was left to answer the newest calls, and nothing of the "
                           "reply is left to write: taken back with its request")
                 starts = exchange_starts(self._state.messages)
-                return self._remove_from(starts[-1] if starts else len(self._system_part()))
+                self._remove_from(starts[-1] if starts else len(self._system_part()))
+                return
             _log.info("no room was left to answer the newest calls: the turn closed on what "
                       "the model wrote")
-            return self._settle()
+            self._settle()
 
-    def add_result(self, call: ToolCall, result) -> int:
-        """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply; how many history messages were dropped for it.
+    def add_result(self, call: ToolCall, result) -> None:
+        """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply.
 
         A result too long for the room left drops the oldest exchanges first,
         as a question does, the turn it answers kept whole. Where it still
@@ -965,10 +943,10 @@ class RenderedCache:
             ContextOverflowError: If not even a result cut to nothing leaves
                 room for the reply.
         """
-        dropped = self._add_result(call, result)
-        return dropped + self._answer_unreadable_owed()
+        self._add_result(call, result)
+        self._answer_unreadable_owed()
 
-    def _add_result(self, call: ToolCall, result) -> int:
+    def _add_result(self, call: ToolCall, result) -> None:
         """:meth:`add_result`'s work for one call."""
         with self._action():
             if not self._state.begun:
@@ -986,40 +964,10 @@ class RenderedCache:
             if not self._renders_result(message):
                 raise UnsupportedError("result", "this model's template renders no tool result, "
                                                  "so a call's result cannot be written")
-            room = self._max_prompt_tokens
-            n_before = history_count(self._state.messages)
-            # Each result still owed after this one is held empty, so that this one is
-            # written whole only where those still fit after it.
-            self._state.messages += [message] + [result_message(later.name, later_id, "")
-                                                 for later, later_id in waiting[1:]]
-            at = len(self._state.messages) - len(waiting)
-            dropped = False
-            fits = functools.partial(self._cutting.fits, self._state)
-            if not fits(at, text, room):
-                # Held cut to nothing instead, so that what this one is cut to leaves room
-                # for each of them, its note included.
-                del self._state.messages[at + 1:]
-                self._state.messages += [result_message(later.name, later_id, cut_result(text, 0))
-                                         for later, later_id in waiting[1:]]
-                dropped = self._drop_while_over(room, generation_prompt=True, tokens_only=True,
-                                                beside_open_turn=True)
-                at = len(self._state.messages) - len(waiting)
-                if not fits(at, text, room):
-                    if text and not fits(at, cut_result(text, 0), room):
-                        del self._state.messages[at + 1:]       # this one first, if only it fits
-                    if text and not fits(at, cut_result(text, 0), room):
-                        earlier = self._cutting.cut_an_earlier_result(
-                            self._state, at, cut_result(text, 0), room)
-                        if earlier is not None:
-                            self._note_cut(*earlier, "an earlier result", "to make room")
-                    if not text or not fits(at, cut_result(text, 0), room):
-                        raise ContextOverflowError(
-                            "not even the result cut to nothing leaves room for the reply in "
-                            f"what is left of the context; {_RAISE_THE_ROOM}")
-                    kept = self._cutting.longest_fitting(self._state, at, text, room)
-                    self._state.messages[at] = with_result_text(message, cut_result(text, kept))
-                    self._note_cut(owed, kept, len(text), "the result", "to fit")
-            del self._state.messages[at + 1:]
+            dropped = self._cutting.write(
+                message, waiting[1:], self._max_prompt_tokens,
+                lambda: self._drop_while_over(self._max_prompt_tokens, generation_prompt=True,
+                                              tokens_only=True, beside_open_turn=True))
             if not self.pending_calls:
                 self._sync(self._fitting_prompt(), dropped=dropped)
             elif dropped:
@@ -1028,13 +976,6 @@ class RenderedCache:
             if dropped:
                 self._memory.repair()           # with the logits the reply needs, then saved
                 self._memory.rest()
-            return n_before - history_count(self._state.messages)
-
-    def _note_cut(self, call: ToolCall, kept: int, total: int, what: str, why: str) -> None:
-        """Note that ``call``'s result was cut to ``kept`` of its ``total`` characters."""
-        self._state.results_cut.append(call)
-        self._changes.tool_results_cut.append(call)
-        _log.info("%s of %s was cut to %d of %d characters %s", what, call.name, kept, total, why)
 
     # ----- changing what it holds -----------------------------------------------------
     def truncate_newest(self, keep_text: str) -> None:
@@ -1069,8 +1010,8 @@ class RenderedCache:
             self._render_ahead()
             self._memory.rest()
 
-    def change_settings(self, tools: list[ToolSpec] | None, reasoning: bool, accept=None) -> int:
-        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept; how many history messages were dropped.
+    def change_settings(self, tools: list[ToolSpec] | None, reasoning: bool, accept=None) -> None:
+        """Run the conversation under ``tools`` and ``reasoning`` from now on, every message kept.
 
         ``tools`` other than ``None``, even empty, writes it with the model's
         template for tools. The cache is decoded again from where the new
@@ -1099,11 +1040,9 @@ class RenderedCache:
             limit = self._config.evict_above_tokens
             self._state.checks = self._render_checks()
             self._pin_opening()
-            n_before = history_count(self._state.messages)
             dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
             self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - history_count(self._state.messages)
 
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
@@ -1129,7 +1068,7 @@ class RenderedCache:
                      and windows_are_exact(render, system, self._rendering.tag_from)),
             splice_probe=splice_probe(render, system),
             repeats_alike=repeated_question_written_alike(render, system),
-            with_a_short_question=self._eviction.with_a_short_question(self._state),
+            with_a_short_question=self._eviction.with_a_short_question(),
             # Without the steps tool calling needs, no turn keeps a call, and the template is
             # not asked.
             tool_turns_stay=self.template.properties.can_call_tools and tool_turns_stay_written(
@@ -1162,11 +1101,11 @@ class RenderedCache:
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
-        limit, needed = self._config.evict_above_tokens, self._eviction.with_a_short_question(self._state)
+        limit, needed = self._config.evict_above_tokens, self._eviction.with_a_short_question()
         if needed > limit:
             raise ContextOverflowError(
                 f"the system prompt and its declarations need {needed} tokens with a short "
-                f"question but the eviction threshold is {limit}; {remedy}, or {_RAISE_THE_ROOM}",
+                f"question but the eviction threshold is {limit}; {remedy}, or {RAISE_THE_ROOM}",
                 needed, limit)
 
     def _ensure_within(self, limit: int, remedy: str) -> None:
@@ -1180,40 +1119,37 @@ class RenderedCache:
             raise ContextOverflowError(
                 f"the conversation needs {needed} tokens but the eviction threshold is "
                 f"{limit}, and the messages no user message follows cannot be evicted; "
-                f"{remedy}, or {_RAISE_THE_ROOM}", needed, limit)
+                f"{remedy}, or {RAISE_THE_ROOM}", needed, limit)
 
-    def _remove_from(self, first: int) -> int:
-        """Take the messages from ``first`` on out again, then drop what is over the limits; how many history messages were dropped."""
+    def _remove_from(self, first: int) -> None:
+        """Take the messages from ``first`` on out again, then drop what is over the limits."""
         with self._action():
             gone = self._state.messages[first:]
             del self._state.messages[first:]
             self._state.kept = [k for k in self._state.kept
                                 if not any(k.first is m or k.last is m for m in gone)]
-            n_before = history_count(self._state.messages)
             dropped = self._drop_while_over(self._config.evict_above_tokens,
                                             generation_prompt=False)
             # As after any reply, so that what the template writes ahead of the next
             # question, a default system prompt say, stays in the cache.
             self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - history_count(self._state.messages)
 
     # ----- after a reply ----------------------------------------------------------
-    def _settle(self) -> int:
-        """Drop what is over the limits, then render and decode ahead for the next question; how many history messages were dropped."""
+    def _settle(self) -> None:
+        """Drop what is over the limits, then render and decode ahead for the next question."""
         with self._action():
-            n_before = history_count(self._state.messages)
             limit = self._config.evict_above_tokens
-            plan = self._windows.ahead(self._state, self._memory) if self._state.checks.windows else WHOLE
+            plan = self._windows.ahead(self._memory) if self._state.checks.windows else WHOLE
             if plan is not WHOLE:
                 # Dropped first, so the cache shifts before the decode ahead, not before the next question's.
                 at, before, length, split, run = plan
                 held = len(self._memory.tokens)
                 kept_until = lambda: at - (held - len(self._memory.tokens))   # noqa: E731
-                done = self._windows.drop_in(self._state, self._memory, kept_until, length)
+                done = self._windows.drop_in(self._memory, kept_until, length)
                 # Where the window's own older exchange must go too, or what is decoded ahead
                 # would not fit, the rest is rendered whole.
-                done = done and not (kept_until() + length > limit or self._eviction.too_many(self._state)
+                done = done and not (kept_until() + length > limit or self._eviction.too_many()
                                      or kept_until() + len(before) > self._config.context_size)
                 if done:
                     self._sync(Target(list(self._memory.tokens[:kept_until()]) + before,
@@ -1226,7 +1162,6 @@ class RenderedCache:
                 dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
                 self._render_ahead(dropped=dropped)
             self._memory.rest()
-            return n_before - history_count(self._state.messages)
 
     def _render_ahead(self, dropped: bool = False) -> None:
         """Decode the render for the next question up to where the question goes."""
@@ -1304,11 +1239,7 @@ class RenderedCache:
 
     def _drop_while_over(self, limit: int, generation_prompt: bool, **options) -> bool:
         """Drop the oldest exchanges once the conversation is over ``limit`` or holds too many, as :meth:`Eviction.drop_while_over` does; whether any went."""
-        cause = self._eviction.drop_while_over(self._state, limit, generation_prompt, **options)
-        if cause is not None:
-            self._changes.evicted_for = cause
-            _log.debug("the oldest history went, for %s", cause.replace("_", " "))
-        return cause is not None
+        return self._eviction.drop_while_over(limit, generation_prompt, **options) is not None
 
     # ----- what a record made ahead was made for ----------------------------------------
     def _note_ahead(self, split: SplitRender, run: int) -> None:
@@ -1347,7 +1278,7 @@ class RenderedCache:
         try:
             yield
         except BaseException:
-            self._state = saved
+            self._state.put_back(saved)
             self._memory.replace(held)
             raise
         finally:
@@ -1398,8 +1329,6 @@ def _ensure_can_reply(conversation, asks_question: bool) -> None:
 # What a call still owed is told when a question closes its turn.
 _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}
 
-# The one wording of what makes more room, at the end of every ContextOverflowError.
-_RAISE_THE_ROOM = "raise context_size or evict_above_fraction, or lower min_reply_tokens"
 
 
 # ----- helpers ---------------------------------------------------------------------

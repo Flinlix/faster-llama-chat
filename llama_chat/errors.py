@@ -64,3 +64,7 @@ class EngineError(RuntimeError):
 def with_template_reason(refusal: str, reason: str | None) -> str:
     """``refusal``, followed by what the template itself said where it said something."""
     return refusal if not reason else f"{refusal} (the template says: {reason})"
+
+
+# The one wording of what makes more room, at the end of every ContextOverflowError.
+RAISE_THE_ROOM = "raise context_size or evict_above_fraction, or lower min_reply_tokens"

@@ -1,19 +1,22 @@
 """Which of a conversation's oldest exchanges go, and when: at a begin, and once it no longer fits or holds too many.
 
-:class:`Eviction` holds no state of its own: each method is given the
-conversation's state and changes it there, so that an action put back puts
+:class:`Eviction` holds no state of its own: it changes the conversation's
+state, and records there what went and why, so that an action put back puts
 back what an eviction did too. See design_history.md, "How eviction works".
 """
 
 from __future__ import annotations
 
 import itertools
+import logging
 import math
 from collections.abc import Callable
 
 from .config import Config
 from .conversation_state import ConversationState
-from .messages import THOUGHT_KEY, exchange_count, exchange_starts, system_part
+from .messages import THOUGHT_KEY, exchange_count, exchange_starts, history_count, system_part
+
+_log = logging.getLogger(__name__)
 
 # Where the cache cannot shift, the fraction of the room under the eviction
 # threshold, after a short question, and of ``max_history_exchanges``, that an
@@ -23,30 +26,33 @@ EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 
 
 class Eviction:
-    """Drops the oldest exchanges of the conversation state it is given, measured with ``rendering``."""
+    """Drops the oldest exchanges of the conversation state it was made with, measured with ``rendering``."""
 
-    def __init__(self, rendering, config: Config, can_shift: bool) -> None:
+    def __init__(self, rendering, config: Config, can_shift: bool,
+                 state: ConversationState) -> None:
         self._rendering, self._config, self._can_shift = rendering, config, can_shift
+        self._state = state
 
-    def with_a_short_question(self, state: ConversationState) -> int:
+    def with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
-        return self._rendering.length(system_part(state.messages)
+        return self._rendering.length(system_part(self._state.messages)
                                       + [{"role": "user", "content": "?"}], generation_prompt=True)
 
-    def keep_newest_history(self, state: ConversationState, bound: int,
+    def keep_newest_history(self, bound: int,
                             refused: Callable[[list[dict]], Exception]) -> None:
         """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.
 
         Raises:
             Exception: What ``refused`` makes of the messages the template refuses to write.
         """
-        first = len(system_part(state.messages))
-        if len(state.messages) == first:
+        first = len(system_part(self._state.messages))
+        if len(self._state.messages) == first:
             return
-        opens = [first] + [i for i in exchange_starts(state.messages) if i > first]
+        n_before = history_count(self._state.messages)
+        opens = [first] + [i for i in exchange_starts(self._state.messages) if i > first]
 
         def length(count: int) -> int:
-            kept = state.messages[:first] + state.messages[opens[-count]:]
+            kept = self._state.messages[:first] + self._state.messages[opens[-count]:]
             if self._rendering.split(kept, kept[-1]["role"] == "tool") is None:
                 raise refused(kept)
             return self._rendering.length(kept, generation_prompt=False)
@@ -57,7 +63,7 @@ class Eviction:
         everything = len(opens)
         # The characters of the newest exchanges, which the lengths measured are scaled by.
         sizes = [len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or ""))
-                 + len(str(m.get(THOUGHT_KEY) or "")) for m in state.messages]
+                 + len(str(m.get(THOUGHT_KEY) or "")) for m in self._state.messages]
         chars = lambda count: sum(sizes[opens[-count]:]) or 1         # noqa: E731
         kept, more, jumped = 1, min(2, everything), False
         while True:
@@ -78,9 +84,10 @@ class Eviction:
         while kept < more - 1:
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
-        state.messages = state.messages[:first] + state.messages[opens[-kept]:]
+        self._state.messages[:] = self._state.messages[:first] + self._state.messages[opens[-kept]:]
+        self.record(n_before, "half_context")
 
-    def drop_while_over(self, state: ConversationState, limit: int, generation_prompt: bool, newest_too: bool = False,
+    def drop_while_over(self, limit: int, generation_prompt: bool, newest_too: bool = False,
                         tokens_only: bool = False, beside_open_turn: bool = False) -> str | None:
         """Drop the oldest exchanges once the conversation renders longer than ``limit`` or holds too many; why they went, ``None`` where none did.
 
@@ -95,28 +102,43 @@ class Eviction:
                 room well below ``limit``, measure that room beside the turn.
         """
         def length() -> int:
-            return self._rendering.length(state.messages, generation_prompt)
+            return self._rendering.length(self._state.messages, generation_prompt)
 
         def too_many(most: int | None = None) -> int:
-            return 0 if tokens_only else self._exchanges_over(state, most)
+            return 0 if tokens_only else self._exchanges_over(most)
 
         if length() <= limit and not too_many():
             return None
         cause = "exchange_limit" if too_many() else "room"
-        bound, most = self.drop_bound(state, limit, beside_open_turn), self.exchanges_after_drop(state)
-        dropped = self._drop_oldest_exchanges(state, length, bound, too_many(most), newest_too)
-        return cause if dropped else None
+        n_before = history_count(self._state.messages)
+        bound, most = self.drop_bound(limit, beside_open_turn), self.exchanges_after_drop()
+        self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
+        return cause if self.record(n_before, cause) else None
 
-    def _drop_oldest_exchanges(self, state: ConversationState, length: Callable[[], int],
+    def record(self, n_before: int, cause: str) -> int:
+        """Record in the state the history messages that went since it held ``n_before``, and ``cause``, one of :data:`~llama_chat.reply.EVICTION_CAUSES`, as why; how many went."""
+        n_gone = n_before - history_count(self._state.messages)
+        if n_gone:
+            self._state.changes.n_evicted += n_gone
+            self._state.changes.evicted_for = cause
+            _log.info("the %d oldest history message(s) went %s", n_gone, {
+                "room": "to make room",
+                "exchange_limit": f"to keep max_history_exchanges="
+                                  f"{self._config.max_history_exchanges}",
+                "half_context": f"so that half of the {self._config.context_size}-token "
+                                "context stays free at a begin"}[cause])
+        return n_gone
+
+    def _drop_oldest_exchanges(self, length: Callable[[], int],
                                bound: int, at_least: int, newest_too: bool) -> bool:
         """Drop the fewest oldest exchanges, ``at_least`` of them, after which ``length()`` is within ``bound``, or every one that can go; whether any went."""
-        messages, kept = list(state.messages), state.kept
+        messages, kept = list(self._state.messages), self._state.kept
 
         def dropping(count: int) -> int:
             """Drop ``count`` exchanges from the conversation as it was; how many could go."""
-            state.messages[:], state.kept = messages, kept
+            self._state.messages[:], self._state.kept = messages, kept
             return sum(1 for _ in itertools.takewhile(
-                bool, (self.drop_oldest_exchange(state, newest_too) for _ in range(count))))
+                bool, (self.drop_oldest_exchange(newest_too) for _ in range(count))))
 
         high = dropping(len(messages))
         long_high = length()
@@ -144,7 +166,7 @@ class Eviction:
         dropping(high)
         return high > 0
 
-    def drop_bound(self, state: ConversationState, limit: int, beside_open_turn: bool = False) -> int:
+    def drop_bound(self, limit: int, beside_open_turn: bool = False) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.
 
         Where the cache cannot shift, what a short question alone takes and that
@@ -154,18 +176,18 @@ class Eviction:
         """
         if self._can_shift:
             return limit
-        system = min(self.with_a_short_question(state), limit)
+        system = min(self.with_a_short_question(), limit)
         bound = system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
         if beside_open_turn:
-            starts = exchange_starts(state.messages)
-            open_turn = state.messages[starts[-1] if starts else len(system_part(state.messages)):]
-            alone = min(self._rendering.length(system_part(state.messages) + open_turn,
+            starts = exchange_starts(self._state.messages)
+            open_turn = self._state.messages[starts[-1] if starts else len(system_part(self._state.messages)):]
+            alone = min(self._rendering.length(system_part(self._state.messages) + open_turn,
                                                generation_prompt=True), limit)
             if alone > bound:
                 return alone + int((limit - alone) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
         return bound
 
-    def exchanges_after_drop(self, state: ConversationState) -> int | None:
+    def exchanges_after_drop(self) -> int | None:
         """How many exchanges an eviction leaves once there are more than ``max_history_exchanges``.
 
         Where the cache cannot shift, that fraction of them, at least one.
@@ -175,32 +197,32 @@ class Eviction:
             return limit
         return min(limit, max(1, int(limit * EVICT_TO_FRACTION_WITHOUT_SHIFT)))
 
-    def too_many(self, state: ConversationState, most: int | None = None) -> bool:
+    def too_many(self, most: int | None = None) -> bool:
         """Whether the history holds more exchanges than ``most``, by default ``max_history_exchanges``."""
-        return self._exchanges_over(state, most) > 0
+        return self._exchanges_over(most) > 0
 
-    def _exchanges_over(self, state: ConversationState, most: int | None = None) -> int:
+    def _exchanges_over(self, most: int | None = None) -> int:
         """How many exchanges the history holds beyond ``most``, by default ``max_history_exchanges``."""
         limit = self._config.max_history_exchanges if most is None else most
-        return 0 if limit is None else max(0, exchange_count(state.messages) - limit)
+        return 0 if limit is None else max(0, exchange_count(self._state.messages) - limit)
 
-    def drop_oldest_exchange(self, state: ConversationState, newest_too: bool = False) -> bool:
+    def drop_oldest_exchange(self, newest_too: bool = False) -> bool:
         """Drop the oldest question and everything up to the next; ``False`` where none can go.
 
         Args:
             newest_too: Let the newest exchange go as well, once its reply is
                 complete, as it may after a reply when the next question is to come.
         """
-        first = 1 if state.messages and state.messages[0]["role"] == "system" else 0
-        following = next((i for i in exchange_starts(state.messages) if i > first),
-                         len(state.messages))
-        if following == len(state.messages) and not (
-                newest_too and len(state.messages) > first
-                and state.messages[-1]["role"] == "assistant"):
+        first = 1 if self._state.messages and self._state.messages[0]["role"] == "system" else 0
+        following = next((i for i in exchange_starts(self._state.messages) if i > first),
+                         len(self._state.messages))
+        if following == len(self._state.messages) and not (
+                newest_too and len(self._state.messages) > first
+                and self._state.messages[-1]["role"] == "assistant"):
             return False
-        gone = state.messages[first:following]
-        del state.messages[first:following]
-        state.kept = [k for k in state.kept
+        gone = self._state.messages[first:following]
+        del self._state.messages[first:following]
+        self._state.kept = [k for k in self._state.kept
                             if not any(k.first is m or k.last is m for m in gone)]
         return True
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 from .rendering import KeptTurn
 from .tools import ToolCall, ToolSpec
@@ -27,6 +27,23 @@ class Ahead:
     after_question: str                   # the template's text after the question
     reply_opening: list[tuple[str, bool]]  # the render from where the reply's kept turn begins
     made_for: MadeFor
+
+
+@dataclass
+class Changes:
+    """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_chat.reply.Report` gives it."""
+
+    n_evicted: int = 0                    # history messages evicted, each result counting as one
+    evicted_for: str | None = None
+    n_kept_messages: int | None = None
+    n_left_out_calls: int = 0
+    n_turns_restored: int = 0
+    generated_turns_ignored: bool = False
+    tool_results_cut: list[ToolCall] = field(default_factory=list)
+    turn_closed: bool = False
+    question_joined: bool = False
+    taken_back: bool = False
+    kept_text: str | None = None          # a reply's answer as kept, where not as shown
 
 
 @dataclass(frozen=True)
@@ -68,26 +85,17 @@ class ConversationState:
     # decoded for: the conversation with the question newest, and the cache after them.
     spliced_at: tuple[int, list[int], MadeFor] | None = None
     begun: bool = False
+    # What the actions since the caller last asked changed beyond what was asked.
+    changes: Changes = field(default_factory=Changes)
 
     def copied(self) -> ConversationState:
         """This state as it is now, each list and dict copied so that later changes leave it alone."""
         return ConversationState(**{f.name: copied_value(getattr(self, f.name)) for f in fields(self)})
 
-
-@dataclass
-class Changes:
-    """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_chat.reply.Report` gives it."""
-
-    evicted_for: str | None = None
-    n_kept_messages: int | None = None
-    n_left_out_calls: int = 0
-    n_turns_restored: int = 0
-    generated_turns_ignored: bool = False
-    tool_results_cut: list[ToolCall] = field(default_factory=list)
-    turn_closed: bool = False
-    question_joined: bool = False
-    taken_back: bool = False
-    kept_text: str | None = None          # a reply's answer as kept, where not as shown
+    def put_back(self, saved: ConversationState) -> None:
+        """Hold what ``saved`` holds again, in this same object, copied so that later changes leave ``saved`` alone."""
+        for f in fields(self):
+            setattr(self, f.name, copied_value(getattr(saved, f.name)))
 
 
 @dataclass(frozen=True)
@@ -123,6 +131,8 @@ def copied_value(value):
         return list(value)
     if isinstance(value, dict):
         return dict(value)
+    if isinstance(value, Changes):
+        return replace(value, tool_results_cut=list(value.tool_results_cut))
     return value
 
 

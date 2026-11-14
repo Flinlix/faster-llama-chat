@@ -54,14 +54,14 @@ class RenderInputs(Protocol):
 class ConversationRendering:
     """One conversation's renders, made with its declarations, its reasoning switch and its kept turns.
 
-    ``inputs`` returns those as they are, and is read at every use. Renders
+    ``inputs`` holds those, and is read at every use as it is then. Renders
     and splits are reused while the template, the declarations and the
     reasoning switch stay as they were, and until :meth:`forget_renders`,
     which each action calls, so that the memo holds one action's renders.
     """
 
     def __init__(self, context, template: Callable[[], ResolvedTemplate],
-                 inputs: Callable[[], RenderInputs]) -> None:
+                 inputs: RenderInputs) -> None:
         self._context = context
         self._template_of = template
         self._inputs = inputs
@@ -81,7 +81,7 @@ class ConversationRendering:
 
     def _current_memo(self) -> dict:
         """The memo of renders and splits, emptied first where the template, the declarations or the reasoning switch changed since it was filled."""
-        inputs = self._inputs()
+        inputs = self._inputs
         made_for = (self._template, tuple(inputs.tools), inputs.reasoning)
         if made_for != self._memo_made_for:
             self._memo.clear()
@@ -96,7 +96,7 @@ class ConversationRendering:
     def _render_given(self, messages, generation_prompt: bool,
                       declarations: list[dict] | None = None) -> str | None:
         """``messages``, as the template is given them, rendered with ``declarations``, by default the conversation's; ``None`` where it refuses that shape."""
-        inputs = self._inputs()
+        inputs = self._inputs
         tools = self._declarations() if declarations is None else declarations
         key = ("render", json.dumps([messages, declarations, generation_prompt], sort_keys=True,
                                     default=str))
@@ -111,16 +111,16 @@ class ConversationRendering:
         """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
         return self._template.refusal_reason(self._as_given(messages), self._declarations(),
                                              generation_prompt=generation_prompt,
-                                             reasoning=self._inputs().reasoning)
+                                             reasoning=self._inputs.reasoning)
 
     def _declarations(self) -> list[dict] | None:
         """What the conversation declares, as a template is handed it; ``None`` for nothing."""
-        return [spec.as_declaration() for spec in self._inputs().tools] or None
+        return [spec.as_declaration() for spec in self._inputs.tools] or None
 
     def _as_given(self, messages: list[dict]) -> list[dict]:
         """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
         inside = set()
-        for kept in self._inputs().kept:
+        for kept in self._inputs.kept:
             first = next((i for i, m in enumerate(messages) if m is kept.first), None)
             last = next((i for i, m in enumerate(messages) if m is kept.last), None)
             if first is not None and last is not None:
@@ -177,7 +177,7 @@ class ConversationRendering:
                 "the template refuses to write this conversation",
                 self.refusal_reason(messages, generation_prompt)))
         end = len(split.text) if upto is None else upto
-        turns = self._inputs().kept
+        turns = self._inputs.kept
         placed = []
         for kept in turns:
             if not all(any(m is end for m in messages) for end in (kept.first, kept.last)):
@@ -338,11 +338,11 @@ class ConversationRendering:
             end = found if found >= 0 else None
         if start is None or end is None or end <= start:
             return None
-        return start, end, self._inputs().kept.index(kept)
+        return start, end, self._inputs.kept.index(kept)
 
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
-        kept = {id(m) for k in self._inputs().kept for m in (k.first, k.last)}
+        kept = {id(m) for k in self._inputs.kept for m in (k.first, k.last)}
         return not any(m["role"] == "tool" or m.get("tool_calls") or id(m) in kept
                        for m in messages)
 

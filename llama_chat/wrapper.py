@@ -233,12 +233,11 @@ class ChatWrapper:
             self._templates.ensure_accepts(
                 uses_tools, tools_field="tools" if specs else "messages" if calls else None,
                 reasoning=reasoning, system_prompt_field="system_prompt" if system_prompt else None)
-            self._conversation.report(0)        # changes of earlier actions are told already
-            kept = self._conversation.start(system_prompt, messages, specs, reasoning,
-                                            generated_turns)
+            self._conversation.report()         # changes of earlier actions are told already
+            self._conversation.start(system_prompt, messages, specs, reasoning, generated_turns)
             # A turn the history leaves open was started by no reply.
             self._turn_policy, self._turn_budget = None, _CallBudget(None)
-            return self._conversation.report(len(messages) - kept)
+            return self._conversation.report()
 
     # ----- adding context ------------------------------------------------------
     def inject(self, text: str, role: str = "user") -> Report:
@@ -282,8 +281,9 @@ class ChatWrapper:
         ensure_text(text, "an injected message's text")
         with self._held():
             self._ensure_open()
-            self._conversation.report(0)
-            return self._conversation.report(self._conversation.add(role, text))
+            self._conversation.report()
+            self._conversation.add(role, text)
+            return self._conversation.report()
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
@@ -456,7 +456,7 @@ class ChatWrapper:
                   max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
         """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's."""
         with self._held():
-            self._conversation.report(0)        # changes of earlier actions are told already
+            self._conversation.report()         # changes of earlier actions are told already
             goes_on = text is None and self._conversation.turn_open
             policy = self._policy_for(given, goes_on)
             _ensure_max_calls_runs(policy, max_calls)
@@ -540,12 +540,12 @@ class ChatWrapper:
             # A failure is told as a failure a registered tool's is, whoever ran the tool.
             written = _explain_failure(result if failure is None else failure,
                                        may_call_again=self._turn_policy == "yield")
-            self._conversation.report(0)
+            self._conversation.report()
             try:
-                evicted = self._conversation.add_result(call, written)
+                self._conversation.add_result(call, written)
             except ContextOverflowError:
-                evicted = self._conversation.close_unanswered()
-            report = self._conversation.report(evicted)
+                self._conversation.close_unanswered()
+            report = self._conversation.report()
         if failure is not None:
             told = ("the turn closed for want of room instead" if report.turn_closed
                     else "so the model is told the call failed (unwritable_result)")
@@ -648,8 +648,9 @@ class ChatWrapper:
                 self._templates.ensure_accepts(
                     specs is not None, tools_field="tools" if specs else None, reasoning=reasoning,
                     system_prompt_field="tools" if conversation.has_system_prompt else None)
-            conversation.report(0)
-            return conversation.report(conversation.change_settings(specs, reasoning, accept))
+            conversation.report()
+            conversation.change_settings(specs, reasoning, accept)
+            return conversation.report()
 
     # ----- introspection -------------------------------------------------------
     @property
@@ -881,7 +882,7 @@ class ChatWrapper:
                 if tokens_left() == 0:
                     # The call spent the reply cap, so nothing would read its result: it is
                     # not run, and the turn closes as one the cap cuts does.
-                    dropped = self._conversation.close_unanswered()
+                    dropped = self._evicted_by(self._conversation.close_unanswered)
                     generations[-1] = replace(
                         generations[-1], stop_reason="token_limit",
                         tool_calls=[call if call.status != "complete"
@@ -900,7 +901,7 @@ class ChatWrapper:
                 except ContextOverflowError:
                     # No room is left to answer: the turn closes on what the model
                     # wrote, as one the reply cap cuts does.
-                    dropped = self._conversation.close_unanswered()
+                    dropped = self._evicted_by(self._conversation.close_unanswered)
                     generations[-1] = replace(
                         generations[-1], stop_reason="token_limit",
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
@@ -1017,8 +1018,16 @@ class ChatWrapper:
 
     def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> int:
         """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
-        return sum(self._conversation.add_result(call, _explain_failure(result, may_call_again))
-                   for call, result in settled)
+        def write() -> None:
+            for call, result in settled:
+                self._conversation.add_result(call, _explain_failure(result, may_call_again))
+        return self._evicted_by(write)
+
+    def _evicted_by(self, action: Callable[[], None]) -> int:
+        """Run ``action``; how many history messages it evicted."""
+        before = self._conversation.changes_so_far().n_evicted
+        action()
+        return self._conversation.changes_so_far().n_evicted - before
 
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
@@ -1055,7 +1064,7 @@ class ChatWrapper:
         self._ensure_open()
         conversation = self._conversation
         decoded_from = conversation.decoded
-        n_evicted_messages = 0
+        evicted_before = conversation.changes_so_far().n_evicted
         noted = self._turn_policy, self._turn_budget
         conversation.open_attempt(starts_request=on_started is not None, asks=text is not None)
 
@@ -1072,9 +1081,9 @@ class ChatWrapper:
             if cancel is not None and cancel.is_set():
                 raise Cancelled("cancelled before the request was written")
             if text is not None:
-                n_evicted_messages = conversation.ask(text, cancel)
+                conversation.ask(text, cancel)
             elif not conversation.turn_open:
-                n_evicted_messages = conversation.prompt()
+                conversation.prompt()
         except Cancelled:
             roll_back()
             return interrupted()
@@ -1124,19 +1133,18 @@ class ChatWrapper:
             pieces.close()
             if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
                 roll_back()                 # nothing was produced, so nothing changes
-                n_evicted_messages = 0
             else:
                 try:
                     # Runs on normal completion and on early close alike.
-                    n_evicted_messages += self._record_reply(generated, reply_text,
-                                                             may_call_again)
+                    self._record_reply(generated, reply_text, may_call_again)
                 except BaseException:
                     roll_back()
                     raise
                 if conversation.rolled_back:
                     self._turn_policy, self._turn_budget = noted
-                    n_evicted_messages = 0
             changes = conversation.changes_so_far()
+            # A generation put back puts back what it evicted too.
+            n_evicted_messages = changes.n_evicted - evicted_before
             # Kept for a stream closed before it returns, which reads it as its reply.
             self._newest_reply = Reply(
                 evicted_for=changes.evicted_for if n_evicted_messages else None,
@@ -1170,8 +1178,8 @@ class ChatWrapper:
                                         self._context.is_special)
 
     def _record_reply(self, generated: GenerationAccumulator, reply_text: ReplyText,
-                      may_call_again: bool) -> int:
-        """Record what one generation left and settle the cache after it; how many history messages were evicted.
+                      may_call_again: bool) -> None:
+        """Record what one generation left and settle the cache after it.
 
         A call that could not be read ends the generation as
         ``"unreadable_tool_call"``, and is answered with a failure that says
@@ -1184,7 +1192,7 @@ class ChatWrapper:
         tags, answer = self._template.properties.reasoning, reply_text.answer
         # Given to a template that writes a past reply's thought; another is written without it.
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
-        return self._conversation.record_reply(
+        self._conversation.record_reply(
             answer, kept_thought, calls, called, _explain_failure(_UNREADABLE, may_call_again),
             stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
 
