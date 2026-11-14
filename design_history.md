@@ -4974,3 +4974,12 @@ It keeps the contract's rule that a turn kept as generated keeps its tokens
 during a conversation: where the new settings write such a turn where it
 cannot be told apart, the change is refused, as a declaration was; a `begin`
 then writes it as the template does.
+
+### Whether a reply without text answers something, read without a copy (405.3A)
+
+A caller that asks for a reply without new text first has to know whether
+there is anything to answer. The server read the whole conversation to look
+at its newest message before every reply (about 1 ms at 900 messages, growing
+with them, measured), and kept its own copy of "the turn waits for its reply".
+`awaits_reply` now answers it from the newest publication, copying nothing:
+true where the newest message is a question, or a turn's results are all in.

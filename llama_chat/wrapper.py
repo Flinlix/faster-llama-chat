@@ -740,6 +740,17 @@ class ChatWrapper:
         return self._conversation.published_turn_open()
 
     @property
+    def awaits_reply(self) -> bool:
+        """Whether :meth:`reply` without text would answer something: the newest message is a question, or a turn's results are all in.
+
+        Safe from any thread, as :meth:`conversation` is, and copies nothing.
+        """
+        published = self._conversation
+        if published.published_turn_open():
+            return not published.published_has_pending_calls()
+        return published.published_awaits_answer()
+
+    @property
     def pending_calls(self) -> list[ToolCall]:
         """The calls the model made that still wait for a result, oldest first.
 

@@ -206,6 +206,14 @@ class RenderedCache:
         """How many tokens the cache holds, from the newest publication; safe to read unlocked."""
         return self._published.total_tokens
 
+    def published_has_pending_calls(self) -> bool:
+        """Whether a call is owed a result, from the newest publication; safe to read unlocked."""
+        return bool(self._published.pending_calls)
+
+    def published_awaits_answer(self) -> bool:
+        """Whether a begun conversation's newest message is a user message, from the newest publication; safe to read unlocked."""
+        return self._published.begun and self._published.newest_role == "user"
+
     def published_turn_open(self) -> bool:
         """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
         return self._published.turn_open

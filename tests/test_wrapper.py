@@ -1278,3 +1278,19 @@ def test_a_reply_to_an_injected_question_evicts_down_to_the_room_its_reply_needs
     assert 400 < w.total_tokens <= 500          # over the room, under the threshold
     reply = w.reply().finish()
     assert reply.n_evicted_messages > 0 and reply.stop_reason == "end_of_turn"
+
+
+def test_awaits_reply_says_whether_a_reply_without_text_answers_something():
+    w, fake = tool_wrapper()
+    assert not w.awaits_reply                   # nothing begun
+    w.begin("persona")
+    assert not w.awaits_reply
+    w.inject("wie spät?")
+    assert w.awaits_reply
+    fake.call_script = ["fn:clock{}"]
+    call, = [e for e in w.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert not w.awaits_reply                   # a result is owed
+    w.inject_tool_result(call, "12:00")
+    assert w.awaits_reply                       # every result is in: the reply goes on
+    w.reply(tool_call_policy="yield").finish()
+    assert not w.awaits_reply
