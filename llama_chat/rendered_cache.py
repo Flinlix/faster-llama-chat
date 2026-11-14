@@ -41,7 +41,7 @@ from .result_cutting import ResultCutting, cut_result
 from .windows import WHOLE, Windows
 from .publishing import published
 from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError,
-                     TemplateRefusedError, UnsupportedError)
+                     TemplateRefusedError, UnsupportedError, with_template_reason)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
@@ -384,9 +384,11 @@ class RenderedCache:
     def _refused_history(self, messages: list[dict]) -> TemplateRefusedError:
         """The refusal of ``messages``, a history this model's template will not write."""
         roles = [m["role"] for m in messages]
-        return TemplateRefusedError("messages", self._refusal("user") if ["user", "user"] in [
-            roles[i:i + 2] for i in range(len(roles) - 1)]
-            else "this model's template refuses to write this conversation")
+        refusal = self._refusal("user") if ["user", "user"] in [
+            roles[i:i + 2] for i in range(len(roles) - 1)] \
+            else "this model's template refuses to write this conversation"
+        return TemplateRefusedError("messages", with_template_reason(
+            refusal, self._rendering.refusal_reason(messages, messages[-1]["role"] == "tool")))
 
     def _writes(self, messages: list[dict]) -> bool:
         """Whether the template writes ``messages``, as they are or with a question after them."""
@@ -1138,9 +1140,10 @@ class RenderedCache:
         """
         # Refusals turn on the newest messages, such as two user turns in a row, so
         # they are read from the newest exchange, not from a render of the whole conversation.
-        if self._rendering.render(self._newest_exchange() + [{"role": role, "content": text}],
-                                  generation_prompt) is None:
-            raise TemplateRefusedError("text", self._refusal(role))
+        messages = self._newest_exchange() + [{"role": role, "content": text}]
+        if self._rendering.render(messages, generation_prompt) is None:
+            raise TemplateRefusedError("text", with_template_reason(
+                self._refusal(role), self._rendering.refusal_reason(messages, generation_prompt)))
 
     def _refusal(self, role: str) -> str:
         """Why the template will not write a ``role`` message next."""

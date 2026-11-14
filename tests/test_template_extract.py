@@ -14,7 +14,7 @@ import pytest
 
 import llama_chat
 from llama_chat.call_format import extract_call_body, extract_tool_fragments
-from llama_chat.model_template import names_read
+from llama_chat.model_template import ModelTemplate, names_read
 from llama_chat.tokenizing import tag_texts
 from llama_chat.template import CallBody
 from llama_chat.template_extract import (as_probes_read, extract_content_rewrites,
@@ -38,7 +38,8 @@ def _tags(stem):
 @functools.cache
 def _real(stem):
     """The renderer the test template ``stem`` is loaded with."""
-    return FakeContext(fixture(stem)).render_with_model_template
+    known = fixture(stem)
+    return ModelTemplate(known["chat_template"], known["eos_token"]).render
 
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
@@ -437,9 +438,7 @@ def test_the_names_a_template_reads_are_read_as_the_renderer_parses_it(stem):
 
 
 def test_a_variable_named_as_a_render_argument_reaches_the_template():
-    context = FakeContext({"chat_template": "{{ reasoning }}/{{ generation_prompt }}",
-                           "eos_token": "", "render_variables": {"off": {}}})
-    rendered = context.render_with_model_template(
+    rendered = ModelTemplate("{{ reasoning }}/{{ generation_prompt }}", "").render(
         [], generation_prompt=True, reasoning=False,
         variables={"reasoning": "deep", "generation_prompt": "given"})
     assert rendered == "deep/given"

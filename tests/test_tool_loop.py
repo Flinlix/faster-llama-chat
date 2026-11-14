@@ -1539,23 +1539,14 @@ def test_can_call_tools_is_exactly_what_declaring_will_accept(build, can_call):
             wrapper.begin("persona", tools=registry.specs())
 
 
-@pytest.mark.parametrize("throws_on", [
-    lambda messages, tools: any(m["role"] == "tool" for m in messages),
-    lambda messages, tools: bool(tools)], ids=["result", "declaration"])
-def test_a_context_that_throws_while_probing_still_loads(throws_on):
-    """The probe decides an optional capability, so it cannot refuse the model.
-
-    A cache context of your own may raise where the bundled one returns None.
-    Letting that escape would deny a conversation that never wanted tools.
-    """
-    class Throws(FakeContext):
-        def render_with_model_template(self, messages, tools=None, **_options):
-            if throws_on(messages, tools):
-                raise RuntimeError("template blew a gasket")
-            return super().render_with_model_template(messages, tools, **_options)
-
+@pytest.mark.parametrize("raises_on", [
+    "{% for m in messages if m.role == 'tool' %}{{ raise_exception('no results') }}{% endfor %}",
+    "{% if tools %}{{ raise_exception('no declarations') }}{% endif %}"],
+    ids=["result", "declaration"])
+def test_a_template_that_raises_while_probing_still_loads(raises_on):
+    """The probe decides an optional capability, so a template that raises on it cannot refuse the model."""
     wrapper = ChatWrapper(Config(context_size=1024),
-                          context=Throws(TOOLS))
+                          context=FakeContext(dict(TOOLS, chat_template=raises_on + TOOLS["chat_template"])))
 
     assert not wrapper.capabilities(tools=True).can_call_tools
     wrapper.begin("persona")

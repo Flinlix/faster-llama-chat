@@ -9,17 +9,16 @@ conversation.
 from __future__ import annotations
 
 import dataclasses
-import functools
 from collections.abc import Mapping
 
-from .cache_context import MODEL_READER, RENDERER_VARIABLES, TOOL_USE_TEMPLATE, ensure_answers
+from .cache_context import MODEL_READER, TOOL_USE_TEMPLATE, ensure_answers
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
                           extract_json_call_keys, extract_named_twice_opening,
                           extract_tool_fragments)
 from .call_parsing import parse_calls
 from .errors import UnsupportedError
 from .messages import call_id, calling_message, result_message, with_thought_as
-from .model_template import names_read
+from .model_template import RENDERER_VARIABLES, ModelTemplate, names_read
 from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
                        ToolCallFragments, common_prefix_length, shared_tags_length)
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
@@ -81,10 +80,13 @@ class ResolvedTemplate:
         ensure_answers(context, MODEL_READER)
         self._context = context
         self._addon_call = dict(addon_call or {})
-        self._template_name = template_name
-        self._model_render = with_reasoning_on(
-            functools.partial(context.render_with_model_template, template_name=template_name),
-            dict(reasoning_on or {}))
+        text = context.chat_template_text(template_name)
+        if text is None:
+            raise ValueError("the model ships no chat template, which this library writes every "
+                             "conversation with")
+        self._model = ModelTemplate(text, context.eos_token_text())
+        self._model_render = with_reasoning_on(self._model.render, dict(reasoning_on or {}))
+        self._model_refusal = with_reasoning_on(self._model.refusal_reason, dict(reasoning_on or {}))
         self._probe_render = refusing(self._model_render)
         self._variables: dict = {}      # template variables every render passes
         self._read_as_probes_for: tuple | None = None   # the variables it was made for
@@ -92,8 +94,7 @@ class ResolvedTemplate:
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
         self._tag_texts = tag_texts(context)
         self._ensure_tags_listed()
-        text = context.chat_template_text(template_name)
-        self._reads_clock = text is None or _CLOCK in text
+        self._reads_clock = _CLOCK in text
         self._fragments = self._resolve_fragments()
         self._has_system_turn = self._resolve_has_system_turn()
         self._validate_template()
@@ -159,11 +160,23 @@ class ResolvedTemplate:
         A reply's thought, held under ``reasoning_content``, is handed to the
         template in the form it reads a past reply's thought in.
         """
+        return self._model_render(self._as_template_reads(messages), tools,
+                                  generation_prompt=generation_prompt, reasoning=reasoning,
+                                  variables=self._variables)
+
+    def refusal_reason(self, messages: list[dict], tools: list[dict] | None = None, *,
+                       generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
+        """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
+        return self._model_refusal(self._as_template_reads(messages), tools,
+                                   generation_prompt=generation_prompt, reasoning=reasoning,
+                                   variables=self._variables)
+
+    def _as_template_reads(self, messages: list[dict]) -> list[dict]:
+        """``messages``, each reply's thought in the form the template reads a past reply's thought in."""
         if self._reasoning is not None and self._reasoning.past_keeps_thought:
-            messages = [with_thought_as(message, self._reasoning.past_thought_form)
-                        for message in messages]
-        return self._model_render(messages, tools, generation_prompt=generation_prompt,
-                                  reasoning=reasoning, variables=self._variables)
+            return [with_thought_as(message, self._reasoning.past_thought_form)
+                    for message in messages]
+        return messages
 
     @property
     def _read_as_probes(self):
@@ -416,14 +429,8 @@ class ResolvedTemplate:
                 "cache context must list every tag")
 
     def _resolve_fragments(self) -> TemplateFragments:
-        """Recover the template fragments from the model's own chat template, which a context that reports no template text ships none of."""
-        has_text = self._context.chat_template_text(self._template_name) is not None
-        fragments = extract_fragments(self._model_render, self._tag_texts) if has_text else None
-        if not has_text:
-            raise ValueError(
-                "the model ships no chat template, which this library writes every "
-                "conversation with"
-            )
+        """Recover the template fragments from the model's own chat template."""
+        fragments = extract_fragments(self._model_render, self._tag_texts)
         if fragments is None:
             raise ValueError(
                 "this model's chat template writes no turn whose reply can be told from the "
@@ -720,12 +727,11 @@ class ResolvedTemplate:
         conversation without tools; empty where the system turn declares them
         already, or no variable makes it.
         """
-        text = self._context.chat_template_text(self._template_name)
-        if not self._calls_marked or text is None or self._declares_in_system_turn():
+        if not self._calls_marked or self._declares_in_system_turn():
             return {}
         conversation = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": _NEXT}]
         plain = self._render(conversation)
-        names = names_read(text)
+        names = names_read(self._model.text)
         for name in sorted(names - RENDERER_VARIABLES):
             for value in (False, True):
                 self._variables = {}

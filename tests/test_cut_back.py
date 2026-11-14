@@ -59,12 +59,9 @@ def test_every_token_id_the_stand_in_hands_out_lies_where_a_context_may_have_one
 
 
 def test_a_model_whose_template_renders_nothing_is_refused_at_load_naming_why():
-    class _RendersNothing(FakeContext):
-        def render_with_model_template(self, messages, tools=None, **options):
-            return None
-
+    refuses_everything = dict(PLAIN, chat_template="{{ raise_exception('nothing') }}")
     with pytest.raises(ValueError, match="reply can be told from the question"):
-        ChatWrapper(Config(context_size=500), context=_RendersNothing(PLAIN))
+        ChatWrapper(Config(context_size=500), context=FakeContext(refuses_everything))
 
 
 def test_a_model_whose_template_drops_every_reply_is_refused_at_load_naming_why():

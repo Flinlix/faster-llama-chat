@@ -5116,3 +5116,35 @@ count of messages (`n_evicted_messages`, `n_kept_messages`) counts each
 message, a result included, where a whole tool turn counted as one.
 Rejected: accepting results out of order and reordering them, which would
 write a conversation the caller did not send.
+
+### The library renders the template; a context gives its text (405.6A, 416)
+
+A cache context had to render the chat template itself
+(`render_with_model_template`), and the bundled context did so with the
+engine binding's Jinja formatter, while the library's own template reader
+also went through the binding to list the names a template reads. So a
+context of one's own was told it only needs to render, but the library
+needed the engine binding all the same, and the engine side imported a
+library probe for the reasoning switch.
+
+Now a context gives only the template's text (`chat_template_text`) and the
+text of its end-of-sequence token (`eos_token_text`), and
+`llama_chat/model_template.py` renders it in the environment chat templates
+are written for: sandboxed and immutable, blocks trimmed, the `generation`
+block tag passed through, loop controls, and `tojson` writing non-ASCII as it
+is. These are the settings the binding's formatter used, so every render is
+unchanged; the suite runs every test template through it. `jinja2` is now a
+declared dependency, which the engine binding had installed already.
+
+The template's own reason for a refusal, given through its
+`raise_exception`, now reaches the caller (416): a refused message, history
+or conversation ends with "(the template says: ...)". It is read by
+rendering again only on the refusal path, so a render that succeeds costs
+nothing more.
+
+In the tests the library's renderer is replaced by one that compiles each
+template text once for every context and counts each render, which is what
+the render-count tests read; the stand-in context no longer renders.
+Removed with it: the test of a context that raises while it renders, since a
+context renders nothing now; a template that raises during the load's probes
+is tested instead.

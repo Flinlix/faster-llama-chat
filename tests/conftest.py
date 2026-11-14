@@ -9,8 +9,15 @@ import pytest
 
 from llama_chat.wrapper import ChatWrapper
 
+from .fake_context import RecordedTemplate
 from .internals import context_of, is_closed
 from .wrappers import assert_cache_reads_as_rendered
+
+
+def pytest_configure(config):
+    """Have the library render each template through :class:`RecordedTemplate`, compiled once per text and each render counted."""
+    from llama_chat import resolved_template
+    resolved_template.ModelTemplate = RecordedTemplate
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +42,7 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
 @pytest.fixture
 def clock(monkeypatch):
     """The time a template that reads the clock is rendered at, a minute before midnight until a test moves it."""
-    import llama_cpp.llama_chat_format as chat_format
+    from llama_chat import model_template
     today = [datetime.datetime(2026, 11, 7, 23, 59)]
 
     class _Clock:
@@ -43,5 +50,5 @@ def clock(monkeypatch):
         def now():
             return today[0]
 
-    monkeypatch.setattr(chat_format, "datetime", _Clock)
+    monkeypatch.setattr(model_template, "datetime", _Clock)
     return today

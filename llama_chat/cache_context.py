@@ -15,10 +15,6 @@ from typing import Protocol
 
 from .config import Sampling
 
-# The template variables a renderer sets for every template itself, so that no
-# render's ``variables`` holds one of them.
-RENDERER_VARIABLES = frozenset({"messages", "tools", "add_generation_prompt", "bos_token",
-                                "eos_token", "raise_exception", "strftime_now"})
 # The name of the further chat template a GGUF may ship for a conversation that
 # declares tools, beside its default one.
 TOOL_USE_TEMPLATE = "tool_use"
@@ -81,21 +77,16 @@ class ModelReader(Protocol):
     def ends_generation(self, token: int) -> bool:
         """Whether drawing ``token`` ends a generation, neither decoded nor shown."""
 
-    def render_with_model_template(self, messages: list[dict], tools: list[dict] | None = None,
-                                   *, generation_prompt: bool = False,
-                                   reasoning: bool | None = None,
-                                   variables: Mapping[str, object] | None = None,
-                                   template_name: str | None = None) -> str | None:
-        """``None`` where the model ships no template of that name or it refuses the shape.
+    def chat_template_text(self, template_name: str | None = None) -> str | None:
+        """The source of the model's chat template of that name, ``None`` where it ships none.
 
-        ``variables`` reach the template by name, any name it reads but those of
-        :data:`RENDERER_VARIABLES`. ``template_name`` names one of the further
-        templates a model may ship, such as :data:`TOOL_USE_TEMPLATE`; ``None``
-        is its default template.
+        ``template_name`` names one of the further templates a model may ship,
+        such as :data:`TOOL_USE_TEMPLATE`; ``None`` is its default template.
+        This library renders it.
         """
 
-    def chat_template_text(self, template_name: str | None = None) -> str | None:
-        """The source of the model's template of that name, ``None`` where it ships none."""
+    def eos_token_text(self) -> str:
+        """The text of the model's end-of-sequence token, which a template may write as ``eos_token``."""
 
     def model_fingerprint(self) -> str:
         """What tells this model's tokens apart from another model's: the same on every load of the same model, and different where its vocabulary, its chat templates or its weights' description differ."""

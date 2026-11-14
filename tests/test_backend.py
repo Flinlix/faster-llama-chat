@@ -732,9 +732,7 @@ def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, mon
     model.touch()
     context = KVContext(Config(model_path=str(model), context_size=32, max_batch_tokens=8,
                                min_reply_tokens=0))
-    question = [{"role": "user", "content": "hi"}]
-    assert context.render_with_model_template(question) == "default:hi"
-    assert context.render_with_model_template(question, template_name="tool_use") == "tools:hi"
+    assert context.chat_template_text() == stored["tokenizer.chat_template"]
     assert context.chat_template_text("tool_use") == stored["tokenizer.chat_template.tool_use"]
     assert context.chat_template_text("rag") is None
 

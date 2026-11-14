@@ -59,3 +59,8 @@ class ContextOverflowError(RefusalError):
 
 class EngineError(RuntimeError):
     """The engine failed while it decoded, edited or generated; the next action brings the cache back first."""
+
+
+def with_template_reason(refusal: str, reason: str | None) -> str:
+    """``refusal``, followed by what the template itself said where it said something."""
+    return refusal if not reason else f"{refusal} (the template says: {reason})"

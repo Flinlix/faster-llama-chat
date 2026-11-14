@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .errors import TemplateRefusedError
+from .errors import TemplateRefusedError, with_template_reason
 from .messages import (RESULT_AS_GIVEN, THOUGHT_KEY, UNREADABLE_CALL,
                        exchange_starts, system_part)
 from .render_checks import STAND_IN
@@ -95,6 +95,12 @@ class ConversationRendering:
                 reasoning=inputs.reasoning)
         return self._memo[key]
 
+    def refusal_reason(self, messages, generation_prompt: bool) -> str | None:
+        """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
+        return self._template.refusal_reason(self._as_given(messages), self._declarations(),
+                                             generation_prompt=generation_prompt,
+                                             reasoning=self._inputs().reasoning)
+
     def _declarations(self) -> list[dict] | None:
         """What the conversation declares, as a template is handed it; ``None`` for nothing."""
         return [spec.as_declaration() for spec in self._inputs().tools] or None
@@ -154,7 +160,9 @@ class ConversationRendering:
             return Target(self.tokenize([], add_special=True), {})     # the opener alone
         split = self.split(messages, generation_prompt)
         if split is None:
-            raise TemplateRefusedError("messages", "the template refuses to write this conversation")
+            raise TemplateRefusedError("messages", with_template_reason(
+                "the template refuses to write this conversation",
+                self.refusal_reason(messages, generation_prompt)))
         end = len(split.text) if upto is None else upto
         turns = self._inputs().kept
         placed = []

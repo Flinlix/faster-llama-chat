@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError, eviction,
-                        rendered_cache)
+from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
+                        TemplateRefusedError, eviction, rendered_cache)
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tools import ToolCall, ToolRegistry, ToolSpec
 from tests.chat_messages import Result, tool_turn
@@ -908,3 +908,15 @@ def test_a_cache_whose_repair_fails_once_is_decoded_whole_again_by_the_next_acti
     fake.fail = "decode"                        # the repair at the next action fails once
     assert w.reply("zwei").finish().text
     assert_cache_reads_as_rendered(w, fake)
+
+
+def test_a_refusal_carries_what_the_template_itself_says():
+    says = dict(PLAIN, chat_template="{% if messages[-1].content == 'verboten' %}"
+                                     "{{ raise_exception('this word is not written') }}{% endif %}"
+                + PLAIN["chat_template"])
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(says))
+    w.begin("s")
+    with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
+        w.inject("verboten")
+    with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
+        w.begin("s", [("user", "verboten")])

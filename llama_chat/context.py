@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 
 from ._backend import Backend
@@ -19,7 +19,6 @@ from .cache_context import TOOL_USE_TEMPLATE
 from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, Sampling
 from .errors import EngineError
 from .errors import InvalidSettingError
-from .model_template import ModelTemplate
 
 SEQ = 0  # the one sequence id, there being one conversation
 # The GGUF keys that state the sampling a model recommends, by Sampling's names.
@@ -90,8 +89,7 @@ class KVContext:
             # The default template under None, and each further one the GGUF ships by its name.
             texts = {None: template, TOOL_USE_TEMPLATE: self._backend.metadata_value(
                 self._model, f"tokenizer.chat_template.{TOOL_USE_TEMPLATE}")}
-            self._model_templates = {name: ModelTemplate(text, self._backend.eos_text(self._vocab))
-                                     for name, text in texts.items() if text}
+            self._template_texts = {name: text for name, text in texts.items() if text}
             self._special_tokens = None
             self._fingerprint: str | None = None
         except BaseException:
@@ -143,23 +141,9 @@ class KVContext:
         """The text a single token stands for, the model's own tags included."""
         return self._backend.token_to_piece(self._vocab, token)
 
-    def render_with_model_template(self, messages: list[dict],
-                                   tools: list[dict] | None = None, *,
-                                   generation_prompt: bool = False,
-                                   reasoning: bool | None = None,
-                                   variables: Mapping[str, object] | None = None,
-                                   template_name: str | None = None) -> str | None:
-        """Render ``messages`` with the model's own chat template of that name; see :meth:`ModelTemplate.render`.
-
-        ``None`` where the model ships no template of that name or the
-        template rejects this message shape. BOS is left out: the sequence
-        opener is the tokenizer's to add.
-        """
-        model_template = self._model_templates.get(template_name)
-        if model_template is None:
-            return None
-        return model_template.render(messages, tools, generation_prompt=generation_prompt,
-                                     reasoning=reasoning, variables=variables)
+    def eos_token_text(self) -> str:
+        """The text of the model's end-of-sequence token, which a template may write."""
+        return self._backend.eos_text(self._vocab)
 
     def recommended_sampling(self) -> dict[str, float]:
         """The sampling the model's GGUF states, by :class:`Sampling`'s names.
@@ -202,8 +186,7 @@ class KVContext:
 
     def chat_template_text(self, template_name: str | None = None) -> str | None:
         """The source of the model's own chat template of that name, or ``None`` where it ships none."""
-        model_template = self._model_templates.get(template_name)
-        return None if model_template is None else model_template.text
+        return self._template_texts.get(template_name)
 
     def reset(self) -> None:
         self._backend.kv_clear(self._engine_context)

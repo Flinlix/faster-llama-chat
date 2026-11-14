@@ -45,6 +45,9 @@ class _Renders:
             self._known[key] = rendered
         return rendered
 
+    def refusal_reason(self, messages, tools=None, **options) -> str | None:
+        return self._model.refusal_reason(messages, tools, **options)
+
     def _key(self, messages, tools, generation_prompt, reasoning, variables) -> str | None:
         """The inputs spelled exactly, ``None`` where they are not plain data or the template reads the clock."""
         if not self._remembers:
@@ -61,6 +64,25 @@ class _Renders:
 def _compiled(text: str, eos_text: str) -> _Renders:
     """A template's renderer, compiled once for every context over the same text."""
     return _Renders(text, eos_text)
+
+
+# How many messages each render of a template the library made was given, in order.
+RENDERED: list[int] = []
+
+
+class RecordedTemplate:
+    """A model's template as the library renders it in the tests: compiled once for every context over the same text, and each render recorded in :data:`RENDERED`."""
+
+    def __init__(self, text: str, eos_text: str) -> None:
+        self.text = text
+        self._renders = _compiled(text, eos_text)
+
+    def render(self, messages, *args, **kwargs) -> str | None:
+        RENDERED.append(len(messages))
+        return self._renders.render(messages, *args, **kwargs)
+
+    def refusal_reason(self, *args, **kwargs) -> str | None:
+        return self._renders.refusal_reason(*args, **kwargs)
 
 
 # The tag-shaped texts of a template a test writes for itself, which lists no tags of its
@@ -206,7 +228,6 @@ class FakeContext:
         # What was asked of it, in order.
         self.tokenize_calls: list[tuple[str, bool]] = []      # (text, parse_special)
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
-        self.rendered: list[int] = []            # how many messages each render was given
         # ("cut", position), ("shift", start, tokens) and ("restore", position).
         self.edits: list[tuple] = []
         self.samplings = []                      # the sampling each generation was handed
@@ -283,17 +304,13 @@ class FakeContext:
     def token_bytes(self, token: int) -> bytes:
         return self.token_text(token).encode()
 
-    def render_with_model_template(self, messages: list[dict],
-                                   tools: list[dict] | None = None, *,
-                                   generation_prompt: bool = False,
-                                   reasoning: bool | None = None,
-                                   variables: dict | None = None,
-                                   template_name: str | None = None) -> str | None:
-        self.rendered.append(len(messages))
-        model = self._models.get(template_name)
-        return None if model is None else model.render(
-            messages, tools, generation_prompt=generation_prompt, reasoning=reasoning,
-            variables=variables)
+    def eos_token_text(self) -> str:
+        return self._fixture["eos_token"]
+
+    @property
+    def rendered(self) -> list[int]:
+        """How many messages each render of a template the library made was given, in order; shared by every context of the test."""
+        return RENDERED
 
     def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False,
                       for_tools: bool | None = None):
