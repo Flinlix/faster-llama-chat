@@ -178,7 +178,7 @@ def test_a_call_after_a_begin_that_shortened_the_history_gets_an_id_of_its_own()
     """The kept calls carry the ids they were written with; a new one must take none of them."""
     history = [item for n in range(6) for item in _past_exchange(n)]
     w, fake = unbegun_tool_wrapper()
-    kept = w.begin("s", history, tools=[ToolSpec("uhr", "", {})])
+    kept = w.begin("s", history, tools=[ToolSpec("uhr", "", {})]).n_kept_messages
     assert kept < len(history)
     ids = {call.id for call in _calls_in(w.conversation()["messages"])}
     fake.call_script.append("fn:uhr{}")
@@ -338,12 +338,12 @@ def test_begin_counts_the_items_kept_as_they_were_given():
     history = [("user", "x"), ToolTurn((ToolCall("uhr", {}), ToolResult("uhr", "12"))),
                ("assistant", "Zwölf.")]
     w, _ = unbegun_tool_wrapper()
-    assert w.begin("s", history, tools=[ToolSpec("uhr", "", {})]) == len(history)
+    assert w.begin("s", history, tools=[ToolSpec("uhr", "", {})]).n_kept_messages == len(history)
     turn = w.conversation()["messages"][-1]
     assert [type(step).__name__ for step in turn.steps] == ["ToolCall", "ToolResult", "str"]
     w, _ = unbegun_tool_wrapper()
     longer = [item for n in range(6) for item in _past_exchange(n)] + history
-    kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})])
+    kept = w.begin("s", longer, tools=[ToolSpec("uhr", "", {})]).n_kept_messages
     assert 3 <= kept < len(longer)
     assert w.conversation()["messages"][0] == longer[-kept]
 
@@ -375,7 +375,8 @@ def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is(
         fake = FakeContext(TOOLS)
         w = ChatWrapper(Config(context_size=32768), context=fake)
         before = len(fake.rendered)
-        kept = w.begin("sys", [m for i in range(n) for m in (("user", f"q{i}"), ("assistant", f"a{i}"))])
+        kept = w.begin("sys", [m for i in range(n) for m in (("user", f"q{i}"), ("assistant", f"a{i}"))]
+                       ).n_kept_messages
         assert kept == 2 * n
         return len(fake.rendered) - before
 

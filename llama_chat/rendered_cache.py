@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import itertools
+import logging
 import math
 import threading
 from collections.abc import Callable
@@ -41,7 +42,10 @@ from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .template import common_prefix_length
 from .tokenizing import split_at_tags
+from .reply import Report
 from .tools import ToolCall, ToolSpec, result_text
+
+_log = logging.getLogger(__name__)
 
 # How far the count of a question alone may fall short of its length in the system turn's render.
 _NEAR_THE_ROOM_TOKENS = 64
@@ -119,6 +123,22 @@ class _ConversationState:
         return _ConversationState(**{f.name: _copied(getattr(self, f.name)) for f in fields(self)})
 
 
+@dataclass
+class _Changes:
+    """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_chat.reply.Report` gives it."""
+
+    evicted_for: str | None = None
+    n_kept_messages: int | None = None
+    n_left_out_calls: int = 0
+    n_turns_restored: int = 0
+    generated_turns_ignored: bool = False
+    tool_results_cut: list[ToolCall] = field(default_factory=list)
+    turn_closed: bool = False
+    question_joined: bool = False
+    taken_back: bool = False
+    kept_text: str | None = None          # a reply's answer as kept, where not as shown
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     """The conversation and the cache's tokens at one moment, for an attempt to go back to."""
@@ -173,6 +193,7 @@ class RenderedCache:
         self._attempt: _Snapshot | None = None
         self._request: _Snapshot | None = None
         self._rolled_back = False
+        self._changes = _Changes()
         self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
@@ -333,7 +354,10 @@ class RenderedCache:
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
+            given = len(self._state.messages)
             self._keep_newest_history(min(limit, self._config.context_size // 2))
+            if len(self._state.messages) < given:
+                self._changes.evicted_for = "half_context"
             self._restore_generated(generated_turns)
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
@@ -350,6 +374,8 @@ class RenderedCache:
             self._ensure_within(limit, "shorten the history")
             n_kept = len(self._state.messages) - len(system)
             self._leave_out_unreadable()
+            self._changes.n_kept_messages = kept_items(history, n_kept)
+            self._log_begin(len(history), generated_turns)
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -372,11 +398,14 @@ class RenderedCache:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
-            return kept_items(history, n_kept)
+            return self._changes.n_kept_messages
 
     def _restore_generated(self, generated_turns: dict | None) -> None:
         """Hold each of ``generated_turns`` whose messages stand unchanged as the tokens it was generated as, where they are this model's."""
-        if not generated_turns or generated_turns.get("model") != self._context.model_fingerprint():
+        if not generated_turns:
+            return
+        if generated_turns.get("model") != self._context.model_fingerprint():
+            self._changes.generated_turns_ignored = True
             return
         messages = self._state.messages
         # A kept turn opens on a reply that calls, so only spans that start on one are tried.
@@ -392,8 +421,33 @@ class RenderedCache:
             last = first + count - 1
             self._state.kept.append(KeptTurn(tuple(turn["tokens"]), messages[first],
                                              messages[last], bool(messages[last].get("tool_calls"))))
+        self._changes.n_turns_restored = len(self._state.kept)
         self._state.kept.sort(key=lambda k: next(i for i, m in enumerate(messages) if m is k.first))
         self._drop_unplaceable()
+
+    def _log_begin(self, n_given: int, generated_turns: dict | None) -> None:
+        """Say once what ``begin`` left out of a history of ``n_given`` items, or of the generated turns it was given; nothing where it kept all of them as given. See design_history.md, "One report of what an action changed"."""
+        changes, said = self._changes, []
+        if changes.n_kept_messages < n_given:
+            why = {"half_context": f"so that half of the {self._config.context_size}-token "
+                                   "context stays free",
+                   "exchange_limit": "to keep max_history_exchanges="
+                                     f"{self._config.max_history_exchanges}",
+                   "room": "to fit beside the system prompt"}[changes.evicted_for or "room"]
+            said.append(f"left out the {n_given - changes.n_kept_messages} oldest {why}")
+        if changes.n_left_out_calls:
+            said.append(f"left out {changes.n_left_out_calls} call(s) the model wrote "
+                        "unreadably, with their error results")
+        if changes.generated_turns_ignored:
+            said.append("the generated turns given are another model's, so every turn is "
+                        "written this model's way")
+        elif generated_turns and changes.n_turns_restored < len(generated_turns.get("turns", ())):
+            said.append(f"restored {changes.n_turns_restored} of "
+                        f"{len(generated_turns['turns'])} generated turns exactly, the others "
+                        "being no longer among the messages as they were")
+        if said:
+            _log.info("begin kept %d of %d history messages; %s", changes.n_kept_messages,
+                      n_given, "; ".join(said))
 
     def _leave_out_unreadable(self) -> None:
         """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result, joining the replies on either side of it."""
@@ -402,6 +456,7 @@ class RenderedCache:
         for message in self._state.messages:
             calls = message.get("tool_calls") or ()
             if id(message) not in held and any(CALL_AS_WRITTEN in c for c in calls):
+                self._changes.n_left_out_calls += sum(CALL_AS_WRITTEN in c for c in calls)
                 gone |= {c["id"] for c in calls if CALL_AS_WRITTEN in c}
                 left = [c for c in calls if CALL_AS_WRITTEN not in c]
                 message = ({**message, "tool_calls": left} if left
@@ -561,6 +616,24 @@ class RenderedCache:
                     raise Cancelled("cancelled while the question was decoded")
             return n_before + 1 - history_count(self._state.messages)
 
+    # ----- what an action changed beyond what was asked ------------------------------------
+    def report(self, n_evicted_messages: int) -> Report:
+        """The changes since the caller last asked, the actions having evicted ``n_evicted_messages`` history items, and a fresh start for the next."""
+        changes, self._changes = self._changes, _Changes()
+        return Report(n_evicted_messages=n_evicted_messages,
+                      evicted_for=changes.evicted_for if n_evicted_messages else None,
+                      n_kept_messages=changes.n_kept_messages,
+                      n_left_out_calls=changes.n_left_out_calls,
+                      n_turns_restored=changes.n_turns_restored,
+                      generated_turns_ignored=changes.generated_turns_ignored,
+                      tool_results_cut=tuple(changes.tool_results_cut),
+                      turn_closed=changes.turn_closed,
+                      question_joined=changes.question_joined)
+
+    def changes_so_far(self) -> _Changes:
+        """What the actions changed since the caller last asked for a :meth:`report`, left to be asked for still."""
+        return replace(self._changes, tool_results_cut=list(self._changes.tool_results_cut))
+
     # ----- nothing blocks a question ------------------------------------------------------
     def _make_way_for(self, question: dict) -> dict | None:
         """Close a turn a call left open, and join ``question`` to an unanswered one the template writes no second question after; the joined question, taken out to be added again, or ``None``.
@@ -573,20 +646,31 @@ class RenderedCache:
         if newest is None or newest["role"] != "user" or self._writes_after(question):
             return None
         self._state.messages.pop()
+        self._changes.question_joined = True
+        _log.info("a question was joined to the one before it, which no reply followed: "
+                  "the template writes no two in a row")
         return {**newest, "content": f"{newest['content']}\n\n{question['content']}"}
 
     def _close_open_turn(self, question: dict) -> None:
         """Close the open turn ahead of ``question``: each call still owed is told it was not run, and a turn waiting for its reply gets an empty one where the template needs it; the turn is taken out where the template writes neither."""
         start = len(self._state.messages)
+        owed = _unanswered(self._state.messages)
         self._state.messages += [result_message(call.name, call_id, result_text(_NOT_RUN), _NOT_RUN)
-                                 for call, call_id in _unanswered(self._state.messages)]
+                                 for call, call_id in owed]
         self._state.results_cut, self._state.called_in_thought = [], False
+        self._changes.turn_closed = True
         if self._writes_after(question):
+            _log.info("a question closed the open turn, %d call(s) told they were not run",
+                      len(owed))
             return
         self._state.messages.append({"role": "assistant", "content": ""})
         if self._writes_after(question):
+            _log.info("a question closed the open turn with an empty reply, %d call(s) told "
+                      "they were not run", len(owed))
             return
         del self._state.messages[start:]
+        _log.info("a question took the open turn out: the template writes it after neither "
+                  "its results nor an empty reply")
         # Neither is written: the turn goes, from its first message after the newest question.
         asked = max(i for i, m in enumerate(self._state.messages) if m["role"] == "user")
         gone = self._state.messages[asked + 1:]
@@ -812,6 +896,10 @@ class RenderedCache:
             recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped,
                                                     call_written)
             self._state.called_in_thought = called and in_thought
+            if recorded != answer:
+                self._changes.kept_text = recorded
+                _log.info("a reply's answer holds the template's thought tags; the part the "
+                          "template writes is kept: %r", recorded)
             try:
                 return self._after_reply(recorded, called, called and not calls, unplaced,
                                          recorded != answer, unreadable_result)
@@ -896,6 +984,9 @@ class RenderedCache:
         replied = not self._state.messages[-1].get("tool_calls")
         if replied and not self._writes(self._state.messages if not answer
                                         else self._newest_exchange()):
+            self._changes.taken_back = True
+            _log.info("a reply the template does not write, nor an empty one in its place, "
+                      "was taken back with its request")
             if self._request is not None:
                 # Taken back with the question this request asked, and what it evicted.
                 self._go_back_to(self._request)
@@ -981,10 +1072,16 @@ class RenderedCache:
             del self._state.messages[calling + 1:]
             self._state.results_cut = []
             self._forget_calls()
+            self._changes.turn_closed = True
             if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
                 # Nothing the template writes is left of the reply: taken back with its request.
+                self._changes.taken_back = True
+                _log.info("no room was left to answer the newest calls, and nothing of the "
+                          "reply is left to write: taken back with its request")
                 starts = exchange_starts(self._state.messages)
                 return self._remove_from(starts[-1] if starts else len(self._system_part()))
+            _log.info("no room was left to answer the newest calls: the turn closed on what "
+                      "the model wrote")
             return self._settle()
 
     def add_result(self, call: ToolCall, result) -> int:
@@ -1054,6 +1151,9 @@ class RenderedCache:
                             else (low, middle - 1)
                     self._state.messages[at] = with_result_text(message, _cut(text, low))
                     self._state.results_cut.append(owed)
+                    self._changes.tool_results_cut.append(owed)
+                    _log.info("the result of %s was cut to %d of %d characters to fit",
+                              owed.name, low, len(text))
             del self._state.messages[at + 1:]
             if not self.pending_calls:
                 self._sync(self._fitting_prompt(), dropped=dropped)
@@ -1088,6 +1188,9 @@ class RenderedCache:
                      if c["id"] == earlier["tool_call_id"]]
             self._state.results_cut.append(ToolCall(call["function"]["name"],
                                                     call["function"]["arguments"], call["id"]))
+            self._changes.tool_results_cut.append(self._state.results_cut[-1])
+            _log.info("an earlier result of %s was cut to %d of %d characters to make room",
+                      call["function"]["name"], low, len(whole))
             return
 
     def _fits(self, at: int, content: str, room: int) -> bool:
@@ -1495,8 +1598,13 @@ class RenderedCache:
 
         if length() <= limit and not too_many():
             return False
+        cause = "exchange_limit" if too_many() else "room"
         bound, most = self._drop_bound(limit, beside_open_turn), self._exchanges_after_drop()
-        return self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
+        dropped = self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
+        if dropped:
+            self._changes.evicted_for = cause
+            _log.debug("the oldest history went, for %s", cause.replace("_", " "))
+        return dropped
 
     def _drop_oldest_exchanges(self, length: Callable[[], int], bound: int, at_least: int,
                                newest_too: bool) -> bool:

@@ -138,7 +138,7 @@ def test_inject_appends_without_generating():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin("s")
     before = w.total_tokens
-    n_evicted_messages = w.inject("some context", role="user")
+    n_evicted_messages = w.inject("some context", role="user").n_evicted_messages
     assert n_evicted_messages == 0
     assert rows(w)[-1]["role"] == "user"
     assert w.total_tokens > before
@@ -151,7 +151,7 @@ def test_inject_evicts_oldest_to_fit():
     w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.06), context=fake)
     w.begin("s")
     w.inject("first injected chunk", role="user")
-    n_evicted_messages = w.inject("second injected chunk", role="user")
+    n_evicted_messages = w.inject("second injected chunk", role="user").n_evicted_messages
     assert n_evicted_messages >= 1
     roles = [s["role"] for s in rows(w)]
     assert roles[0] == "system"  # system never evicted
@@ -541,7 +541,7 @@ def test_inject_evicts_to_leave_room_under_the_exchange_limit():
     w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")])
     assert _n_exchanges(w) == 2
     # The oldest exchange goes whole, so the survivors open on a user turn.
-    assert w.inject("reference material") == 2
+    assert w.inject("reference material").n_evicted_messages == 2
     assert [r["text"] for r in rows(w)][1:] == ["c", "reference material"]
 
 
@@ -555,7 +555,7 @@ def test_begin_prefills_no_more_than_the_exchange_limit(history, kept):
     # Without the cap, begin would prefill history the first turn then evicts.
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=4000, max_history_exchanges=1), context=fake)
-    assert w.begin("s", history) == len(kept)
+    assert w.begin("s", history).n_kept_messages == len(kept)
     assert [r["text"] for r in rows(w)] == ["s"] + kept       # the newest exchange, whole
 
 
@@ -848,8 +848,8 @@ def test_a_template_whose_generation_prompt_is_not_where_its_tags_say_is_refused
 def test_a_restart_says_how_much_history_it_kept():
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=4000), context=fake)
-    assert w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")]) == 3
-    assert w.begin("s") == 0
+    assert w.begin("s", [("user", "a"), ("assistant", "b"), ("user", "c")]).n_kept_messages == 3
+    assert w.begin("s").n_kept_messages == 0
 
 
 # ----- the tool call policies ----------------------------------------------
@@ -1294,3 +1294,63 @@ def test_awaits_reply_says_whether_a_reply_without_text_answers_something():
     assert w.awaits_reply                       # every result is in: the reply goes on
     w.reply(tool_call_policy="yield").finish()
     assert not w.awaits_reply
+
+
+# ----- one report of what an action changed beyond what was asked ------------------
+def test_begin_says_how_many_history_messages_it_left_out_and_why(caplog):
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=400), context=fake)
+    history = [("user", "q" * 60), ("assistant", "a" * 60)] * 4
+    with caplog.at_level("INFO", logger="llama_chat"):
+        report = w.begin("s", history)
+    assert report.n_kept_messages < len(history) and report.evicted_for == "half_context"
+    assert report.n_evicted_messages == len(history) - report.n_kept_messages
+    said, = [r.getMessage() for r in caplog.records if r.getMessage().startswith("begin kept")]
+    assert said == (f"begin kept {report.n_kept_messages} of {len(history)} history messages; "
+                    f"left out the {report.n_evicted_messages} oldest so that half of the "
+                    "400-token context stays free")
+    caplog.clear()
+    with caplog.at_level("INFO", logger="llama_chat"):
+        w.begin("s", history[-2:])          # kept whole: nothing to say
+    assert not [r for r in caplog.records if r.getMessage().startswith("begin kept")]
+
+
+def test_generated_turns_of_another_model_are_reported_as_unused(caplog):
+    w, _ = begun_wrapper()
+    with caplog.at_level("INFO", logger="llama_chat"):
+        report = w.begin("s", [("user", "a"), ("assistant", "b")],
+                         generated_turns={"model": "another", "turns": []})
+    assert report.generated_turns_ignored
+    assert any("another model's" in r.getMessage() for r in caplog.records)
+
+
+def test_a_result_that_cannot_fit_reports_the_turn_closed_not_a_success():
+    w, fake = tool_wrapper(context_size=160)
+    w.begin("persona")
+    fake.call_script = ["fn:clock{}"]
+    for size in range(1, 400):
+        w, fake = tool_wrapper(context_size=60 + size)
+        try:
+            w.begin("persona")
+        except ContextOverflowError:
+            continue
+        fake.call_script = ["fn:clock{}"]
+        try:
+            calls = [e for e in w.reply("wie?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+        except ContextOverflowError:
+            continue
+        if not calls or not w.pending_calls:
+            continue
+        report = w.inject_tool_result(calls[0], "x" * 2000)
+        if not w.turn_open:
+            assert report.turn_closed
+            return
+    pytest.fail("no context size left the call room but its result none")
+
+
+def test_a_stream_closed_early_still_reports_its_generation():
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    stream = w.reply("hallo")
+    next(stream)
+    stream.close()
+    assert stream.reply is not None and stream.reply.n_generated_tokens >= 1

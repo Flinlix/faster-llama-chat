@@ -26,8 +26,8 @@ from .config import Config, Sampling
 from .errors import (ContextOverflowError, EngineError, InvalidArgumentError, InvalidSettingError,
                      OutOfOrderError, RefusalError, TemplateRefusedError, UnsupportedError)
 from .tools import Thought, ToolCall, ToolCallStatus, ToolRegistry, ToolResult, ToolSpec, ToolTurn
-from .reply import (STOP_REASONS, TOOL_CALL_POLICIES, Reply, ReplyStream, StopReason,
-                    ToolCallPolicy)
+from .reply import (EVICTION_CAUSES, STOP_REASONS, TOOL_CALL_POLICIES, EvictionCause, Reply,
+                    ReplyStream, Report, StopReason, ToolCallPolicy)
 from .resolved_template import Capabilities
 from .wrapper import ChatWrapper
 
@@ -46,6 +46,9 @@ __all__ = [
     "Capabilities",
     "Reply",
     "ReplyStream",
+    "Report",
+    "EvictionCause",
+    "EVICTION_CAUSES",
     "StopReason",
     "STOP_REASONS",
     "ToolCallPolicy",

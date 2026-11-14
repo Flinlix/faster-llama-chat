@@ -26,7 +26,7 @@ from .messages import ensure_role, ensure_text
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
                      UnsupportedError)
-from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, ToolCallPolicy
+from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
 from .reply_text import ReplyText
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tools import (ToolCall, ToolRegistry, ToolSpec, ToolTurn, ensure_declarable,
@@ -118,12 +118,14 @@ class ChatWrapper:
         # first one a reply gave it, and the calls it may still run, which a reply going on
         # with it keeps.
         self._turn_policy: ToolCallPolicy | ToolRegistry | None = None
+        # The newest generation's Reply, which a stream closed early reads.
+        self._newest_reply: Reply | None = None
         self._turn_budget = _CallBudget(None)
 
     def begin(self, system_prompt: str,
               messages: list[tuple[str, str] | dict | ToolTurn] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
-              reasoning: bool = False, generated_turns: dict | None = None) -> int:
+              reasoning: bool = False, generated_turns: dict | None = None) -> Report:
         """Reset the conversation: prefill the system prompt and recent history.
 
         Every other action refuses until this has run, because only this
@@ -170,7 +172,10 @@ class ChatWrapper:
                 design_history.md, "Exact restore with model handover".
 
         Returns:
-            How many items of ``messages`` were kept.
+            What it changed beyond what was asked: how many items of
+            ``messages`` it kept and why it left the others out, the calls it
+            left out, and the generated turns it restored. Each such change is
+            also logged once, at ``INFO``, under the logger ``llama_chat``.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations
@@ -224,14 +229,15 @@ class ChatWrapper:
                     "this model's template does not keep a system prompt in place: it "
                     "writes one where the questions after it change it, so a system "
                     "prompt kept for the whole conversation cannot be")
+            self._conversation.report(0)        # changes of earlier actions are told already
             kept = self._conversation.start(system_prompt, messages, specs, reasoning,
                                             generated_turns)
             # A turn the history leaves open was started by no reply.
             self._turn_policy, self._turn_budget = None, _CallBudget(None)
-            return kept
+            return self._conversation.report(len(messages) - kept)
 
     # ----- adding context ------------------------------------------------------
-    def inject(self, text: str, role: str = "user") -> int:
+    def inject(self, text: str, role: str = "user") -> Report:
         """Prefill one message as context without generating.
 
         A question goes where the next one was prepared for, as :meth:`reply`
@@ -248,8 +254,9 @@ class ChatWrapper:
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
 
         Returns:
-            The number of history items evicted to make room, a tool turn
-            counting as one.
+            What it changed beyond what was asked: the history items evicted
+            to make room, a tool turn counting as one, and why; a turn it
+            closed or a question it joined.
 
         Raises:
             TypeError: If ``text`` is not a ``str``.
@@ -271,7 +278,8 @@ class ChatWrapper:
         ensure_text(text, "an injected message's text")
         with self._held():
             self._ensure_open()
-            return self._conversation.add(role, text)
+            self._conversation.report(0)
+            return self._conversation.report(self._conversation.add(role, text))
 
     # ----- asking ---------------------------------------------------------------
     def reply(self, text: str | None = None, *,
@@ -414,9 +422,10 @@ class ChatWrapper:
             tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
+        self._newest_reply = None
         steps = self._noting_each_reader(self._replying(text, tool_call_policy, max_calls, **options))
         self._replies.add(steps)
-        return ReplyStream(steps)
+        return ReplyStream(steps, on_close=lambda: self._newest_reply)
 
     def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
                             ) -> Generator[str | ToolCall, None, Reply]:
@@ -443,6 +452,7 @@ class ChatWrapper:
                   max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
         """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's."""
         with self._held():
+            self._conversation.report(0)        # changes of earlier actions are told already
             goes_on = text is None and self._conversation.turn_open
             policy = self._policy_for(given, goes_on)
             _ensure_max_calls_runs(policy, max_calls)
@@ -482,8 +492,8 @@ class ChatWrapper:
             self._turn_policy = policy
         self._turn_budget = budget
 
-    def inject_tool_result(self, call: ToolCall, result) -> int:
-        """Hand the model what the tool it called returned; how many older history items were evicted for it.
+    def inject_tool_result(self, call: ToolCall, result) -> Report:
+        """Hand the model what the tool it called returned; what that changed beyond what was asked.
 
         Written where this model's own template writes a result, inside the
         turn the call left open, with special-token parsing off. A result too
@@ -504,6 +514,11 @@ class ChatWrapper:
                 answered with the ``unwritable_result`` failure a registered
                 tool's would be, and a warning is logged.
 
+        Returns:
+            What it changed beyond what was asked: the history items evicted
+            for it, the results cut to fit, and whether the turn closed for
+            want of room instead, its result dropped.
+
         Raises:
             TypeError: If ``call`` is no :class:`~llama_chat.tools.ToolCall`.
             OutOfOrderError: If no conversation has been begun, no call is
@@ -521,14 +536,18 @@ class ChatWrapper:
             # A failure is told as a failure a registered tool's is, whoever ran the tool.
             written = _explain_failure(result if failure is None else failure,
                                        may_call_again=self._turn_policy == "yield")
+            self._conversation.report(0)
             try:
                 evicted = self._conversation.add_result(call, written)
             except ContextOverflowError:
                 evicted = self._conversation.close_unanswered()
+            report = self._conversation.report(evicted)
         if failure is not None:
-            _log.warning("the result handed over for %s cannot be written, so the model is told "
-                         "the call failed (unwritable_result): %s", call.name, failure["message"])
-        return evicted
+            told = ("the turn closed for want of room instead" if report.turn_closed
+                    else "so the model is told the call failed (unwritable_result)")
+            _log.warning("the result handed over for %s cannot be written, %s: %s",
+                         call.name, told, failure["message"])
+        return report
 
     # ----- shortening the newest reply -----------------------------------------
     def truncate_last_reply(self, keep_text: str) -> None:
@@ -560,7 +579,7 @@ class ChatWrapper:
             self._conversation.truncate_newest(keep_text)
 
     def change_settings(self, *, tools: Iterable[ToolSpec] | None | object = _UNCHANGED,
-                        reasoning: bool | object = _UNCHANGED) -> int:
+                        reasoning: bool | object = _UNCHANGED) -> Report:
         """Run the conversation under other tools or another reasoning setting from now on, every message kept.
 
         The declarations go where the template writes them, and the cache is
@@ -578,8 +597,8 @@ class ChatWrapper:
                 on; left out, unchanged.
 
         Returns:
-            How many history items were evicted to make room, a tool turn
-            counting as one.
+            What it changed beyond what was asked: the history items evicted
+            to make room, a tool turn counting as one, and why.
 
         Raises:
             TypeError: If ``tools`` is not an iterable of
@@ -630,7 +649,8 @@ class ChatWrapper:
                     raise UnsupportedError(
                         "tools", "this model's template for a conversation with tools does "
                         "not keep a system prompt in place; begin again without one")
-            return conversation.change_settings(specs, reasoning, accept)
+            conversation.report(0)
+            return conversation.report(conversation.change_settings(specs, reasoning, accept))
 
     # ----- introspection -------------------------------------------------------
     @property
@@ -1127,18 +1147,23 @@ class ChatWrapper:
                 if conversation.rolled_back:
                     self._turn_policy, self._turn_budget = noted
                     n_evicted_messages = 0
-        return Reply(
-            text=reply_text.answer,
-            n_prefilled_tokens=conversation.decoded - decoded_from,
-            n_prompt_tokens=n_prompt_tokens,
-            n_generated_tokens=len(generated.token_ids),
-            n_evicted_messages=n_evicted_messages,
-            stop_reason=generated.stop_reason,
-            tool_calls=_reported_calls(generated, conversation.pending_calls),
-            tool_results_cut=results_cut,
-            n_reasoning_tokens=reply_text.thought_pieces,
-            thought=reply_text.thought,
-        )
+            changes = conversation.changes_so_far()
+            # Kept for a stream closed before it returns, which reads it as its reply.
+            self._newest_reply = Reply(
+                evicted_for=changes.evicted_for if n_evicted_messages else None,
+                taken_back=changes.taken_back, kept_text=changes.kept_text,
+                text=reply_text.answer,
+                n_prefilled_tokens=conversation.decoded - decoded_from,
+                n_prompt_tokens=n_prompt_tokens,
+                n_generated_tokens=len(generated.token_ids),
+                n_evicted_messages=n_evicted_messages,
+                stop_reason=generated.stop_reason,
+                tool_calls=_reported_calls(generated, conversation.pending_calls),
+                tool_results_cut=results_cut,
+                n_reasoning_tokens=reply_text.thought_pieces,
+                thought=reply_text.thought,
+            )
+        return self._newest_reply
 
     def _reply_cap(self, max_reply_tokens: int | None) -> int:
         """The cap on a reply's tokens: ``max_reply_tokens``, else the config's, else the context's size."""
@@ -1299,6 +1324,9 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         tool_results_cut=[call for t in generations for call in t.tool_results_cut],
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
         thought="\n\n".join(t.thought for t in generations if t.thought),
+        evicted_for=next((t.evicted_for for t in reversed(generations) if t.evicted_for), None),
+        taken_back=generations[-1].taken_back,
+        kept_text=generations[-1].kept_text,
     )
 
 

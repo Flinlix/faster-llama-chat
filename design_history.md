@@ -4983,3 +4983,36 @@ at its newest message before every reply (about 1 ms at 900 messages, growing
 with them, measured), and kept its own copy of "the turn waits for its reply".
 `awaits_reply` now answers it from the newest publication, copying nothing:
 true where the newest message is a question, or a turn's results are all in.
+
+### One report of what an action changed (415.8A, 409, 416.2 to 416.4)
+
+Six places dropped history and said so in different ways: `begin` returned
+how many items it kept, the other actions how many they dropped, and none
+said why; a cut result was reported only in the next reply; a reply the
+template refused vanished with its question while the reply still showed the
+text; a result that did not fit even cut to nothing closed the turn and
+returned 0, as a success does (416.2); and a stream closed early reported
+nothing of the eviction and the cutting its reply caused (416.4).
+
+`begin`, `inject`, `inject_tool_result` and `change_settings` now return a
+`Report`: the history items that went and why (`EVICTION_CAUSES`: no room,
+the exchange limit, or `begin`'s half of the context), and for `begin` how
+many items it kept, the unreadable calls it left out and the generated turns
+it restored or found to be another model's; the results cut; whether the
+action closed the open turn; and whether a question was joined to an
+unanswered one. A `Reply` carries the same where it concerns a reply, and
+also whether the request was taken back (416.3) and the answer as kept where
+the template keeps another text than was shown. A stream closed early holds
+the summary of the generation it was closed in.
+
+Each such change is logged once, and the levels mean one thing each: `INFO`
+for a change of the conversation the caller did not ask for, `DEBUG` for a
+slower path (the cache decoded again, the oldest history going for room or
+the exchange limit during a running conversation, which happens every turn
+once the context is full and would flood an `INFO` log), and `WARNING` for
+something to fix (an add-on file not used, a result that cannot be written,
+an engine whose penalty signature differs, which was a Python warning
+before). `begin` logs one line only where it left something out or could not
+use the generated turns it was given (409.4A), for example "begin kept 120 of
+200 history messages; left out the 80 oldest so that half of the 8192-token
+context stays free".

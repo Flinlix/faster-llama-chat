@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import threading
 
 from .cache_context import CacheContext, GenerationAccumulator
@@ -13,6 +15,8 @@ _TOKEN_OFFSET = 0x10000
 # At most how many tokens a long decode runs on after a cancel is set, where one is watched.
 _CANCEL_PART_TOKENS = 512
 
+
+_log = logging.getLogger(__name__)
 
 class Cancelled(Exception):
     """A decode that :attr:`CacheSync.cancel` stopped between its parts."""
@@ -210,6 +214,7 @@ class CacheSync:
         """
         if self.is_current:
             return False
+        _log.debug("the cache is decoded again from token %d", self._valid)
         try:
             self._bring_up(want_logits=True)
         except Cancelled:

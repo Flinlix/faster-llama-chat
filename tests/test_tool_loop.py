@@ -553,7 +553,7 @@ def test_a_result_too_long_for_the_room_left_evicts_the_oldest_exchanges_first(c
              if isinstance(e, ToolCall)]
     room = wrapper.config.context_size - wrapper.config.min_reply_tokens
     result = "y" * (room - wrapper.total_tokens + 40)
-    evicted = wrapper.inject_tool_result(call, result)
+    evicted = wrapper.inject_tool_result(call, result).n_evicted_messages
     # Whole, the turn kept, and on a cache that cannot shift well below the room left.
     assert evicted > 0 and _result_of(fake) == f"clock({result})"
     questions = [m["text"] for m in rows(wrapper) if m["role"] == "user"]

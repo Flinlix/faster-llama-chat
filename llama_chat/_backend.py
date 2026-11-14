@@ -11,7 +11,6 @@ import ctypes
 import inspect
 import logging
 import threading
-import warnings
 from typing import Callable
 
 try:  # pragma: no cover (reachable only without the dependency installed)
@@ -30,6 +29,8 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from .errors import EngineError  # noqa: E402  (after the dependency's own check)
+
+_log = logging.getLogger(__name__)
 
 # The C API's floor on how many candidates a truncating stage may leave.
 _MIN_CANDIDATES = 1
@@ -364,12 +365,8 @@ class Backend:
             self._chain_add(chain, self._init_penalties(
                 *leading, window_tokens, repetition, frequency, presence))
         except TypeError:
-            warnings.warn(
-                "this llama_cpp build has an incompatible "
-                "llama_sampler_init_penalties signature; "
-                "repetition/presence/frequency penalties are ignored",
-                RuntimeWarning,
-            )
+            _log.warning("this llama_cpp build has an incompatible llama_sampler_init_penalties "
+                         "signature; repetition, presence and frequency penalties are ignored")
 
     def add_withheld(self, chain, vocab, tokens: tuple[int, ...]) -> None:
         """Add the stage that keeps ``tokens`` from ever being drawn."""

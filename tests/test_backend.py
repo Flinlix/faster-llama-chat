@@ -157,7 +157,7 @@ def _raises_type_error(*_args):
     raise TypeError("this build takes a different argument list")
 
 
-def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused():
+def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused(caplog):
     """A model still generates without them; refusing to load would cost more.
 
     The penalties are the one sampler stage whose argument list has changed
@@ -169,9 +169,9 @@ def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused():
     backend._init_penalties = _raises_type_error
     backend._penalties_take_vocab_size = False
 
-    with pytest.warns(RuntimeWarning, match="penalties"):
+    with caplog.at_level("WARNING", logger="llama_chat"):
         backend.add_penalties(object(), "vocab", 64, 1.1, 0.0, 0.0)
-    assert added == []
+    assert added == [] and any("penalties" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.parametrize("takes_vocab_size, arguments", [

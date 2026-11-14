@@ -98,7 +98,8 @@ class _Run:
         self.renders.append(len(self.context.rendered))
 
     def begin(self, history=(), tools=None):
-        return self.chat.begin(self.system, list(history), tools=tools, reasoning=self.reasoning)
+        return self.chat.begin(self.system, list(history), tools=tools,
+                               reasoning=self.reasoning).n_kept_messages
 
     def render(self, messages, tools=None):
         system = [{"role": "system", "content": self.system}] if self.system else []
@@ -551,7 +552,7 @@ def test_a_result_longer_than_the_room_left_drops_only_part_of_the_history_of_a_
     held = len(run.chat.conversation()["messages"])
     evicted = run.chat.inject_tool_result(_called(run, "Weather in Bonn?"),
                                           _longer_than_the_room_left(run))
-    assert 0 < evicted < held
+    assert 0 < evicted.n_evicted_messages < held
     run.chat.reply(tool_call_policy="yield").finish()
     assert "Question 11" in run.seen[-1]        # the reply to the result reads the newest history
 
@@ -903,7 +904,7 @@ def test_a_refused_restart_leaves_the_conversation_as_it_was_and_usable(stem):
 def _assert_begins_again_the_same(chat, other=None):
     """``begin(**chat.conversation())`` gives the same conversation, or its newest part where a begin keeps less, each item unchanged and in its place; begun on ``other`` where given, which ``chat`` then goes on unchanged by."""
     saved = chat.conversation()
-    kept = (other or chat).begin(**saved)
+    kept = (other or chat).begin(**saved).n_kept_messages
     again = (other or chat).conversation()
     assert {key: again[key] for key in ("system_prompt", "tools", "reasoning")} \
         == {key: saved[key] for key in ("system_prompt", "tools", "reasoning")}
@@ -1927,9 +1928,31 @@ def test_a_change_of_tools_and_reasoning_keeps_every_message(stem):
     for question in QUESTIONS[:3]:
         run.chat.reply(question).finish()
     messages = run.chat.conversation()["messages"]
-    assert run.chat.change_settings(tools=[WEATHER], reasoning=True) == 0
+    assert run.chat.change_settings(tools=[WEATHER], reasoning=True).n_evicted_messages == 0
     held = run.chat.conversation()
     assert held["messages"] == messages and held["tools"] == [WEATHER] and held["reasoning"]
-    assert run.chat.change_settings(tools=None, reasoning=False) == 0
+    assert run.chat.change_settings(tools=None, reasoning=False).n_evicted_messages == 0
     assert run.chat.conversation()["messages"] == messages
     assert run.chat.reply(QUESTIONS[3]).finish().text == ANSWERS[3]
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if not expected(fixture(stem), "writes_empty_reply")])
+def test_a_reply_taken_back_with_its_request_says_so(stem):
+    run = _Run(stem)
+    run.begin()
+    run.context.replies = [""]
+    reply = run.chat.reply(QUESTIONS[0]).finish()
+    assert reply.taken_back and run.chat.conversation()["messages"] == []
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if _FIXTURES[stem]["marks_thought"]])
+def test_a_reply_kept_otherwise_than_shown_says_what_was_kept(stem):
+    run = _Run(stem)
+    close = run.template.reasoning.thought_close.strip()
+    run.context.replies = [f"Erst das. {close} Dann das."]
+    run.begin()
+    reply = run.chat.reply(QUESTIONS[0]).finish()
+    kept = run.chat.conversation()["messages"][-1]["content"]
+    assert (reply.kept_text is None) == (kept == reply.text)
+    assert reply.kept_text is None or reply.kept_text == kept

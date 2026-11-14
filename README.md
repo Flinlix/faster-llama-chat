@@ -130,8 +130,8 @@ on, so the refusal follows it there.
 
 | doing what | call |
 |------|------|
-| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns how many history items it kept. A history message is a `(role, text)` pair or a `{"role": ..., "content": ...}` dictionary, its role `"user"` or `"assistant"`, a reply's dictionary with its thought under `"reasoning_content"` where it has one; a turn that called tools is a `ToolTurn`. Any other form or role is refused, naming it. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question, where the newest exchange cannot fit, or a history with no user message, which nothing can be evicted from, cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
-| adding context | `inject(text, role="user")`: adds one message without a reply, and returns how many older messages were evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
+| starting, or starting again | `begin(system_prompt, messages=None, tools=None, *, reasoning=False, generated_turns=None)`: a reset. Prefills the pinned system prompt and the newest history that fits with it in half the context, from a user turn on, at least the newest exchange and no more than `max_history_exchanges` exchanges, and returns a `Report` of what it kept and left out. A history message is a `(role, text)` pair or a `{"role": ..., "content": ...}` dictionary, its role `"user"` or `"assistant"`, a reply's dictionary with its thought under `"reasoning_content"` where it has one; a turn that called tools is a `ToolTurn`. Any other form or role is refused, naming it. Older history is dropped without being rendered. A history that ends on a call keeps it owed a result. Refused where the system prompt and its declarations leave no room for a short question, where the newest exchange cannot fit, or a history with no user message, which nothing can be evicted from, cannot fit, and where the template writes a system prompt where later questions move it; a refused or failed `begin` leaves the conversation it would have replaced as it was |
+| adding context | `inject(text, role="user")`: adds one message without a reply, and returns a `Report` of the older messages evicted for it. A user message is added as `reply(text)` adds its question, so `inject(text)` followed by `reply()` waits no longer than `reply(text)`; the eviction it needs may come after the reply instead, and is then counted in that reply's `n_evicted_messages`. An assistant message, or a user message once `max_history_exchanges` is reached, evicts first. An eviction drops up to the next user message, so the messages after the newest one stay; an assistant message with which they no longer fit under the threshold is refused. `role` is `"user"` or `"assistant"`: a system message is refused, since the system prompt is `begin`'s, and so is a tool result, which `inject_tool_result` writes |
 | asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)`. Without `text`, it answers the newest user message already written, or goes on with a turn a tool call left open. A conversation that cannot take the reply (none begun, a request while a reply is open, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that is not a `str`, a `max_reply_tokens` of 0 or less, a `tool_call_policy` that is none of `TOOL_CALL_POLICIES`, `None` or a `ToolRegistry`, a `stop` that is neither a `str` nor an iterable of `str`, a `cancel` that is no event and a `sampling` that is no `Sampling`; the rest is checked when the stream is first read |
 | answering a call yourself | `inject_tool_result(call, result)` for each of `pending_calls`, oldest first, then `reply()`, which keeps the turn's `tool_call_policy` |
 | changing the tools or the reasoning | `change_settings(*, tools=..., reasoning=...)`: the conversation runs under the tools given, in place of those before, or under the reasoning setting given, from now on, every message kept; a setting left out stays. The cache is decoded again only from where the conversation is first written otherwise. Refused while a tool call has left a reply open, and where a turn kept as generated could no longer be told apart; `begin` again then |
@@ -340,7 +340,7 @@ cut into the turn being written. A result too long for what is left, with
 `min_reply_tokens` free, first evicts the oldest exchanges, as a question
 does, the open turn kept whole: its question, its calls and its results; on a
 cache that cannot shift it evicts well below that, as every eviction there
-does. `inject_tool_result` returns how many history items went, and under a
+does. `inject_tool_result` returns a `Report` of the history items that went, and under a
 registry they count in the reply's `n_evicted_messages`. A result still too
 long is cut, its tags kept, and ends with a note the model reads, such as
 `(cut: 3100 of 20000 characters kept)`; the next reply lists its call in
@@ -539,7 +539,16 @@ errors as `ERROR`, its warnings as `WARNING`, its load-time listings as `INFO`
 and `DEBUG`. With no logging configured, Python shows warnings and errors on
 stderr, and nothing below them whatever level a logger is set to; showing
 `INFO` and `DEBUG` lines takes a handler, such as the one `logging.basicConfig()`
-puts on stderr. To show only errors, or everything:
+puts on stderr. The library's own levels mean one thing each: `INFO`, the
+conversation changed in a way the caller did not ask for, such as history a
+`begin` left out ("begin kept 120 of 200 history messages; left out the 80
+oldest so that half of the 8192-token context stays free"), a result cut to
+fit, a reply taken back, or an open turn a question closed; `DEBUG`, a slower
+path was taken, such as the cache decoded again; `WARNING`, something to fix,
+such as an add-on file that is not used. Each `INFO` change is also in the
+`Report` the action returns (`begin`, `inject`, `inject_tool_result`,
+`change_settings`) or in the `Reply`; why history went is one of
+`EVICTION_CAUSES`, typed as `EvictionCause`. To show only errors, or everything:
 
 ```python
 import logging
