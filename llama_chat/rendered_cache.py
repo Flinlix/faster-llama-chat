@@ -118,6 +118,14 @@ class _ConversationState:
 
 
 @dataclass(frozen=True)
+class _Snapshot:
+    """The conversation and the cache's tokens at one moment, for an attempt to go back to."""
+
+    state: _ConversationState
+    tokens: list[int]
+
+
+@dataclass(frozen=True)
 class _Published:
     """The conversation as the newest finished change left it, for readers that hold no lock."""
 
@@ -153,14 +161,14 @@ class RenderedCache:
         self._state = _ConversationState()
         self._rendering = ConversationRendering(context, lambda: self.template,
                                                 lambda: self._state)
-        # Left as they are by a failed action. The newest generation: where it began,
-        # whether it resumed a turn, and the tokens before the question it answers where
-        # its request asked one.
-        # Where the newest generation's turn starts in the cache, whether it went on with an open
-        # turn, the cache before the question it answers, and how long the cache was when it began.
-        self._generation: tuple[int, bool, list[int] | None, int] = (0, False, None, 0)
-        # The conversation and the cache before the newest question, until a generation follows it.
-        self._before_ask: tuple[_ConversationState, list[int]] | None = None
+        # Where the newest generation's turn starts in the cache, and whether it went on
+        # with an open turn; left as they are by a failed action.
+        self._generation: tuple[int, bool] = (0, False)
+        # The conversation and the cache as the open attempt found them, until its reply is
+        # recorded, and as the newest request that asked a question found them.
+        self._attempt: _Snapshot | None = None
+        self._request: _Snapshot | None = None
+        self._rolled_back = False
         self._published = _Published()
 
     # ----- what it holds ---------------------------------------------------------------
@@ -306,7 +314,8 @@ class RenderedCache:
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
-            self._state.ahead, self._state.spliced_at, self._state.asked = None, None, None
+            self._state.ahead, self._state.spliced_at = None, None
+            self._attempt = self._request = None
             self._state.opening = self._rendering.opening_render(self._system_part())
             self._pin_opening()
             if self.pending_calls:
@@ -421,20 +430,14 @@ class RenderedCache:
             Cancelled: If ``cancel`` was set before the question was decoded
                 whole, which leaves everything as it was.
         """
-        as_it_was = self._state.copied(), list(self._memory.tokens)
         self._memory.cancel = cancel
         try:
-            return self._ask(text, as_it_was)
-        except Cancelled:
-            self._memory.cancel = None
-            with contextlib.suppress(Exception):
-                self._memory.repair()       # the parts decoded go again now; where it fails, later
-            raise
+            return self._ask(text)
         finally:
             self._memory.cancel = None
 
-    def _ask(self, text: str, as_it_was: tuple[_ConversationState, list[int]]) -> int:
-        """:meth:`ask`'s work, ``as_it_was`` kept for :meth:`take_back_question`."""
+    def _ask(self, text: str) -> int:
+        """:meth:`ask`'s work."""
         with self._action():
             _ensure_ready(self, "start a request", "generate into")
             room = self._max_prompt_tokens
@@ -452,7 +455,6 @@ class RenderedCache:
                     "shorten the request or the system prompt, or raise context_size or lower "
                     "min_reply_tokens")
             self._ensure_writes("user", text, generation_prompt=True)
-            before = list(self._memory.tokens)
             n_before = history_count(self._state.messages)
             if not self._splice(question, room):
                 self._state.messages.append(question)
@@ -471,22 +473,44 @@ class RenderedCache:
                 self._memory.repair()
                 if self._memory.cancel.is_set():
                     raise Cancelled("cancelled while the question was decoded")
-            self._state.asked = before, self._made_for_now()
-            self._before_ask = as_it_was
             return n_before + 1 - history_count(self._state.messages)
 
-    def keep_question(self) -> None:
-        """Keep the newest question for good, once its generation has started."""
-        self._before_ask = None
+    # ----- one attempt per generation ---------------------------------------------------
+    def open_attempt(self, starts_request: bool, asks: bool) -> None:
+        """Note the conversation and the cache as they are, for :meth:`roll_back` until the attempt's reply is recorded.
 
-    def take_back_question(self) -> None:
-        """Leave the conversation and the cache as they were before the newest question, where no generation has followed it; else change nothing."""
-        if self._before_ask is None:
-            return
-        (self._state, tokens), self._before_ask = self._before_ask, None
-        self._memory.replace(tokens)
-        with contextlib.suppress(Exception):
-            self._memory.repair()           # where it fails, the next action decodes again
+        Args:
+            starts_request: Whether the attempt is a request's first generation.
+            asks: Whether that request asks a question of its own, so that a
+                reply taken back with it puts back what the question evicted.
+        """
+        self._attempt = _Snapshot(self._state.copied(), list(self._memory.tokens))
+        self._rolled_back = False
+        if starts_request:
+            self._request = self._attempt if asks else None
+
+    def roll_back(self) -> None:
+        """Put the conversation and the cache back as the open attempt found them.
+
+        The cache is brought back at once where it is known; one a failure
+        left unknown is brought back by the next action.
+        """
+        if self._attempt is not None:
+            self._go_back_to(self._attempt)
+
+    @property
+    def rolled_back(self) -> bool:
+        """Whether the newest attempt was put back, by :meth:`roll_back` or as its reply was taken back."""
+        return self._rolled_back
+
+    def _go_back_to(self, snapshot: _Snapshot) -> None:
+        """Hold the conversation and the cache's tokens of ``snapshot``, ending the attempt."""
+        self._state = snapshot.state.copied()
+        self._memory.replace(snapshot.tokens)
+        self._attempt, self._rolled_back = None, True
+        if self._memory.is_known:
+            with contextlib.suppress(Exception):
+                self._memory.repair()       # where it fails, the next action decodes again
         self._publish()
 
     def _splice(self, question: dict, room: int) -> bool:
@@ -596,11 +620,9 @@ class RenderedCache:
                 user message.
         """
         _ensure_can_reply(self, asks_question=False)
-        asked, self._state.asked = self._state.asked, None      # frees its copy of the cache
         self._state.results_cut = []
-        before_question = asked[0] if asked and self._is_current(asked[1]) else None
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
-                            self.turn_open, before_question, len(self._memory.tokens))
+                            self.turn_open)
         room = (self._config.context_size - len(self._memory.tokens)
                 - self.template.n_closing_tokens)
         return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
@@ -626,11 +648,12 @@ class RenderedCache:
         it writes none, which the rules above then take.
 
         Where the generation failed, what it said is recorded, or, where it
-        said nothing, the question its request asked is taken out again; the
-        cache is left to be decoded again by the next action. Where recording
-        the reply itself raises, the request is taken back whole where it
-        asked a question, else the conversation is left as it was before the
-        reply; a fault after the reply is recorded keeps it.
+        said nothing the template writes, the attempt is put back; the cache is
+        left to be decoded again by the next action. A reply taken back with
+        the question its request asked puts back what that question evicted
+        too. Recording the reply ends the attempt :meth:`open_attempt` opened;
+        where that raises, the caller puts the attempt back, and a fault after
+        it keeps the reply.
 
         Args:
             thought: The reply's thought, given to the template as its own to
@@ -648,31 +671,19 @@ class RenderedCache:
         Returns:
             How many history items were dropped.
         """
-        _start, _resumed, before_question, generated_from = self._generation
+        if not self._memory.is_known and not answer and not called:
+            # It failed before it said anything the template writes: nothing changes.
+            self.roll_back()
+            return 0
         try:
-            if not self._memory.is_known and not answer and not called:
-                # It failed before it said anything: the request is taken back whole.
-                if before_question is not None:
-                    self._state.messages.pop()
-                    self._memory.replace(before_question)
-                return 0
-            saved, held = self._state.copied(), list(self._memory.tokens[:generated_from])
+            recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped,
+                                                    call_written)
+            self._state.called_in_thought = called and in_thought
             try:
-                recorded, unplaced = self._append_reply(answer, thought, calls, called, stopped,
-                                                        call_written)
-                self._state.called_in_thought = called and in_thought
-            except BaseException:
-                self._state = saved
-                if before_question is not None:
-                    self._state.messages.pop()
-                    self._memory.replace(before_question)
-                else:
-                    self._memory.replace(held)
-                with contextlib.suppress(Exception):
-                    self._memory.repair()       # where it fails, the next action decodes again
-                raise
-            return self._after_reply(recorded, called, called and not calls, unplaced,
-                                     recorded != answer, unreadable_result)
+                return self._after_reply(recorded, called, called and not calls, unplaced,
+                                         recorded != answer, unreadable_result)
+            finally:
+                self._attempt = None        # recorded: a fault after it keeps the reply
         finally:
             self._publish()
 
@@ -684,7 +695,7 @@ class RenderedCache:
             The answer as recorded, and whether a kept turn could no longer be
             placed.
         """
-        start, resumed, _before_question, _generated_from = self._generation
+        start, resumed = self._generation
         unreadable = called and not calls
         if answer and not calls and self._holds_thought_tags(answer):
             # Where the template writes none of it as text, it is recorded as an answer with no text.
@@ -724,14 +735,13 @@ class RenderedCache:
         Args:
             rewritten: Whether ``answer`` was recorded otherwise than generated.
         """
-        _start, resumed, before_question, _generated_from = self._generation
+        _start, resumed = self._generation
         if not self._memory.is_known:
             # The generation failed: the next action decodes the cache again. One that left
-            # no answer it writes is taken back with its question, as one that said nothing;
-            # one recorded otherwise than generated is decoded again as it was recorded.
-            if not answer and not called and before_question is not None:
-                del self._state.messages[-2:]
-                self._memory.replace(before_question)
+            # no answer it writes changes nothing, as one that said nothing; one recorded
+            # otherwise than generated is decoded again as it was recorded.
+            if not answer and not called:
+                self.roll_back()
             elif rewritten:
                 self._memory.replace(
                     self._rendering.target(self._state.messages, generation_prompt=False).tokens)
@@ -753,6 +763,10 @@ class RenderedCache:
         replied = not self._state.messages[-1].get("tool_calls")
         if replied and not self._writes(self._state.messages if not answer
                                         else self._newest_exchange()):
+            if self._request is not None:
+                # Taken back with the question this request asked, and what it evicted.
+                self._go_back_to(self._request)
+                return 0
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
@@ -806,7 +820,6 @@ class RenderedCache:
                             if k.last is old else k for k in self._state.kept]
         self._state.kept_at = {}
         self._drop_unplaceable()
-        self._publish()
 
     def _drop_unplaceable(self) -> bool:
         """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was."""
@@ -1488,7 +1501,6 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
-        self._before_ask = None             # a question can be taken back only before any other action
         self._rendering.forget_renders()
         self._memory.repair()
         if self._state.begun and self.template.reads_clock:

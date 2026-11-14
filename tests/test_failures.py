@@ -774,3 +774,100 @@ def test_a_cancel_set_during_a_short_questions_decode_changes_nothing():
     reply = w.reply("eine neue frage " + "y" * 60, cancel=cancel).finish()
     del fake.prefill
     assert (reply.stop_reason, reply.n_evicted_messages) == ("interrupted", 0) and _state(w) == before
+
+
+# ----- one undo path: every exit before the first word puts the attempt back ---------
+def _evicting_conversation(fake):
+    """A wrapper whose history a long question pushes out at once, and that history."""
+    w = ChatWrapper(Config(context_size=300, evict_above_fraction=1.0, min_reply_tokens=32),
+                    context=fake)
+    w.begin("s", [("user", "a" * 60), ("assistant", "b" * 60), ("user", "c" * 60),
+                  ("assistant", "d" * 30)])
+    return w, w.conversation()["messages"]
+
+
+def test_a_generation_failing_before_its_first_word_puts_back_the_history_its_question_evicted():
+    fake = _Flaky(PLAIN, gen_tokens=5)
+    w, history = _evicting_conversation(fake)
+    fake.fail = "generate"
+    with pytest.raises(RuntimeError):
+        w.reply(" " + "q" * 150).finish()       # not spliced, so it evicts as it is asked
+    assert w.conversation()["messages"] == history
+    assert_cache_reads_as_rendered(w, fake)
+
+
+class _CancelAtTheFirstDraw(FakeContext):
+    """A fake model that sets ``cancel`` as its first token is drawn, once the question is decoded."""
+
+    cancel = None
+
+    def sampled_tokens(self, *args, **kwargs):
+        if self.cancel is not None:
+            self.cancel.set()
+        return super().sampled_tokens(*args, **kwargs)
+
+
+@pytest.mark.parametrize("template", [PLAIN, REFUSES_TWO_USER_TURNS],
+                         ids=["writes-two-user-turns", "refuses-two-user-turns"])
+def test_a_cancel_at_the_first_draw_changes_nothing(template):
+    fake = _CancelAtTheFirstDraw(template)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "a"), ("assistant", "b")])
+    before = w.conversation()
+    fake.cancel = threading.Event()
+    reply = w.reply("q", cancel=fake.cancel).finish()
+    assert reply.stop_reason == "interrupted" and reply.text == "" \
+        and reply.n_evicted_messages == 0
+    assert w.conversation() == before
+
+
+def test_a_cancel_at_the_first_draw_after_an_injected_question_keeps_that_question():
+    fake = _CancelAtTheFirstDraw(REFUSES_TWO_USER_TURNS)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "a"), ("assistant", "b")])
+    w.inject("q")
+    before = w.conversation()
+    fake.cancel = threading.Event()
+    assert w.reply(cancel=fake.cancel).finish().stop_reason == "interrupted"
+    assert w.conversation() == before
+
+
+def test_a_cancel_at_the_first_draw_of_a_turn_going_on_leaves_it_open_with_its_results():
+    fake = _CancelAtTheFirstDraw(TOOLS)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "wie spät?"), ToolTurn((ToolCall("clock", {}),
+                                                   ToolResult("clock", "12:00")))])
+    assert w.turn_open
+    before = w.conversation()
+    fake.cancel = threading.Event()
+    assert w.reply(cancel=fake.cancel).finish().stop_reason == "interrupted"
+    assert w.conversation() == before and w.turn_open
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if not expected(fixture(stem), "writes_empty_reply")])
+def test_a_reply_taken_back_with_its_question_puts_back_what_the_question_evicted(stem):
+    fake = FakeContext(fixture(stem), gen_tokens=0)
+    w = ChatWrapper(Config(context_size=4096, evict_above_fraction=1.0, min_reply_tokens=32),
+                    context=fake)
+    w.begin("", [("user", "a" * 500), ("assistant", "b" * 500), ("user", "c" * 500),
+                 ("assistant", "d" * 250)])
+    history = w.conversation()["messages"]
+    # Not spliced, and too long to fit beside the whole history: it evicts as it is asked.
+    question = " " + "q" * (4096 - w.total_tokens + 100)
+    reply = w.reply(question).finish()          # ends at once: no empty reply is written
+    assert reply.stop_reason == "end_of_turn"
+    assert w.conversation()["messages"] == history and reply.n_evicted_messages == 0
+    assert_cache_reads_as_rendered(w, fake)
+
+
+def test_a_cache_whose_repair_fails_once_is_decoded_whole_again_by_the_next_action():
+    fake = _Flaky(PLAIN, gen_tokens=5)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin("s", [("user", "a"), ("assistant", "b")])
+    fake.fail = "generate"
+    with pytest.raises(RuntimeError):
+        w.reply("eins").finish()
+    fake.fail = "decode"                        # the repair at the next action fails once
+    assert w.reply("zwei").finish().text
+    assert_cache_reads_as_rendered(w, fake)

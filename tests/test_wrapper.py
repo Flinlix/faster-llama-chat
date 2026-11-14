@@ -1042,7 +1042,7 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
 @pytest.mark.parametrize("nothing", ["cancelled-at-once", "ends-at-once", "cancelled-by-a-tool"])
 def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_question_back(
         stem, nothing):
-    """These templates write no empty reply, so the request is taken back whole and the next question is answered."""
+    """These templates write no empty reply, so the request is taken back whole and the next question is answered; a later round cancelled before its first word leaves its turn open."""
     from llama_chat.resolved_template import ResolvedTemplate
     from tests.fake_context import ScriptedCall, written_call
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
@@ -1066,8 +1066,14 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
         else:
             fake.gen_tokens = 0
     w.reply("Erste Frage", **options).finish()
-    assert w.conversation()["messages"] == [] and not w.turn_open
     fake.gen_tokens = 7
+    if nothing == "cancelled-by-a-tool":
+        # A later round cancelled before its first word changes nothing: the turn stays open
+        # with its result, and the reply goes on with it.
+        assert w.turn_open and w.conversation()["messages"][0]["content"] == "Erste Frage"
+        assert w.reply().finish().text == "Antwort"
+        return
+    assert w.conversation()["messages"] == [] and not w.turn_open
     assert w.reply("Zweite Frage").finish().text == "Antwort"
     assert [m["text"] for m in rows(w)] == ["Zweite Frage", "Antwort"]
 

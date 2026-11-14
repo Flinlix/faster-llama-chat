@@ -111,9 +111,11 @@ stream early records exactly what the cache holds. An abandoned stream holds
 the wrapper's lock until it is collected: read it to its end, close it, or use
 it in a `with`. To stop a generation from another thread, pass
 `cancel=threading.Event()` and set it; the reply ends within one token with
-`stop_reason == "interrupted"`. Set before the request starts, or while its
-question is decoded, which stops within 512 tokens, it ends the request with
-nothing changed: no question is added and no older exchange is dropped.
+`stop_reason == "interrupted"`. Set before the reply's first word, while its
+question is decoded too, which stops within 512 tokens, it ends the request
+with nothing changed: no question is added and no older exchange is dropped.
+After a tool's result, set before the next first word, it leaves the turn
+open with its results, for `reply()` to go on with.
 
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
@@ -423,12 +425,11 @@ are to run is still handed its `ToolRegistry`.
 
 To keep everything, older turns included, keep each message as you send it
 and each reply as you read it. A request whose generation fails before it says
-anything is taken back, its question with it, so the conversation no longer
-holds that question. So is a request whose reply the template refuses to
+anything changes nothing: its question is taken back, and the older exchanges
+it pushed out come back. So does a request whose reply the template refuses to
 write, and one whose reply produced nothing, where the template writes no
-empty reply: one the model ended at once, or one cancelled before its first
-word was drawn, while a tool ran or closed for lack of room after its
-calls, which takes the turn's calls and results back with it. Where the
+empty reply: one the model ended at once, or one closed for lack of room after
+its calls, which takes the turn's calls and results back with it. Where the
 template writes an empty reply and two questions in a row, a reply to a
 question that has no answer, such as one that only thought, is taken back
 alone: its question stays, the next

@@ -4792,3 +4792,42 @@ The second half of the rule, judging each call of a batch on its own instead
 of refusing the whole batch for one bad entry, waits for the removal of the
 call-as-written code (403.3A): until then an unreadable call must stand alone
 in its turn.
+
+### One undo path (402.5A, 402.6A, 402.7A, 415.6A)
+
+Ten places put the conversation back after a failure or a cancel, from three
+different copies of "before the question", under three repair policies, and
+"produced nothing" meant one thing for a cancel while the question was
+decoded and another for a cancel just before the first word. Three bugs came
+from it (399.1 to 399.3): a generation that failed before its first word,
+after a question that evicted older exchanges, lost those exchanges for good
+and left the cache unlike the render until the next action; a cancel between
+the question's decode and the first word kept the question, recorded an empty
+reply on templates that refuse two questions in a row, closed a turn going on
+after its results, and deleted a question `inject` had added; and recording
+that failed on a turn its history opened kept the failed reply's call policy.
+
+Now every generation opens one attempt, a snapshot of the conversation and
+the cache's tokens, before its question is written, and the reply's recording
+ends it. Every exit before that, a cancel or a failure before the first word,
+a failure while the reply is recorded, puts the snapshot back whole, the
+exchanges the question evicted and the cut results included, together with
+the request's call policy. A cancel set while the cache is brought up for the
+generation is watched too, between parts as for a question. A fault after the
+reply is recorded keeps it. A request whose reply is taken back with its
+question, because the template writes neither the reply nor an empty one,
+goes back to the snapshot its first generation took, so the exchanges its
+question evicted come back (402.7A). A later round of a turn, cancelled
+before its first word, leaves the turn open with its results (402.6A, which
+replaces the limit of 366.13A to a request's first generation).
+
+The cache is brought back at once where it is known; one a failure left
+unknown is brought back by the next action, and a repair that fails is tried
+once more by decoding the whole conversation from nothing (419.9), so one
+failed repair no longer fails an unrelated action.
+
+Removed with it: the question's own take-back and the copy kept for it, the
+cache before the question kept per generation, the hand-written undo
+branches in recording, the cancel handling inside the question, and the
+request's call policy put back by hand. `tests/test_failures.py` tries each
+of the bugs above.

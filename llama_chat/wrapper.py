@@ -924,33 +924,47 @@ class ChatWrapper:
             withhold: Also keep a call's opening token from ever being drawn.
             on_started: Called once the request is written and the generation
                 starts, before anything it produces is recorded; given to a
-                request's first generation alone, which a ``cancel`` set
-                before it leaves without any change.
+                request's first generation alone.
+
+        Every exit before the generation's first token, by a cancel or a
+        failure, leaves the conversation and the cache as this call found
+        them, the history its question evicted included; so does a failure
+        while the reply is recorded. See design_history.md, "One undo path".
         """
         self._ensure_open()
         conversation = self._conversation
         decoded_from = conversation.decoded
         n_evicted_messages = 0
+        noted = self._turn_policy, self._turn_budget
+        conversation.open_attempt(starts_request=on_started is not None, asks=text is not None)
+
+        def roll_back() -> None:
+            conversation.roll_back()
+            if conversation.rolled_back:
+                self._turn_policy, self._turn_budget = noted
+
+        def interrupted() -> Reply:
+            return Reply(text="", n_prefilled_tokens=conversation.decoded - decoded_from,
+                         n_prompt_tokens=conversation.total_tokens,
+                         n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
         try:
-            # Only a request's first generation, the one that notes its start, can be cancelled
-            # before the request began.
-            if on_started is not None and cancel is not None and cancel.is_set():
+            if cancel is not None and cancel.is_set():
                 raise Cancelled("cancelled before the request was written")
             if text is not None:
                 n_evicted_messages = conversation.ask(text, cancel)
             elif not conversation.turn_open:
                 conversation.prompt()
         except Cancelled:
-            # Cancelled before its first word was drawn: the request changes nothing.
-            return Reply(text="", n_prefilled_tokens=conversation.decoded - decoded_from,
-                         n_prompt_tokens=conversation.total_tokens,
-                         n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
+            roll_back()
+            return interrupted()
+        except BaseException:
+            roll_back()
+            raise
         max_generated_tokens = self._reply_cap(max_reply_tokens)
         n_prompt_tokens = conversation.total_tokens
 
         generated = GenerationAccumulator()
         results_cut = conversation.results_cut
-        noted = self._turn_policy, self._turn_budget
         try:
             goes_on = text is None and conversation.turn_open
             reply_text = ReplyText(self._template.reasoning,
@@ -966,12 +980,10 @@ class ChatWrapper:
                                  starts_in_thought=reply_text.opens_in_thought))
             if on_started is not None:
                 on_started()
-            conversation.keep_question()
         except BaseException:
-            # Failed before it generated: taken back with its question, as a failed request.
-            self._turn_policy, self._turn_budget = noted
-            conversation.take_back_question()
+            roll_back()
             raise
+        failed = False
         try:
             for piece in pieces:
                 shown = reply_text.feed(piece)
@@ -984,14 +996,25 @@ class ChatWrapper:
             else:
                 if shown := reply_text.finish(generated.stop_reason):
                     yield shown
+        except BaseException:
+            failed = True
+            raise
         finally:
             pieces.close()
-            try:
-                # Runs on normal completion and on early close alike.
-                n_evicted_messages += self._record_reply(generated, reply_text, may_call_again)
-            finally:
-                if not generated.token_ids:
-                    self._turn_policy, self._turn_budget = noted    # it wrote nothing: nothing changes
+            if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
+                roll_back()                 # nothing was produced, so nothing changes
+                n_evicted_messages = 0
+            else:
+                try:
+                    # Runs on normal completion and on early close alike.
+                    n_evicted_messages += self._record_reply(generated, reply_text,
+                                                             may_call_again)
+                except BaseException:
+                    roll_back()
+                    raise
+                if conversation.rolled_back:
+                    self._turn_policy, self._turn_budget = noted
+                    n_evicted_messages = 0
         return Reply(
             text=reply_text.answer,
             n_prefilled_tokens=conversation.decoded - decoded_from,

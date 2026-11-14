@@ -89,10 +89,22 @@ class CacheSync:
         self._decode_at_end(tokens, want_logits)
 
     def generate(self, max_generated_tokens: int, out: GenerationAccumulator, **options):
-        """Stream a generation from the cache's end; what it decodes is appended to :attr:`tokens`."""
-        self._bring_up(want_logits=True)
-        if not self._logits:
-            self._decode_again_with_logits()
+        """Stream a generation from the cache's end; what it decodes is appended to :attr:`tokens`.
+
+        A ``cancel`` among ``options`` is watched while what the generation
+        follows is decoded too; set there, it ends the generation at once as
+        ``"interrupted"``, with nothing generated.
+        """
+        self.cancel = options.get("cancel")
+        try:
+            self._bring_up(want_logits=True)
+            if not self._logits:
+                self._decode_again_with_logits()
+        except Cancelled:
+            out.stop_reason = "interrupted"
+            return
+        finally:
+            self.cancel = None
         start = self._end
         pieces = generate(self._context, start, max_generated_tokens, out=out, **options)
         try:
@@ -191,10 +203,20 @@ class CacheSync:
         self._logits = False
 
     def repair(self) -> bool:
-        """Bring the cache to its tokens where a change was left for later or failed; whether it was needed."""
+        """Bring the cache to its tokens where a change was left for later or failed; whether it was needed.
+
+        Where bringing it up fails, it is emptied and its tokens decoded
+        whole once more; only a failure of that is raised.
+        """
         if self.is_current:
             return False
-        self._bring_up(want_logits=True)
+        try:
+            self._bring_up(want_logits=True)
+        except Cancelled:
+            raise
+        except Exception:
+            self._end = None                # decoded whole from nothing on the second try
+            self._bring_up(want_logits=True)
         return True
 
     def rest(self) -> None:
