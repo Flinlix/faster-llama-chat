@@ -382,12 +382,14 @@ a registry: a request whose calls are to run is handed one.
 
 **A template of its own for tools.** A GGUF may ship, beside its default chat
 template, one for a conversation that declares tools
-(`tokenizer.chat_template.tool_use`). Where it does, both pass the check a
+(`tokenizer.chat_template.tool_use`). Where it does, both meet the check a
 model meets at load, `capabilities(tools=True)` answers for that one and
-`capabilities(tools=False)` for the default, and a conversation
-is written with it when `begin` or `change_settings` is given `tools`, a
-registry or a list, even an empty one; with `tools=None` it is written with
-the default template. `change_settings` moves a running conversation from one
+`capabilities(tools=False)` for the default, and a conversation is written
+with it when `begin` or `change_settings` is given `tools`, even an empty
+list; with `tools=None` it is written with the default template. Where the
+template for tools fails that check, the model loads with its default
+template alone: a warning names the cause, `capabilities(tools=True)` says it
+calls no tools, and declaring a tool is refused with that cause. `change_settings` moves a running conversation from one
 to the other, its messages kept.
 
 **Every failure is told to the model** in its own result block, and the reply

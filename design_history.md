@@ -5331,3 +5331,14 @@ alone, and a pair is a `TypeError` that names the form to use. The tests
 write their histories as dictionaries. The README's quick start and its
 tool example were corrected with it; the latter still passed a registry
 itself as `tools`, which the cleanups had made a `TypeError`.
+
+### A template for tools that cannot be read refuses only tools
+
+Where a model's further template for tools failed the load check, the whole
+model was refused, though its default template serves every conversation
+without tools (found while adding Hermes 2 Pro). At the user's choice the
+model now loads with its default template: the cause is logged once as a
+warning, `capabilities(tools=True).can_call_tools` is false, and every
+declaration of tools, through `begin`, `change_settings` or a registry
+policy, is refused with an `UnsupportedError` naming that cause. The default
+template must still pass the check, as before.

@@ -9,6 +9,7 @@ conversation.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Mapping
 
 from .cache_context import MODEL_READER, TOOL_USE_TEMPLATE, ensure_answers
@@ -28,6 +29,8 @@ from .render_checks import writes_two_user_turns
 from .reply_text import reply_header
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
+
+_log = logging.getLogger(__name__)
 
 # The function a template calls to read the clock, as the renderer provides it.
 _CLOCK = "strftime_now"
@@ -889,19 +892,29 @@ class ResolvedTemplates:
         reasoning_on: What the add-on file says turns reasoning on, for both
             templates; see :class:`ResolvedTemplate`.
 
+    A template for tools that cannot be recovered leaves the model with its
+    default template, every conversation with tools refused with the cause.
+
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
-        ValueError: If either template cannot be recovered, or fails validation
-            against the model.
+        ValueError: If the default template cannot be recovered, or fails
+            validation against the model.
     """
 
     def __init__(self, context, addon_call: Mapping[str, str] | None = None,
                  reasoning_on: Mapping[str, object] | None = None) -> None:
         self._default = ResolvedTemplate(context, addon_call, reasoning_on=reasoning_on)
-        self._for_tools = (ResolvedTemplate(context, addon_call, template_name=TOOL_USE_TEMPLATE,
-                                            reasoning_on=reasoning_on)
-                           if context.chat_template_text(TOOL_USE_TEMPLATE) is not None
-                           else self._default)
+        self._for_tools = self._default
+        self._tools_refused: str | None = None     # why the template for tools is not used
+        if context.chat_template_text(TOOL_USE_TEMPLATE) is not None:
+            try:
+                self._for_tools = ResolvedTemplate(context, addon_call,
+                                                   template_name=TOOL_USE_TEMPLATE,
+                                                   reasoning_on=reasoning_on)
+            except ValueError as refused:
+                self._tools_refused = str(refused)
+                _log.warning("the model's template for tools cannot be used, so no "
+                             "conversation can call tools: %s", refused)
 
     @property
     def has_template_for_tools(self) -> bool:
@@ -912,8 +925,21 @@ class ResolvedTemplates:
         """The template a conversation is written with: the one for tools where it is begun with tools."""
         return self._for_tools if uses_tools else self._default
 
+    def ensure_tools_usable(self, template: ResolvedTemplate, field: str) -> None:
+        """Refuse tools in a conversation written with ``template``, one of :meth:`for_conversation`, where it could never use them.
+
+        Raises:
+            UnsupportedError: Naming ``field``, if the model's template for
+                tools could not be read, or ``template`` cannot call tools.
+        """
+        if self._tools_refused is not None:
+            raise UnsupportedError(field, "this model's template for tools could not be read, "
+                                          f"so it calls no tools: {self._tools_refused}")
+        template.ensure_tools_usable(field)
+
     def capabilities(self, uses_tools: bool) -> Capabilities:
         """What a conversation written with :meth:`for_conversation` of ``uses_tools`` accepts."""
         template = self.for_conversation(uses_tools)
-        return Capabilities(template.can_call_tools, template.can_reason,
+        return Capabilities(template.can_call_tools and self._tools_refused is None,
+                            template.can_reason,
                             template.can_turn_off_reasoning, template.has_system_turn)

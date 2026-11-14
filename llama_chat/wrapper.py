@@ -230,7 +230,7 @@ class ChatWrapper:
                     raise UnsupportedError(
                         "messages", "this model reads a turn that called tools only in a "
                         "conversation begun with tools; pass tools, an empty list included")
-                template.ensure_tools_usable("tools" if specs else "messages")
+                self._templates.ensure_tools_usable(template, "tools" if specs else "messages")
             if reasoning:
                 template.ensure_can_reason()
             if system_prompt and not template.has_system_turn:
@@ -653,7 +653,7 @@ class ChatWrapper:
 
             def accept() -> None:
                 if specs:
-                    template.ensure_tools_usable("tools")
+                    self._templates.ensure_tools_usable(template, "tools")
                 if reasoning:
                     template.ensure_can_reason()
                 if conversation.has_system_prompt and not template.has_system_turn:
@@ -842,7 +842,7 @@ class ChatWrapper:
         """
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
-            self._template.ensure_tools_usable("tool_call_policy")
+            self._templates.ensure_tools_usable(self._template, "tool_call_policy")
         # A turn going on has called; a question closes it first.
         any_call_asked = text is None and self._conversation.turn_open
         open_turn_text = self._open_turn_text() if text is None else ""

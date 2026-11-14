@@ -2025,13 +2025,15 @@ def test_a_conversation_begun_with_tools_is_written_with_the_template_for_tools(
     assert "<decl>weather</decl>" in held_text(fake) and "<[say>" not in held_text(fake)
 
 
-def test_a_template_for_tools_that_fails_the_load_check_refuses_the_model():
+def test_a_template_for_tools_that_fails_the_load_check_refuses_only_tools_naming_why():
     # Its closing after a reply is plain text, which a reply could never stop on.
     broken = {**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, "tool_use_template":
               "{%- for m in messages -%}{{ m.role }}: {{ m.content }} END<turn]>\n"
               "{%- endfor -%}{%- if add_generation_prompt -%}model: {%- endif -%}"}
-    with pytest.raises(ValueError, match="generation would never stop"):
-        _with_a_template_for_tools(broken)
+    chat, _fake = _with_a_template_for_tools(broken)
+    with pytest.raises(UnsupportedError, match="generation would never stop"):
+        chat.begin("persona", tools=[ToolSpec("clock", "Die Zeit.", {})])
+    chat.begin("persona")
 
 
 def _counting_clock():
@@ -2229,3 +2231,15 @@ def test_a_question_that_closes_a_batch_with_an_unreadable_entry_begins_again_th
     saved = w.conversation()
     w.begin(**saved)
     assert w.conversation() == saved
+
+
+def test_a_template_for_tools_that_cannot_be_read_leaves_the_model_without_tools_only(caplog):
+    unreadable = dict(TOOLS, tool_use_template="{{ raise_exception('not this one') }}")
+    chat = ChatWrapper(Config(context_size=1024), context=FakeContext(unreadable))
+    assert not chat.capabilities(tools=True).can_call_tools
+    assert "template for tools cannot be used" in caplog.text
+    with pytest.raises(UnsupportedError, match="template for tools could not be read") as refused:
+        chat.begin("persona", tools=[ToolSpec("clock", "Die Zeit.", {})])
+    assert refused.value.field == "tools"
+    chat.begin("persona")
+    assert chat.reply("hallo").finish().text == "reply"
