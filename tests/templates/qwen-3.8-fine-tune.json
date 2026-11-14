@@ -5,6 +5,7 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": false,
+ "n_closing_tokens": 1,
  "render_variables": {
   "off": {
    "enable_thinking": false

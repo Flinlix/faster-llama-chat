@@ -5,6 +5,10 @@
  "marks_thought": false,
  "can_reason": false,
  "calls_tools": true,
+ "n_closing_tokens": 1,
+ "reads_clock": true,
+ "json_call_keys": ["name", "parameters"],
+ "call_lead_in": "{\"name\": \"",
  "call_marks": {"opening": "{\"name\": \"", "closing": "<|eot_id|>", "tags": false},
  "writes_arguments_as_json": true,
  "render_variables": {

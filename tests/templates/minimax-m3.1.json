@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 2,
+ "call_lead_in": "\n]<]minimax[>[<invoke name=\"",
  "call_marks": {"opening": "<tool_call>", "closing": "</invoke>", "tags": true},
  "writes_text_and_number_alike": true,
  "render_variables": {

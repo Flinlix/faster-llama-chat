@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 2,
+ "call_lead_in": "<function name=\"",
  "call_marks": {"opening": "<function name=\"", "closing": "</function>", "tags": false},
  "call_follows_text": true,
  "writes_text_and_number_alike": true,

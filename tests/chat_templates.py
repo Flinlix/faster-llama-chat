@@ -42,6 +42,13 @@ _UNSTATED = {
     "writes_arguments_as_json": False,  # a call's arguments are written as one JSON object
     "writes_text_and_number_alike": False,  # a text that reads as a number is written as the number is
     "writes_history_without_question": True,  # a history may open with a turn that called tools
+    "n_closing_tokens": None,           # tokens the closing after a reply takes at most
+    "reads_clock": False,               # the template reads the date
+    "json_call_keys": None,             # the keys a JSON call names its function and arguments by
+    "declares_before_newest_turn": False,  # the declarations move with each question
+    "content_rewrites": [],             # texts the template writes otherwise inside a message
+    "writes_two_user_turns": True,      # two questions in a row are written
+    "call_lead_in": "",                 # fixed text a model writes before a call's name
 }
 
 

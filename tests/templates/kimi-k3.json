@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 20,
+ "call_lead_in": "call tool=\"",
  "call_marks": {"opening": "<|close|>response<|sep|><|open|>tools<|sep|><|open|>call tool=\"", "closing": "<|sep|><|close|>call<|sep|>", "tags": false},
  "render_variables": {
   "off": {

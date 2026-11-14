@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 1,
+ "call_lead_in": "\n<tool_call:opensource>",
  "call_marks": {"opening": "<tool_calls:opensource>", "closing": "</tool_call:opensource>", "tags": true},
  "writes_text_and_number_alike": true,
  "render_variables": {

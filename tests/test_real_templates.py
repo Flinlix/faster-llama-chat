@@ -378,3 +378,29 @@ def test_a_template_that_reads_the_clock_writes_the_date_as_its_file_says(stem, 
             [{"role": "system", "content": "s"}, {"role": "user", "content": "x"}],
             generation_prompt=True)
         assert (clock[0].strftime(date_format) in with_system_prompt) == beside_system_prompt
+
+
+# ----- every property a load reads, against the template's file ---------------------
+@pytest.mark.parametrize("stem", STEMS)
+def test_every_property_a_load_reads_is_what_the_templates_file_states(stem):
+    _context, template = _load(stem)
+    properties, known = template.properties, fixture(stem)
+    assert properties.n_closing_tokens == expected(known, "n_closing_tokens")
+    assert properties.reads_clock == expected(known, "reads_clock")
+    assert properties.reads_clock == (expected(known, "date_format") is not None
+                                      or expected(known, "reads_clock"))
+    keys = expected(known, "json_call_keys")
+    assert properties.json_call_keys == (None if keys is None else tuple(keys))
+    assert properties.declares_before_newest_turn == expected(known, "declares_before_newest_turn")
+    assert [list(r) for r in properties.content_rewrites] == expected(known, "content_rewrites")
+    assert properties.writes_two_user_turns == expected(known, "writes_two_user_turns")
+    assert properties.call_lead_in == expected(known, "call_lead_in")
+    assert properties.has_system_turn == expected(known, "can_take_system_prompt")
+    assert properties.can_reason == known["can_reason"]
+    assert (properties.reasoning is not None) == known["marks_thought"]
+    assert (properties.can_declare_tools and properties.can_write_results) == known["calls_tools"] \
+        or not known["calls_tools"]
+    marks = expected(known, "call_marks")
+    if marks is not None:
+        assert properties.call_follows_text == expected(known, "call_follows_text")
+        assert (properties.call_tags is not None) == marks["tags"]

@@ -5,6 +5,8 @@
  "marks_thought": false,
  "can_reason": false,
  "calls_tools": true,
+ "n_closing_tokens": 1,
+ "writes_two_user_turns": false,
  "call_marks": {"opening": "[TOOL_CALLS]", "closing": "</s>", "tags": true},
  "writes_arguments_as_json": true,
  "render_variables": {

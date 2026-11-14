@@ -5033,3 +5033,24 @@ helper that patched the expected render the same way. A reply still reports
 what the model wrote for an unreadable call, in its `tool_calls`, for the
 caller to see; the conversation keeps no copy of it. The earlier risk of a
 tag's letters in that text turning into the tag went with the splice.
+
+### One record of what a load reads from a template (401.4A)
+
+Everything a load reads from a template was already worked out in one
+sequence, the template's constructor, but kept in about a dozen loose fields
+and four record types, and several properties had no test of their own: the
+closing's length, the keys of a JSON call, declarations that move with each
+question, the texts a template rewrites inside a message, whether it writes
+two questions in a row, and the fixed text before a call's name. Whether two
+questions in a row are written was also worked out again on every reply that
+could need it.
+
+`ResolvedTemplate.properties` is now one frozen `TemplateProperties` record
+of every load property, built once at the end of the load; the two-question
+check is read from it. Each test template's file states the expected value of
+each property where it differs from the usual one, and
+`tests/test_real_templates.py` compares the record with the file, field by
+field, on every test template. The loose fields stay where the load builds
+them, since later steps of the load read earlier ones; the record is what
+everything after the load reads. Not done: splitting the call boundary into
+its load facts and its per-generation options, which only moves code.

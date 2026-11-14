@@ -25,6 +25,7 @@ from .template import (CallBoundary, CallBody, Reasoning, TemplateFragments,
 from .template_extract import (ESCAPABLE, as_probes_read, extract_content_rewrites,
                                extract_fragments, extract_reasoning, extract_removed_thought,
                                refusing)
+from .render_checks import writes_two_user_turns
 from .reply_text import reply_header
 from .tokenizing import first_special_token, split_at_tags, tag_texts
 from .tools import ToolCall, ToolSpec
@@ -130,6 +131,26 @@ class ResolvedTemplate:
                         else 1 if boundary.tool_tokens else 0)
         self._n_closing_tokens = max(call_closing, len(context.tokenize(
             self._fragments.assistant_suffix, add_special=False)))
+        self.properties = self._read_properties()
+
+    def _read_properties(self) -> TemplateProperties:
+        """Every property this load read from the template, in one record."""
+        boundary = self._boundary
+        return TemplateProperties(
+            reads_clock=self._reads_clock, fragments=self._fragments,
+            has_system_turn=self._has_system_turn, turn_end_token=self._turn_end_token,
+            content_rewrites=self._fragments.rewrites, tool_fragments=self._tool_calls,
+            call_tags=boundary.tool_tokens, call_texts=boundary.call_texts,
+            call_follows_text=boundary.follows_text, call_lead_in=self._call_lead_in,
+            call_format_from_addon=self._call_from_file, call_body=self._call_body,
+            json_call_keys=self._json_keys,
+            declares_before_newest_turn=self._declares_before_newest_turn,
+            declaration_variables=dict(self._variables),
+            can_declare_tools=self._can_declare_tools,
+            can_write_results=self._can_write_results, reasoning=self._reasoning,
+            can_reason=self._can_reason, n_closing_tokens=self._n_closing_tokens,
+            writes_two_user_turns=writes_two_user_turns(
+                lambda messages, prompt: self.render(messages, generation_prompt=prompt)))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -794,6 +815,62 @@ def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
             variables = {**reasoning_on, **(variables or {})}
         return render(messages, tools, reasoning=reasoning, variables=variables, **options)
     return rendered
+
+
+@dataclasses.dataclass(frozen=True)
+class TemplateProperties:
+    """Everything a load reads from a model's chat template, in one place; see each field's reader on :class:`ResolvedTemplate`.
+
+    Attributes:
+        reads_clock: The template reads the date, so a render may change with it.
+        fragments: The texts around each kind of turn.
+        has_system_turn: A system prompt stays where it is written.
+        turn_end_token: The tag that ends a reply, where one does.
+        content_rewrites: Texts the template writes otherwise inside a message.
+        tool_fragments: The texts around a past call and its result; ``None``
+            where the template describes no call.
+        call_tags: The tags that open and close a generated call, where it has
+            tags of its own.
+        call_texts: The texts that open and close a generated call, where it
+            has no tags.
+        call_follows_text: A call may follow a reply's text.
+        call_lead_in: Fixed text the model writes before a call's name.
+        call_format_from_addon: The call format comes from the add-on file.
+        call_body: How a call's arguments are spelled, where not as JSON.
+        json_call_keys: The keys a JSON call names its function and arguments
+            by, where a call is JSON.
+        declares_before_newest_turn: The declarations move with each question.
+        declaration_variables: The template variables the declarations are
+            passed under.
+        can_declare_tools: The template writes the declarations.
+        can_write_results: The template writes a call's result.
+        reasoning: How a thought is marked and turned on, where it is.
+        can_reason: A conversation can be asked to reason.
+        n_closing_tokens: Tokens the closing after a reply takes at most.
+        writes_two_user_turns: The template writes two questions in a row.
+    """
+
+    reads_clock: bool
+    fragments: TemplateFragments
+    has_system_turn: bool
+    turn_end_token: int | None
+    content_rewrites: tuple
+    tool_fragments: ToolCallFragments | None
+    call_tags: tuple[int, int] | None
+    call_texts: tuple[str, str] | None
+    call_follows_text: bool
+    call_lead_in: str
+    call_format_from_addon: bool
+    call_body: CallBody | None
+    json_call_keys: tuple[str, ...] | None
+    declares_before_newest_turn: bool
+    declaration_variables: dict
+    can_declare_tools: bool
+    can_write_results: bool
+    reasoning: Reasoning | None
+    can_reason: bool
+    n_closing_tokens: int
+    writes_two_user_turns: bool
 
 
 @dataclasses.dataclass(frozen=True)

@@ -5,6 +5,9 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 1,
+ "reads_clock": true,
+ "call_lead_in": "commentary to=functions.",
  "call_marks": {"opening": "<|channel|>commentary to=functions.", "closing": "<|call|>", "tags": false},
  "render_variables": {
   "off": {},

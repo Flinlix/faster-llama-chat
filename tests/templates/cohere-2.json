@@ -5,6 +5,9 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 2,
+ "json_call_keys": ["tool_name", "parameters", "tool_call_id"],
+ "call_lead_in": "[\n    {\"tool_call_id\": \"0\", \"tool_name\": \"",
  "call_marks": {"opening": "<|START_ACTION|>", "closing": "<|END_ACTION|>", "tags": true},
  "writes_arguments_as_json": true,
  "render_variables": {

@@ -34,7 +34,7 @@ from .messages import (THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_histor
                        with_result_text)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, splice_probe, tool_turns_stay_written,
-                            windows_are_exact, writes_two_user_turns)
+                            windows_are_exact)
 from .rendering import ConversationRendering, KeptTurn, Target
 from .errors import (ContextOverflowError, InvalidArgumentError, OutOfOrderError,
                      TemplateRefusedError, UnsupportedError)
@@ -996,7 +996,7 @@ class RenderedCache:
             starts = exchange_starts(self._state.messages)
             return self._remove_from(starts[-1] if starts else len(self._system_part()))
         if not answer and not called and not resumed \
-                and writes_two_user_turns(self._rendering.render):
+                and self.template.properties.writes_two_user_turns:
             # A reply all thought or cut before its answer leaves the question
             # unanswered, as the next question then follows it.
             return self._remove_from(len(self._state.messages) - 1)

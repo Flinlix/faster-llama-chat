@@ -5,6 +5,8 @@
  "marks_thought": true,
  "can_reason": true,
  "calls_tools": true,
+ "n_closing_tokens": 1,
+ "content_rewrites": [["</think>", ""], ["<think>", ""], ["<|assistant|>", "&lt;|assistant|&gt;"], ["<|begin_of_text|>", "&lt;|begin_of_text|&gt;"], ["<|developer|>", "&lt;|developer|&gt;"], ["<|end_of_text|>", "&lt;|end_of_text|&gt;"], ["<|observation|>", "&lt;|observation|&gt;"], ["<|system|>", "&lt;|system|&gt;"], ["<|user|>", "&lt;|user|&gt;"]],
  "call_marks": {"opening": "<tool_call>", "closing": "</tool_call>", "tags": true},
  "writes_text_and_number_alike": true,
  "render_variables": {
