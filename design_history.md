@@ -11,40 +11,29 @@ that later entry first.
 Two rules govern the library. Every model whose GGUF ships a chat template is
 encoded exactly as that template renders the conversation, or refused. A model
 needs no code change, and no model is supported by decoding the whole
-conversation again each turn.
+conversation again each turn. One line per topic, with the sections that hold
+the reasons:
 
-- **The cache holds the template's render** of the conversation, which is kept
-  as the messages a template is given. Each action decodes only from the first
-  token that differs; no message is assembled from pieces of the template. See
-  "The render is the conversation's encoding"; the design it replaced is "The
-  mechanism, moved here from the README".
-- **Each text of the caller's is placed by a second render** with a marker in
-  its place, and tokenized with special-token parsing off, so a typed tag stays
-  text. See "Every text placed by a marker render".
-- **A turn that called tools keeps the tokens it was generated as,** in place
-  of the template's version. See "The target, built without the cache".
-- **The next question is prepared after each reply,** while the reply is read,
-  so a question decodes only its own tokens; windows keep that work from
-  growing with the conversation. See "The template as the program", "Rendering
-  windows" and "An injected question waits only for itself".
-- **Eviction drops whole exchanges,** never the system turn. A cache that
-  shifts keeps the survivors' KV. One that cannot is cut, restored from a saved
-  state or decoded again, and drops far enough that this happens only every few
-  turns. See "How eviction works", "Eviction removes whole exchanges", "A state
-  kept where the oldest question begins", "Where an eviction stops on a cache
-  that cannot shift" and "Bugs found by the rethink".
-- **One owner for each kind of state:** `RenderedCache` the conversation,
-  `CacheSync` the cache's tokens and every decode, `ConversationRendering` the
-  renders. A failed action puts the state back. See "One owner of the turn, of
-  the tokens, and of a failed action" and "Restructured inside the library".
-- **The template is read at load only for what a generation needs:** the
-  generation prompt, the closing after a reply, a thought's tags, the call
-  format, and what the template does to message text. See "What a template is
-  read for, and refused for", "How reasoning is read" and "How a call's format
-  is recovered".
-- **An add-on file gives what a template cannot tell,** and the public
-  interface has one way to do each thing. See "One way to do each thing in the
-  public interface".
+| Topic | How it works today | Sections |
+|---|---|---|
+| The encoding | The cache holds the template's render of the conversation; each action decodes only from the first token that differs. | "The render is the conversation's encoding", "The template as the program" |
+| The caller's text | Each text is placed by a second render with a marker in its place and tokenized with special-token parsing off, so a typed tag stays text. | "Every text placed by a marker render" |
+| Rendering | The library renders the template from the text a context gives; renders are remembered while the template, the tools and the reasoning switch stay. | "The library renders the template; a context gives its text", "Small cleanups after the structure review" |
+| Reading a template | Read once at load, into one record: turns, closing, thought tags, call format, what it does to message text. | "What a template is read for, and refused for", "One record of what a load reads from a template" |
+| Reasoning | Only the shared switches are read from a template; an add-on file may name another. | "How reasoning is read", "An add-on file may name what turns reasoning on" |
+| Tool calls | A call is read in the one shape its template writes, answered by the caller or a registry, and every call is reported. | "Tools and tool calls", "Calls are read in the one shape their template writes", "What a failed call is told" |
+| Add-on call formats | Where a template does not show a call, the add-on file says how it is written, and its format wins over the template's. | "How a call's format is recovered", "An add-on file's call format wins over the template's", "Settings, add-on files and logging" |
+| A template for tools | A model's further template for tools writes every conversation begun with tools, given a list of tools always. | "A real model with a template for tools of its own" |
+| Kept turns | A turn that called tools keeps the tokens it was generated as, and a begin on the same model restores them. | "The target, built without the cache", "Exact restore with model handover" |
+| The next question | Prepared after each reply, so a question decodes only its own tokens; windows keep that work from growing. | "Rendering windows", "An injected question waits only for itself" |
+| Eviction | Whole exchanges go, never the system turn; a cache that cannot shift drops far enough that it is rebuilt only every few turns. | "How eviction works", "Structure review: what changed and why", "Where an eviction stops on a cache that cannot shift" |
+| Failures and refusals | One snapshot per action puts everything back; every refusal is one family, raised before anything changes. | "One undo path", "One family of refusals" |
+| Nothing blocks a question | A question closes an open turn first and joins an unanswered one. | "Nothing blocks a question" |
+| What changed unasked | Every action reports and logs what it changed beyond what was asked. | "One report of what an action changed" |
+| The message form | A history goes in and comes out as chat messages. | "One message form: chat messages in and out" |
+| Threads | Actions take turns under one lock, readers see a published copy, and closing on a reply's own thread ends that reply. | "One read of the system prompt and the history", "Closing on the thread that reads a reply ends that reply first", "Load time and thread defaults" |
+| State and its parts | The conversation owns its state; eviction, result cutting, publishing and windows are parts without state of their own. | "One owner of the turn, of the tokens, and of a failed action", "The conversation split into parts without state" |
+| The public interface | One way to do each thing. | "One way to do each thing in the public interface" |
 
 ## 2026-11-07: The mechanism, moved here from the README
 
@@ -3774,7 +3763,7 @@ call is therefore empty. A mention of the opening in prose is not a call, as
 before: a plain-text opening counts only at the reply's start or right after
 a tag.
 
-## 2026-11-13: The user's decisions on the review of one-model cases (345.21A)
+## 2026-11-13: The user's decisions on the review of one-model cases
 
 ### Calls are read in the one shape their template writes
 
@@ -4060,7 +4049,7 @@ there); delimiters remain the way back for anything else. This is the shape
 the template writes, as the rule "a call is read in the one shape its
 template writes" asks, and an add-on file's call keeps setting it as before.
 
-## 2026-11-13: The user's decisions on the answers page (356)
+## 2026-11-13: The user's decisions on the answers page
 
 ### A number where a tool asks for text is the text the model wrote
 
@@ -4092,7 +4081,7 @@ the thought's opening, a call's opening after the reply's tag, the answer's
 opening, and the text a reply ends with where a call opens with the start of
 its closing. No bracket character is left written into the code for it.
 
-### Fixes from the review of 356.7A and 356.10A (J1 to J7)
+### Fixes from the second review of the one-model cases
 
 - **The tag list is checked where a model is adopted (J1).** Since tag ends
   are read from the model's tag list alone, a cache context of one's own that
@@ -4118,7 +4107,7 @@ its closing. No bracket character is left written into the code for it.
   last message read by tags of another shape, which the bracket rule read too
   wide.
 
-## 2026-11-13: The first word after a start (369)
+## 2026-11-13: The first word after a start
 
 ### A full batch warms the GPU at load
 
@@ -4151,7 +4140,7 @@ would help one caller and leave every other one with the slower first
 `begin`.
 
 
-## 2026-11-13: Fixes from the whole-project review (366, 376)
+## 2026-11-13: Fixes from the whole-project review
 
 The user picked how each finding of the whole-project review of 2026-11-13
 is fixed (366.x), and asked that whatever is known from one model alone goes
@@ -4333,7 +4322,7 @@ same answer. Measured on the same stand-in after both changes: 0.2 s at 16k,
 0.4 s at 32k and 1.0 s at 64k, about two dozen renders instead of one per
 dropped exchange.
 
-### Small text errors (366.31)
+### Small text errors
 
 366.31 (D5 to D8, D11 to D13). Corrected: the example of an id that fed the
 call count (`callbacks` is five base-36 digits after `call` and still counts;
@@ -4356,7 +4345,7 @@ call names the failure and ends in the one instruction not already implied,
 whether another call is worth making; what to do instead is left unsaid, as
 there is nothing to do but answer.
 
-### A split render grows its placements as a list (366.25)
+### A split render grows its placements as a list
 
 366.25 (K6). Splitting a render into the template's text and the caller's
 grew its tuple of placements one entry at a time, which copies the tuple each
@@ -4366,7 +4355,7 @@ time: quadratic in the messages. 10,000 messages took 0.4 s and 80,000 took
 the refusal of 100,000 replies takes 5.9 s, most of it the template's own
 render. A second `return` after the first, which could never run, is gone.
 
-### An infinite wait for idle waits, and a timeout that is no time is refused (366.30)
+### An infinite wait for idle waits, and a timeout that is no time is refused
 
 366.30 (T8). `wait_idle(float("inf"))` raised Python's own `OverflowError`
 and a NaN a `ValueError` from the lock, neither naming the argument. Infinity
@@ -4374,7 +4363,7 @@ now waits as `None` does, and a value that is not a number of seconds of at
 least 0 (NaN, a negative number, a string, a bool) is refused naming
 `timeout_s`.
 
-### A tool turn refuses a step it cannot hold (366.26)
+### A tool turn refuses a step it cannot hold
 
 366.26 (K7). A `ToolTurn` step of another kind, such as a message dictionary
 or a number, was silently dropped from the history, and a call whose
@@ -4382,7 +4371,7 @@ arguments were a list reached the template, which refused the whole
 conversation without saying why. `ToolTurn` now refuses both when it is made,
 naming the step.
 
-### The tokenizer memory is bounded by characters too (366.22)
+### The tokenizer memory is bounded by characters too
 
 366.22 (K5). The memory of what was tokenized started over only after 20,000
 entries, however long each was: a 2 MB tool result left about 36 MB behind,
@@ -4393,7 +4382,7 @@ without being kept. The bound is about 30 times the text of a 32,000-token
 conversation, so the memory starts over rarely enough that the renders
 around a reply still find their pieces in it.
 
-### A tool stopped mid-round keeps the results before it (366.24)
+### A tool stopped mid-round keeps the results before it
 
 366.24 (T7). Where a tool raised `KeyboardInterrupt` (Ctrl+C) during the
 second call of a round run by a registry, the first call's result, though
@@ -4403,7 +4392,7 @@ runs, as it already did where the stream was closed at a call, and the rest
 stay owed. `ToolRegistry.call` still turns only an `Exception` into a result,
 so a stop is never told to the model as a tool failure.
 
-### Room for a call's closing, and the cache after a reply taken back (366.21, 366.14)
+### Room for a call's closing, and the cache after a reply taken back
 
 366.21 (K4). A reply kept room after itself only for the closing of a reply's
 text. A model that ended its turn inside a call at the last free token had the
@@ -4425,7 +4414,7 @@ conversation is empty, so the cache lost the 2,400 tokens `begin` had decoded,
 and the next question decoded them again. A reply taken back now leaves the
 cache decoded ahead of the next question, as after any other reply.
 
-### The package's name, what a message count counts, and two claims (366.18A, 366.20, 366.34A, 366.35B)
+### The package's name, what a message count counts, and two claims
 
 366.34A (D10). The project is faster-llama-chat; the distribution was named
 `llama_chat`, as the README's title was. It now installs as
@@ -4449,7 +4438,7 @@ prompt with reasoning on leaves that thought open.
 is tested on, which no record shows. The claim is gone; 3.11 stays the
 version it requires.
 
-### Add-on files spelled as their test templates (366.33A)
+### Add-on files spelled as their test templates
 
 366.33A (D9). Four add-on files spelled a model's name otherwise than the
 test template of the same model: `qwen3`, `qwen3.5`, `qwen3-coder` and
@@ -4458,7 +4447,7 @@ test template of the same model: `qwen3`, `qwen3.5`, `qwen3-coder` and
 shipped add-on file is found by its template's fingerprint, never by its
 name, so nothing a caller does changes.
 
-### The demo uses the public interface alone (366.32)
+### The demo uses the public interface alone
 
 366.32 (D14). The demo subclassed `KVContext`, which the package does not
 export, to count what each action decodes. It now reads the same from the
@@ -4468,7 +4457,7 @@ reply's `n_prefilled_tokens`, and it loads its models with
 processor: 5 to 16 tokens decoded per reply, and the system prompt kept
 through every eviction of the small-context run.
 
-### A reply that fails before it generates changes nothing (366.11A, 366.12)
+### A reply that fails before it generates changes nothing
 
 366.11A (T4). After a reply's question was decoded, a few steps prepared the
 generation (the reply text's filter, the test of the turn's end, the call
@@ -4489,7 +4478,7 @@ changed them, so the next `reply()` of a turn its history opened handed a
 call over where it would otherwise have answered it. A reply that wrote
 nothing now leaves both as they were.
 
-### A request cancelled before it starts changes nothing (366.13A)
+### A request cancelled before it starts changes nothing
 
 366.13A (T6). The cancel was read only while the model wrote, once per token.
 A request whose cancel was set while it waited behind another reply, or
@@ -4512,7 +4501,7 @@ request to go on with it is cancelled before it starts, and the next reply
 goes on with it. 512 tokens is a trade: a smaller part stops sooner on the
 processor, a larger one batches better on a graphics card.
 
-### A question is measured beside the system turn only near the room (366.17A)
+### A question is measured beside the system turn only near the room
 
 366.17A (P3). Before each question's first token, the library rendered and
 tokenized the system turn, every declared tool included, with the question,
@@ -4525,7 +4514,7 @@ clock change), and a question is counted alone beside it. Only a question
 whose count comes within 64 tokens of the room is measured in the system
 turn's render as before, so the check refuses exactly what it refused.
 
-### A result given as a value comes back as that value (366.19A)
+### A result given as a value comes back as that value
 
 366.19A (D3). A tool result given as a dictionary, say, was written as the
 JSON text the model reads and came back from `conversation()` as that text,
@@ -4536,7 +4525,7 @@ message without it, so what the model reads is unchanged. A result cut to fit
 is no longer the value given, so it comes back as the cut text the model was
 given, which is what beginning again from it must write.
 
-### A history that fits is tried whole once its size says so (366.23)
+### A history that fits is tried whole once its size says so
 
 366.23 (P4). `begin` finds the newest history that fits in half the context
 by rendering twice as many exchanges each time. A history that fits anyway
@@ -4548,7 +4537,7 @@ with 50 or 200 short exchanges takes 22 renders, the load's own checks
 included, instead of 30 and 34; a history far longer than the context costs
 what it cost before.
 
-### Whether a result is written is read from its turn (366.16)
+### Whether a result is written is read from its turn
 
 366.16 (P2). Between a call's closing and the first word of its answer, the
 conversation was rendered whole several times: about 1 s with Gemma 4 at
@@ -4560,7 +4549,7 @@ already is. Writing a result on a 300-exchange stand-in now renders the
 whole conversation twice instead of four times; the two left measure whether
 the result fits, which needs the whole.
 
-### A thought a call left open goes on hidden after its result (366.8)
+### A thought a call left open goes on hidden after its result
 
 366.8 (V3). A reasoning model that called a tool in the middle of its
 thought, and went on thinking after the result before it closed the thought,
@@ -4574,7 +4563,7 @@ answer after its closing is the answer. On the two templates that write a
 call after text, a call inside a thought is a mention (F2 of the review of
 366.2A), so the case does not arise there.
 
-### The cache check compares tokens, and the round trip drives a call with reasoning on (366.10)
+### The cache check compares tokens, and the round trip drives a call with reasoning on
 
 366.10 (V5, V6). The test check that the cache holds the template's render
 token for token compared what the tokens spell, so a token a generation
@@ -4588,7 +4577,7 @@ runs with generated tokens of both kinds. The test that beginning again from
 reasoning on too, the call after a closed thought. All pass without a change
 to the library.
 
-### The review of this round's changes (366, second round)
+### The review of this round's changes
 
 One fresh review of the 18 changes above found twelve problems; each was
 rerun and fixed:
@@ -4623,9 +4612,9 @@ rerun and fixed:
   has to be uninstalled (366.34A). The split timing test takes the shortest
   of three runs, so one pause of the machine cannot fail it (366.25).
 
-## 2026-11-13: The last findings of the review (390)
+## 2026-11-13: The last findings of the review
 
-### Two steps no longer grow with the conversation (366.28)
+### Two steps no longer grow with the conversation
 
 366.28 (P5). A few steps of every reply went over the whole conversation:
 the history items were counted by building the history as `conversation()`
@@ -4637,7 +4626,7 @@ building anything, a test holds it equal to the history's length for every
 short sequence of message kinds, and the search for owed calls stops at the
 first message after the newest call that is no result.
 
-### Saving a state after the question was measured and not built (366.29)
+### Saving a state after the question was measured and not built
 
 366.29 (P6). On a cache that can neither shift nor cut, such as Qwen 3.5 to
 3.8, each reply goes back to the state saved before its question and decodes
@@ -4650,7 +4639,7 @@ only the reply is decoded again. That save would come before the first word:
 in the same run, to spare a decode that runs after the answer. Not built:
 it would make every first word later to save work nobody waits for.
 
-### A call the model wrote unreadably is restored as it wrote it (366.9, 390.2)
+### A call the model wrote unreadably is restored as it wrote it
 
 366.9 (V4). A call that could not be read was kept as a call to a tool named
 `unknown` with no arguments. Beginning again from `conversation()` wrote that
@@ -4697,9 +4686,9 @@ templates a restored call is still written under `unknown`, where the
 template writes every past call in its own frame or names it in the turn's
 header; that is put to the user (393).
 
-## 2026-11-14: What a model can do, asked per kind of conversation (420A, 405.4A)
+## 2026-11-14: What a model can do, asked per kind of conversation
 
-### What begin accepts is one record per kind of conversation (420A)
+### What begin accepts is one record per kind of conversation
 
 A model may ship a template of its own for a conversation that declares
 tools. Four properties said what the model can do, and they answered for
@@ -4720,7 +4709,7 @@ Rejected: one argument per property (four calls for one question, 405.4B),
 and one answer for both templates at once, which would report a model whose
 template for tools reasons and whose default does not as unable (405.4C).
 
-### What the model cannot do is refused naming the parameter (405.4A)
+### What the model cannot do is refused naming the parameter
 
 `begin`, `declare_tools` and a reply given a registry refused tools,
 reasoning and a system prompt the model cannot take with a plain
@@ -4737,7 +4726,7 @@ tools, an empty list included (found by the review of this change). This is the 
 
 ## 2026-11-14: The build of the restructuring plan (loop 21)
 
-### The test check places each kept turn among its own messages (399.4)
+### The test check places each kept turn among its own messages
 
 The check every test ends with compared the cache with the template's render
 around each turn kept as generated, and took the template's version of a kept
@@ -4756,7 +4745,7 @@ turn's where any of its messages is. Every placement of the kept turns in the
 cache is tried. `tests/test_cache_check.py` removes an exchange after a kept
 turn and expects the check to fail.
 
-### Tests that choose their cases from the template files (405.10 to 405.14)
+### Tests that choose their cases from the template files
 
 Many parametrized tests returned early or skipped where a template lacked
 the property they test, so they passed without checking anything, 38 skips
@@ -4776,7 +4765,7 @@ no longer fails them. Where a conversation holds no thought, the check no
 longer renders it three times in three identical forms, which saved about a
 tenth of the suite's time.
 
-### A call is readable only where all of its text is read (415.11A, first half)
+### A call is readable only where all of its text is read
 
 The parser read what it could of a call and dropped the rest without a word:
 text after the last argument, an unclosed argument after it, a blank pair
@@ -4796,7 +4785,7 @@ place in the turn, while the entries that are calls are handed over or run.
 A turn may hold an unreadable call beside others; it still has no name or
 arguments.
 
-### One undo path (402.5A, 402.6A, 402.7A, 415.6A)
+### One undo path
 
 Ten places put the conversation back after a failure or a cancel, from three
 different copies of "before the question", under three repair policies, and
@@ -4835,7 +4824,7 @@ branches in recording, the cancel handling inside the question, and the
 request's call policy put back by hand. `tests/test_failures.py` tries each
 of the bugs above.
 
-### One family of refusals (415.7A, 405.4A)
+### One family of refusals
 
 The library signalled failure with six exception types and no pattern: a
 wrong type was a `TypeError` in some calls and a `ValueError` in others, only
@@ -4862,7 +4851,7 @@ Not done here: a template's own refusal reason (its `raise_exception` text)
 is still lost, because the cache context hands back only "refused"; it comes
 with the step in which the library renders the template itself (405.6A).
 
-### Nothing blocks a question (419)
+### Nothing blocks a question
 
 The user's rule: "None should block: the model should always be able to
 respond to a question." A question was refused while a turn a call left open
@@ -4896,7 +4885,7 @@ changed there. `tests/test_failures.py` follows every state its failure sweep
 reaches with a question, and `tests/test_conversations.py` asks one on every
 test template's open turn.
 
-### Smaller fixes from the error inventory (416.5, 416.6)
+### Smaller fixes from the error inventory
 
 A call that used up the reply cap exactly was reported without its name where
 the library runs the tools, but handed over whole where the caller runs them;
@@ -4905,7 +4894,7 @@ reworded as a failure ("the tool call failed: ..., try again") where the
 library ran the tool, but written as given where the caller handed it over;
 both are now told the same way.
 
-### Exact restore with model handover (393.2)
+### Exact restore with model handover
 
 A turn that called tools stays in the cache as the tokens the model generated,
 which no template writes back exactly: a call's spelling, its spacing, an
@@ -4953,7 +4942,7 @@ unreadable call left out; and gives generated turns read earlier messages
 added to and dropped from since. The unreadable-call tests no longer skip on seven templates: each
 template is given a call body it truly cannot read (399.5).
 
-### One action changes the tools and the reasoning of a running conversation (405.1A)
+### One action changes the tools and the reasoning of a running conversation
 
 `declare_tools` could only add tools, and only into a conversation begun
 with tools where the model ships a template of its own for them; reasoning
@@ -4978,7 +4967,7 @@ during a conversation: where the new settings write such a turn where it
 cannot be told apart, the change is refused, as a declaration was; a `begin`
 then writes it as the template does.
 
-### Whether a reply without text answers something, read without a copy (405.3A)
+### Whether a reply without text answers something, read without a copy
 
 A caller that asks for a reply without new text first has to know whether
 there is anything to answer. The server read the whole conversation to look
@@ -4987,7 +4976,7 @@ with them, measured), and kept its own copy of "the turn waits for its reply".
 `awaits_reply` now answers it from the newest publication, copying nothing:
 true where the newest message is a question, or a turn's results are all in.
 
-### One report of what an action changed (415.8A, 409, 416.2 to 416.4)
+### One report of what an action changed
 
 Six places dropped history and said so in different ways: `begin` returned
 how many items it kept, the other actions how many they dropped, and none
@@ -5020,7 +5009,7 @@ use the generated turns it was given (409.4A), for example "begin kept 120 of
 200 history messages; left out the 80 oldest so that half of the 8192-token
 context stays free".
 
-### The call-as-written code goes (403.3A)
+### The call-as-written code goes
 
 With the generated turns (393.2) restoring an unreadable call exactly on the
 same model, and a begin without them leaving it out with its error result,
@@ -5034,7 +5023,7 @@ what the model wrote for an unreadable call, in its `tool_calls`, for the
 caller to see; the conversation keeps no copy of it. The earlier risk of a
 tag's letters in that text turning into the tag went with the splice.
 
-### One record of what a load reads from a template (401.4A)
+### One record of what a load reads from a template
 
 Everything a load reads from a template was already worked out in one
 sequence, the template's constructor, but kept in about a dozen loose fields
@@ -5055,7 +5044,7 @@ them, since later steps of the load read earlier ones; the record is what
 everything after the load reads. Not done: splitting the call boundary into
 its load facts and its per-generation options, which only moves code.
 
-### The conversation split into parts without state (400.6A)
+### The conversation split into parts without state
 
 The conversation's module had grown to about 1900 lines, holding its state
 types, beginning, questions, replies, results, eviction, result cutting,
@@ -5077,7 +5066,7 @@ rollback, the cache sync, and logging what the caller did not ask for. The
 parts are reached only through it. Rejected: giving each part its own copy of
 the state, which would need a second rollback path.
 
-### An injected message is counted before it is rendered (405.2A)
+### An injected message is counted before it is rendered
 
 `inject` rendered the system turn with the new message on every call, only to
 check that the message fits beside the system prompt alone. A question to
@@ -5089,7 +5078,7 @@ limit. A count that misses a template's own text further from the limit is
 still caught by the checks after the message is placed, inside the same
 action, which is then put back as a whole.
 
-### One message form: chat messages in and out (405.5A)
+### One message form: chat messages in and out
 
 A history went into `begin` in three forms, `(role, text)` pairs, message
 dictionaries, and a `ToolTurn` of steps (`str`, `Thought`, `ToolCall`,
@@ -5117,7 +5106,7 @@ message, a result included, where a whole tool turn counted as one.
 Rejected: accepting results out of order and reordering them, which would
 write a conversation the caller did not send.
 
-### The library renders the template; a context gives its text (405.6A, 416)
+### The library renders the template; a context gives its text
 
 A cache context had to render the chat template itself
 (`render_with_model_template`), and the bundled context did so with the
@@ -5149,7 +5138,7 @@ Removed with it: the test of a context that raises while it renders, since a
 context renders nothing now; a template that raises during the load's probes
 is tested instead.
 
-### Small cleanups after the structure review (405.7A)
+### Small cleanups after the structure review
 
 Seven changes without a change in behaviour:
 
@@ -5179,7 +5168,7 @@ Seven changes without a change in behaviour:
 
 All seven are in one change, since several touch the same lines.
 
-### A real model with a template for tools of its own (404.13A)
+### A real model with a template for tools of its own
 
 The support for a GGUF's further template for tools
 (`tokenizer.chat_template.tool_use`) was tested on an invented template
@@ -5206,7 +5195,7 @@ refused at load, though its default template would serve every
 conversation without tools. Whether that should refuse only tools is on the
 round's decision list.
 
-### The contract names its tests; invariant 2 is traced (405.20A)
+### The contract names its tests; invariant 2 is traced
 
 The contract's principles 6, 7 and 8 named no test, and invariant 2's rule
 that no reply pays for a property the loaded template does not have was
