@@ -4666,14 +4666,15 @@ keeps it with the unreadable call, which `conversation()` gives back as a
 is handed the call under `unknown`, so that it writes its frame and the
 failure the model was told, which names `unknown` as before; the text between
 the call's opening and closing in that render is then replaced by what the
-model wrote, as template text, so a tag the model wrote there is the tag. The
+model wrote, as the caller's own text (see the review below). The
 call's frame is found around the name where the template first writes it,
 or after it where the template names the call in its turn's header first
 (Muse Glimmer). On a template that writes a past call in another frame than
 the model writes one, where no opening of the model's surrounds the name
 (gpt-oss), the call is written as the template writes any past call there,
-as a call that was read would be. The test check applies the same rule,
-worked out on its own from the fake model's call marks.
+as a call that was read would be. The test check applies the same rule; it
+finds the call's frame with the library's own reading of the template, so it
+does not check that reading independently.
 
 The review of this change found four faults, all fixed. The search for the
 call's opening went back past a closing to an earlier call's opening, on a
