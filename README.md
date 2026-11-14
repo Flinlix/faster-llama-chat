@@ -629,6 +629,7 @@ that search. `tests/fake_context.py` is a worked one over a list of ints.
 
 ```bash
 python -m pytest -q                                  # no model needed
+python -m pytest -q -n auto                          # the same, on every processor core
 python examples/demo.py /path/to/model.gguf          # against a real model
 ```
 
