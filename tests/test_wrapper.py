@@ -1382,8 +1382,7 @@ _PROPERTY_CODE = {
     "tools": lambda where: where.split(":")[0] in ("call_parsing.py", "call_format.py",
                                                    "tool_registry.py")
     or where == "resolved_template.py:ResolvedTemplate.read_calls",
-    "clock": lambda where: where in ("rendering.py:ConversationRendering.forget_renders",
-                                     "rendering.py:ConversationRendering.opening_render"),
+    "clock": lambda where: where == "rendering.py:ConversationRendering.opening_render",
 }
 
 
@@ -1409,3 +1408,14 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
     assert entered                  # the profile saw the library at work
     for name, serves in _PROPERTY_CODE.items():
         assert not sorted(where for where in entered if serves(where)), name
+
+
+def test_the_render_memory_holds_one_actions_renders_however_long_the_conversation():
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.5), context=fake)
+    w.begin("s")
+    sizes = []
+    for n in range(60):
+        w.reply(f"Frage {n}?").finish()
+        sizes.append(len(w._conversation._rendering._memo))
+    assert max(sizes[30:]) <= max(sizes[:30])

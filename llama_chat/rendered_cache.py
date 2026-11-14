@@ -28,7 +28,7 @@ from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published, Snapshot,
                                  goes_on_from)
-from .messages import (UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages, calling_message,
+from .messages import (THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, as_messages, calling_message,
                        exchange_count, exchange_starts, history_count,
                        next_call_number, portable_digest, result_message, system_part,
                        with_result_text)
@@ -59,9 +59,9 @@ class RenderedCache:
     """One conversation's messages, as its template is given them, and the cache holding their render.
 
     Every method expects the caller to hold the conversation's lock, except
-    :meth:`conversation`, :meth:`published_pending_calls`,
-    :meth:`published_total_tokens`, :meth:`published_turn_open` and
-    :meth:`ensure_can_reply`, which read a
+    :meth:`conversation`, :meth:`generated_turns`, :meth:`published_pending_calls`,
+    :meth:`published_total_tokens`, :meth:`published_turn_open`,
+    :meth:`published_awaits_reply` and :meth:`ensure_can_reply`, which read a
     copy published after each change.
     Each action leaves the cache equal to the template's render of the
     messages, a turn that called tools held as it was generated, or, where it
@@ -104,16 +104,12 @@ class RenderedCache:
         return {"system_prompt": published.system_prompt,
                 "messages": copy.deepcopy(list(published.history)),
                 "tools": None if published.tools is None else copy.deepcopy(list(published.tools)),
-                "reasoning": published.reasoning, "generated_turns": self.generated_turns()}
+                "reasoning": published.reasoning,
+                "generated_turns": _generated_turns_of(published)}
 
     def generated_turns(self) -> dict | None:
         """Each turn kept as generated, from one publication, as :meth:`start` takes them back; ``None`` where none is; safe to read unlocked."""
-        kept = self._published.kept
-        if not kept:
-            return None
-        return {"model": self._context.model_fingerprint(), "turns": [
-            {"tokens": list(tokens), "message_count": count, "digest": digest}
-            for tokens, count, digest in kept]}
+        return _generated_turns_of(self._published)
 
     def published_pending_calls(self) -> list[ToolCall]:
         """The calls still owed a result, oldest first, from the newest publication, the caller's to change; safe to read unlocked."""
@@ -123,13 +119,12 @@ class RenderedCache:
         """How many tokens the cache holds, from the newest publication; safe to read unlocked."""
         return self._published.total_tokens
 
-    def published_has_pending_calls(self) -> bool:
-        """Whether a call is owed a result, from the newest publication; safe to read unlocked."""
-        return bool(self._published.pending_calls)
-
-    def published_awaits_answer(self) -> bool:
-        """Whether a begun conversation's newest message is a user message, from the newest publication; safe to read unlocked."""
-        return self._published.begun and self._published.newest_role == "user"
+    def published_awaits_reply(self) -> bool:
+        """Whether a reply without a question would answer something, from one publication: the newest message is a question, or a turn's results are all in; safe to read unlocked."""
+        published = self._published
+        if published.turn_open:
+            return not published.pending_calls
+        return published.begun and published.newest_role == "user"
 
     def published_turn_open(self) -> bool:
         """Whether the newest turn is open, from the newest publication; safe to read unlocked."""
@@ -249,12 +244,17 @@ class RenderedCache:
             limit = self._config.evict_above_tokens
             self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
+            self._restore_generated(generated_turns)
+            n_left_out = self._leave_out_unreadable()
             given = len(self._state.messages)
             self._eviction.keep_newest_history(self._state, min(limit, self._config.context_size // 2),
                                                self._refused_history)
             if len(self._state.messages) < given:
                 self._changes.evicted_for = "half_context"
-            self._restore_generated(generated_turns)
+                held = {id(m) for m in self._state.messages}
+                self._state.kept = [k for k in self._state.kept if id(k.first) in held]
+            self._drop_unplaceable()
+            self._changes.n_turns_restored = len(self._state.kept)
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
@@ -268,10 +268,7 @@ class RenderedCache:
                     f"{_RAISE_THE_ROOM}", needed, limit)
             self._drop_while_over(limit, generation_prompt=False)
             self._ensure_within(limit, "shorten the history")
-            n_kept = len(self._state.messages) - len(system)
-            self._leave_out_unreadable()
-            self._changes.n_kept_messages = n_kept
-            self._log_begin(len(history), generated_turns)
+            self._changes.n_kept_messages = len(self._state.messages) - len(system)
             self._state.begun = False
             self._memory.reset()
             # The records made ahead for the conversation before, freed with it.
@@ -294,10 +291,11 @@ class RenderedCache:
                 self._render_ahead()
             self._memory.rest()
             self._state.begun = True
+            self._log_begin(len(history), n_left_out, generated_turns)
             return self._changes.n_kept_messages
 
     def _restore_generated(self, generated_turns: dict | None) -> None:
-        """Hold each of ``generated_turns`` whose messages stand unchanged as the tokens it was generated as, where they are this model's."""
+        """Hold each of ``generated_turns`` whose messages stand unchanged as the tokens it was generated as, where they are this model's; whether each can be placed is read once the history is trimmed."""
         if not generated_turns:
             return
         if generated_turns.get("model") != self._context.model_fingerprint():
@@ -317,20 +315,19 @@ class RenderedCache:
             last = first + count - 1
             self._state.kept.append(KeptTurn(tuple(turn["tokens"]), messages[first],
                                              messages[last], bool(messages[last].get("tool_calls"))))
-        self._changes.n_turns_restored = len(self._state.kept)
         self._state.kept.sort(key=lambda k: next(i for i, m in enumerate(messages) if m is k.first))
-        self._drop_unplaceable()
 
-    def _log_begin(self, n_given: int, generated_turns: dict | None) -> None:
-        """Say once what ``begin`` left out of a history of ``n_given`` items, or of the generated turns it was given; nothing where it kept all of them as given. See design_history.md, "One report of what an action changed"."""
+    def _log_begin(self, n_given: int, n_left_out: int, generated_turns: dict | None) -> None:
+        """Say once what ``begin`` left out of a history of ``n_given`` messages, ``n_left_out`` of them with unreadable calls, or of the generated turns it was given; nothing where it kept all of them as given. See design_history.md, "One report of what an action changed"."""
         changes, said = self._changes, []
-        if changes.n_kept_messages < n_given:
+        n_oldest = n_given - n_left_out - changes.n_kept_messages
+        if n_oldest > 0:
             why = {"half_context": f"so that half of the {self._config.context_size}-token "
                                    "context stays free",
                    "exchange_limit": "to keep max_history_exchanges="
                                      f"{self._config.max_history_exchanges}",
                    "room": "to fit beside the system prompt"}[changes.evicted_for or "room"]
-            said.append(f"left out the {n_given - changes.n_kept_messages} oldest {why}")
+            said.append(f"left out the {n_oldest} oldest {why}")
         if changes.n_left_out_calls:
             said.append(f"left out {changes.n_left_out_calls} call(s) the model wrote "
                         "unreadably, with their error results")
@@ -345,30 +342,53 @@ class RenderedCache:
             _log.info("begin kept %d of %d history messages; %s", changes.n_kept_messages,
                       n_given, "; ".join(said))
 
-    def _leave_out_unreadable(self) -> None:
-        """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result, joining the replies on either side of it."""
+    def _leave_out_unreadable(self) -> int:
+        """Leave out each call the model wrote unreadably that no kept turn holds as generated, with its error result; how many messages went.
+
+        A reply left with no call goes on in the next reply of its turn,
+        where that one is not kept as generated; else it stays where it says
+        something, and goes where it says nothing. Two questions it leaves in a
+        row are joined where the template writes no two in a row, as a question
+        after an unanswered one is.
+        """
         held = {id(m) for k in self._state.kept for m in (k.first, k.last)}
-        kept, gone, joins = [], set(), False
+        kept, gone, emptied = [], set(), None
         for message in self._state.messages:
             calls = message.get("tool_calls") or ()
             if id(message) not in held and any(UNREADABLE_CALL in c for c in calls):
                 self._changes.n_left_out_calls += sum(UNREADABLE_CALL in c for c in calls)
                 gone |= {c["id"] for c in calls if UNREADABLE_CALL in c}
                 left = [c for c in calls if UNREADABLE_CALL not in c]
-                message = ({**message, "tool_calls": left} if left
-                           else {k: v for k, v in message.items() if k != "tool_calls"})
-                joins = not left            # the reply after the call goes on with this one
-            elif message["role"] == "tool" and message["tool_call_id"] in gone:
+                if left:
+                    kept.append({**message, "tool_calls": left})
+                    continue
+                self._ends_reply(emptied, kept)
+                emptied = {k: v for k, v in message.items() if k != "tool_calls"}
                 continue
-            elif joins and message["role"] == "assistant" and not calls:
-                before = kept.pop()
+            if message["role"] == "tool" and message["tool_call_id"] in gone:
+                continue
+            if emptied is not None and message["role"] == "assistant" and id(message) not in held:
                 message = {**message, "content": "\n\n".join(
-                    text for text in (before["content"], message["content"]) if text)}
-                joins = False
+                    text for text in (emptied["content"], message["content"]) if text),
+                    **({THOUGHT_KEY: emptied[THOUGHT_KEY]} if THOUGHT_KEY in emptied
+                       and THOUGHT_KEY not in message else {})}
+                emptied = None
             else:
-                joins = False
+                self._ends_reply(emptied, kept)
+                emptied = None
             kept.append(message)
+        self._ends_reply(emptied, kept)
+        if not self.template.properties.writes_two_user_turns:
+            kept = _questions_joined(kept, self._state.messages)
+        n_gone = len(self._state.messages) - len(kept)
         self._state.messages = kept
+        return n_gone
+
+    @staticmethod
+    def _ends_reply(emptied: dict | None, kept: list[dict]) -> None:
+        """Keep ``emptied``, a reply whose calls were all left out, as a reply of its own where it says something."""
+        if emptied is not None and (emptied["content"] or emptied.get(THOUGHT_KEY)):
+            kept.append(emptied)
 
     def _settled_while_owed(self) -> Target:
         """The render of the conversation as far as the results still owed cannot change it: what the cache holds until they are in."""
@@ -489,13 +509,14 @@ class RenderedCache:
         self._changes.question_joined = True
         _log.info("a question was joined to the one before it, which no reply followed: "
                   "the template writes no two in a row")
-        return {**newest, "content": f"{newest['content']}\n\n{question['content']}"}
+        return _joined(newest, question)
 
     def _close_open_turn(self, question: dict) -> None:
         """Close the open turn ahead of ``question``: each call still owed is told it was not run, and a turn waiting for its reply gets an empty one where the template needs it; the turn is taken out where the template writes neither."""
         start = len(self._state.messages)
         owed = _unanswered(self._state.messages)
-        self._state.messages += [result_message(call.name, call_id, result_text(_NOT_RUN), _NOT_RUN)
+        self._state.messages += [result_message(call.name or UNKNOWN_FUNCTION, call_id,
+                                                result_text(_NOT_RUN), _NOT_RUN)
                                  for call, call_id in owed]
         self._state.results_cut, self._state.called_in_thought = [], False
         self._changes.turn_closed = True
@@ -1311,8 +1332,7 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
-        if self.template.reads_clock:
-            self._rendering.forget_renders()
+        self._rendering.forget_renders()
         self._memory.repair()
         if self._state.begun and self.template.reads_clock:
             opening = self._rendering.opening_render(self._system_part())
@@ -1335,7 +1355,7 @@ class RenderedCache:
     def _publish(self) -> None:
         """Publish the conversation for readers that hold no lock."""
         self._published = published(self._state, self.pending_calls, self.turn_open,
-                                    len(self._memory.tokens))
+                                    len(self._memory.tokens), self._context.model_fingerprint)
 
 
 # ----- what an action may start from -------------------------------------------------
@@ -1382,6 +1402,36 @@ _RAISE_THE_ROOM = "raise context_size or evict_above_fraction, or lower min_repl
 
 
 # ----- helpers ---------------------------------------------------------------------
+def _generated_turns_of(published: Published) -> dict | None:
+    """The turns ``published`` keeps as generated, as :meth:`RenderedCache.start` takes them back; ``None`` where none is."""
+    if not published.kept:
+        return None
+    return {"model": published.model, "turns": [
+        {"tokens": list(tokens), "message_count": count, "digest": digest}
+        for tokens, count, digest in published.kept]}
+
+
+def _questions_joined(messages: list[dict], given: list[dict]) -> list[dict]:
+    """``messages`` with each question joined to the one before it where what stood between them in ``given`` is gone, as a question after an unanswered one is."""
+    at = {id(m): i for i, m in enumerate(given)}
+    joined: list[dict] = []
+    before = None                   # where the newest message kept stood in ``given``
+    for message in messages:
+        place = at.get(id(message))
+        if joined and message["role"] == joined[-1]["role"] == "user" \
+                and None not in (place, before) and place - before > 1:
+            joined[-1] = _joined(joined[-1], message)
+        else:
+            joined.append(message)
+        before = place
+    return joined
+
+
+def _joined(question: dict, later: dict) -> dict:
+    """``question`` with the ``later`` question after it, as one."""
+    return {**question, "content": f"{question['content']}\n\n{later['content']}"}
+
+
 def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
     """The calls of the newest turn that no result after them answers yet."""
     calling = None

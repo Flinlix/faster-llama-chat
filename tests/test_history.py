@@ -426,3 +426,18 @@ def test_a_history_cannot_leave_an_unreadable_call_owed():
     w, _fake = tool_wrapper(context_size=2048)
     with pytest.raises(ValueError, match="cannot leave one owed"):
         w.begin("persona", [("user", "x"), *tool_turn(ToolCall("", {}, status="unreadable", text="t"))])
+
+
+@pytest.mark.parametrize("turns", [
+    {"turns": []},
+    {"model": "m", "turns": [{"tokens": [1], "message_count": 2}]},
+    {"model": "m", "turns": [{"tokens": ["x"], "message_count": 2, "digest": "d"}]},
+    {"model": "m", "turns": "none"},
+], ids=["no-model", "no-digest", "tokens-of-text", "turns-not-a-list"])
+def test_generated_turns_not_as_a_conversation_gives_them_are_refused_naming_them(turns):
+    w, fake = begun_wrapper()
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ValueError) as refused:
+        w.begin("s", [("user", "a")], generated_turns=turns)
+    assert refused.value.field == "generated_turns"
+    assert w.conversation() == before and fake.cache == held

@@ -5155,7 +5155,10 @@ Seven changes without a change in behaviour:
 - The render memo clears itself where the template, the declarations or the
   reasoning switch differ from those it was filled under, instead of relying
   on `begin` and `change_settings` to clear it. Every action still clears it
-  for a template that reads the clock.
+  as well: the review measured that without that clear the memo grew by about
+  seven entries a turn, each keyed by the whole conversation (2122 entries
+  after 300 turns on the plain test template, against 10), and a declaration
+  the caller changes in place would be read stale across actions.
 - The conversation no longer reaches into the context: whether the cache
   shifts is handed to the eviction part once, and counting a message's
   tokens and telling a plain question go through the conversation's
@@ -5279,3 +5282,41 @@ function it described:
 - `wrapper.py` `ChatWrapper._generate_until_answered`: Why the lock is held across tool runs: so that no other action comes between the exchange's rounds. Dropped pointer: whether a tool can be called is decided by ResolvedTemplate.ensure_tools_usable.
 - `wrapper.py` `ChatWrapper._read_generation`: Why the generator is driven by hand rather than with a for loop: a for loop would discard the returned Reply.
 - `wrapper.py` `ChatWrapper._settle_calls`: Why every call of a round is settled before any result is written: what a failure tells the model to do next depends on the budget the last call leaves. Why in the order asked: the template renders the results in that order.
+
+### Fixes from the review of the restructuring
+
+A fresh review of this round's changes found these, each fixed and tested:
+
+- **A call written unreadably, left out at a begin, could leave a
+  conversation the template does not write.** The leaving out ran after every
+  check, so its result was never checked: an empty reply stayed where the
+  call stood, and five templates of the Mistral family then refused every
+  later question. It now runs before the history is trimmed and checked. A
+  reply left with no call goes on in the next reply of its turn, stays where
+  it says something, and goes where it says nothing; two questions it leaves
+  in a row are joined where the template writes no two in a row. A history
+  the template still cannot write is refused before anything changes.
+  `n_kept_messages` counts what is kept after it, and the begin's log line is
+  written only once the begin has succeeded.
+- **A question that closed a batch with an unreadable entry made the
+  conversation fail to begin again**: the not-run result named the function
+  `""`. It names `unknown`, as every other result for such a call does.
+  `pending_calls` no longer lists an unreadable call of a batch, which the
+  library answers itself.
+- **The render memo grew with every turn** once it was no longer emptied by
+  each action (see "Small cleanups after the structure review"); each action
+  empties it again.
+- **`conversation()` read two publications**, the messages and the generated
+  turns, and `awaits_reply` read three values separately. Each now reads one
+  publication, which carries the model's fingerprint for its kept turns; the
+  fingerprint no longer reads the model file's size after the load.
+- **Malformed generated turns** raised a `KeyError` or an `AttributeError`;
+  `begin` now refuses them as an `InvalidArgumentError` naming
+  `generated_turns`, before anything changes.
+- **The README described the removed "call as written" code** for an
+  unreadable call; it now says what `conversation()` gives and what a begin
+  does with it.
+
+Left open as a decision: the server's messages hold no thought and no mark
+of an unreadable call, so turns holding either are not restored through the
+server.

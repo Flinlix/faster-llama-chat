@@ -23,6 +23,7 @@ from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .generation import GenerationAccumulator
 from .messages import ensure_role, ensure_text
+from .publishing import ensure_generated_turns
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
                      UnsupportedError)
@@ -202,8 +203,9 @@ class ChatWrapper:
                 beforehand what is accepted.
             InvalidArgumentError: If a history message has another role, or
                 a dictionary other keys; if ``tools`` names one tool twice; if
-                two calls of the history carry one id; or if a result answers
-                no call owed one, or not the oldest.
+                two calls of the history carry one id; if a result answers
+                no call owed one, or not the oldest; or if ``generated_turns``
+                is not what :meth:`conversation` gives.
             TemplateRefusedError: If the template refuses to write the
                 conversation.
             RuntimeError: If the wrapper is closed, or this thread is still
@@ -211,6 +213,7 @@ class ChatWrapper:
             The previous conversation is left intact on every refusal here.
         """
         ensure_text(system_prompt, "the system prompt")
+        ensure_generated_turns(generated_turns)
         if tools is not None and not isinstance(tools, Iterable):
             raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
@@ -773,10 +776,7 @@ class ChatWrapper:
 
         Safe from any thread, as :meth:`conversation` is, and copies nothing.
         """
-        published = self._conversation
-        if published.published_turn_open():
-            return not published.published_has_pending_calls()
-        return published.published_awaits_answer()
+        return self._conversation.published_awaits_reply()
 
     @property
     def pending_calls(self) -> list[ToolCall]:

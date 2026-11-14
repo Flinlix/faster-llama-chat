@@ -57,12 +57,13 @@ class ToolCall:
             into one yet, such as one built for a history, which ``begin``
             gives an id.
         status: ``"complete"`` for a call that was read. ``"unreadable"``
-            for one that was written but could not be read, and
-            ``"unfinished"`` for one the reply cap or a cancel cut short:
-            such a call is only reported, with no name, arguments or id, and
-            nothing answers it.
-        text: What the model wrote for a call that could not be read,
-            between the call's opening and its closing; empty for any other.
+            for one that was written but could not be read, which the library
+            answers itself, and ``"unfinished"`` for one the reply cap or a
+            cancel cut short, which nothing answers: either is only reported,
+            with no name or arguments, and an unfinished one with no id.
+        text: What the model wrote for a call that could not be read, where
+            the reply stopped on it, between the call's opening and its
+            closing; empty for any other.
     """
 
     name: str

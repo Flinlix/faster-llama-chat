@@ -1956,3 +1956,36 @@ def test_a_reply_kept_otherwise_than_shown_says_what_was_kept(stem):
     kept = run.chat.conversation()["messages"][-1]["content"]
     assert (reply.kept_text is None) == (kept == reply.text)
     assert reply.kept_text is None or reply.kept_text == kept
+
+
+def _unreadable_entry(call_id: str) -> dict:
+    return {"id": call_id, "type": "function", "function": {"name": "unknown", "arguments": {}},
+            "unreadable": True}
+
+
+@pytest.mark.parametrize("ends_open", [False, True], ids=["closed", "ends-on-its-result"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_history_whose_unreadable_call_is_left_out_is_written_as_the_template_writes_it(
+        stem, ends_open):
+    """An unreadable call, then a readable one, in one turn: left out at a begin without its generated turns, the rest is written and a question answered."""
+    run = _Run(stem)
+    weather = {"id": "call00001", "type": "function",
+               "function": {"name": WEATHER.name, "arguments": {"city": "Bonn"}}}
+    history = [{"role": "user", "content": "Weather?"},
+               {"role": "assistant", "content": "", "tool_calls": [_unreadable_entry("call00000")]},
+               {"role": "tool", "tool_call_id": "call00000", "content": "the call could not be read"}]
+    if not ends_open:
+        history += [{"role": "assistant", "content": "", "tool_calls": [weather]},
+                    {"role": "tool", "tool_call_id": "call00001", "content": "sunny"},
+                    {"role": "assistant", "content": "Sunny."}]
+    try:
+        report = run.chat.begin(run.system, history, tools=[WEATHER])
+    except ValueError as refused:       # refused before anything changed, with its cause
+        assert "refuses" in str(refused) and not run.chat.conversation()["messages"]
+        return
+    assert report.n_left_out_calls == 1
+    assert report.n_kept_messages == len(run.chat.conversation()["messages"])
+    assert not any("unreadable" in c for m in run.chat.conversation()["messages"]
+                   for c in m.get("tool_calls", ()))
+    assert_cache_reads_as_rendered(run.chat, run.context)
+    assert run.chat.reply("And now?").finish().stop_reason == "end_of_turn"

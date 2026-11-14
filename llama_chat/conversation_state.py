@@ -109,6 +109,8 @@ class Published:
     total_tokens: int = 0
     # Each kept turn's tokens, how many messages it covers, and their portable digest.
     kept: tuple = ()
+    # The model's fingerprint, where a turn is kept: what the kept turns' tokens are valid for.
+    model: str | None = None
 
 
 def copied_value(value):

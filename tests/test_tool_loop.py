@@ -2215,3 +2215,17 @@ def test_a_batch_with_one_entry_that_is_no_call_runs_the_others_and_tells_the_mo
     assert len(ran) == 2
     assert [call.status for call in reply.tool_calls] == ["complete", "unreadable", "complete"]
     assert "could not be read" in held_text(fake) and not w.turn_open
+
+
+def test_a_question_that_closes_a_batch_with_an_unreadable_entry_begins_again_the_same():
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin("persona", tools=[])
+    fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"}]']
+    list(w.reply("wie spät?", tool_call_policy="yield"))
+    assert [call.name for call in w.pending_calls] == ["clock"]     # the unreadable one is not the caller's
+    fake.call_script = []
+    w.reply("egal, wie heißt du?").finish()
+    saved = w.conversation()
+    w.begin(**saved)
+    assert w.conversation() == saved

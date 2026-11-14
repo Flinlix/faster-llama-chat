@@ -57,7 +57,7 @@ class ConversationRendering:
     ``inputs`` returns those as they are, and is read at every use. Renders
     and splits are reused while the template, the declarations and the
     reasoning switch stay as they were, and until :meth:`forget_renders`,
-    which is due wherever the clock a template reads may have moved.
+    which each action calls, so that the memo holds one action's renders.
     """
 
     def __init__(self, context, template: Callable[[], ResolvedTemplate],

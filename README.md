@@ -326,20 +326,18 @@ where that turn stands is refused with a `ValueError`, the conversation left
 as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it: one that was read with its
 `ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
-and one the reply cap or a cancel cut short as `"unfinished"`, the last two
-without a name, arguments or id, and never handed over in the stream. The
-status is of the type `ToolCallStatus`. An
-unreadable call carries in `ToolCall.text` what the model wrote between the
-call's opening and its closing. The conversation keeps it so too: in
-`conversation()` it is a `ToolCall` with that status, that text and its id,
-followed by the failure the model was told, and beginning again writes that
-text between the call's opening and closing, as the model wrote it, as any
-text a conversation is given: a tag's letters in it stay letters. A template
-that writes a past call in another frame than the model writes one writes
-the call as it writes any past call, under the name `unknown` with no
-arguments, or names it so in the turn's header. An
-unreadable call in a history holds `"unreadable": True` and no name or
-arguments, and its result follows it, as a conversation keeps one. A `ToolCall` may be kept in a set or used as a
+and one the reply cap or a cancel cut short as `"unfinished"`. The status is of
+the type `ToolCallStatus`. Neither of the last two is handed over in the
+stream or listed in `pending_calls`. An unfinished call has no name, arguments
+or id. An unreadable call has no name or arguments; where the reply stopped on
+it, it carries in `ToolCall.text` what the model wrote between the call's
+opening and its closing, and as an entry of a batch it carries its id. In
+`conversation()` it is an entry of `"tool_calls"` holding `"unreadable": True`,
+its id, and no name or arguments, followed by the failure the model was told.
+Beginning again on the same model with `generated_turns` restores its turn as
+it was generated; otherwise the call is left out with its result, the reply it
+stood in goes on in the next reply of its turn, and two questions this leaves
+in a row are joined where the template writes no two in a row. A `ToolCall` may be kept in a set or used as a
 dict key, and equals another only where every field does. Where calls run, the `Reply` sums
 every generation of the exchange, `n_prompt_tokens` aside, which is the last
 generation's, and `tool_limit_reached` says whether a `max_calls` ceiling ran

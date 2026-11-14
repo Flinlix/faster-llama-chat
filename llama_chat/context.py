@@ -92,6 +92,7 @@ class KVContext:
             self._template_texts = {name: text for name, text in texts.items() if text}
             self._special_tokens = None
             self._fingerprint: str | None = None
+            self._model_bytes = os.path.getsize(config.model_path)
         except BaseException:
             # Free whatever was created before the failure.
             if self._engine_context is not None:
@@ -178,7 +179,7 @@ class KVContext:
                 digest.update(f"{key}={self._backend.metadata_value(self._model, key)}\n".encode())
             for name in (None, TOOL_USE_TEMPLATE):
                 digest.update(f"{name}={self.chat_template_text(name)}\n".encode())
-            digest.update(f"size={os.path.getsize(self._config.model_path)}\n".encode())
+            digest.update(f"size={self._model_bytes}\n".encode())
             for piece in self._backend.vocabulary_pieces(self._vocab):
                 digest.update(len(piece).to_bytes(4, "little") + piece)
             self._fingerprint = digest.hexdigest()
