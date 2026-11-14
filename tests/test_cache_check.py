@@ -152,3 +152,27 @@ def test_a_cache_holding_a_token_that_spells_the_renders_text_but_is_not_its_tok
         assert_cache_reads_as_rendered(w, fake)
     fake.cache = sound
     overwrite_held_tokens(w, sound)
+
+
+def test_a_cache_missing_an_exchange_after_a_kept_turn_is_caught_where_replies_repeat_their_text():
+    w, fake = _with_a_kept_turn()
+    w.reply("noch?").finish()
+    sound = list(fake.cache)
+    replies = [m["content"] for m in w.conversation()["messages"]
+               if isinstance(m, dict) and m["role"] == "assistant"]
+    assert len(replies) >= 2 and len(set(replies)) == 1     # every reply repeats one text
+    # The cache without the exchange the question "und?" opened.
+    starts, text = [], ""
+    for token in sound:
+        starts.append(len(text))
+        text += fake.token_text(token)
+    begin, end = text.index("und?"), text.index("noch?")
+    begin, end = text.rfind("<[turn>", 0, begin), text.rfind("<[turn>", 0, end)
+    first, last = starts.index(begin), starts.index(end)
+    broken = sound[:first] + sound[last:]
+    fake.cache = broken
+    overwrite_held_tokens(w, broken)
+    with pytest.raises(AssertionError, match="does not read as the template renders"):
+        assert_cache_reads_as_rendered(w, fake)
+    fake.cache = sound
+    overwrite_held_tokens(w, sound)

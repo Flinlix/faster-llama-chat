@@ -4733,3 +4733,24 @@ tool turn and begun without tools was refused with "this model's template
 describes no tool call", though the model calls tools; it now says to pass
 tools, an empty list included (found by the review of this change). This is the first kind of the family of refusals planned under
 415.7A; the other kinds follow with that step.
+
+## 2026-11-14: The build of the restructuring plan (loop 21)
+
+### The test check places each kept turn among its own messages (399.4)
+
+The check every test ends with compared the cache with the template's render
+around each turn kept as generated, and took the template's version of a kept
+turn to end where its last message's text or its closing ended. Where two
+replies had the same text, as most tests' fixed reply text makes them, a cache
+that lacked a whole exchange after a kept turn passed: the version simply ran
+on over the missing exchange. The check also pinned each kept turn to the first
+place its text appears in the cache, so two identical tool turns could be
+matched the wrong way round and pass by luck.
+
+Each piece of the render now names the messages its own texts come from,
+worked out from the marked render the check already makes, and a kept turn's
+version may take in no own text of a message it does not stand for; own texts
+with no template text between them read as one, so such a run counts as the
+turn's where any of its messages is. Every placement of the kept turns in the
+cache is tried. `tests/test_cache_check.py` removes an exchange after a kept
+turn and expects the check to fail.
