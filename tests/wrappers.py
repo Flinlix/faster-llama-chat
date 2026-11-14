@@ -448,7 +448,8 @@ def assert_conversation_is_its_forms(wrapper):
     held = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
     messages, _gone = without_unreadable(messages, held, joins)
     rebuilt = answer_in_order(messages, internals.unreadable_result_text(wrapper))
-    assert n_found == len(turns), "a saved turn is not found among the messages it was saved with"
+    assert n_found == sum(len(record["kept"]) for record in turns), \
+        "a saved turn is not found among the messages it was saved with"
     assert [_comparable(m) for m in rebuilt] \
         == [_comparable(m) for m in internals.rendered_messages(wrapper)], \
         "the conversation is not its messages with each saved turn put back"

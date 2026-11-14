@@ -6,13 +6,14 @@ conversation's state, and records there each result it cut.
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable
 
 from .conversation_state import ConversationState
 from .errors import RAISE_THE_ROOM, ContextOverflowError
-from .messages import UNREADABLE_CALL, result_message, with_result_text
-from .tools import ToolCall
+from .messages import UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message, with_result_text
+from .tools import ToolCall, result_text
 
 _log = logging.getLogger(__name__)
 
@@ -55,15 +56,14 @@ class ResultCutting:
             ContextOverflowError: If not even the result cut to nothing fits.
         """
         messages, text = self._state.messages, message["content"]
-        messages += [message] + [result_message(later.name, later_id, "")
-                                 for later, later_id in owed_after]
+        messages += [message] + [self._held_for(later, later_id, "") for later, later_id in owed_after]
         at = len(messages) - len(owed_after) - 1
         dropped = False
         if not self._fits(at, text, room):
             # Held cut to nothing instead, so that what this one is cut to leaves room for
             # each of them, its note included.
             del messages[at + 1:]
-            messages += [result_message(later.name, later_id, cut_result(text, 0))
+            messages += [self._held_for(later, later_id, cut_result(text, 0))
                          for later, later_id in owed_after]
             dropped = make_room()
             messages = self._state.messages
@@ -108,6 +108,13 @@ class ResultCutting:
             self._note(self._call_answered(at), kept, len(text), "a result", "at the begin")
             return
 
+    def _held_for(self, later: ToolCall, later_id: str, text: str) -> dict:
+        """The result room is kept for, for a call owed after the one written: ``text``, or for a call that could not be read the failure it is answered with, which is not cut."""
+        if later.status == "unreadable" and self._state.unreadable_result is not None:
+            return result_message(UNKNOWN_FUNCTION, later_id,
+                                  result_text(self._state.unreadable_result))
+        return result_message(later.name, later_id, text)
+
     def _fits(self, at: int, content: str, room: int) -> bool:
         """Whether the conversation, its message at ``at``, a result, holding ``content``, fits in ``room`` with the generation prompt."""
         messages = self._state.messages
@@ -146,7 +153,8 @@ class ResultCutting:
         call, = [c for c in messages[calling]["tool_calls"] if c["id"] == answered]
         if UNREADABLE_CALL in call:
             return ToolCall("", {}, call["id"], "unreadable")
-        return ToolCall(call["function"]["name"], call["function"]["arguments"], call["id"])
+        return ToolCall(call["function"]["name"], copy.deepcopy(call["function"]["arguments"]),
+                        call["id"])
 
     def _note(self, call: ToolCall, kept: int, total: int, what: str, why: str) -> None:
         """Record that ``call``'s result was cut to ``kept`` of its ``total`` characters."""

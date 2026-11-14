@@ -5518,3 +5518,25 @@ The trace test of invariant 2 lists the code a plain reply may run, so code
 new to it is flagged, where it listed the code that must not run. After every
 test, what `conversation()` gives is taken by `begin`, and the conversation
 is its Chat Completions messages with each saved turn put back.
+
+### Fixes from the review of the two forms
+
+A fresh review with random action sequences found the saved turns' matching
+too weak. A turn's key is now taken from one conversion of the whole
+conversation that records which messages each Chat Completions message
+stands for, so a question joined across a turn, or a reply that took in an
+unreadable call's text, is part of what the turn is put back as. Turns whose
+messages overlap so are one record; a question may close one record and
+open the next. Records are placed newest first, each older one before the
+one placed after it, and where messages read alike, at the place the record
+stood when it was saved (its distance from the end), else at the newest;
+the digests of each width are worked out once, so a begin with 400 saved
+turns over 1,600 messages matched them in 3.4 to 6.8 s before and in about
+0.02 s after (measured). A reply whose calls all went now goes on in the
+next reply also where that reply keeps a call, its thought joined, so no
+reply stands between a call and its result. Two calls sharing an id are
+refused before any call is left out. A begin counts the messages it kept
+and the turns it restored as the caller sees them. An unreadable entry owed
+after a long result has room kept for its failure text, and where it finds
+none the turn closes. A cut call handed back is a copy. A test runs 150
+fixed random sequences on six templates.

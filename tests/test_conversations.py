@@ -1886,7 +1886,8 @@ def test_beginning_again_from_the_conversation_holds_each_turn_as_generated(stem
     live, saved = list(run.context.cache), run.chat.conversation()
     kept = [tokens for tokens, _text, _on_call in internals.kept_turns(run.chat)]
     turns = (saved["generated_turns"] or {}).get("turns", [])
-    assert [turn["tokens"] for turn in turns] == kept      # every kept turn, and nothing else
+    assert [turn["tokens"] for record in turns for turn in record["kept"]] == kept
+
     run.chat.begin(**saved)
     assert run.context.cache == live                        # token for token
     assert run.chat.conversation() == saved

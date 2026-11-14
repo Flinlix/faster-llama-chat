@@ -2221,3 +2221,30 @@ def test_a_template_for_tools_that_cannot_be_read_leaves_the_model_without_tools
     assert refused.value.field == "tools"
     chat.begin(opened("persona"))
     assert chat.reply("hallo").finish().text == "reply"
+
+
+def test_an_unreadable_entry_after_a_long_result_is_answered_or_the_turn_closes():
+    """No turn is left owing a call the caller cannot see."""
+    for size in range(300, 500, 10):
+        fake = FakeContext(JSON_TOOLS)
+        w = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=fake)
+        w.begin(opened("s"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
+        fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"}]']
+        list(w.reply("wie spät?", tool_call_policy="yield"))
+        if not w.pending_calls:
+            continue
+        w.inject_tool_result(w.pending_calls[0].id, "x" * 5000)
+        assert not (w.turn_open and not w.pending_calls) or w.awaits_reply
+        w.reply().finish() if w.awaits_reply else w.reply("weiter?").finish()
+
+
+def test_a_call_reported_as_cut_is_the_callers_to_change():
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS, context_size=400)
+    wrapper.begin(opened("s"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
+    fake.call_script = ['{"name": "clock", "arguments": {"zone": "Berlin"}}']
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    cut = wrapper.inject_tool_result(wrapper.pending_calls[0].id, "x" * 3000).tool_results_cut
+    assert cut
+    cut[0].arguments["zone"] = "Rom"
+    calls = [c for m in wrapper.conversation()["messages"] for c in m.get("tool_calls") or ()]
+    assert calls[-1]["function"]["arguments"] == '{"zone":"Berlin"}'

@@ -115,7 +115,7 @@ class ChatWrapper:
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False, generated_turns: dict | None = None) -> Report:
-        """Reset the conversation: prefill the system prompt and recent history.
+        """Begin the conversation, or begin it again: prefill the system prompt and recent history, decoding only where they differ from what the cache holds.
 
         Every other action refuses until this has run, because only this
         prefills the sequence opener and the system prompt.
@@ -144,8 +144,10 @@ class ChatWrapper:
                 ends on a call or a result leaves that turn open, as a live
                 turn is left, for :meth:`reply` to go on with. Only the most
                 recent are kept, from a user turn on: those that fit with the
-                system prompt in half the context, at least the newest
-                exchange, and no more than ``max_history_exchanges``; the
+                system prompt in half the context, or under the eviction
+                threshold where the cache holds the oldest of them already,
+                at least the newest exchange, and no more than
+                ``max_history_exchanges``; the
                 newest exchange may take the room a reply leaves, its results
                 cut to fit as :meth:`inject_tool_result` cuts one. Older ones
                 are dropped unrendered.
@@ -188,9 +190,10 @@ class ChatWrapper:
                 on, leaves no room for a reply beside them even with its
                 results cut to nothing, or ``messages`` hold no user message
                 and cannot fit beside them either.
-            TypeError: If a message, a text, an id or a call's arguments is of
-                another type than stated above, or ``tools`` holds anything but
-                tool specs.
+            TypeError: If ``messages`` is no list, a message or a call is no
+                dictionary, a text, a function's name or a call's arguments is
+                of another type than stated above, or ``tools`` holds anything
+                but tool specs.
             UnsupportedError: If ``tools`` names anything, or the history
                 holds a call or a result, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
@@ -202,9 +205,10 @@ class ChatWrapper:
                 take here, such as ``name``, a list of content parts or a role
                 such as ``developer``, each named; if ``tools`` names one tool
                 twice; if two calls of the history carry one id, or a call has
-                none; if a result answers no call owed one, or not the oldest;
-                or if ``generated_turns`` is not what :meth:`conversation`
-                gives, naming ``generated_turns``.
+                none; if a result has no ``tool_call_id``, is no text, answers
+                no call owed one, or not the oldest; or if ``generated_turns``
+                is not what :meth:`conversation` gives, naming
+                ``generated_turns``.
             TemplateRefusedError: If the template refuses to write the
                 conversation.
             RuntimeError: If the wrapper is closed, or this thread is still
@@ -212,6 +216,10 @@ class ChatWrapper:
             The previous conversation is left intact on every refusal here.
         """
         ensure_saved_turns(generated_turns)
+        if messages is not None and (isinstance(messages, (str, bytes, dict))
+                                     or not isinstance(messages, Iterable)):
+            raise TypeError(f"messages must be a list of chat message dictionaries, the system "
+                            f"message first where there is one, not {messages!r}")
         if tools is not None and not isinstance(tools, Iterable):
             raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
@@ -536,10 +544,10 @@ class ChatWrapper:
 
         Raises:
             TypeError: If ``call_id`` is no ``str``.
-            OutOfOrderError: If no conversation has been begun, no call is
-                waiting, ``call_id`` is not the one owed, or it names a call
-                :meth:`begin` left out as one that could not be read; its
-                ``field`` is ``call_id``. The call stays owed.
+            OutOfOrderError: If no conversation has been begun; or, its
+                ``field`` then ``call_id``, if no call is waiting, ``call_id``
+                is not the one owed, or it names a call :meth:`begin` left out
+                as one that could not be read. The call stays owed.
             UnsupportedError: If this model's template writes no result,
                 naming ``result``.
             RuntimeError: If the wrapper is closed, or this thread is still

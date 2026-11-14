@@ -33,17 +33,19 @@ _FUNCTION_KEYS = {"name", "arguments"}
 def read_messages(messages: list) -> list[dict]:
     """``begin``'s messages, in the Chat Completions form, as the messages a template is given.
 
-    A call whose arguments are no JSON object is marked as one that could
-    not be read; ``""`` is no arguments. A reply's ``content`` may be
-    ``None`` where it makes calls, and is then empty.
+    A call whose arguments are no JSON object, or that names no function, is
+    marked as one that could not be read; ``""`` is no arguments. A reply's
+    ``content`` may be ``None`` where it makes calls, and is then empty.
 
     Raises:
-        TypeError: If a message is no dictionary, or a text, an id or a
-            call's arguments is no ``str``.
-        ValueError: If a message holds a key its role does not take here,
-            its role is none of ``system``, ``user``, ``assistant`` and
-            ``tool``, a system message is not the first, or a call lacks its
-            id or is of another type than ``function``.
+        TypeError: If a message or a call is no dictionary, or a text, a
+            function's name or a call's arguments is of another type.
+        ValueError: If a message holds a key its role does not take here, or
+            a list of content parts; its role is none of ``system``, ``user``,
+            ``assistant`` and ``tool``; a system message is not the first; a
+            call lacks its id, is of another type than ``function``, or
+            shares its id with another; or a result lacks its
+            ``tool_call_id`` or is no text.
     """
     read = []
     for i, item in enumerate(messages):
@@ -69,6 +71,11 @@ def read_messages(messages: list) -> list[dict]:
         read.append(_reply(item, where) if role == "assistant"
                     else _result(item, where) if role == "tool"
                     else {"role": role, "content": _text(item["content"], f"{where}.content")})
+    ids = [c["id"] for m in read for c in m.get("tool_calls") or ()]
+    repeated = next((given for given, n in collections.Counter(ids).items() if n > 1), None)
+    if repeated is not None:
+        raise InvalidArgumentError("messages", f"two calls of the history carry the id "
+                                               f"{repeated!r}; give each call an id of its own")
     return read
 
 
@@ -268,60 +275,83 @@ def without_unreadable(messages: list[dict], held: set[int],
     """``messages`` without each call that could not be read and its result, except in the messages at ``held``; and the ids of the calls that went.
 
     A reply left with no call goes on in the next reply of its turn, where
-    that one is not held; else it stays where it says something, and goes
-    where it says nothing. With ``joins_questions``, two questions this
-    leaves in a row are joined, as a question after an unanswered one is.
+    that one is not held, its text and thought before that reply's; else it
+    stays where it says something, and goes where it says nothing. With
+    ``joins_questions``, two questions this leaves in a row are joined, as a
+    question after an unanswered one is.
     """
-    kept, gone, emptied, placed = [], set(), None, []
+    kept, _sources, gone = _without_unreadable(messages, held, joins_questions)
+    return kept, gone
+
+
+def _without_unreadable(messages: list[dict], held: set[int], joins_questions: bool
+                        ) -> tuple[list[dict], list[frozenset[int]], set[str]]:
+    """:func:`without_unreadable`, and for each message kept, the places in ``messages`` of the messages it stands for."""
+    kept: list[dict] = []
+    sources: list[frozenset[int]] = []
+    gone: set[str] = set()
+    emptied: tuple[dict, int] | None = None     # a reply whose calls all went, held back
+
+    def keep(message: dict, at: int) -> None:
+        nonlocal emptied
+        if emptied is not None and message["role"] == "assistant" and at not in held:
+            said, said_at = emptied
+            message = {**message, "content": _joined_texts(said["content"], message["content"])}
+            thought = _joined_texts(said.get(THOUGHT_KEY) or "", message.get(THOUGHT_KEY) or "")
+            if thought:
+                message[THOUGHT_KEY] = thought
+            kept.append(message)
+            sources.append(frozenset((said_at, at)))
+        else:
+            keep_saying()
+            kept.append(message)
+            sources.append(frozenset((at,)))
+        emptied = None
+
+    def keep_saying() -> None:
+        if emptied is not None and (emptied[0]["content"] or emptied[0].get(THOUGHT_KEY)):
+            kept.append(emptied[0])
+            sources.append(frozenset((emptied[1],)))
+
     for at, message in enumerate(messages):
         calls = message.get("tool_calls") or ()
         if at not in held and any(UNREADABLE_CALL in c for c in calls):
             gone |= {c["id"] for c in calls if UNREADABLE_CALL in c}
             left = [c for c in calls if UNREADABLE_CALL not in c]
             if left:
-                kept.append({**message, "tool_calls": left})
-                placed.append(at)
+                keep({**message, "tool_calls": left}, at)
                 continue
-            _keep_saying(emptied, kept, placed)
+            keep_saying()
             emptied = ({k: v for k, v in message.items() if k != "tool_calls"}, at)
             continue
         if message["role"] == "tool" and message["tool_call_id"] in gone:
             continue
-        if emptied is not None and message["role"] == "assistant" and at not in held:
-            said = emptied[0]
-            message = {**message, "content": "\n\n".join(
-                text for text in (said["content"], message["content"]) if text),
-                **({THOUGHT_KEY: said[THOUGHT_KEY]} if said.get(THOUGHT_KEY)
-                   and not message.get(THOUGHT_KEY) else {})}
-        else:
-            _keep_saying(emptied, kept, placed)
-        emptied = None
-        kept.append(message)
-        placed.append(at)
-    _keep_saying(emptied, kept, placed)
+        keep(message, at)
+    keep_saying()
     if joins_questions and gone:
-        kept = _questions_joined(kept, placed)
-    return kept, gone
+        kept, sources = _questions_joined(kept, sources)
+    return kept, sources, gone
 
 
-def _keep_saying(emptied: tuple[dict, int] | None, kept: list[dict], placed: list[int]) -> None:
-    """Keep ``emptied``, a reply whose calls were all left out, as a reply of its own where it says something."""
-    if emptied is not None and (emptied[0]["content"] or emptied[0].get(THOUGHT_KEY)):
-        kept.append(emptied[0])
-        placed.append(emptied[1])
+def _joined_texts(first: str, then: str) -> str:
+    """Two texts as one, a blank line between them where both say something."""
+    return "\n\n".join(text for text in (first, then) if text)
 
 
-def _questions_joined(messages: list[dict], placed: list[int]) -> list[dict]:
-    """``messages``, each from where ``placed`` says, with each question joined to the one before it where what stood between them is gone."""
+def _questions_joined(messages: list[dict], sources: list[frozenset[int]]
+                      ) -> tuple[list[dict], list[frozenset[int]]]:
+    """``messages``, each standing for the places ``sources`` gives, with each question joined to the one before it where what stood between them is gone."""
     joined: list[dict] = []
-    before = None
-    for message, place in zip(messages, placed):
-        if joined and message["role"] == joined[-1]["role"] == "user" and place - before > 1:
+    joined_sources: list[frozenset[int]] = []
+    for message, source in zip(messages, sources):
+        if joined and message["role"] == joined[-1]["role"] == "user" \
+                and min(source) - max(joined_sources[-1]) > 1:
             joined[-1] = joined_question(joined[-1], message)
+            joined_sources[-1] |= source
         else:
             joined.append(message)
-        before = place
-    return joined
+            joined_sources.append(source)
+    return joined, joined_sources
 
 
 def joined_question(question: dict, later: dict) -> dict:
@@ -331,16 +361,44 @@ def joined_question(question: dict, later: dict) -> dict:
 
 # ----- turns kept as generated ----------------------------------------------------------
 def saved_turns(messages: list[dict], joins_questions: bool) -> list[dict]:
-    """Each turn ``messages`` keep as generated, JSON-ready: its tokens, its messages as the conversation holds them through the end of the turn, how many of them its tokens stand for, and the key it is found again by."""
-    turns = []
+    """The turns ``messages`` keep as generated, JSON-ready, each with the messages it is put back as: those messages, where each turn's tokens begin among them and how many they stand for, and what they are found again by.
+
+    They are found by the Chat Completions messages ``messages`` give for
+    them, with the question before them, and with the message after a turn
+    that gives none of its own; they are put back as every message those
+    stand for, so that a question joined across a turn, or a reply that took
+    in its text, comes back as it was. Turns whose messages overlap so are
+    one record; a question may close one record and open the next.
+    """
+    kept, sources, _gone = _without_unreadable(messages, set(), joins_questions)
+    portable = [_portable(_as_completions(message)) for message in kept]
+    records: list[dict] = []
     for first, last, turn in kept_turns(messages):
         end = last
         while end + 1 < len(messages) and messages[end + 1]["role"] == "tool":
             end += 1                # the results written so far in an open turn
-        held = [_exact(m) for m in messages[first:end + 1]]
-        turns.append({"tokens": list(turn.tokens), "span": turn.span, "messages": held,
-                      **_key(messages[first - 1:first], held, joins_questions)})
-    return turns
+        own = set(range(first, end + 1))
+        window = [k for k, source in enumerate(sources) if source & (own | {first - 1})]
+        if not any(sources[k] & own for k in window) and window and window[-1] + 1 < len(kept):
+            window.append(window[-1] + 1)
+        if not window:
+            continue                # nothing of it, or before it, is given back to find it by
+        lo = min(min(sources[k]) for k in window)
+        hi = max(end, max(max(sources[k]) for k in window))
+        part = {"from": window[0], "to": window[-1], "lo": lo, "hi": hi,
+                "kept": [(first, turn)]}
+        shared = records[-1]["to"] - part["from"] + 1 if records else 0
+        if shared > 1 or shared == 1 and not portable[part["from"]].startswith('["user"'):
+            older = records.pop()
+            part = {"from": older["from"], "to": max(older["to"], part["to"]),
+                    "lo": min(older["lo"], lo), "hi": max(older["hi"], hi),
+                    "kept": older["kept"] + part["kept"]}
+        records.append(part)
+    return [{"messages": [_exact(m) for m in messages[r["lo"]:r["hi"] + 1]],
+             "kept": [{"tokens": list(turn.tokens), "start": first - r["lo"], "span": turn.span}
+                      for first, turn in r["kept"]],
+             "count": r["to"] - r["from"] + 1, "after": len(kept) - r["to"] - 1,
+             "digest": _digest_of(portable[r["from"]:r["to"] + 1])} for r in records]
 
 
 def _exact(message: dict) -> dict:
@@ -348,50 +406,58 @@ def _exact(message: dict) -> dict:
     return copy.deepcopy({k: v for k, v in message.items() if k != KEPT_TURN})
 
 
-def _key(before: list[dict], held: list[dict], joins_questions: bool) -> dict:
-    """What a saved turn of the messages ``held`` after ``before`` is found again by: how many Chat Completions messages it stands for, the one before them counted, and their digest."""
-    found = completions_messages(before + held, joins_questions)
-    return {"count": len(found), "digest": _digest(found)}
+def _portable(message: dict) -> str:
+    """A Chat Completions message as a caller keeps it, as text: no thought, an empty text and a null one alike, arguments as the objects they encode, in their own order."""
+    calls = [[c["id"], c["function"]["name"], _arguments(c["function"]["arguments"])]
+             for c in message.get("tool_calls") or ()]
+    return json.dumps([message["role"], message.get("content") or "", message.get("tool_call_id"),
+                       calls], ensure_ascii=False, separators=(",", ":"))
 
 
-def _digest(messages: list[dict]) -> str:
-    """A digest of Chat Completions messages as a caller keeps them: no thought, an empty text and a null one alike, arguments as the objects they encode, in their own order."""
-    def portable(message: dict) -> list:
-        calls = [[c["id"], c["function"]["name"], _arguments(c["function"]["arguments"])]
-                 for c in message.get("tool_calls") or ()]
-        return [message["role"], message.get("content") or "", message.get("tool_call_id"), calls]
-    return hashlib.sha256(json.dumps([portable(m) for m in messages], ensure_ascii=False,
-                                     separators=(",", ":")).encode()).hexdigest()
+def _digest_of(portable: list[str]) -> str:
+    """A digest of messages, each given as :func:`_portable` writes it."""
+    return hashlib.sha256(("[" + ",".join(portable) + "]").encode()).hexdigest()
 
 
 def with_saved_turns(messages: list[dict], turns: list[dict],
                      joins_questions: bool) -> tuple[list[dict], int]:
-    """``messages``, read from the Chat Completions form, with each of ``turns`` that they still hold put back as the conversation held it, its tokens on its message; and how many were.
+    """``messages``, read from the Chat Completions form, with each record of ``turns`` that they still hold put back as the conversation held it, each turn's tokens on its message; and how many turns were.
 
-    A turn is found by its Chat Completions messages and the question before them, the
-    newest place first, and its messages take the place of its Chat Completions ones;
-    one found nowhere is written as the template writes it.
+    The newest record is placed first, where it stood when it was saved
+    among places that read alike, else at the newest, and each older one
+    before the record placed after it, the question that opens that
+    record's messages shared; its messages take the place of the Chat
+    Completions ones it was found by. A turn found nowhere is written as the
+    template writes it.
     """
-    completions = [_as_completions(message) for message in messages]
-    places: list[tuple[int, int]] = []      # where a turn's window begins, and which turn
-    taken: set[int] = set()
-    for n, turn in enumerate(turns):
-        width = turn["count"]
-        at = next((i for i in range(len(completions) - width, -1, -1)
-                   if not taken.intersection(range(i, i + width))
-                   and _digest(completions[i:i + width]) == turn["digest"]), None)
+    portable = [_portable(_as_completions(message)) for message in messages]
+    by_width: dict[int, dict[str, list[int]]] = {}
+    places: list[tuple[int, dict]] = []
+    before = len(messages)          # where the record placed last begins
+    for record in reversed(turns):
+        width = record["count"]
+        if width not in by_width:
+            found: dict[str, list[int]] = {}
+            for i in range(len(portable) - width + 1):
+                found.setdefault(_digest_of(portable[i:i + width]), []).append(i)
+            by_width[width] = found
+        fitting = [i for i in by_width[width].get(record["digest"], ()) if i + width <= before]
+        # Where it stood when it was saved, among messages that read alike; else the newest.
+        at = next((i for i in fitting if len(portable) - i - width == record["after"]),
+                  max(fitting, default=None))
         if at is not None:
-            places.append((at, n))
-            taken.update(range(at, at + width))
+            places.append((at, record))
+            # A question may close one record's messages and open the next record's.
+            before = at + (portable[at].startswith('["user"'))
     put = list(messages)
-    for at, n in sorted(places, reverse=True):
-        turn = turns[n]
-        held = copy.deepcopy(turn["messages"])
-        last = turn["span"] - 1
-        held[last] = {**held[last], KEPT_TURN: KeptTurn(
-            tuple(turn["tokens"]), turn["span"], bool(held[last].get("tool_calls")))}
-        put[at + 1:at + turn["count"]] = held
-    return put, len(places)
+    for at, record in places:       # the newest first, so that no place moves before it is used
+        held = copy.deepcopy(record["messages"])
+        for turn in record["kept"]:
+            last = turn["start"] + turn["span"] - 1
+            held[last] = {**held[last], KEPT_TURN: KeptTurn(
+                tuple(turn["tokens"]), turn["span"], bool(held[last].get("tool_calls")))}
+        put[at:at + record["count"]] = held
+    return put, sum(len(record["kept"]) for _, record in places)
 
 
 def ensure_saved_turns(given) -> None:
@@ -399,9 +465,9 @@ def ensure_saved_turns(given) -> None:
 
     Raises:
         TypeError: If ``given`` is neither ``None`` nor a ``dict``.
-        ValueError: Naming ``generated_turns``, if it lacks the model or a
-            turn's tokens, messages, span, count or digest, or holds one of
-            another form.
+        ValueError: Naming ``generated_turns``, if it lacks the model, or a
+            record lacks its messages, its turns' tokens, start or span, its
+            count, its place or its digest, or holds one of another form.
     """
     if given is None:
         return
@@ -416,21 +482,31 @@ def ensure_saved_turns(given) -> None:
                                    "turn as the template writes it")
 
 
-def _is_saved_turn(turn) -> bool:
-    """Whether ``turn`` is one turn as :func:`saved_turns` gives it."""
-    if not isinstance(turn, dict) or set(turn) != {"tokens", "span", "messages", "count", "digest"}:
+def _is_saved_turn(record) -> bool:
+    """Whether ``record`` is one record as :func:`saved_turns` gives it."""
+    if not isinstance(record, dict) \
+            or set(record) != {"messages", "kept", "count", "after", "digest"}:
         return False
-    tokens, span, held = turn["tokens"], turn["span"], turn["messages"]
-    return (isinstance(tokens, list) and all(type(token) is int for token in tokens)
-            and isinstance(held, list) and type(span) is int and 0 < span <= len(held)
-            and type(turn["count"]) is int and turn["count"] > 0
-            and isinstance(turn["digest"], str) and all(_is_held(m) for m in held))
+    held, kept = record["messages"], record["kept"]
+    return (isinstance(held, list) and all(_is_held(m) for m in held)
+            and isinstance(kept, list) and kept and all(
+                isinstance(turn, dict) and set(turn) == {"tokens", "start", "span"}
+                and isinstance(turn["tokens"], list)
+                and all(type(token) is int for token in turn["tokens"])
+                and type(turn["start"]) is int and type(turn["span"]) is int
+                and turn["span"] > 0 and 0 <= turn["start"]
+                and turn["start"] + turn["span"] <= len(held) for turn in kept)
+            and type(record["count"]) is int and record["count"] > 0
+            and type(record["after"]) is int and record["after"] >= 0
+            and isinstance(record["digest"], str))
 
 
 def _is_held(message) -> bool:
-    """Whether ``message`` is a reply or a result as a saved turn holds one."""
+    """Whether ``message`` is a question, a reply or a result as a saved turn holds one."""
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):
         return False
+    if message.get("role") == "user":
+        return set(message) == {"role", "content"}
     if message.get("role") == "tool":
         return set(message) == {"role", "tool_call_id", "name", "content"} \
             and isinstance(message["tool_call_id"], str) and isinstance(message["name"], str)

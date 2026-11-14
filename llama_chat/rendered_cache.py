@@ -28,8 +28,8 @@ from .cache_sync import CacheSync, Cancelled
 from .config import Config
 from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
-from .history_forms import (answer_in_order, joined_question, read_messages, with_saved_turns,
-                            without_unreadable)
+from .history_forms import (answer_in_order, completions_messages, joined_question,
+                            read_messages, with_saved_turns, without_unreadable)
 from .messages import (KEPT_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
@@ -276,7 +276,6 @@ class RenderedCache:
             asks = any(m["role"] == "user" for m in self._state.messages)
             self._keep_newest_history(cached)
             self._drop_unplaceable()
-            self._state.changes.n_turns_restored = len(kept_turns(self._state.messages))
             if any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
@@ -302,7 +301,10 @@ class RenderedCache:
             self._drop_while_over(limit, generation_prompt=False)
             if not asks:
                 self._ensure_within(limit, "shorten the history")
-            self._state.changes.n_kept_messages = history_count(self._state.messages)
+            self._state.changes.n_turns_restored = len(kept_turns(self._state.messages))
+            # Counted as the caller's messages: those a kept turn holds besides are none of them.
+            self._state.changes.n_kept_messages = history_count(
+                completions_messages(self._state.messages, joins))
             self._state.called_in_thought = self._open_turn_in_thought()
             self._state.begun = False
             # The records made ahead for the conversation before, freed with it.
@@ -377,10 +379,11 @@ class RenderedCache:
         if changes.generated_turns_ignored:
             said.append("the generated turns given are another model's, so every turn is "
                         "written this model's way")
-        elif generated_turns and changes.n_turns_restored < len(generated_turns.get("turns", ())):
-            said.append(f"restored {changes.n_turns_restored} of "
-                        f"{len(generated_turns['turns'])} generated turns exactly, the others "
-                        "being no longer among the messages as they were")
+        elif generated_turns:
+            given = sum(len(record["kept"]) for record in generated_turns["turns"])
+            if changes.n_turns_restored < given:
+                said.append(f"restored {changes.n_turns_restored} of {given} generated turns "
+                            "exactly, the others being no longer among the messages as they were")
         if said:
             _log.info("begin kept %d of %d history messages; %s", changes.n_kept_messages,
                       n_given, "; ".join(said))
@@ -971,8 +974,8 @@ class RenderedCache:
                 raise
             if not written:
                 self._forget_calls()
-        elif self.turn_open:
-            self._answer_unreadable_owed()  # an entry of a batch that could not be read
+        elif self.turn_open and self._answer_unreadable_owed():
+            return                          # an entry of a batch that could not be read
         if self.turn_open:
             if unplaced:
                 self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
@@ -1030,12 +1033,15 @@ class RenderedCache:
         except ContextOverflowError:
             return False
 
-    def _answer_unreadable_owed(self) -> None:
-        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told."""
+    def _answer_unreadable_owed(self) -> bool:
+        """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; whether the turn closed instead, for want of room for it."""
         while self.pending_calls and self.pending_calls[0].status == "unreadable" \
                 and self._state.unreadable_result is not None:
             if not self._write_unreadable(self._state.unreadable_result):
-                break
+                # Left owed, it would hold the turn open with no call the caller can answer.
+                self.close_unanswered()
+                return True
+        return False
 
     def _renders_result(self, message: dict) -> bool:
         """Whether the template writes ``message``, a result, after the conversation."""
@@ -1126,8 +1132,9 @@ class RenderedCache:
                 raise OutOfOrderError(None, "no conversation to answer a call in; call begin() first")
             if call_id in self._state.left_out_calls:
                 raise OutOfOrderError(
-                    "call_id", f"the call {call_id!r} could not be read, its arguments no JSON "
-                    "object, so begin left it out; no result is owed for it")
+                    "call_id", f"the call {call_id!r} could not be read, as it named no function "
+                    "or its arguments were no JSON object, so begin left it out; no result is "
+                    "owed for it")
             waiting = _unanswered(self._state.messages)
             if not waiting:
                 raise OutOfOrderError("call_id", "no tool call is waiting for a result")

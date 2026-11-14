@@ -461,3 +461,24 @@ def test_a_begin_that_goes_on_with_the_cached_conversation_keeps_it_to_the_evict
     fresh = ChatWrapper(Config(context_size=2000, evict_above_fraction=0.9),
                         context=FakeContext(TOOLS))
     assert fresh.begin(**saved).evicted_for == "half_context"
+
+
+def test_a_history_given_as_text_is_refused_naming_the_form():
+    w, _ = begun_wrapper()
+    with pytest.raises(TypeError, match="list of chat message dictionaries"):
+        w.begin("You are a terse assistant.")
+
+
+def test_begin_reports_only_the_turns_it_kept_as_generated():
+    registry = weather_registry()
+    live, fake = tool_wrapper(context_size=2048)
+    live.begin(opened("persona"), tools=registry.specs())
+    for city in ("Bonn", "Rom"):
+        fake.call_script = [f"fn:weather{{city:'{city}'}}"]
+        live.reply("wetter?", tool_call_policy=registry).finish()
+    saved = live.conversation()
+    assert sum(len(record["kept"]) for record in saved["generated_turns"]["turns"]) == 2
+    limited = ChatWrapper(Config(context_size=2048, max_history_exchanges=1),
+                          context=FakeContext(TOOLS))
+    report = limited.begin(**saved)
+    assert report.n_turns_restored == 1

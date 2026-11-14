@@ -177,3 +177,30 @@ def test_the_count_of_history_messages_leaves_out_only_the_system_message():
     for length in range(5):
         for messages in itertools.product(kinds, repeat=length):
             assert history_count(list(messages)) == sum(m["role"] != "system" for m in messages)
+
+
+def test_a_reply_whose_calls_all_went_goes_on_in_the_next_reply_even_one_with_calls_left():
+    """Its text and thought come before the next reply's, so no reply stands between a call and its result."""
+    unreadable = {"id": "u", "type": "function", UNREADABLE_CALL: True,
+                  "function": {"name": "unknown", "arguments": {}}}
+    readable = {"id": "c", "type": "function", "function": {"name": "f", "arguments": {}}}
+    messages = [_QUESTION,
+                {"role": "assistant", "content": "Ich versuche es.", "reasoning_content": "eins",
+                 "tool_calls": [unreadable]},
+                {"role": "tool", "name": "unknown", "tool_call_id": "u", "content": "failed"},
+                {"role": "assistant", "content": "Nochmal.", "reasoning_content": "zwei",
+                 "tool_calls": [dict(unreadable, id="v"), readable]},
+                {"role": "tool", "name": "unknown", "tool_call_id": "v", "content": "failed"},
+                {"role": "tool", "name": "f", "tool_call_id": "c", "content": "12:00"},
+                {"role": "assistant", "content": "Fertig."}]
+    kept, gone = without_unreadable(messages, set(), joins_questions=False)
+    assert gone == {"u", "v"}
+    assert kept[1] == {"role": "assistant", "content": "Ich versuche es.\n\nNochmal.",
+                       "reasoning_content": "eins\n\nzwei", "tool_calls": [readable]}
+    _read(completions_messages(messages, joins_questions=False))      # a history begin takes
+
+
+def test_a_call_left_out_shares_no_id_with_one_kept():
+    with pytest.raises(ValueError, match="two calls"):
+        read_messages([*_call("{", call="x"), {"role": "tool", "tool_call_id": "x", "content": "r"},
+                       {"role": "assistant", "content": "a"}, *_call("{}", call="x")])

@@ -296,7 +296,7 @@ def get_weather(city: str) -> dict:
     return {"city": city, "celsius": 18}
 
 chat = ChatWrapper(Config(model_path="model.gguf"))
-chat.begin("You are a terse assistant.", tools=registry.specs())
+chat.begin([{"role": "system", "content": "You are a terse assistant."}], tools=registry.specs())
 print(chat.reply("What is the weather in Munich?", tool_call_policy=registry).finish().text)
 ```
 
