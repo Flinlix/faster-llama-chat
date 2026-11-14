@@ -124,7 +124,7 @@ class ChatWrapper:
         self._turn_budget = _CallBudget(None)
 
     def begin(self, system_prompt: str,
-              messages: list[tuple[str, str] | dict] | None = None,
+              messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False, generated_turns: dict | None = None) -> Report:
         """Reset the conversation: prefill the system prompt and recent history.
