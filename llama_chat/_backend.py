@@ -321,9 +321,8 @@ class Backend:
                       frequency: float, presence: float) -> None:
         """Add the three repetition penalties over the last ``window_tokens``.
 
-        Passes ``vocab``'s size first where this build's function takes it.
-        Warns and adds no stage where its signature is another still, leaving
-        generation unpenalized rather than refusing to start.
+        Where this build's function has a signature not known here, warns and adds
+        no stage.
         """
         leading = ((self._vocab_n_tokens(vocab),)
                    if self._penalties_take_vocab_size else ())

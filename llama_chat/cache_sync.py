@@ -27,14 +27,8 @@ class CacheSync:
     """The tokens a cache should hold, and that cache brought to hold them.
 
     Every change to :attr:`tokens` goes through here. A cache that shifts or
-    cuts its end takes each change at once. One that cannot is brought back to
-    :attr:`tokens` before the next generation or rest, once however many
-    changes came first: from the newest saved state that still holds a
-    beginning of them, else by decoding them again whole. Besides the states it
-    rested in, such a cache keeps one where :meth:`pin` says, and the one it
-    rested in at the last cut :meth:`hold` rests at, for as long as the tokens
-    before each stay. A decode or an edit that fails leaves the cache
-    unknown, and it is decoded again whole the same way. See design_history.md,
+    cuts its end takes each change at once; one that cannot is brought back to
+    :attr:`tokens` before the next generation or rest. See design_history.md,
     "How eviction works".
     """
 
@@ -349,8 +343,7 @@ class CacheSync:
 def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int | None:
     """Where ``held`` goes on as ``target`` does from ``start``, the stretch before it dropped; ``None`` where nowhere.
 
-    The longest run of at least eight tokens wins. A wrong one costs decoding
-    only: what differs after it is decoded again.
+    The longest run of at least eight tokens wins.
     """
     memory, wanted = _as_text(held), _as_text(target)
     probe = wanted[start:start + 8]

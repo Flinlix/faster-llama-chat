@@ -258,12 +258,7 @@ class ConversationRendering:
         return len(self.target(messages, generation_prompt).tokens)
 
     def opening_length(self, system: list[dict]) -> int:
-        """How many tokens open a conversation on ``system`` whatever its oldest exchange: the system turn, its declarations and the sequence opener.
-
-        The tokens two renders share that differ only in the oldest question,
-        so that what a template writes there only once a question follows is
-        counted, and nothing that moves with the newest question is.
-        """
+        """How many tokens open a conversation on ``system`` whatever its oldest exchange: the system turn, its declarations and the sequence opener."""
         first, second = (self.target(system + [
             {"role": "user", "content": question}, {"role": "assistant", "content": "A reply."},
             {"role": "user", "content": "Another question?"}], generation_prompt=True).tokens

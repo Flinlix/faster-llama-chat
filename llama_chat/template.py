@@ -121,8 +121,7 @@ class ToolCallFragments:
     """How a model writes a tool call: the tags around it.
 
     The two tags are taken verbatim from a render, so either may carry fixed
-    text past the tag itself. Narrowing one to the single tag it holds needs a
-    vocabulary, which this module has none of.
+    text past the tag itself.
 
     Attributes:
         call_open: What stands between the assistant turn's opening tag and the
@@ -139,10 +138,8 @@ class ToolCallFragments:
 class TemplateFragments:
     """The template tags a turn is wrapped in.
 
-    A turn renders as ``prefix + content + suffix``. Recovered from the model's
-    own GGUF chat template, and read for what a generation holds: a thought,
-    the end of a reply. What a tool call is wrapped in is
-    :class:`ToolCallFragments`.
+    A turn renders as ``prefix + content + suffix``. What a tool call is
+    wrapped in is :class:`ToolCallFragments`.
 
     Attributes:
         user_prefix, user_suffix: Wrap a user turn.

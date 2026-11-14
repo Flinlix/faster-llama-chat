@@ -112,11 +112,7 @@ def as_probes_read(render: Render, tags: tuple[str, ...] = ()) -> Render:
 
 
 def _conversation_end(render: Render, tags: tuple[str, ...]) -> str:
-    """What a render without a generation prompt writes after its last turn.
-
-    Read as what follows a lone user turn but not the same turn followed by a
-    reply, and also ends the render with the reply.
-    """
+    """What a render without a generation prompt writes after its last turn."""
     alone = render([{"role": "user", "content": USER_SENTINEL}], reasoning=False)
     followed = render([{"role": "user", "content": USER_SENTINEL},
                        {"role": "assistant", "content": ASSISTANT_SENTINEL}], reasoning=False)
@@ -131,13 +127,6 @@ def _conversation_end(render: Render, tags: tuple[str, ...]) -> str:
 
 def extract_fragments(render: Render, tags: tuple[str, ...]) -> TemplateFragments | None:
     """Recover template fragments by probing ``render`` with sentinel content.
-
-    The user and assistant tags are read from a conversation of two user turns,
-    where the first reply is a past one: a first turn alone may carry text the
-    template writes once at the start, and a newest reply may carry what only
-    the newest one does. Every probe is rendered with reasoning off, which is
-    what the fragments describe; what reasoning changes is
-    :func:`extract_reasoning`'s.
 
     Args:
         render: As ``Render`` above.
@@ -203,10 +192,7 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
                             tags: tuple[str, ...]) -> Reasoning | None:
     """The thought of a template that writes none but removes one from a past reply.
 
-    Tried with each of the model's tags: the closing tag is the one after which
-    a past reply keeps only its answer, and the opening tag the one that reads
-    as the closing without its first slash. Such a template has no switch, so
-    the model may reason in every reply.
+    Such a template has no switch, so the model may reason in every reply.
     """
     render = as_probes_read(render, tags)
     known = set(tags)
@@ -225,12 +211,7 @@ def extract_removed_thought(render: Render, fragments: TemplateFragments,
 
 def _empty_thought_tags(render: Render, tags: tuple[str, ...]
                         ) -> tuple[tuple[str, str], None] | None:
-    """The tags of the empty thought only the generation prompt without reasoning ends in.
-
-    Read where a template writes no thought into a reply: two of the model's
-    ``tags`` with nothing but whitespace between them, which the prompt with
-    reasoning lacks.
-    """
+    """The tags of the empty thought only the generation prompt without reasoning ends in."""
     off, on = _prompt_added(render, False), _prompt_added(render, True)
     if off is None or on is None or off == on:
         return None
@@ -361,16 +342,7 @@ def _whole_prompt(render: Render, assistant_prefix: str) -> str:
 def _thought_tags(render: Render, fragments: TemplateFragments,
                   tool_calls: ToolCallFragments | None, tags: tuple[str, ...]
                   ) -> tuple[tuple[str, str], str] | None:
-    """The tags around a reply's thought, read from a newest reply that holds one, and the form it was read in.
-
-    A template may write a thought only in a turn that calls a tool, so that
-    turn is the second probe, and templates read the thought in any of
-    :data:`~llama_chat.messages.THOUGHT_FORMS`. The opening tag is what the
-    model writes after the generation prompt before the thought, or else what
-    the turn holds before it beyond a past reply's tag; where a past reply's
-    tag already holds it, as an empty thought, it is the last tag before the
-    thought.
-    """
+    """The tags around a reply's thought, read from a newest reply that holds one, and the form it was read in."""
     opened = USER_SENTINEL + fragments.user_suffix
     prompt = fragments.generation_prompt_without_reasoning
     probes = []
@@ -425,9 +397,7 @@ def extract_content_rewrites(render: Render, texts,
                              tags: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
     """What the template writes in a user message's content for each of ``texts`` it changes.
 
-    One render, each text between markers of its own, so a template that
-    escapes or drops a tag, or escapes a character, is read as it does so.
-    ``()`` where the render cannot be read that way.
+    ``()`` where that cannot be read from one render.
     """
     texts = [text for text in dict.fromkeys(texts) if text and _MARK not in text]
     marks = [f"{_MARK}{n}{_MARK}" for n in range(len(texts) + 1)]

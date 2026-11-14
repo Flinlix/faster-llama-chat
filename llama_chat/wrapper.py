@@ -826,9 +826,8 @@ class ChatWrapper:
         """Generate, settle whatever the model calls, and go on until it answers.
 
         Each call that runs is handed over in the stream before it runs. The
-        lock must be held, and is for the whole exchange, tools running
-        included, so no other action comes between its rounds; a tool that
-        calls back into the wrapper is refused.
+        lock must be held for the whole exchange, tools running included; a
+        tool that calls back into the wrapper is refused.
 
         Args:
             policy: The registry to run calls against, or ``"refuse"``, which
@@ -840,9 +839,7 @@ class ChatWrapper:
 
         Raises:
             UnsupportedError: If ``policy`` is a registry holding tools this
-                model could never call, which is what
-                :meth:`~llama_chat.resolved_template.ResolvedTemplate.ensure_tools_usable`
-                decides.
+                model could never call.
         """
         registry = policy if isinstance(policy, ToolRegistry) else None
         if registry is not None and len(registry) > 0:
@@ -964,10 +961,9 @@ class ChatWrapper:
     def _read_generation(self, deltas: Generator[str, None, Reply], after: str):
         """Yield one generation's text, and return the :class:`Reply` describing it.
 
-        Driven by hand rather than with ``for``, which would discard that
-        :class:`Reply`. Where ``after``, the text shown before it, and this
-        text would join without whitespace, a blank line goes between them,
-        and the Reply's text starts with it.
+        Where ``after``, the text shown before it, and this text would join
+        without whitespace, a blank line goes between them, and the Reply's
+        text starts with it.
         """
         separator = None if after and not after[-1].isspace() else ""
         while True:
@@ -996,13 +992,11 @@ class ChatWrapper:
                       budget: _CallBudget):
         """Decide what every call of one round gets back, running what may run, and hand over each call that runs before it runs.
 
-        Settled before any of it is written, because what a failure tells the
-        model to do next depends on the budget the last call leaves. In the
-        order asked, which the template renders in. A call handed over counts
-        against ``budget`` from then on. Where the stream is closed at a call
-        handed over, or anything is raised while it runs, a ``KeyboardInterrupt``
-        included, the results of the calls that ran before it are written, and
-        it and the rest of the round stay owed.
+        The calls are settled in the order asked, before any result is written.
+        A call handed over counts against ``budget`` from then on. Where the
+        stream is closed at a call handed over, or anything is raised while it
+        runs, a ``KeyboardInterrupt`` included, the results of the calls that ran
+        before it are written, and it and the rest of the round stay owed.
 
         Returns:
             The ``(call, result)`` pairs.
@@ -1047,8 +1041,13 @@ class ChatWrapper:
 
         Without ``text``, it goes on with the open turn, adding no message of
         its own, or else answers the newest message, which must be a user
-        message already written. One generation, so a call it stops on leaves
-        the turn open for a result. The lock must be held.
+        message already written. A call it stops on leaves the turn open for a
+        result. The lock must be held.
+
+        Every exit before the generation's first token, by a cancel or a
+        failure, leaves the conversation and the cache as this call found
+        them, the history its question evicted included; so does a failure
+        while the reply is recorded. See design_history.md, "One undo path".
 
         Args:
             text, stop, cancel: As :meth:`reply`.
@@ -1056,8 +1055,7 @@ class ChatWrapper:
                 for the config's.
             sampling: Every value the generation draws with.
             recognizes_calls: ``False`` leaves a call the model writes as text,
-                so this generation cannot end on a call and the turn is certain
-                to close.
+                so this generation cannot end on a call.
             may_call_again: Whether a call is read again after a call this
                 generation writes that cannot be read, which the answer to
                 that call tells the model.
@@ -1065,11 +1063,6 @@ class ChatWrapper:
             on_started: Called once the request is written and the generation
                 starts, before anything it produces is recorded; given to a
                 request's first generation alone.
-
-        Every exit before the generation's first token, by a cancel or a
-        failure, leaves the conversation and the cache as this call found
-        them, the history its question evicted included; so does a failure
-        while the reply is recorded. See design_history.md, "One undo path".
         """
         self._ensure_open()
         conversation = self._conversation

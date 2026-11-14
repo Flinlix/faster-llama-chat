@@ -43,10 +43,8 @@ def template_fingerprint(template: str) -> str:
 def addon_file(model_path: str | None, template: str | None) -> dict:
     """A model's add-on file, with ``sampling``, ``call`` and ``reasoning_on`` always present, possibly empty.
 
-    The file next to the model with its name and ``.json`` comes first, where
-    it names the model's template; one that does not is not used, and a
-    warning says why. Then a file shipped in :data:`SHIPPED_ADDONS` that names
-    the template.
+    The file beside the model, with its name and ``.json``, if it names the
+    model's template; else a file in :data:`SHIPPED_ADDONS` that names it.
 
     Raises:
         ValueError: If the file found is malformed.
@@ -90,11 +88,8 @@ def read_addon_file(path: Path | None) -> dict:
     """An add-on file's contents, checked; an empty one for ``None``.
 
     Raises:
-        ValueError: Naming the file, if it is not JSON, holds a key no add-on
-            file has, templates that are not a list of fingerprints, a source
-            that is not text, a sampling value that is null or one
-            :class:`Config` refuses, its type included, a call field that is not text, or a reasoning_on
-            that is no object of template variables.
+        ValueError: Naming the file and the fault, if it is not JSON or does
+            not follow the add-on file format.
     """
     if path is None:
         return {"templates": [], "sampling": {}, "call": {}, "reasoning_on": {}}
@@ -137,12 +132,11 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
                         addon: dict) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
-    Value by value: the add-on file's, else what the model recommends itself,
-    else switched off. A model for which neither states any value but the
-    penalty window runs at llama.cpp's defaults.
+    Each field takes the add-on file's value, else the model's own, else is
+    switched off. A model that states no value other than the penalty window
+    runs at llama.cpp's defaults.
 
     Args:
-        config: What the caller set; a field it sets is kept.
         recommended: The sampling the model states for itself, as
             :meth:`~llama_chat.cache_context.ModelReader.recommended_sampling` gives it.
         addon: The model's add-on file, as :func:`addon_file` reads it.
@@ -150,9 +144,7 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
     Raises:
         ValueError: If a value the model recommends, which neither ``config``
             nor the add-on file replaces, is one the settings refuse, or names
-            no model sampling field. Not an
-            :class:`~llama_chat.errors.InvalidSettingError`, since no setting
-            of the caller's is at fault.
+            no model sampling field.
     """
     unknown = sorted(set(recommended) - set(SAMPLING_FIELDS))
     if unknown:

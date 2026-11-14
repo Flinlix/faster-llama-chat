@@ -236,11 +236,7 @@ def call_id(n: int) -> str:
 
 
 def next_call_number(ids) -> int:
-    """A number past every one among ``ids`` that :func:`call_id` writes, so that the ids numbered from it are new and nine characters long.
-
-    One past the highest, where that leaves room below 36**5; else the start
-    of the lowest run of :data:`_FREE_RUN` numbers none of ``ids`` holds.
-    """
+    """A number past every one among ``ids`` that :func:`call_id` writes, so that the ids numbered from it are new and nine characters long."""
     taken = {int(found.group(1), 36) for found in map(_CALL_ID.fullmatch, ids) if found}
     after = max(taken, default=-1) + 1
     if after + _FREE_RUN <= _ID_LIMIT:
@@ -356,9 +352,7 @@ def history_count(messages: list[dict]) -> int:
 def exchange_starts(messages: list[dict]) -> list[int]:
     """Where each exchange begins: every user message, where kept history may open.
 
-    A conversation that dropped its oldest messages opens on a user turn, as
-    every template writes one. See design_history.md, "Eviction removes whole
-    exchanges" under "Structure review: what changed and why".
+    See design_history.md, "Eviction removes whole exchanges".
     """
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 

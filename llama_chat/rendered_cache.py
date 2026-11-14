@@ -698,27 +698,14 @@ class RenderedCache:
         """Record what the newest generation produced, then settle the cache after it.
 
         A turn that called tools keeps the tokens it was generated as, and stays
-        open while a call is owed a result. A call that could not be read is
-        answered with an error result, so the turn goes on to say so, or, where
-        that result has no room, the turn closes as a reply. Any other reply
-        closes the turn: one the template refuses to write, or that produced
-        nothing it writes, is taken back with its request, the newest question
-        and everything after it;
-        one with no answer, after a question, is taken out again where the
-        template writes two questions in a row; and the cache is then brought
-        to the template's render and decoded ahead for the next question.
+        open while a call is owed a result; any other reply closes the turn. A
+        reply the template refuses to write, or that produced nothing it writes, is
+        taken back with its request. Where the generation failed, the cache is left
+        to be decoded again by the next action.
 
-        An answer holding the template's own thought tags is kept as a part
-        of it the template writes as text, and as an answer with no text where
-        it writes none, which the rules above then take.
-
-        Where the generation failed, what it said is recorded, or, where it
-        said nothing the template writes, the attempt is put back; the cache is
-        left to be decoded again by the next action. A reply taken back with
-        the question its request asked puts back what that question evicted
-        too. Recording the reply ends the attempt :meth:`open_attempt` opened;
-        where that raises, the caller puts the attempt back, and a fault after
-        it keeps the reply.
+        Recording the reply ends the attempt :meth:`open_attempt` opened; where
+        that raises, the caller puts the attempt back, and a fault after it keeps
+        the reply.
 
         Args:
             thought: The reply's thought, given to the template as its own to
@@ -884,11 +871,7 @@ class RenderedCache:
         return dropped
 
     def _renders_result(self, message: dict) -> bool:
-        """Whether the template writes ``message``, a result, after the conversation.
-
-        Read from the newest exchange, the turn the result goes in, as a
-        question's refusal is, not from a render of the whole conversation.
-        """
+        """Whether the template writes ``message``, a result, after the conversation."""
         # A history with no question has no exchange to stand for it: it is read whole.
         newest = (self._newest_exchange() if exchange_starts(self._state.messages)
                   else self._state.messages)
@@ -1166,9 +1149,6 @@ class RenderedCache:
     def _ensure_within(self, limit: int, remedy: str) -> None:
         """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped.
 
-        What is left over then has no user message after it, and an eviction
-        drops only up to the next one.
-
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
@@ -1368,10 +1348,7 @@ def _ensure_begun(conversation, into: str) -> None:
 def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
     """Refuse an action before a conversation was begun, or inside a turn a call left open.
 
-    ``conversation`` is a :class:`RenderedCache` or what it published. Only a
-    begun conversation holds the sequence opener and the system prompt, and a
-    message inside a model turn that never ended is a shape no template renders
-    and no model was trained on.
+    ``conversation`` is a :class:`RenderedCache` or what it published.
     """
     if not conversation.begun:
         raise OutOfOrderError(None, f"no conversation to {into or action}; call begin() first")

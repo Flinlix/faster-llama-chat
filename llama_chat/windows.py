@@ -25,12 +25,6 @@ class Windows:
     def ahead(self, state: ConversationState, memory: CacheSync):
         """What the conversation decodes ahead of the next question, from a render of the system message and the newest two exchanges alone.
 
-        The window is written as the whole render is from the first tag after
-        the older exchange's reply on. That tag is found in the cache from where
-        the newest question's run was decoded, that question being the one
-        spliced there; the stretch from the tag to the run, and what the splice
-        decoded, are checked token for token.
-
         Returns:
             Where in the cache that tag sits, the tokens from it up to where the
             next question goes, how many of the conversation's own follow the
@@ -76,13 +70,13 @@ class Windows:
     def drop_in(self, state: ConversationState, memory: CacheSync, kept_until, after: int) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
 
+        It stops before the newest two exchanges, which the window was rendered
+        from.
+
         Args:
             kept_until: Where in the cache the window's tag sits now; nothing
                 from there on may be removed.
             after: How many tokens the render has from that tag on.
-
-        It stops before the newest two exchanges, which the window was rendered
-        from.
 
         Returns:
             Whether the cache is the render up to that tag after it; where it

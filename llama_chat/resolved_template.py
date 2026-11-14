@@ -293,13 +293,6 @@ class ResolvedTemplate:
     def answer_opening(self, reasoning: bool = False) -> str:
         """What a past reply's tag holds that the generation prompt leaves to the model.
 
-        A template that routes replies through channels ends its generation
-        prompt before the channel's own header, which the model writes and
-        the answer does not include. One whose prompt ends in an empty thought
-        leaves the tag's own opening of the answer to the model after it,
-        which is then what the tag holds beyond what it shares with the
-        prompt.
-
         Raises:
             ValueError: If ``reasoning`` is asked of a model that cannot reason.
         """
@@ -334,10 +327,8 @@ class ResolvedTemplate:
 
     @property
     def can_call_tools(self) -> bool:
-        """Whether all four steps tool calling needs came out of this template.
+        """Whether the call tags, the declarations, the argument spelling and the result block all came out of this template.
 
-        The call tags, the declarations that tell the model a tool exists, the
-        argument spelling, and the block a result goes in.
         :meth:`ensure_tools_usable` says which one is missing.
         """
         return (self._calls_marked and self._can_declare_tools
@@ -369,13 +360,6 @@ class ResolvedTemplate:
 
     def ensure_tools_usable(self, field: str) -> None:
         """Refuse to declare tools this model could never use.
-
-        Declaring tools, and handing over a registry to run them, are the same
-        promise, so every step between the promise and a result the model can
-        read is checked before the promise is made rather than at the first
-        call, where the reply would already be running. All four were settled
-        at construction, which is what :attr:`can_call_tools` reports; this only
-        says which one is missing.
 
         Args:
             field: The parameter the tools were given in, which a refusal names.
@@ -447,11 +431,8 @@ class ResolvedTemplate:
     def _validate_template(self) -> None:
         """Ensure the closing after a reply opens with one of this model's own tags.
 
-        The model ends a reply by generating that tag; a closing that opens
-        with plain text never lets it stop, so it would run to the reply cap
-        every generation. Where the closing is empty, the reply ends where
-        the model draws the tag that opens the next turn, which must therefore
-        end a generation.
+        Where the closing is empty, the tag that opens the next turn must end a
+        generation instead.
         """
         closing = self._fragments.assistant_suffix.strip()
         if not closing:
@@ -502,7 +483,6 @@ class ResolvedTemplate:
 
         In each reasoning mode: the generation prompt ends the render of a
         question, and the closing after a reply follows a past reply's text.
-        What else a conversation holds is the render itself.
 
         Raises:
             ValueError: If the template writes either otherwise.
@@ -649,11 +629,7 @@ class ResolvedTemplate:
                            self._call_lead_in, parameters, self._json_keys)
 
     def _opens_in_reply_header(self, call_open: str) -> bool:
-        """Whether a plain-text opening begins with text of a reply's own opening.
-
-        A model may write such a header in another order than its template
-        does, so the template cannot tell how a generated call begins.
-        """
+        """Whether a plain-text opening begins with text of a reply's own opening."""
         header, text = self._fragments.assistant_prefix, ""
         for tag in self._tags_in(header):
             text_before, _, header = header.partition(self._context.token_text(tag))
@@ -678,9 +654,8 @@ class ResolvedTemplate:
     def _call_closer(self, fragments: ToolCallFragments) -> int | None:
         """The tag that ends a call.
 
-        The last tag between two calls of one turn, where the template writes
-        one there that ``call_close`` also holds: a call's ending may close its
-        last argument with a tag of its own first. Otherwise the first tag of
+        The last tag between two calls of one turn, where the template writes one
+        there that ``call_close`` also holds; otherwise the first tag of
         ``call_close``.
         """
         separator = extract_call_separator(self._read_as_probes,
@@ -697,11 +672,7 @@ class ResolvedTemplate:
         return [tag for tag in found if tag is not None]
 
     def _resolve_call_body(self) -> CallBody | None:
-        """This model's argument spelling, or ``None`` if it cannot be read.
-
-        A call stays detectable without it, and only its contents cannot be
-        read.
-        """
+        """This model's argument spelling, or ``None`` if it cannot be read."""
         if not self._calls_marked or self._tool_calls is None:
             return None
         if self._call_from_file:
@@ -714,12 +685,7 @@ class ResolvedTemplate:
         return extract_call_body(self._read_as_probes, call_open, self.call_close_text)
 
     def _resolve_can_declare_tools(self) -> bool:
-        """Whether this model's template renders tool declarations at all.
-
-        Probed with a stand-in tool, for the same reason the result block is:
-        a template renders declarations or it does not, and does not branch on
-        which tools it was handed.
-        """
+        """Whether this model's template renders tool declarations at all."""
         if not self._calls_marked:
             return False
         return self._declares_before_newest_turn or self._declares_in_system_turn()
@@ -748,11 +714,7 @@ class ResolvedTemplate:
         return {}
 
     def _resolve_declares_before_newest_turn(self) -> bool:
-        """Whether the template declares tools right before the newest user turn alone.
-
-        Probed with a stand-in tool's declaration, which must read the same in a
-        first turn as in a later one.
-        """
+        """Whether the template declares tools right before the newest user turn alone."""
         if not self._calls_marked or self._declares_in_system_turn():
             return False
         tools = [_PROBE_TOOL.as_declaration()]
@@ -775,11 +737,7 @@ class ResolvedTemplate:
         return len(found) == 1
 
     def _resolve_can_write_results(self) -> bool:
-        """Whether this model's template renders a block to answer a call in.
-
-        Probed once, with a stand-in name: a template renders a result block or
-        it does not, and does not branch on which function is being answered.
-        """
+        """Whether this model's template renders a block to answer a call in."""
         if not self._calls_marked:
             return False
         rendered = self._render([

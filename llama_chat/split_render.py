@@ -176,14 +176,7 @@ def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: i
 
 
 def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
-    """The marked render's parts matched in ``rendered``, each marker's text placed; ``None`` where they do not match.
-
-    A text the template writes otherwise than in any of its forms, wrapped in
-    text of the template's own say, is what lies before the template's next
-    text; it is placed only where exactly one place for it leaves the rest of
-    the render matching. How the rest matches from a part and a position is
-    worked out once, so that many such texts are placed in polynomial time.
-    """
+    """The marked render's parts matched in ``rendered``, each marker's text placed; ``None`` where they do not match."""
     ways_from: dict[tuple[int, int], tuple[int, tuple | None]] = {}
 
     def rest(k: int, at: int) -> tuple[int, tuple | None]:

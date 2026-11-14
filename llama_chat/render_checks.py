@@ -54,13 +54,6 @@ def repeated_question_written_alike(render: Render, system: list[dict]) -> bool:
 def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
     """Whether this template writes the newest two exchanges, and the oldest two kept after a drop, as the whole render does.
 
-    Checked on five exchanges with the conversation's system message, tools
-    and reasoning: the window of the newest two from the first tag after the
-    older one's reply, the history before that tag as the prompt for the
-    newest reply wrote it, and after dropping the oldest exchange, the oldest
-    two kept up to the first tag after the first one's reply and everything
-    after that tag as before.
-
     Args:
         tag_after: ``(text, at)`` to where the first tag at or after ``at``
             begins, ``None`` where there is none.
@@ -92,11 +85,6 @@ def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
 def ensure_history_stays_written(render: Render, system: list[dict]) -> None:
     """Refuse a template that writes an older exchange otherwise once another follows.
 
-    Such a conversation could only be kept by decoding it again each turn,
-    which the rolling memory does not do. Changes within the newest exchange,
-    such as a past reply written without its thought or a system prompt moving
-    to the newest question, are what the cache follows.
-
     Raises:
         ValueError: If the template rewrites anything before the newest
             exchange, or refuses the probe that shows whether it does.
@@ -118,7 +106,7 @@ def ensure_history_stays_written(render: Render, system: list[dict]) -> None:
 def tool_turns_stay_written(render: Render, system: list[dict], tool: str, thought: bool) -> bool:
     """Whether the template writes a past turn that called ``tool``, with a ``thought`` or without, as before once another exchange follows.
 
-    ``False`` also where it refuses the probe, so that the turn is checked after every reply.
+    ``False`` also where it refuses the probe.
     """
     thoughts = ({THOUGHT_KEY: "QQTHOUGHTQQ"}, {THOUGHT_KEY: "QQLATERQQ"}) if thought else ({}, {})
     turn = [{"role": "user", "content": "QQASKQQ"},

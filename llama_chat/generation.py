@@ -129,30 +129,23 @@ def generate(
     """Stream a reply, yielding text deltas as tokens are sampled.
 
     The caller must have prefilled the generation prompt with
-    ``want_logits=True``. Bytes run through an incremental UTF-8 decoder, so
-    a codepoint split across tokens is never mangled, and the trailing
-    characters are held back while they could still begin a call's opening
-    or the text that ends a reply.
+    ``want_logits=True``. The trailing characters are held back while they
+    could still begin a call's opening or the text that ends a reply.
 
     Args:
-        context: The cache context drawn from and decoded into.
         start_pos: Cache position of the first generated token.
-        max_generated_tokens: Hard cap on tokens to generate.
         out: Accumulator to fill. Pass one in to read what reached the cache
             after abandoning the stream; a fresh one is used otherwise.
         cancel: Checked once per token. Setting it, from any thread, ends
             the generation with ``stop_reason == "interrupted"``.
-        sampling: Every value this generation draws with, handed to the
-            context.
         ends_turn: Whether a sampled token ends the reply as an
             end-of-generation token does, neither cached nor yielded: the
             first of a closing the model writes in several tags.
         boundary: Where a call opens and closes and where a reply ends in
-            text. A call is recognized where it opens, none of it is
-            yielded, and generation ends where it closes with
-            ``stop_reason == "tool_call"``, or where the turn ends inside it,
-            closed as the template closes one; one the reply cap cuts short is
-            dropped, and the reply ends with ``"token_limit"``.
+            text. No part of a call is yielded; generation ends where it
+            closes with ``stop_reason == "tool_call"``, or where the turn ends
+            inside it, closed as the template closes one; one the reply cap
+            cuts short is dropped, and the reply ends with ``"token_limit"``.
 
     Yields:
         Visible reply text deltas; their concatenation equals ``out.text``.

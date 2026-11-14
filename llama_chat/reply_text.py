@@ -138,10 +138,9 @@ class ReplyText:
 class _ThoughtFilter:
     """Passes on a reply's text as it streams, all but its thoughts.
 
-    The tags are matched without their surrounding whitespace, which a model
-    does not always reproduce, and the answer after a thought starts unpadded.
-    Whitespace at the reply's very start is held until what follows says whose
-    it is: a thought's tag makes it the tag's, answer text the answer's.
+    The tags are matched without their surrounding whitespace, and the answer
+    after a thought starts unpadded. Whitespace at the reply's very start is
+    held until what follows says whose it is.
 
     Once answer text has begun, a thought opens only where a tag of the
     model's stands in its opening's text, where ``tag_spans`` says where they

@@ -41,9 +41,9 @@ class ModelReader(Protocol):
     def chat_template_text(self, template_name: str | None = None) -> str | None:
         """The source of the model's chat template of that name, ``None`` where it ships none.
 
-        ``template_name`` names one of the further templates a model may ship,
-        such as :data:`TOOL_USE_TEMPLATE`; ``None`` is its default template.
-        This library renders it.
+        Args:
+            template_name: One of the further templates a model may ship, such as
+                :data:`TOOL_USE_TEMPLATE`; ``None`` for its default template.
         """
 
     def eos_token_text(self) -> str:

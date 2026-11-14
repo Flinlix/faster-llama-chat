@@ -37,12 +37,6 @@ class Eviction:
                             refused: Callable[[list[dict]], Exception]) -> None:
         """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest.
 
-        Only the newest messages are rendered: twice as many exchanges each
-        time until they no longer fit, then the count between is halved, so a
-        history far longer than the context costs a few renders of about
-        ``bound`` each; where the lengths measured so far say the whole
-        history fits, it is tried at once.
-
         Raises:
             Exception: What ``refused`` makes of the messages the template refuses to write.
         """
@@ -92,15 +86,13 @@ class Eviction:
 
         Where the cache cannot shift, they go until the history is well below
         its room under ``limit`` and its count well below
-        ``max_history_exchanges``, so that the cache is decoded again only
-        every few turns.
+        ``max_history_exchanges``.
 
         Args:
             tokens_only: Leave ``max_history_exchanges`` out, which may keep
                 nothing on purpose.
             beside_open_turn: Where the open turn alone leaves the history no
-                room well below ``limit``, measure that room beside the turn,
-                so that a long result in it drops only the history it needs.
+                room well below ``limit``, measure that room beside the turn.
         """
         def length() -> int:
             return self._rendering.length(state.messages, generation_prompt)
@@ -117,13 +109,7 @@ class Eviction:
 
     def _drop_oldest_exchanges(self, state: ConversationState, length: Callable[[], int],
                                bound: int, at_least: int, newest_too: bool) -> bool:
-        """Drop the fewest oldest exchanges, ``at_least`` of them, after which ``length()`` is within ``bound``, or every one that can go; whether any went.
-
-        Each try renders what is left, so the count is found with few tries:
-        every one that can go first, which leaves the shortest render, then
-        counts placed where the lengths measured so far put the bound, halving
-        the range instead where that does not halve it.
-        """
+        """Drop the fewest oldest exchanges, ``at_least`` of them, after which ``length()`` is within ``bound``, or every one that can go; whether any went."""
         messages, kept = list(state.messages), state.kept
 
         def dropping(count: int) -> int:
@@ -161,12 +147,10 @@ class Eviction:
     def drop_bound(self, state: ConversationState, limit: int, beside_open_turn: bool = False) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.
 
-        Where the cache cannot shift, what a short question alone takes and
-        that fraction of the room after it, so that history is kept however
-        long the system turn and wherever the template writes declarations.
-        With ``beside_open_turn``, where the open turn alone goes past that,
-        what the open turn takes with the system turn and that fraction of
-        the room after them.
+        Where the cache cannot shift, what a short question alone takes and that
+        fraction of the room after it. With ``beside_open_turn``, where the open
+        turn alone goes past that, what the open turn takes with the system turn
+        and that fraction of the room after them.
         """
         if self._can_shift:
             return limit

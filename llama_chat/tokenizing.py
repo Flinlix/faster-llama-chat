@@ -30,11 +30,7 @@ def split_at_tags(reader: ModelReader, text: str) -> list[tuple[str, bool]] | No
 
 
 def first_special_token(reader: ModelReader, text: str) -> int | None:
-    """The first of the model's own tags in ``text``, or ``None``.
-
-    The first tag, not the first token: a recovered tool tag carries fixed
-    lead-in text.
-    """
+    """The first of the model's own tags in ``text``, or ``None``."""
     return next((token for token in reader.tokenize(text, add_special=False, parse_special=True)
                  if reader.is_special(token)), None)
 
@@ -51,12 +47,10 @@ def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
     """``pieces`` as one render tokenizes them.
 
     The model's own tags are tokenized as tags, and the plain text between two
-    tags as one run with special-token parsing off, whether it is the
-    template's or the caller's. See the README, "Special tokens in message
-    content".
+    tags as one run with special-token parsing off. See the README, "Special
+    tokens in message content".
 
     Args:
-        reader: The model's tokenizer and tags.
         pieces: The text in order, each marked whether it is the caller's own,
             which is never read as a tag, rather than the template's.
         add_special: Attach the model's sequence opener to the first token.

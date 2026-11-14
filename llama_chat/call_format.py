@@ -35,22 +35,13 @@ def extract_tool_fragments(render: Render, fragments: TemplateFragments,
                            tags: tuple[str, ...]) -> ToolCallFragments | None:
     """Recover what a template wraps a generated tool call in.
 
-    Two probes differing only in their argument's type, so what the renders
-    share around the call is structure rather than content.
-
     Args:
         render: As :func:`~llama_chat.template_extract.extract_fragments`.
-        fragments: The recovered turn tags. The turn holding a call begins
-            after the user turn and the assistant tag, so a template whose
-            assistant tag cannot be told from its user tag cannot locate that
-            turn at all, and what came back would open a call with a turn tag.
-            An assistant tag that is empty is no such case: the reply then
-            begins where the user turn ends.
+        fragments: The recovered turn tags.
         tags: The texts of the model's own tags, where a tag ends.
 
     Returns:
-        The tags, or ``None`` where nothing usable can be recovered, which is
-        what a model that cannot call tools looks like from here.
+        The tags, or ``None`` where nothing usable can be recovered.
     """
     render = as_probes_read(render, tags)
     if fragments.assistant_prefix == fragments.user_prefix:
@@ -89,14 +80,12 @@ def extract_tool_fragments(render: Render, fragments: TemplateFragments,
 def extract_call_separator(render: Render, call_open: str) -> str | None:
     """What a template writes between one call's argument and the next call's opening.
 
-    Read from a turn that makes two calls, so it holds the first call's own
-    ending but not what the template writes after the last call. Where the
-    opening begins with a tag written once for all the calls of a turn, each
-    call is found by the shortest end of the opening that starts with a tag.
+    It holds the first call's own ending, not what the template writes after
+    the last call.
 
     Returns:
         The text, or ``None`` where the template does not open each call with
-        ``call_open`` or such an end of it.
+        ``call_open`` or with the shortest end of it that starts with a tag.
     """
     rendered = as_probes_read(render)([
         {"role": "user", "content": USER_SENTINEL},
@@ -118,23 +107,17 @@ def extract_call_body(render: Render, call_open: str,
                       close_tag: str) -> CallBody | None:
     """Recover how this model spells a name and its arguments between the tags.
 
-    Four renders: no arguments, one string, one number, and two strings. Every
-    delimiter falls out of comparing them, and three more recover how nested
-    values are written. See design_history.md, "How a call's format is
-    recovered" and "Nested values in a model's own elements, and tests by
-    module".
+    See design_history.md, "How a call's format is recovered".
 
     Args:
         render: As :func:`~llama_chat.template_extract.extract_fragments`.
         call_open: The recovered opening, tag and lead-in together.
-        close_tag: The control token that ends a call, on its own. The recovered
-            ``call_close`` cannot stand in for it, because it carries the body's
-            own ending in front of the tag.
+        close_tag: The control token that ends a call, on its own; not the
+            recovered ``call_close``, which carries the body's own ending in
+            front of the tag.
 
     Returns:
-        The grammar, or ``None`` where the probes prove nothing about some
-        delimiter. Such a model's calls are still detected, because the tags are
-        tokens, but what is inside one cannot be read.
+        The grammar, or ``None`` where some delimiter cannot be recovered.
     """
     render = as_probes_read(render)
     def rendered_body(arguments) -> str | None:
@@ -225,10 +208,8 @@ def extract_call_body(render: Render, call_open: str,
 def _nested_forms(rendered_body, text: str, quote_open: str, quote_close: str) -> dict:
     """How a template writes an object's members and a list's items in their own delimiters.
 
-    Read from a call whose one argument is an object with one member, one with
-    two, and a list of two strings, each compared with the call whose argument
-    is a string. Empty where the template writes nested values as JSON or a
-    literal, which the values are read as anyway, or in no fixed form.
+    Empty where the template writes nested values as JSON, as a literal, or in
+    no fixed form.
     """
     value_at = text.index(_STRING)
     before, after = text[:value_at - len(quote_open)], text[value_at + len(_STRING) + len(quote_close):]
@@ -261,13 +242,7 @@ def _nested_forms(rendered_body, text: str, quote_open: str, quote_close: str) -
 
 
 def extract_call_close_text(render: Render, call_open: str) -> str | None:
-    """The text that ends one call, for a template whose call has no closing tag of its own.
-
-    The longest text, from where a tag starts to where one ends, found both in
-    what follows the first of two calls and in what a call with an argument
-    and one without both end with. Where a template writes no two calls in one
-    turn, the longest such end of the latter.
-    """
+    """The text that ends one call, for a template whose call has no closing tag of its own."""
     render = as_probes_read(render)
     empty, text = _render_call(render, {}), _render_call(render, {_KEY: _STRING})
     if empty is None or text is None or call_open not in empty or call_open not in text:
@@ -287,9 +262,7 @@ def extract_call_close_text(render: Render, call_open: str) -> str | None:
 def extract_named_twice_opening(render: Render, call_open: str) -> str | None:
     """Where a call names its function twice, the text between the two names.
 
-    Such a template writes the name in the turn's header, right after
-    ``call_open``, and again in the call's body, which is what opens the call
-    there. ``None`` where the name does not follow ``call_open`` and recur.
+    ``None`` where the name does not follow ``call_open`` and recur.
     """
     rendered = _render_call(as_probes_read(render), {_KEY: _STRING})
     if rendered is None or call_open not in rendered:
@@ -306,12 +279,7 @@ def _common_suffix(one: str, other: str) -> str:
 
 
 def extract_json_call_keys(render: Render) -> tuple[str, ...] | None:
-    """Where the template writes a call as one JSON object, its keys: the one naming the function, the one holding the arguments, then the others; ``None`` where it does not.
-
-    Read from a call to ``TOOLNAME`` with one text argument: the JSON object
-    or array around the name is decoded, and the keys whose values are the
-    name and the arguments are taken.
-    """
+    """Where the template writes a call as one JSON object, its keys: the one naming the function, the one holding the arguments, then the others; ``None`` where it does not."""
     arguments = {_KEY: _STRING}
     rendered = _render_call(as_probes_read(render), arguments)
     at = -1 if rendered is None else rendered.find(TOOL_SENTINEL)

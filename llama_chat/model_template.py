@@ -82,9 +82,7 @@ class ModelTemplate:
     """The chat template a model ships, and renders of it.
 
     Built from the template's text and the text of the model's end-of-sequence
-    token, which some templates write. Shared by everything that renders a
-    model's template, so a test of the template runs the code a loaded model
-    runs.
+    token, which some templates write.
 
     Raises:
         ValueError: If ``text`` is not valid template code, naming where and why.
