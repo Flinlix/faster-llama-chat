@@ -331,6 +331,11 @@ class RenderedCache:
                 if self._length(self._state.messages, prompted) > room:
                     self._cutting.cut_to_fit(room, self._held_indexes())
                 needed = self._length(self._state.messages, prompted)
+                # A reply stopped by the full context does not fit with its closing; it goes as
+                # it goes after the reply.
+                if needed > room and not prompted and not self._state.messages[-1].get("tool_calls"):
+                    self._drop_while_over(room, generation_prompt=False, newest_too=True)
+                    needed = self._length(self._state.messages, prompted)
                 if needed > room:
                     raise ContextOverflowError(
                         f"the newest exchange of the history, from its user message on, needs "

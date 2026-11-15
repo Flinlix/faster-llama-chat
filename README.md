@@ -154,7 +154,9 @@ parts, the `developer` role or a `name`, is refused, naming where it stands. Two
 questions in a row are joined into one where the template writes no two in a
 row, as a running conversation joins them, and a turn a call left open before
 a later question is closed as that question closes it live, where the template
-does not write the question after it as it stands. It
+does not write the question after it as it stands. A newest reply that does
+not fit the context with its closing, as one the full context stopped, goes as
+it goes after the reply in a running conversation. It
 compares the conversation with what the cache holds and decodes only from where
 they differ, so beginning again with the same conversation and other tools or
 another reasoning setting is how those change. It keeps the newest history that

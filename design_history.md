@@ -5796,6 +5796,12 @@ and what changed:
   alone: as it stands, with each owed call told it was not run, with an empty
   reply after, or taken out and the two questions joined. Refusing it, as
   before, blocked the resume, which rule 11 rules out.
+- A history whose newest reply ran until the context was full was refused at
+  a begin: with its closing tag it is a few tokens over the context (6 on
+  the qwen-3 test template, found by the same fuzzer on a resume). The begin
+  now drops what is over the context as the work after that reply drops it
+  live, the oldest exchange first. A newest turn that ends on a call is still
+  refused, as dropping it would leave its call unreported.
 - Left, with the reason: two or more unanswered questions joined in one turn
   are decoded again with each further one, as the plain text between two tags
   is tokenized as one run; treating the join as a token boundary would be a

@@ -2079,6 +2079,30 @@ def test_a_history_that_keeps_a_turn_open_before_a_question_begins_as_the_questi
     assert kept.chat.reply(QUESTIONS[1]).finish().n_generated_tokens
 
 
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_history_whose_newest_reply_ran_to_the_full_context_begins_without_it(stem):
+    opening = _Run(stem, context_size=16384)
+    opening.begin()
+    asked = opening.chat._conversation._rendering.length(
+        [{"role": "user", "content": "?"}], generation_prompt=True)
+    run = _Run(stem, context_size=4 * asked + 600)
+    run.begin()
+    measure = run.chat._conversation._rendering.length
+    older = [{"role": "user", "content": QUESTIONS[0]}, {"role": "assistant", "content": ANSWERS[0]}]
+    words = 1
+    while True:
+        newest = [{"role": "user", "content": QUESTIONS[1]},
+                  {"role": "assistant", "content": "Ein Satz. " * words}]
+        if measure(newest, generation_prompt=False) > run.chat.config.context_size:
+            break
+        words += 1
+    # With its closing it is over the context, as a reply the full context stopped is; it goes
+    # as it goes after the reply live, the oldest first.
+    assert run.chat.begin(older + newest).n_evicted_messages == 4
+    assert after_system(run.chat.conversation()["messages"]) == []
+    assert run.chat.reply(QUESTIONS[2]).finish().n_generated_tokens
+
+
 # ----- changing tools and reasoning on the running conversation -----------------------
 @pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if _FIXTURES[stem]["can_reason"]])
 def test_a_change_of_tools_and_reasoning_keeps_every_message(stem):
