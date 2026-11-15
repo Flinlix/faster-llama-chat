@@ -1112,6 +1112,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._after_reply",
         "RenderedCache._append_reply",
         "RenderedCache._ask",
+        "RenderedCache._drop_over_after_a_reply",
         "RenderedCache._drop_unplaceable",
         "RenderedCache._drop_while_over",
         "RenderedCache._ends_on_result",

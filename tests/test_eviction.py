@@ -229,3 +229,15 @@ def test_replies_injected_in_a_row_are_refused_once_they_no_longer_fit(history):
     w.inject("Und jetzt?")                      # a question lets them go
     w.inject("y" * 150, role="assistant")
     assert w.total_tokens <= w.config.evict_above_tokens
+
+
+def test_a_reply_over_the_threshold_alone_stays_until_the_next_question_so_it_can_be_cut():
+    """A reader that heard part of a long reply cuts it back; the next question evicts it."""
+    fake = FakeContext(PLAIN, gen_tokens=250)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
+    w.begin(opened("s"))
+    text = w.reply("Erzähl lange.").finish().text
+    assert w.conversation()["messages"][-1]["content"] == text
+    w.truncate_last_reply(text[:20])
+    assert w.reply("Und kurz?").finish().text
+    assert w.conversation()["messages"][-2]["content"] == "Und kurz?"

@@ -1518,12 +1518,19 @@ class RenderedCache:
                                logits=False)
                     self._note_ahead(split, run)
                 else:
-                    self._drop_while_over(limit, generation_prompt=False, newest_too=True)
+                    self._drop_over_after_a_reply(limit)
                     self._render_ahead(dropped=True)
             else:
-                dropped = self._drop_while_over(limit, generation_prompt=False, newest_too=True)
-                self._render_ahead(dropped=dropped)
+                self._render_ahead(dropped=self._drop_over_after_a_reply(limit))
             self._memory.rest()
+
+    def _drop_over_after_a_reply(self, limit: int) -> bool:
+        """Drop the oldest exchanges while the conversation is over ``limit`` or holds too many, the newest kept until the next question comes, which a reader may still cut back, unless it does not fit the context; whether any went."""
+        dropped = self._drop_while_over(limit, generation_prompt=False)
+        if self._length(self._state.messages, generation_prompt=False) > self._config.context_size:
+            dropped = self._drop_while_over(self._config.context_size, generation_prompt=False,
+                                            newest_too=True) or dropped
+        return dropped
 
     def _render_ahead(self, dropped: bool = False) -> None:
         """Decode the render for the next question up to where the question goes."""
