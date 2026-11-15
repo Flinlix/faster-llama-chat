@@ -15,6 +15,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 
 import pytest
@@ -2104,6 +2105,32 @@ def test_a_history_whose_newest_reply_ran_to_the_full_context_begins_without_it(
     assert run.chat.begin(older + newest).n_evicted_messages == 4
     assert after_system(run.chat.conversation()["messages"]) == []
     assert run.chat.reply(QUESTIONS[2]).finish().n_generated_tokens
+
+
+@pytest.mark.parametrize("question", [None, "", "Und?"], ids=["no question", "empty", "a question"])
+@pytest.mark.parametrize("policy", ["refuse", "yield"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_reply_whose_call_the_cap_cuts_on_a_turn_waiting_after_its_results_ends(
+        stem, policy, question):
+    """Taken back with its request, the reply leaves the turn waiting as before; it ends there rather than going on as after an unreadable call."""
+    run = _Run(stem)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    run.begin([{"role": "user", "content": "Wetter?"},
+               *tool_turn(ToolCall(WEATHER.name, {"city": "Rom"}), Result(WEATHER.name, "warm"))],
+              tools=[WEATHER])
+    run.context.replies = [ScriptedCall(body)] * 3
+    ended = []
+
+    def reply():
+        try:
+            ended.append(run.chat.reply(question, tool_call_policy=policy,
+                                        max_reply_tokens=1).finish())
+        except ValueError as refused:       # an empty question some templates do not write
+            ended.append(refused)
+    replying = threading.Thread(target=reply, daemon=True)
+    replying.start()
+    replying.join(timeout=10)
+    assert ended, "the reply did not end"
 
 
 # ----- changing tools and reasoning on the running conversation -----------------------

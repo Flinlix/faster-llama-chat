@@ -891,8 +891,10 @@ class ChatWrapper:
                     deltas, after=open_turn_text + "".join(g.text for g in generations))
                 generations.append(generation)
                 if not _answerable(generation.tool_calls):
-                    # A request cancelled before it started leaves an open turn open.
-                    if self._conversation.turn_open and generation.stop_reason != "interrupted":
+                    # A request cancelled before it started, or cut by the reply cap, leaves an
+                    # open turn open.
+                    if self._conversation.turn_open and _unreadable(generation.tool_calls) \
+                            and generation.stop_reason != "interrupted":
                         # An unreadable call, already answered: the turn goes on, spending
                         # budget. See design_history.md, "An unreadable call spends the
                         # budget; how a failure is told".
@@ -974,6 +976,7 @@ class ChatWrapper:
                 after=open_turn_text + "".join(g.text for g in generations))
             generations.append(generation)
             if (_answerable(generation.tool_calls) or not self._conversation.turn_open
+                    or not _unreadable(generation.tool_calls)
                     or generation.stop_reason == "interrupted"):
                 return generation if len(generations) == 1 else _sum_generations(generations, False)
             text = None
@@ -1219,6 +1222,11 @@ def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int
 def _answerable(calls: list[ToolCall]) -> list[ToolCall]:
     """Of the calls a generation reports, those that were read, which a result answers."""
     return [call for call in calls if call.status == "complete"]
+
+
+def _unreadable(calls: list[ToolCall]) -> bool:
+    """Whether a generation reports a call that could not be read, which its turn goes on after."""
+    return any(call.status == "unreadable" for call in calls)
 
 
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:

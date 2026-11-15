@@ -5810,6 +5810,12 @@ and what changed:
   to an unanswered one is measured against the room its reply needs, as a lone
   one is. A begin that closes an open turn reports it as a question closing it
   live does.
+- A fuzzer seed hung a reply for good: on a turn waiting after its results, a
+  question whose reply the cap cut inside a call was taken back with its
+  request, which left the turn waiting as before, and the loop took that open
+  turn for one an unreadable call leaves, asking again with no token left,
+  without end. The loop now goes on only where a generation reports a call it
+  could not read. This was in the committed library too.
 - Left, with the reason: a cut whose text is the opening of both the turn's
   earlier text and the newest reply is read as the newest reply's, which is
   what a reader of each reply's own stream hands over; the call accepts both
