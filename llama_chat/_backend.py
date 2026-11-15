@@ -18,14 +18,7 @@ try:  # pragma: no cover (reachable only without the dependency installed)
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "llama-cpp-python 0.3.23 or later is required to run the model, built from "
-        "source for this machine. Build it with the repository's install script:\n"
-        "  ./install.sh            (CUDA where the GPU driver is found, else the CPU)\n"
-        "  ./install.sh --cpu      or --cuda to choose the backend\n"
-        "or by hand:\n"
-        '  CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python '
-        '"llama-cpp-python>=0.3.23"\n'
-        '  CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python '
-        '"llama-cpp-python>=0.3.23"'
+        "source for this machine; the README's install section says how"
     ) from exc
 
 from .errors import EngineError  # noqa: E402  (after the dependency's own check)
