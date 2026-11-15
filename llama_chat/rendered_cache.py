@@ -34,8 +34,8 @@ from .messages import (KEPT_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_mes
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
-                            repeated_question_written_alike, splice_probe, tool_turns_stay_written,
-                            windows_are_exact)
+                            repeated_question_written_alike, rest_stays_after_a_drop, splice_probe,
+                            tool_turns_stay_written, windows_are_exact)
 from .rendering import ConversationRendering, KeptTurn, Target, kept_turns, with_kept
 from .eviction import Eviction
 from .result_cutting import ResultCutting
@@ -1280,6 +1280,7 @@ class RenderedCache:
             splice_probe=splice_probe(render, system),
             repeats_alike=repeated_question_written_alike(render, system),
             with_a_short_question=self._eviction.with_a_short_question(),
+            rest_stays=rest_stays_after_a_drop(render, system),
             # Without the steps tool calling needs, no turn keeps a call, and the template is
             # not asked.
             tool_turns_stay=self.template.properties.can_call_tools and tool_turns_stay_written(

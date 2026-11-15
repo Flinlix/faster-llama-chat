@@ -167,12 +167,13 @@ class Eviction:
     def drop_bound(self, limit: int, beside_open_turn: bool = False) -> int:
         """How far an eviction brings the conversation down once it is over ``limit``.
 
-        Where the cache cannot shift, what a short question alone takes and that
-        fraction of the room after it. With ``beside_open_turn``, where the open
+        Where the cache cannot shift, or the template writes the rest otherwise
+        once the oldest exchange goes, what a short question alone takes and
+        that fraction of the room after it. With ``beside_open_turn``, where the open
         turn alone goes past that, what the open turn takes with the system turn
         and that fraction of the room after them.
         """
-        if self._can_shift:
+        if self._keeps_the_rest:
             return limit
         system = min(self.with_a_short_question(), limit)
         bound = system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
@@ -188,12 +189,18 @@ class Eviction:
     def exchanges_after_drop(self) -> int | None:
         """How many exchanges an eviction leaves once there are more than ``max_history_exchanges``.
 
-        Where the cache cannot shift, that fraction of them, at least one.
+        Where the cache cannot shift, or the template writes the rest otherwise
+        once the oldest exchange goes, that fraction of them, at least one.
         """
         limit = self._config.max_history_exchanges
-        if limit is None or self._can_shift:
+        if limit is None or self._keeps_the_rest:
             return limit
         return min(limit, max(1, int(limit * EVICT_TO_FRACTION_WITHOUT_SHIFT)))
+
+    @property
+    def _keeps_the_rest(self) -> bool:
+        """Whether the cache keeps the exchanges after the oldest when it goes: it shifts them, and the template writes them as before."""
+        return self._can_shift and self._state.checks.rest_stays
 
     def too_many(self, most: int | None = None) -> bool:
         """Whether the history holds more exchanges than ``most``, by default ``max_history_exchanges``."""

@@ -32,6 +32,7 @@ from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from .fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
+from .invented_templates import NUMBERED
 from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
@@ -45,12 +46,14 @@ _FALLBACK = {
     "chat_template": "{%- for m in messages -%}<|{{ m.role }}_says|>{{ m.content }}<|said|>"
                      "{%- endfor -%}{%- if add_generation_prompt -%}"
                      "<|assistant_{{ messages|length }}|>{%- endif -%}"}
-_EVERY = sorted(_FIXTURES) + ["fallback"]
+# A template that numbers every message, so that dropping the oldest exchange changes the rest.
+_NUMBERED = NUMBERED
+_EVERY = sorted(_FIXTURES) + ["fallback", "numbered"]
 _TOOL_TEMPLATES = [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["calls_tools"]]
 
 
 def _fixture(stem):
-    return _FALLBACK if stem == "fallback" else _FIXTURES[stem]
+    return {"fallback": _FALLBACK, "numbered": _NUMBERED}.get(stem) or _FIXTURES[stem]
 
 
 def _reasoning_modes(stem):
@@ -395,7 +398,7 @@ def test_evictions_drop_whole_exchanges_and_decode_only_what_changed(stem, can_s
     # exchange that became the oldest, and the template text around them.
     bound = 4 * exchange + 80
     over = [k for k in range(1, len(run.decoded)) if run.decoded[k] - run.decoded[k - 1] > bound]
-    if can_shift:
+    if can_shift and internals.keeps_the_rest_after_a_drop(run.chat):
         assert run.context.resets == resets and not over
         assert any(edit[0] == "shift" for edit in run.context.edits)
     else:

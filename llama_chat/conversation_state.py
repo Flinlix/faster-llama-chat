@@ -59,6 +59,9 @@ class RenderChecks:
     tool_turns_stay: bool = False
     # What the system turn and a one-character question take, with the generation prompt.
     with_a_short_question: int = 0
+    # Whether the exchanges after the oldest are written as before once it goes, so that
+    # a cache that shifts keeps them.
+    rest_stays: bool = True
 
 
 @dataclass

@@ -65,6 +65,7 @@ _TEXT = r"""
   {%- else -%}
     {%- if declares == 'in the newest turn' and loop.index0 == ns.newest -%}{{- declarations() -}}{%- endif -%}
     {{- '<[turn>' ~ role ~ '\n' -}}
+    {%- if numbers_turns and role != 'system' -%}{{- '#' ~ loop.index ~ ' ' -}}{%- endif -%}
     {%- if role == 'system' and reasons -%}{{- '<think_on>\n' -}}{%- endif -%}
     {%- if (calls or keeps_thought) and can_reason and m.reasoning_content -%}
       {{- '<thought>' ~ m.reasoning_content ~ '</thought>' -}}
@@ -94,6 +95,7 @@ _SWITCHES = {
     "keeps_thought": False,             # a past reply keeps its thought
     "user_join": "",                    # between two user turns in a row; None refuses them
     "refused_content": None,            # a text refused wherever it stands
+    "numbers_turns": False,             # each message after the system's is numbered
 }
 
 
@@ -131,6 +133,8 @@ def _invented(**switches) -> dict:
 
 
 PLAIN = _invented()
+# Each turn numbered, so that every number after the oldest exchange changes when it goes.
+NUMBERED = _invented(numbers_turns=True)
 JOINS_USER_TURNS = _invented(user_join="<sep>")
 REFUSES_TWO_USER_TURNS = _invented(user_join=None)
 # Two user turns in a row are refused, and so is the text "refused".

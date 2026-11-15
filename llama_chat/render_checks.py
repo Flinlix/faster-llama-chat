@@ -82,6 +82,19 @@ def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
             and dropped[:drop] == head[:in_head] and dropped[drop:] == whole[kept:])
 
 
+def rest_stays_after_a_drop(render: Render, system: list[dict]) -> bool:
+    """Whether the template writes the exchanges after the oldest as before once the oldest goes, as one that numbers its messages does not."""
+    stand_in = [{"role": "user", "content": STAND_IN}]
+    exchanges = [list(e) for e in _WINDOW_PROBES[:3]]
+    whole = render(system + sum(exchanges, []) + stand_in, True)
+    dropped = render(system + sum(exchanges[1:], []) + stand_in, True)
+    if whole is None or dropped is None:
+        return False
+    shared = next((i for i, (a, b) in enumerate(zip(whole, dropped)) if a != b),
+                  min(len(whole), len(dropped)))
+    return whole.endswith(dropped[shared:])
+
+
 def ensure_history_stays_written(render: Render, system: list[dict]) -> None:
     """Refuse a template that writes an older exchange otherwise once another follows.
 
