@@ -263,7 +263,9 @@ class ChatWrapper:
         reached, evicts them first, until it fits inside both eviction limits.
         A question closes a turn a call left open first, as :meth:`reply`
         with ``text`` does, and joins a question no reply follows where the
-        template writes no two in a row.
+        template writes no two in a row, or, where the two joined would not
+        fit beside the system prompt, takes its place, the unanswered one
+        counted as evicted.
 
         Args:
             text: The message's text.
@@ -386,7 +388,9 @@ class ChatWrapper:
         still owed told it was not run and an empty reply added where the
         template needs one (or, where the template writes neither, the turn
         taken out), and a question no reply follows is joined to it where the
-        template writes no two in a row. It is refused only where it cannot
+        template writes no two in a row, or, where the two joined would not
+        fit beside the system prompt, replaced by it, the unanswered one
+        counted as evicted. It is refused only where it cannot
         fit beside the system prompt alone, or where the template does not
         write that question as its text, such as one asked twice or an empty
         one on some templates; either refusal leaves the next question free.

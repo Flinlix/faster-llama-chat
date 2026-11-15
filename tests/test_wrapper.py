@@ -1370,3 +1370,32 @@ def test_a_stream_never_read_reports_no_other_streams_reply():
     read = w.reply("zweite").finish()
     unread.close()
     assert read.text == "Antwort." and unread.reply is None
+
+
+@pytest.mark.parametrize("asks", ["reply", "inject"])
+def test_a_question_too_long_to_join_an_unanswered_one_takes_its_place_and_the_next_fits_too(asks):
+    """Rule 11: a question that fits beside the system prompt alone is answered, though the unanswered one before it would not fit joined to it."""
+    fake = FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("s"))
+    w.inject("a" * 250)
+    if asks == "inject":
+        report = w.inject("b" * 250)
+        reply = w.reply().finish()
+    else:
+        reply = report = w.reply("b" * 250).finish()
+    assert reply.text == "Gut." and report.n_evicted_messages == 1
+    assert report.evicted_for == "room"
+    assert [m["content"][0] for m in after_system(w.conversation()["messages"])] == ["b", "G"]
+    assert w.reply("c" * 250).finish().text == "Gut."
+    assert_cache_reads_as_rendered(w, fake)
+
+
+def test_a_short_question_after_an_unanswered_one_is_joined_to_it():
+    fake = FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("s"))
+    w.inject("eins")
+    reply = w.reply("zwei").finish()
+    assert reply.n_evicted_messages == 0
+    assert after_system(w.conversation()["messages"])[0]["content"] == "eins\n\nzwei"

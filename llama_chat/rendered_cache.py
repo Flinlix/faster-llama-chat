@@ -454,7 +454,7 @@ class RenderedCache:
                     f"the request needs {alone} tokens but {room} fit beside room for the "
                     f"reply; shorten the request or the system prompt, or {RAISE_THE_ROOM}",
                     alone, room)
-            joined = self._make_way_for(question)
+            joined = self._make_way_for(question, room, generation_prompt=True)
             if joined is None:
                 self._ensure_writes("user", text, generation_prompt=True)
             if joined is not None or not self._splice(question, room):
@@ -494,10 +494,12 @@ class RenderedCache:
         return replace(self._state.changes, tool_results_cut=list(self._state.changes.tool_results_cut))
 
     # ----- nothing blocks a question ------------------------------------------------------
-    def _make_way_for(self, question: dict) -> dict | None:
+    def _make_way_for(self, question: dict, limit: int, generation_prompt: bool) -> dict | None:
         """Close a turn a call left open, and join ``question`` to an unanswered one the template writes no second question after; the joined question, taken out to be added again, or ``None``.
 
-        See design_history.md, "Nothing blocks a question".
+        Where the two joined would not fit in ``limit`` beside the system
+        prompt, the unanswered one goes instead, counted as evicted. See
+        design_history.md, "Nothing blocks a question".
         """
         if self.turn_open:
             self._close_open_turn(question)
@@ -505,10 +507,17 @@ class RenderedCache:
         if newest is None or newest["role"] != "user" or self._writes_after(question):
             return None
         self._state.messages.pop()
+        joined = joined_question(newest, question)
+        if self._length_alone(joined, limit, generation_prompt) > limit:
+            self._state.changes.n_evicted += 1
+            self._state.changes.evicted_for = "room"
+            _log.info("an unanswered question went to make room for the one after it: the "
+                      "template writes no two in a row, and the two joined do not fit")
+            return None
         self._state.changes.question_joined = True
         _log.info("a question was joined to the one before it, which no reply followed: "
                   "the template writes no two in a row")
-        return joined_question(newest, question)
+        return joined
 
     def _close_open_turn(self, question: dict) -> None:
         """Close the open turn ahead of ``question``: each call still owed is told it was not run, and a turn waiting for its reply gets an empty one where the template needs it; the turn is taken out where the template writes neither."""
@@ -632,7 +641,8 @@ class RenderedCache:
                     f"the injected message needs {alone} tokens but {limit} fit beside the "
                     f"system prompt; shorten the message or the system prompt, or {RAISE_THE_ROOM}",
                     alone, limit)
-            joined = self._make_way_for(message) if role == "user" else None
+            joined = (self._make_way_for(message, limit, generation_prompt=False)
+                      if role == "user" else None)
             if joined is None:
                 self._ensure_writes(role, text, generation_prompt=False)
             room = self._max_prompt_tokens
