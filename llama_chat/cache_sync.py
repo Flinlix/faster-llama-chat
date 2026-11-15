@@ -244,11 +244,13 @@ class CacheSync:
         self._bring_up(want_logits=False)
         if self._can_cut:
             return                      # a cut needs no saved state
-        try:
-            state = self._context.save_state()
-        except RuntimeError:
-            self._rest_states = []      # decoding again stands in where none is saved
-            return
+        state = self._pinned.get(self._end)          # one kept here already serves
+        if state is None:
+            try:
+                state = self._context.save_state()
+            except RuntimeError:
+                self._rest_states = []  # decoding again stands in where none is saved
+                return
         self._rest_states = ([s for s in self._rest_states if s[0] < self._end][-1:]
                              + [(self._end, state)])
 
@@ -334,10 +336,13 @@ class CacheSync:
     def _save_pinned_state(self) -> None:
         """Save the state the cache holds now, where one is to be kept here."""
         if self._end in self._pins_to_save():
-            try:
-                state = self._context.save_state()
-            except RuntimeError:
-                return                  # decoding again stands in where none is saved
+            # A state rested in here already serves.
+            state = next((s for at, s in self._rest_states if at == self._end), None)
+            if state is None:
+                try:
+                    state = self._context.save_state()
+                except RuntimeError:
+                    return              # decoding again stands in where none is saved
             self._pinned[self._end] = state
 
     def _pins_to_save(self) -> set[int]:

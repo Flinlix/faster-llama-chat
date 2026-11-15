@@ -697,6 +697,8 @@ class RenderedCache:
             newest = max(self._memory.pinned(_NEWEST_EXCHANGES), default=None)
             self._memory.pin([at for at in (newest, len(self._memory.tokens)) if at is not None],
                              _NEWEST_EXCHANGES)
+            end = len(self._memory.tokens) + len(tokens)
+            self._pin_the_reply(self._rendering.tokenize(ahead.reply_opening), tokens, end)
         self._state.messages.append(question)
         self._memory.decode(tokens, want_logits=True)
         self._state.spliced_at = (len(self._memory.tokens) - len(tokens), tokens,
@@ -789,7 +791,16 @@ class RenderedCache:
             raise ContextOverflowError(
                 f"the conversation needs {len(target.tokens)} tokens but {room} leave room "
                 f"for the reply; {RAISE_THE_ROOM}", len(target.tokens), room)
+        if self._memory.keeps_saved_states:
+            end = len(target.tokens)
+            self._memory.pin([at for at in {self._state.prompt_start, end} if 0 < at <= end],
+                             _THE_REPLY)
         return target
+
+    def _pin_the_reply(self, opening: list[int], tokens: list[int], end: int) -> None:
+        """Keep states where the reply after ``tokens``, decoded to ``end``, begins and where its generation starts, so that a reply written again, or shortened, decodes only itself."""
+        starts = end - len(opening) if opening and tokens[-len(opening):] == opening else end
+        self._memory.pin([at for at in {starts, end} if end - len(tokens) < at <= end], _THE_REPLY)
 
     # ----- generating -------------------------------------------------------------------
     def generate(self, max_generated_tokens: int, generated: GenerationAccumulator, **options):
@@ -1392,9 +1403,18 @@ class RenderedCache:
         return None
 
     def _pin_opening(self) -> None:
-        """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
-        self._memory.pin([self._rendering.opening_length(self._system_part())]
-                         if self._memory.keeps_saved_states else [], "opening")
+        """Keep states saved where the conversation's opening ends, and where the decode ahead of a first question stops, where the cache goes back to saved states."""
+        if not self._memory.keeps_saved_states:
+            self._memory.pin([], "opening")
+            return
+        system = self._system_part()
+        places = {self._rendering.opening_length(system)}
+        asked = system + [{"role": "user", "content": STAND_IN}]
+        split = self._rendering.split(asked, generation_prompt=True)
+        run = self._rendering.run_start(split, len(asked) - 1, 0) if split is not None else None
+        if run is not None:
+            places.add(len(self._rendering.target(asked, True, upto=run).tokens))
+        self._memory.pin(sorted(places), "opening")
 
     def _render_checks(self) -> RenderChecks:
         """What the template's renders allow, as the system turn, the declarations and the clock now leave them.
@@ -1717,7 +1737,9 @@ class RenderedCache:
     def _newest_exchanges_at(self) -> list[int] | None:
         """Where in the cache each of the two newest exchanges begins, the tag that opens its question, those that cannot be told left out; ``None`` where this action rendered the conversation whole in neither form, which it is not rendered again for."""
         messages = self._state.messages
-        starts = [at for at in exchange_starts(messages)[-2:] if at]
+        # Not the first after the system turn, whose tag may stand inside it: the opening's
+        # state stands there.
+        starts = [at for at in exchange_starts(messages)[-2:] if at and messages[at - 1]["role"] != "system"]
         for prompted in (False, True):
             split = self._rendering.split_made(messages, prompted)
             if split is not None:
@@ -1912,6 +1934,8 @@ def _ensure_can_reply(conversation, asks_question: bool) -> None:
 
 # What the states a cache that cannot be cut keeps where the newest exchanges begin are kept for.
 _NEWEST_EXCHANGES = "newest exchanges"
+# What the states it keeps where the newest reply begins and where its generation starts are for.
+_THE_REPLY = "the reply"
 
 # What a call still owed is told when a question closes its turn.
 _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}

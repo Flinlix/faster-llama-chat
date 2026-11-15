@@ -173,7 +173,7 @@ def test_a_cut_on_a_cache_that_cannot_shift_restores_or_rebuilds(saves_state):
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Eins. Zw", can_shift=False)
     if not saves_state:
         fake.save_state = _fails_to_save
-        w.begin(opened("s"))
+        w.begin(opened("anders"))           # no state saved before fits this opening
     w.reply("hi").finish()
     resets = fake.resets
     w.truncate_last_reply("Eins.")
@@ -199,7 +199,7 @@ def test_a_past_reply_on_a_cache_that_cannot_shift_comes_back_from_its_saved_sta
 def test_a_cache_that_fails_to_save_a_state_is_rebuilt_instead():
     w, fake = reasoning_wrapper(can_shift=False)
     fake.save_state = _fails_to_save
-    w.begin(opened("s"), reasoning=True)
+    w.begin(opened("anders"), reasoning=True)   # no state saved before fits this opening
     resets = fake.resets
     w.reply("hi").finish()
     assert fake.resets == resets + 1
