@@ -30,31 +30,37 @@ class Windows:
         Returns:
             Where in the cache that tag sits, the tokens from it up to where the
             next question goes, how many of the conversation's own follow the
-            tag, and the window's render with where the next question's run
-            begins in it; or ``WHOLE`` where the window cannot stand for the
-            whole render.
+            tag, the window's render with where the next question's run
+            begins in it, and where each turn kept as generated after the tag
+            begins in those tokens; or ``WHOLE`` where the window cannot stand
+            for the whole render.
         """
-        starts = exchange_starts(self._state.messages)
+        messages = self._state.messages
+        starts = exchange_starts(messages)
         spliced_at = self._state.spliced_at
         if spliced_at is None or len(starts) < 2 or not goes_on_from(self._state, spliced_at[2]) \
-                or self._state.messages[starts[-1]] is not spliced_at[2].messages[-1] or [
-                m["role"] for m in self._state.messages[starts[-2]:]] != ["user", "assistant"] * 2 \
-                or not self._rendering.template_writes(self._state.messages[starts[-2]:]):
+                or messages[starts[-1]] is not spliced_at[2].messages[-1] \
+                or messages[starts[-1] - 1]["role"] != "assistant" or messages[-1]["role"] != "assistant" \
+                or not (self._state.checks.tool_windows
+                        or self._rendering.template_writes(messages[starts[-2]:])):
             return WHOLE
-        system = system_part(self._state.messages)
-        window = (system + self._state.messages[starts[-2]:]
-                  + [{"role": "user", "content": STAND_IN}])
+        system = system_part(messages)
+        window = system + messages[starts[-2]:] + [{"role": "user", "content": STAND_IN}]
         split = self._rendering.split(window, generation_prompt=True)
         if split is None or split.text.count(STAND_IN) != 1:
             return WHOLE
-        older_reply = len(system) + 1
+        older_reply = len(system) + starts[-1] - starts[-2] - 1
         anchor = self._rendering.tag_after_content(split, older_reply)
         run = self._rendering.run_start(split, older_reply + 1, anchor)
         ahead_run = self._rendering.run_start(split, len(window) - 1, anchor)
         if None in (anchor, run, ahead_run):
             return WHOLE
-        to_question = self._rendering.tokenize(split.pieces(anchor, run))
-        before = self._rendering.tokenize(split.pieces(anchor, ahead_run))
+        try:
+            to_question = self._rendering.target(window, True, upto=run, start=anchor).tokens
+            ahead = self._rendering.target(window, True, upto=ahead_run, start=anchor)
+        except ValueError:
+            return WHOLE                    # a kept turn the window cannot place
+        before = ahead.tokens
         question_at, spliced, _ = spliced_at
         at = question_at - len(to_question)
         if at < 0 or list(memory.tokens[at:question_at]) != to_question \
@@ -66,8 +72,11 @@ class Windows:
         plain = self._rendering.split(window[:-1], generation_prompt=False)
         if plain is None or plain.text[:anchor] != split.text[:anchor]:
             return WHOLE
-        length = len(self._rendering.tokenize(plain.pieces(anchor)))
-        return at, before, length, split, ahead_run
+        try:
+            length = len(self._rendering.target(window[:-1], False, start=anchor).tokens)
+        except ValueError:
+            return WHOLE
+        return at, before, length, split, ahead_run, ahead.kept_at
 
     def drop_in(self, memory: CacheSync, kept_until, after: int) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
@@ -103,7 +112,8 @@ class Windows:
                 break
             # The cache up to the tag after the second oldest exchange's reply, before the drop,
             # checked token for token, as no check at load covers it.
-            held = self._rendering.head(self._state.messages, through=1)
+            held = self._rendering.head(self._state.messages, through=1,
+                                        kept_turns=self._state.checks.tool_windows)
             if held is None or list(memory.tokens[:len(held)]) != held:
                 return False
             if not self._eviction.drop_oldest_exchange(True):
@@ -121,7 +131,8 @@ class Windows:
         the tag after the first one's reply, and everything after that tag is
         as before.
         """
-        wanted = self._rendering.head(self._state.messages, through=0)
+        wanted = self._rendering.head(self._state.messages, through=0,
+                                      kept_turns=self._state.checks.tool_windows)
         if wanted is None:
             return False
         same = common_prefix_length(held, wanted)

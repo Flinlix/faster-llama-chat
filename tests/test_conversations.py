@@ -1352,7 +1352,7 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     assert before_thanks.rsplit(answer, 1)[1] == after.rsplit(answer, 1)[1]
 
 
-@pytest.mark.parametrize("cut", [3, 9])
+@pytest.mark.parametrize("cut", [0, 3, 9])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut):
     """The text kept may hold the blank line the stream showed after the result; the turn keeps its tokens as generated up to the cut."""
@@ -1372,6 +1372,11 @@ def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_
     if not newest:
         return                                      # the template kept no text to cut
     keep = shown[:len(shown) - len(newest) + min(cut, len(newest) - 1)]
+    if not cut and run.context.stated_render(
+            [{"role": "user", "content": "Weather?"}, {"role": "assistant", "content": ""}]) is None:
+        with pytest.raises(TemplateRefusedError, match="shortened to ''"):
+            run.chat.truncate_last_reply(keep)      # the template writes no empty reply
+        return
     run.chat.truncate_last_reply(keep)
     assert run.chat.conversation()["messages"][-1]["content"] == newest[:min(cut, len(newest) - 1)]
     assert internals.kept_turns(run.chat), "the turn no longer keeps its tokens as generated"

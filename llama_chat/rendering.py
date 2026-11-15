@@ -283,24 +283,33 @@ class ConversationRendering:
             for question in ("Alpha one?", "Zulu two?"))
         return common_prefix_length(first, second)
 
-    def head(self, messages: list[dict], through: int) -> list[int] | None:
-        """The render up to the first tag after the reply of oldest exchange ``through``, 0 or 1, from the system message and the oldest two exchanges of ``messages``; ``None`` where it cannot be told."""
+    def head(self, messages: list[dict], through: int,
+             kept_turns: bool = False) -> list[int] | None:
+        """The cache's tokens up to the first tag after the reply of oldest exchange ``through``, 0 or 1, from the system message and the oldest two exchanges of ``messages``; ``None`` where they cannot be told.
+
+        Args:
+            kept_turns: Whether exchanges that called tools may be among
+                them, each turn kept as generated placed in their render.
+        """
         starts = exchange_starts(messages)
         if len(starts) <= through:
             return None
         bounds = starts[1:] + [len(messages)]
-        kept = messages[starts[0]:bounds[min(1, len(bounds) - 1)]]
-        if not self.template_writes(kept):
+        oldest = messages[starts[0]:bounds[min(1, len(bounds) - 1)]]
+        if not kept_turns and not self.template_writes(oldest):
             return None
         system = system_part(messages)
-        split = self.split(system + kept + [{"role": "user", "content": STAND_IN}],
-                           generation_prompt=True)
+        written = system + oldest + [{"role": "user", "content": STAND_IN}]
+        split = self.split(written, generation_prompt=True)
         if split is None:
             return None
         anchor = self.tag_after_content(split, len(system) + bounds[through] - starts[0] - 1)
         if anchor is None:
             return None
-        return self.tokenize(split.pieces(0, anchor), add_special=True)
+        try:
+            return self.target(written, True, upto=anchor).tokens
+        except ValueError:
+            return None                 # a kept turn its render cannot place
 
     def tokenize(self, pieces: list[tuple[str, bool]], add_special: bool = False) -> list[int]:
         """``pieces`` as a render tokenizes them, a call's tags as the single tokens a generated call holds."""

@@ -253,8 +253,12 @@ class RenderedCache:
             # What the cache holds of a conversation this one may go on with.
             cached = ([_without_turn(m) for m in self._state.messages if m["role"] != "system"]
                       if self._state.begun else [])
+            before = list(self._state.messages)
+            # Written alike, the conversation's own messages may stand for the history's.
+            alike = self._state.begun and (self._state.tools, self._state.reasoning,
+                                           self._state.uses_tool_template) == (
+                list(tools or []), reasoning, tools is not None)
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
-            self._state.anchors = ()            # placed again as the cache is held
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
             joins = self._joins_questions
@@ -263,6 +267,14 @@ class RenderedCache:
             held = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
             messages, gone = without_unreadable(messages, held, joins)
             self._state.messages[:] = answer_in_order(messages, result_text(unreadable_result))
+            # The messages it opens with that the conversation holds alike are the
+            # conversation's own, so that what was placed after them in the cache still stands.
+            reused = _reuse_alike(self._state.messages, before) if alike else 0
+            prefix = alike and reused == len(self._state.messages)
+            # The opening it was begun with, the system turn included, which the checks read.
+            opened_alike = alike and len(system_part(before)) == len(self._system_part()) <= reused
+            if not alike:
+                self._state.anchors = ()        # placed again as the cache is held
             self._state.left_out_calls = frozenset(gone)
             self._state.changes.n_left_out_calls = len(gone)
             # Counted before the oldest are dropped, and never back, so that no later call
@@ -271,19 +283,25 @@ class RenderedCache:
             self._state.n_calls = max(self._state.n_calls, next_call_number(
                 [c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()]
                 + sorted(gone)))
-            self._state.kept_at = {}
+            held_turns = {turn for _, _, turn in kept_turns(self._state.messages)}
+            self._state.kept_at = ({k: at for k, at in self._state.kept_at.items() if k in held_turns}
+                                   if alike else {})
             self._state.results_cut = []
             limit, room = self._config.evict_above_tokens, self._max_prompt_tokens
-            self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
+            if not opened_alike:
+                self._ensure_room_for_a_question("shorten the prompt or declare fewer tools")
             asks = any(m["role"] == "user" for m in self._state.messages)
-            self._keep_newest_history(cached)
+            if not prefix:
+                # What the conversation held, or the start of it, needs no search: it fit.
+                self._keep_newest_history(cached)
             self._drop_unplaceable()
-            if any(m["role"] != "system" for m in self._state.messages) \
+            if not prefix and any(m["role"] != "system" for m in self._state.messages) \
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
-            self._state.checks = self._render_checks()
+            if not opened_alike:
+                self._state.checks = self._render_checks()
             if asks and not any(m["role"] == "user" for m in self._state.messages):
-                needed = self._rendering.length(self._state.messages, False)
+                needed = self._length(self._state.messages, False)
                 raise ContextOverflowError(
                     f"the newest exchange of the history, from its user message on, needs "
                     f"{needed} tokens beside the system prompt but {limit} fit; shorten it, "
@@ -295,9 +313,9 @@ class RenderedCache:
                 prompted = self._state.messages[-1]["role"] in ("user", "tool")
                 if self._state.messages[-1].get("tool_calls"):
                     room = self._config.context_size
-                if self._rendering.length(self._state.messages, prompted) > room:
+                if self._length(self._state.messages, prompted) > room:
                     self._cutting.cut_to_fit(room, self._held_indexes())
-                needed = self._rendering.length(self._state.messages, prompted)
+                needed = self._length(self._state.messages, prompted)
                 if needed > room:
                     raise ContextOverflowError(
                         f"the newest exchange of the history, from its user message on, needs "
@@ -1236,14 +1254,27 @@ class RenderedCache:
                 return
             shortened = {**newest, "content": keep_text}
             turn = newest.get(KEPT_TURN)
-            if turn is not None:
+            messages = self._state.messages
+            if turn is not None and not keep_text:
+                # A reply without text has nothing to place its end by: the turn stays kept up
+                # to its newest call, as one whose reply said nothing is, the rest the template's.
+                del shortened[KEPT_TURN]
+                first = len(messages) - turn.span
+                calling = max(i for i in range(first, len(messages)) if messages[i].get("tool_calls"))
+                cut = self._kept_to_its_call(turn, newest["content"], calling - first + 1)
+                if cut is None:
+                    raise TemplateRefusedError(
+                        "keep_text", "the newest reply's tokens as generated cannot be cut "
+                        "after its turn's newest call; keep some of its text")
+                messages[calling] = with_kept(messages[calling], cut)
+            elif turn is not None:
                 cut = self._kept_up_to(turn, newest["content"], keep_text)
                 if cut is None:
                     raise TemplateRefusedError(
                         "keep_text", "the newest reply's tokens as generated hold more than "
                         "its text, such as a call that went, so they cannot be cut at keep_text")
                 shortened[KEPT_TURN] = cut
-            self._state.messages[-1] = shortened
+            messages[-1] = shortened
             if not self._writes(self._newest_part(self._state.messages)):
                 raise TemplateRefusedError(
                     "keep_text", f"this model's template does not write the newest reply "
@@ -1265,6 +1296,23 @@ class RenderedCache:
         rest = whole[at:end].decode()
         tokens = turn.tokens[:n] + tuple(self._rendering.tokenize([(rest, True)]) if rest else ())
         return KeptTurn(tokens, turn.span, turn.on_call)
+
+    def _kept_to_its_call(self, turn: KeptTurn, text: str, span: int) -> KeptTurn | None:
+        """``turn``, ending on a reply's ``text``, as the turn of its first ``span`` messages, ending on its newest call: its generated tokens up to that call's closing; ``None`` where they cannot be told."""
+        closing = self.template.properties.call_close_text.encode()
+        pieces = [self._context.token_bytes(token) for token in turn.tokens]
+        whole, said = b"".join(pieces), text.encode()
+        if not closing or not whole.endswith(said):
+            return None
+        end = whole.rfind(closing, 0, len(whole) - len(said))
+        if end < 0:
+            return None
+        at, end = 0, end + len(closing)
+        for n, piece in enumerate(pieces):
+            if at == end:
+                return KeptTurn(turn.tokens[:n], span, True)
+            at += len(piece)
+        return None
 
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
@@ -1369,7 +1417,7 @@ class RenderedCache:
             plan = self._windows.ahead(self._memory) if self._state.checks.windows else WHOLE
             if plan is not WHOLE:
                 # Dropped first, so the cache shifts before the decode ahead, not before the next question's.
-                at, before, length, split, run = plan
+                at, before, length, split, run, window_kept = plan
                 held = len(self._memory.tokens)
                 kept_until = lambda: at - (held - len(self._memory.tokens))   # noqa: E731
                 done = self._windows.drop_in(self._memory, kept_until, length)
@@ -1383,8 +1431,11 @@ class RenderedCache:
                     anchors = () if tag is None or tag > run else ((
                         len(self._state.messages) - 1, kept_until() + len(before)
                         - len(self._rendering.tokenize(split.pieces(tag, run)))),)
-                    self._sync(Target(list(self._memory.tokens[:kept_until()]) + before,
-                                      self._state.kept_at, anchors), logits=False)
+                    base = kept_until()
+                    kept_at = {**{k: p for k, p in self._state.kept_at.items() if p < base},
+                               **{k: base + p for k, p in window_kept.items()}}
+                    self._sync(Target(list(self._memory.tokens[:base]) + before, kept_at, anchors),
+                               logits=False)
                     self._note_ahead(split, run)
                 else:
                     self._drop_while_over(limit, generation_prompt=False, newest_too=True)
@@ -1421,7 +1472,9 @@ class RenderedCache:
         """Where a window of ``messages`` begins that stands for their render after one of the cache's anchors, the newest that still stands, and that anchor; ``None`` where no window does.
 
         The window opens with the exchange the anchor's message ends, and
-        holds at most two more.
+        holds at most two more; both that message and the one before the
+        window are replies that close their turn, as the probes that showed
+        windows to stand for the whole render had them.
         """
         if not self._state.checks.windows:
             return None
@@ -1441,6 +1494,9 @@ class RenderedCache:
         if not opening or len(starts) - opening[-1] > 3:
             return None
         start = starts[opening[-1]]
+        if not _closes_turn(messages[anchor.index]) \
+                or start > len(system_part(messages)) and not _closes_turn(messages[start - 1]):
+            return None
         if not self._state.checks.tool_windows \
                 and not self._rendering.template_writes(messages[start:]):
             return None
@@ -1757,6 +1813,25 @@ def _decodes(data: bytes) -> bool:
     except UnicodeDecodeError:
         return False
     return True
+
+
+def _closes_turn(message: dict) -> bool:
+    """Whether ``message`` is a reply that makes no call, which closes its turn."""
+    return message["role"] == "assistant" and not message.get("tool_calls")
+
+
+def _reuse_alike(messages: list[dict], held: list[dict]) -> int:
+    """Put each message of ``held`` in the place of the one of ``messages`` there, from the first on, while the two say the same and keep the same turn as generated; how many were put."""
+    count = 0
+    for given, own in zip(messages, held):
+        turns = given.get(KEPT_TURN), own.get(KEPT_TURN)
+        if _without_turn(given) != _without_turn(own) or (turns[0] is None) != (turns[1] is None) \
+                or turns[0] is not None and (turns[0].tokens, turns[0].span, turns[0].on_call) \
+                != (turns[1].tokens, turns[1].span, turns[1].on_call):
+            break
+        messages[count] = own
+        count += 1
+    return count
 
 
 def _without_turn(message: dict) -> dict:
