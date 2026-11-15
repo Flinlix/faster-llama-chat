@@ -200,6 +200,19 @@ def test_a_reply_whose_calls_all_went_goes_on_in_the_next_reply_even_one_with_ca
     _read(completions_messages(messages, joins_questions=False))      # a history begin takes
 
 
+def test_replies_whose_calls_all_went_in_a_row_go_on_in_the_next_reply_as_one():
+    unreadable = {"id": "u", "type": "function", UNREADABLE_CALL: True,
+                  "function": {"name": "unknown", "arguments": {}}}
+    messages = [_QUESTION]
+    for n, said in enumerate(("Ich schaue.", "", "Nochmal.")):
+        messages += [{"role": "assistant", "content": said, "tool_calls": [dict(unreadable, id=f"u{n}")]},
+                     {"role": "tool", "name": "unknown", "tool_call_id": f"u{n}", "content": "failed"}]
+    messages.append({"role": "assistant", "content": "Fertig."})
+    kept, gone = without_unreadable(messages, set(), joins_questions=False)
+    assert gone == {"u0", "u1", "u2"}
+    assert kept == [_QUESTION, {"role": "assistant", "content": "Ich schaue.\n\nNochmal.\n\nFertig."}]
+
+
 def test_a_call_left_out_shares_no_id_with_one_kept():
     with pytest.raises(ValueError, match="two calls"):
         read_messages([*_call("{", call="x"), {"role": "tool", "tool_call_id": "x", "content": "r"},

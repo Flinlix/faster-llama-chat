@@ -290,18 +290,16 @@ def _without_unreadable(messages: list[dict], held: set[int], joins_questions: b
     kept: list[dict] = []
     sources: list[frozenset[int]] = []
     gone: set[str] = set()
-    emptied: tuple[dict, int] | None = None     # a reply whose calls all went, held back
+    # A reply whose calls all went, held back with the places it stands for; a later one
+    # whose calls all went too joins it.
+    emptied: tuple[dict, frozenset[int]] | None = None
 
     def keep(message: dict, at: int) -> None:
         nonlocal emptied
         if emptied is not None and message["role"] == "assistant" and at not in held:
             said, said_at = emptied
-            message = {**message, "content": _joined_texts(said["content"], message["content"])}
-            thought = _joined_texts(said.get(THOUGHT_KEY) or "", message.get(THOUGHT_KEY) or "")
-            if thought:
-                message[THOUGHT_KEY] = thought
-            kept.append(message)
-            sources.append(frozenset((said_at, at)))
+            kept.append(_joined_replies(said, message))
+            sources.append(said_at | {at})
         else:
             keep_saying()
             kept.append(message)
@@ -311,7 +309,7 @@ def _without_unreadable(messages: list[dict], held: set[int], joins_questions: b
     def keep_saying() -> None:
         if emptied is not None and (emptied[0]["content"] or emptied[0].get(THOUGHT_KEY)):
             kept.append(emptied[0])
-            sources.append(frozenset((emptied[1],)))
+            sources.append(emptied[1])
 
     for at, message in enumerate(messages):
         calls = message.get("tool_calls") or ()
@@ -321,8 +319,9 @@ def _without_unreadable(messages: list[dict], held: set[int], joins_questions: b
             if left:
                 keep({**message, "tool_calls": left}, at)
                 continue
-            keep_saying()
-            emptied = ({k: v for k, v in message.items() if k != "tool_calls"}, at)
+            said = {k: v for k, v in message.items() if k != "tool_calls"}
+            emptied = ((_joined_replies(emptied[0], said), emptied[1] | {at})
+                       if emptied is not None else (said, frozenset((at,))))
             continue
         if message["role"] == "tool" and message["tool_call_id"] in gone:
             continue
@@ -331,6 +330,15 @@ def _without_unreadable(messages: list[dict], held: set[int], joins_questions: b
     if joins_questions and gone:
         kept, sources = _questions_joined(kept, sources)
     return kept, sources, gone
+
+
+def _joined_replies(said: dict, then: dict) -> dict:
+    """``then``, a reply, with the text and thought of ``said``, an earlier one, before its own."""
+    joined = {**then, "content": _joined_texts(said["content"], then["content"])}
+    thought = _joined_texts(said.get(THOUGHT_KEY) or "", then.get(THOUGHT_KEY) or "")
+    if thought:
+        joined[THOUGHT_KEY] = thought
+    return joined
 
 
 def _joined_texts(first: str, then: str) -> str:

@@ -1951,6 +1951,30 @@ def test_unreadable_calls_after_an_earlier_call_are_kept_as_generated_live_and_r
     assert run.context.cache == live and run.chat.conversation() == saved
 
 
+@pytest.mark.parametrize("in_a_row", [2, 3])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_unreadable_calls_in_a_row_are_one_reply_and_the_messages_alone_begin_again(stem, in_a_row):
+    """Text before the first call where the template reads a call after text, else none."""
+    for before in ("Let me look.", ""):
+        run = _Run(stem, context_size=16384)
+        unreadable = _unreadable_body(run)
+        run.context.replies = [ScriptedCall(unreadable, before=before)] + [
+            ScriptedCall(unreadable)] * (in_a_row - 1) + ["It is sunny."]
+        run.begin(tools=[WEATHER])
+        reply = run.chat.reply("Weather?", tool_call_policy="yield").finish()
+        if [c.status for c in reply.tool_calls] == ["unreadable"] * in_a_row:
+            break
+    else:
+        pytest.fail("no call was read as unreadable")
+    saved = run.chat.conversation()
+    replies = [m for m in after_system(saved["messages"]) if m["role"] == "assistant"]
+    assert len(replies) == 1
+    said = replies[0]["content"] or replies[0].get("reasoning_content") or ""
+    assert said.startswith(before) or not reply.text
+    run.chat.begin(**{**saved, "generated_turns": None})
+    assert run.chat.reply("And now?").finish().n_generated_tokens
+
+
 # ----- nothing blocks a question --------------------------------------------------
 @pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
