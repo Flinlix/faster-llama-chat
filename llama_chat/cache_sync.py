@@ -48,8 +48,9 @@ class CacheSync:
         # by how many tokens they hold.
         self._pins: dict[str, frozenset[int]] = {}
         self._pinned: dict[int, object] = {}
-        # The state rested in where the cache was last cut for a rest, besides those.
-        self._at_cut: tuple[int, object] | None = None
+        # The states rested in where the cache was cut for a rest the two newest times,
+        # besides those: the next change may begin at either.
+        self._at_cuts: list[tuple[int, object]] = []
 
     @property
     def tokens(self) -> list[int]:
@@ -72,7 +73,7 @@ class CacheSync:
         self._tokens, self._valid, self._end = [], 0, 0
         self.version += 1
         self._rest_states, self._logits = [], False
-        self._pins, self._pinned, self._at_cut = {}, {}, None
+        self._pins, self._pinned, self._at_cuts = {}, {}, []
 
     def pin(self, positions, kept_for: str) -> None:
         """Keep a state saved where the first ``pos`` tokens end, for each ``pos`` of ``positions``, for as long as they stay, where the cache needs saved states.
@@ -201,7 +202,8 @@ class CacheSync:
         if rest_at_cut:
             self.rest()
             if changes and self._rest_states and self._rest_states[-1][0] == same:
-                self._at_cut = self._rest_states[-1]
+                self._at_cuts = [s for s in self._at_cuts if s[0] < same][-1:] + [
+                    self._rest_states[-1]]
         self.decode(target[same:], want_logits=want_logits)
 
     def replace(self, tokens: list[int]) -> None:
@@ -338,19 +340,19 @@ class CacheSync:
 
     def _reset_to_nothing(self) -> None:
         self._context.reset()
-        self._valid, self._end, self._rest_states, self._pinned, self._at_cut = 0, 0, [], {}, None
+        self._valid, self._end, self._rest_states, self._pinned, self._at_cuts = 0, 0, [], {}, []
 
     def _restore_to(self, pos: int) -> bool:
         """Go back to the newest state saved at or before ``pos``; whether one could be."""
         self._forget_states_after(pos)
-        saved = self._rest_states + list(self._pinned.items()) + ([self._at_cut] if self._at_cut else [])
+        saved = self._rest_states + list(self._pinned.items()) + self._at_cuts
         if not saved:
             return False
         rested, state = max(saved, key=lambda s: s[0])
         try:
             self._context.restore_state(state, rested)
         except RuntimeError:
-            self._rest_states, self._pinned, self._at_cut = [], {}, None
+            self._rest_states, self._pinned, self._at_cuts = [], {}, []
             return False
         self._valid = self._end = rested
         return True
@@ -359,8 +361,7 @@ class CacheSync:
         """Drop the saved states that hold more than the first ``pos`` tokens, which changed."""
         self._rest_states = [s for s in self._rest_states if s[0] <= pos]
         self._pinned = {kept: state for kept, state in self._pinned.items() if kept <= pos}
-        if self._at_cut is not None and self._at_cut[0] > pos:
-            self._at_cut = None
+        self._at_cuts = [s for s in self._at_cuts if s[0] <= pos]
 
 
 def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int | None:

@@ -2176,6 +2176,11 @@ def _costs(stem, cache, n_exchanges):
         measured("call", lambda: list(chat.reply("Weather?", tool_call_policy="yield")))
         measured("result", lambda: chat.inject_tool_result(chat.pending_calls[0].id, "sunny"))
         measured("reply after the result", lambda: chat.reply().finish())
+        run.context.replies[:0] = [ScriptedCall(body)]
+        measured("call left open", lambda: list(chat.reply("Weather again?", tool_call_policy="yield")))
+        measured("question closing it", lambda: chat.reply("Never mind.").finish())
+        measured("note after it", lambda: chat.inject("Another note."))
+        measured("question joining it", lambda: chat.reply("Joined?").finish())
     measured("begin again", lambda: chat.begin(**chat.conversation()))
     measured("question after it", lambda: chat.reply("Last?").finish())
     return decoded
