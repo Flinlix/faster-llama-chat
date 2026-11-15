@@ -805,15 +805,15 @@ def test_an_injected_user_turn_after_a_user_turn_is_written_or_joined():
     assert w.reply().finish().text
 
 
-def test_a_history_with_two_user_turns_in_a_row_is_joined_or_refused():
+def test_a_history_with_two_user_turns_in_a_row_is_written_or_joined():
     fake = FakeContext(JOINS_USER_TURNS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     w.begin(opened("s", [{"role": "user", "content": "eins"}, {"role": "user", "content": "zwei"}, {"role": "assistant", "content": "drei"}]))
     assert_cache_reads_as_rendered(w, fake)
     fake = FakeContext(REFUSES_TWO_USER_TURNS)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
-    with pytest.raises(ValueError, match="two user turns"):
-        w.begin(opened("s", [{"role": "user", "content": "eins"}, {"role": "user", "content": "zwei"}]))
+    assert w.begin(opened("s", [{"role": "user", "content": "eins"},
+                                {"role": "user", "content": "zwei"}])).question_joined
 
 
 def test_a_refused_history_is_explained_by_what_would_be_kept_of_it():

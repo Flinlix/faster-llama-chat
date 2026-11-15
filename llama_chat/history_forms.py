@@ -362,6 +362,17 @@ def _questions_joined(messages: list[dict], sources: list[frozenset[int]]
     return joined, joined_sources
 
 
+def with_questions_joined(messages: list[dict]) -> list[dict]:
+    """``messages`` with each question that follows another, no reply between them, joined to it, as a template that writes no two in a row is given them."""
+    joined: list[dict] = []
+    for message in messages:
+        if joined and message["role"] == joined[-1]["role"] == "user":
+            joined[-1] = joined_question(joined[-1], message)
+        else:
+            joined.append(message)
+    return joined
+
+
 def joined_question(question: dict, later: dict) -> dict:
     """``question`` with the ``later`` question after it, as one."""
     return {**question, "content": f"{question['content']}\n\n{later['content']}"}

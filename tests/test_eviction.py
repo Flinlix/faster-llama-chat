@@ -193,10 +193,11 @@ def test_every_refusal_for_want_of_room_says_what_to_change():
         w.reply("x" * 600).finish()
     with pytest.raises(ContextOverflowError, match="shorten the message.*evict_above_fraction"):
         w.inject("x" * 600)
-    w.inject("x" * 470)                         # under the threshold, not under room for a reply
+    # Under the threshold, not under room for a reply: a question that could never be answered.
     with pytest.raises(ContextOverflowError,
                        match="raise context_size or evict_above_fraction, or lower min_reply_tokens"):
-        w.reply().finish()
+        w.inject("x" * 470)
+    w.inject("x" * 470, role="assistant")       # what is answered by none needs no such room
 
 
 def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():

@@ -142,7 +142,10 @@ class ChatWrapper:
                 * ``{"role": "tool", "tool_call_id": id, "content": text}``:
                   a call's result, in the order of the calls.
 
-                Every call needs an id of its own. A call whose arguments are
+                Two questions in a row, no reply between them, are joined
+                into one where the template writes no two in a row, as
+                :meth:`inject` joins them. Every call needs an id of its own.
+                A call whose arguments are
                 no JSON object, or that names no function, could not be read:
                 it is left out with its result, and a later result for it is
                 refused. A history that
@@ -194,9 +197,8 @@ class ChatWrapper:
                 (``evict_above_fraction`` of ``context_size``) for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, leaves no room for a reply beside them even with its
-                results cut to nothing (one that ends on a call no result
-                follows yet may fill the context, as the call did when it was
-                made), or ``messages`` hold no user message and cannot fit
+                results cut to nothing (one that ends on a reply or a call
+                may fill the context, as it did when it was generated), or ``messages`` hold no user message and cannot fit
                 beside them either.
             TypeError: If ``messages`` is no list, a message or a call is no
                 dictionary, a text, a function's name or a call's arguments is
@@ -736,7 +738,8 @@ class ChatWrapper:
         where it was cut. A call the model wrote unreadably is left out with
         its result, as :meth:`begin` leaves one out. Whatever :meth:`begin`
         takes without leaving anything out, this gives back unchanged, apart
-        from the spelling of arguments and an empty text written as above.
+        from the spelling of arguments, an empty text written as above, and two
+        questions in a row joined where the template writes no two.
 
         ``generated_turns`` is ``None`` where no turn is kept as generated;
         it is a JSON-ready dictionary, only meaningful to this model, holding

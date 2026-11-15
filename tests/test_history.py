@@ -13,7 +13,7 @@ from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
-from tests.invented_templates import (CALL_TAGS, REASONING_KEEPING_THOUGHTS, TOOLS,
+from tests.invented_templates import (CALL_TAGS, PLAIN, REASONING_KEEPING_THOUGHTS, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
@@ -510,3 +510,30 @@ def test_a_call_made_in_the_room_a_reply_leaves_begins_again_and_its_result_clos
         assert report.turn_closed and not again.turn_open
         return
     pytest.fail("no question left the call in the room a reply leaves")
+
+
+def test_a_reply_that_ran_to_the_end_of_the_context_begins_again():
+    """Rule 10: a reply may fill the context to its end, as no reply follows it until the next question evicts it."""
+    fake = FakeContext(PLAIN, gen_tokens=400)
+    config = Config(context_size=200, evict_above_fraction=1.0, min_reply_tokens=16)
+    w = ChatWrapper(config, context=fake)
+    w.begin(opened("s"))
+    assert w.reply("Erzähl.").finish().stop_reason == "token_limit"
+    saved = w.conversation()
+    again = ChatWrapper(config, context=FakeContext(PLAIN))
+    again.begin(**saved)
+    assert again.conversation() == saved
+    w.begin(**saved)
+    assert w.conversation() == saved and w.reply("Und?").finish()
+
+
+def test_two_questions_in_a_row_are_joined_at_a_begin_where_the_template_writes_no_two():
+    """As a running conversation joins them, so a history kept with both, as a server keeps it, begins again."""
+    from tests.invented_templates import REFUSES_TWO_USER_TURNS
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=3))
+    report = w.begin(opened("s", [{"role": "user", "content": "eins"},
+                                  {"role": "user", "content": "zwei"}]))
+    assert report.question_joined
+    assert after_system(w.conversation()["messages"]) == [
+        {"role": "user", "content": "eins\n\nzwei"}]
+    assert w.reply().finish().n_generated_tokens

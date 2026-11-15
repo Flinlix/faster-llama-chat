@@ -29,7 +29,8 @@ from .config import Config
 from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
 from .history_forms import (answer_in_order, completions_messages, joined_question,
-                            read_messages, with_generated_turns, without_unreadable)
+                            read_messages, with_generated_turns, with_questions_joined,
+                            without_unreadable)
 from .messages import (GENERATED_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
@@ -268,8 +269,13 @@ class RenderedCache:
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
             joins = self._joins_questions
-            messages, _n_found = with_generated_turns(read_messages(history),
-                                                  self._usable_turns(generated_turns), joins)
+            given = read_messages(history)
+            if joins:
+                # Two questions in a row are written as one, as a running conversation writes them.
+                n_read, given = len(given), with_questions_joined(given)
+                self._state.changes.question_joined = len(given) < n_read
+            messages, _n_found = with_generated_turns(given, self._usable_turns(generated_turns),
+                                                      joins)
             held = {i for first, last, _ in generated_turns_in(messages) for i in range(first, last + 1)}
             messages, gone = without_unreadable(messages, held, joins)
             self._state.messages[:] = answer_in_order(messages, result_text(unreadable_result))
@@ -316,10 +322,10 @@ class RenderedCache:
                     f"{RAISE_THE_ROOM}", needed, limit)
             if asks:
                 # The newest exchange may take what a running conversation may, its results
-                # cut as they are cut there; a call no result follows yet was generated in
+                # cut as they are cut there; a reply or a call that ends it was generated in
                 # the room a reply leaves, as the whole context is.
                 prompted = self._state.messages[-1]["role"] in ("user", "tool")
-                if self._state.messages[-1].get("tool_calls"):
+                if self._state.messages[-1]["role"] == "assistant":
                     room = self._config.context_size
                 if self._length(self._state.messages, prompted) > room:
                     self._cutting.cut_to_fit(room, self._held_indexes())
@@ -720,12 +726,15 @@ class RenderedCache:
                 _ensure_ready(self, "inject", "inject into")
             message = {"role": role, "content": text}
             limit = self._config.evict_above_tokens
-            alone = self._length_alone(message, limit, generation_prompt=False)
-            if alone > limit:
+            # A question is answered: it needs the room its reply leaves too.
+            asks = role == "user"
+            bound = min(limit, self._max_prompt_tokens) if asks else limit
+            alone = self._length_alone(message, bound, generation_prompt=asks)
+            if alone > bound:
                 raise ContextOverflowError(
-                    f"the injected message needs {alone} tokens but {limit} fit beside the "
+                    f"the injected message needs {alone} tokens but {bound} fit beside the "
                     f"system prompt; shorten the message or the system prompt, or {RAISE_THE_ROOM}",
-                    alone, limit)
+                    alone, bound)
             joined = (self._make_way_for(message, limit, generation_prompt=False)
                       if role == "user" else None)
             if joined is None:
