@@ -153,13 +153,13 @@ def test_a_cut_to_nothing_stands_where_the_template_writes_an_empty_reply():
     w.reply("weiter").finish()
 
 
-def test_a_reply_that_called_a_tool_cannot_be_cut():
+def test_a_reply_whose_call_waits_for_its_result_cannot_be_cut():
     w, fake = begun_wrapper(TOOLS)
     fake.call_script.append("fn:uhr{}")
     w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})])
     for _event in w.reply("wie spät?", tool_call_policy="yield"):
         pass
-    with pytest.raises(ValueError, match="tool call"):
+    with pytest.raises(ValueError, match="reply is open"):
         w.truncate_last_reply("")
 
 

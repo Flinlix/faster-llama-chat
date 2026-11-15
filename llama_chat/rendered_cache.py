@@ -1199,20 +1199,23 @@ class RenderedCache:
     def truncate_newest(self, keep_text: str) -> None:
         """Shorten the newest reply's text to ``keep_text``.
 
+        A reply that ends a turn that called tools keeps the tokens it was
+        generated as up to ``keep_text``.
+
         Raises:
             ValueError: If no conversation was begun, a reply is open, the
                 newest message is not a reply or holds a tool call, one that
                 could not be read included, ``keep_text`` is not a prefix of
                 its text, or the template does not write the reply shortened
-                to it.
+                to it, or the tokens of a reply kept as generated hold more
+                than its text.
         """
         with self._action():
             _ensure_ready(self, "truncate a reply", "truncate in")
             newest = self._state.messages[-1] if self._state.messages else None
             if newest is None or newest["role"] != "assistant":
                 raise OutOfOrderError(None, "the newest message is not an assistant reply")
-            if any(m["role"] == "tool" or m.get("tool_calls") for m in self._state.messages[-2:]) \
-                    or KEPT_TURN in newest:
+            if newest.get("tool_calls"):
                 raise OutOfOrderError(None, "the newest reply holds a tool call, which would "
                                             "be separated from its result")
             if not newest["content"].startswith(keep_text):
@@ -1220,13 +1223,37 @@ class RenderedCache:
                                            "keep_text is not a prefix of the newest reply")
             if keep_text == newest["content"]:
                 return
-            self._state.messages[-1] = {**newest, "content": keep_text}
+            shortened = {**newest, "content": keep_text}
+            turn = newest.get(KEPT_TURN)
+            if turn is not None:
+                cut = self._kept_up_to(turn, newest["content"], keep_text)
+                if cut is None:
+                    raise TemplateRefusedError(
+                        "keep_text", "the newest reply's tokens as generated hold more than "
+                        "its text, such as a call that went, so they cannot be cut at keep_text")
+                shortened[KEPT_TURN] = cut
+            self._state.messages[-1] = shortened
             if not self._writes(self._state.messages):
                 raise TemplateRefusedError(
                     "keep_text", f"this model's template does not write the newest reply "
                     f"shortened to {keep_text!r}; keep more of its text")
             self._render_ahead()
             self._memory.rest()
+
+    def _kept_up_to(self, turn: KeptTurn, text: str, keep_text: str) -> KeptTurn | None:
+        """``turn``, ending on a reply's ``text``, as its tokens hold the reply cut to ``keep_text``: its generated tokens up to the last whole one before the cut, the rest of ``keep_text`` tokenized; ``None`` where its tokens do not end on ``text``."""
+        pieces = [self._context.token_bytes(token) for token in turn.tokens]
+        whole, said = b"".join(pieces), text.encode()
+        if not whole.endswith(said):
+            return None
+        end = len(whole) - len(said) + len(keep_text.encode())
+        n, at = len(pieces), len(whole)
+        while n and (at > end or not _decodes(whole[at:end])):
+            n -= 1
+            at -= len(pieces[n])
+        rest = whole[at:end].decode()
+        tokens = turn.tokens[:n] + tuple(self._rendering.tokenize([(rest, True)]) if rest else ())
+        return KeptTurn(tokens, turn.span, turn.on_call)
 
     def _pin_opening(self) -> None:
         """Keep a state saved where the conversation's opening ends, where the cache goes back to saved states."""
@@ -1559,6 +1586,15 @@ def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -
     if generated.cut_inside_call:
         return [ToolCall("", {}, status="unfinished")]
     return pending
+
+
+def _decodes(data: bytes) -> bool:
+    """Whether ``data`` is whole UTF-8 text."""
+    try:
+        data.decode()
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def _without_turn(message: dict) -> dict:

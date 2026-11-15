@@ -593,8 +593,9 @@ class ChatWrapper:
         to where the shortened reply differs and decoded again from there.
 
         Args:
-            keep_text: What stays, a prefix of the message's text. The whole
-                text changes nothing.
+            keep_text: What stays, a prefix of the message's text, or of the
+                text its reply was streamed as, which after a tool's result
+                may open with a blank line. The whole text changes nothing.
 
         Raises:
             TypeError: If ``keep_text`` is not a ``str``.
@@ -604,13 +605,20 @@ class ChatWrapper:
             InvalidArgumentError: If ``keep_text`` is not a prefix of its text.
             TemplateRefusedError: If the template does not write the reply
                 shortened to it, as one that writes no empty reply does not
-                write it shortened to ``""``.
+                write it shortened to ``""``; or, for the reply that ends a
+                turn that called tools, if its tokens as generated hold more
+                than its text, such as a call that went for want of room.
             RuntimeError: If the wrapper is closed, or this thread is still
                 reading a reply.
         """
         ensure_text(keep_text, "keep_text")
         with self._held():
             self._ensure_open()
+            messages = self._conversation.messages
+            if messages and messages[-1]["role"] == "assistant":
+                parting = _parting(_shown_before(messages), messages[-1]["content"])
+                if parting and (keep_text.startswith(parting) or parting.startswith(keep_text)):
+                    keep_text = keep_text[len(parting):]
             self._conversation.truncate_newest(keep_text)
 
     # ----- introspection -------------------------------------------------------
@@ -923,7 +931,7 @@ class ChatWrapper:
         without whitespace, a blank line goes between them, and the Reply's
         text starts with it.
         """
-        separator = None if after and not after[-1].isspace() else ""
+        separator = None
         try:
             while True:
                 try:
@@ -931,7 +939,7 @@ class ChatWrapper:
                 except StopIteration as ended:
                     return replace(ended.value, text=(separator or "") + ended.value.text)
                 if separator is None and delta:
-                    separator = "" if delta[0].isspace() else "\n\n"
+                    separator = _parting(after, delta)
                     delta = separator + delta
                 yield delta
         finally:
@@ -1157,6 +1165,17 @@ def _explain_failure(result, may_call_again: bool):
     return {**result,
             "message": f"the tool call failed: {reason}. "
                        + ("try again" if may_call_again else "do not call again")}
+
+
+def _parting(before: str, text: str) -> str:
+    """What a stream shows between ``before``, the text shown before a generation in its turn, and ``text``, that generation's: a blank line where they would join without whitespace."""
+    return "\n\n" if before and text and not before[-1].isspace() and not text[0].isspace() else ""
+
+
+def _shown_before(messages: list[dict]) -> str:
+    """The text of the replies of the newest turn before its newest message, which that message was streamed after."""
+    asked = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=-1)
+    return "".join(m["content"] or "" for m in messages[asked + 1:-1] if m["role"] == "assistant")
 
 
 def _calls_tools(item) -> bool:

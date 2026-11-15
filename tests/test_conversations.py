@@ -788,7 +788,7 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
 
 
-def test_a_reply_kept_as_generated_is_not_shortened():
+def test_a_reply_whose_tokens_as_generated_hold_a_call_that_went_is_not_shortened():
     from tests.invented_templates import TOOLS
     for size in range(200, 900, 2):
         context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
@@ -800,7 +800,7 @@ def test_a_reply_kept_as_generated_is_not_shortened():
         except ContextOverflowError:
             continue
         if reply.stop_reason == "unreadable_tool_call" and not chat.turn_open:
-            with pytest.raises(ValueError, match="tool call"):
+            with pytest.raises(ValueError, match="cannot be cut at keep_text"):
                 chat.truncate_last_reply("Mo")
             return
     pytest.fail("no context size left the error result without room")
@@ -1339,6 +1339,32 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     after = _rendered_turn(run, {"role": "assistant", "content": answer},
                            {"role": "user", "content": "Thanks."})
     assert before_thanks.rsplit(answer, 1)[1] == after.rsplit(answer, 1)[1]
+
+
+@pytest.mark.parametrize("cut", [3, 9])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut):
+    """The text kept may hold the blank line the stream showed after the result; the turn keeps its tokens as generated up to the cut."""
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+    for before in ("Let me look.", ""):
+        run = _Run(stem, context_size=16384)
+        run.context.replies = [ScriptedCall(body, before=before)] + _as_generated(
+            run.template, ["It is sunny in Bonn.", "Fine."], False)
+        run.begin(tools=[WEATHER])
+        call = next((e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+                     if isinstance(e, ToolCall)), None)
+        if call is not None:
+            break
+    run.chat.inject_tool_result(call.id, "sunny")
+    shown = "".join(run.chat.reply(tool_call_policy="yield"))
+    newest = run.chat.conversation()["messages"][-1]["content"]
+    if not newest:
+        return                                      # the template kept no text to cut
+    keep = shown[:len(shown) - len(newest) + min(cut, len(newest) - 1)]
+    run.chat.truncate_last_reply(keep)
+    assert run.chat.conversation()["messages"][-1]["content"] == newest[:min(cut, len(newest) - 1)]
+    assert internals.kept_turns(run.chat), "the turn no longer keeps its tokens as generated"
+    run.chat.reply("And tomorrow?").finish()
 
 
 _WRITES_CALL_IDS = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_id_open")

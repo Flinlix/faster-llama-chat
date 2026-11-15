@@ -1291,6 +1291,7 @@ _PLAIN_REPLY_CODE = {
         "_ensure_cancel_and_sampling",
         "_ensure_max_calls_runs",
         "_explain_failure",
+        "_parting",
         "_stop_texts",
         "_sum_generations",
         "_sum_generations.<locals>.<genexpr>",
