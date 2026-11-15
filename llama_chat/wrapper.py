@@ -187,8 +187,10 @@ class ChatWrapper:
                 leave no room under ``evict_above_tokens`` for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, leaves no room for a reply beside them even with its
-                results cut to nothing, or ``messages`` hold no user message
-                and cannot fit beside them either.
+                results cut to nothing (one that ends on a call no result
+                follows yet may fill the context, as the call did when it was
+                made), or ``messages`` hold no user message and cannot fit
+                beside them either.
             TypeError: If ``messages`` is no list, a message or a call is no
                 dictionary, a text, a function's name or a call's arguments is
                 of another type than stated above, or ``tools`` holds anything

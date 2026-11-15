@@ -288,8 +288,11 @@ class RenderedCache:
                     f"{RAISE_THE_ROOM}", needed, limit)
             if asks:
                 # The newest exchange may take what a running conversation may, its results
-                # cut as they are cut there.
+                # cut as they are cut there; a call no result follows yet was generated in
+                # the room a reply leaves, as the whole context is.
                 prompted = self._state.messages[-1]["role"] in ("user", "tool")
+                if self._state.messages[-1].get("tool_calls"):
+                    room = self._config.context_size
                 if self._rendering.length(self._state.messages, prompted) > room:
                     self._cutting.cut_to_fit(room, self._held_indexes())
                 needed = self._rendering.length(self._state.messages, prompted)

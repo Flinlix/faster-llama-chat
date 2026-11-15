@@ -5,6 +5,7 @@ import json
 import pytest
 
 from llama_chat.config import Config
+from llama_chat.errors import ContextOverflowError
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
@@ -482,3 +483,27 @@ def test_begin_reports_only_the_turns_it_kept_as_generated():
                           context=FakeContext(TOOLS))
     report = limited.begin(**saved)
     assert report.n_turns_restored == 1
+
+
+def test_a_call_made_in_the_room_a_reply_leaves_begins_again_and_its_result_closes_the_turn():
+    """The live call took room the reply leaves; begun again it keeps it, and a result that does not fit closes the turn as it would have live."""
+    for length in range(150, 300, 4):
+        fake = FakeContext(TOOLS)
+        fake.call_script = ["fn:weather{city:'Bonn'}"]
+        config = Config(context_size=300, min_reply_tokens=16, evict_above_fraction=0.9)
+        live = ChatWrapper(config, context=fake)
+        live.begin(opened("s"), tools=weather_registry().specs())
+        try:
+            reply = live.reply("q" * length, tool_call_policy="yield").finish()
+        except ContextOverflowError:
+            break
+        if not live.pending_calls or live.total_tokens <= config.context_size - config.min_reply_tokens:
+            continue
+        saved = live.conversation()
+        again = ChatWrapper(config, context=FakeContext(TOOLS))
+        again.begin(**saved)
+        assert again.conversation() == saved
+        report = again.inject_tool_result(reply.tool_calls[0].id, "sunny")
+        assert report.turn_closed and not again.turn_open
+        return
+    pytest.fail("no question left the call in the room a reply leaves")
