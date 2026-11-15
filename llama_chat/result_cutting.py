@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from collections.abc import Callable
 
 from .conversation_state import ConversationState
@@ -21,9 +22,19 @@ _log = logging.getLogger(__name__)
 RESULT_CUT_NOTE = "\n(cut: {kept} of {total} characters kept)"
 
 
+# A note a cut left, read back so that a result cut again counts the text it was cut from.
+_A_CUT_NOTE = re.compile(r"\n\(cut: (\d+) of (\d+) characters kept\)\Z")
+
+
 def cut_result(text: str, kept: int) -> str:
-    """``text`` cut to its first ``kept`` characters, :data:`RESULT_CUT_NOTE` after them."""
-    return text[:kept] + RESULT_CUT_NOTE.format(kept=kept, total=len(text))
+    """``text`` cut to its first ``kept`` characters, :data:`RESULT_CUT_NOTE` after them; a text a cut left is cut from what it kept, the note counting the whole it was cut from."""
+    note = _A_CUT_NOTE.search(text)
+    if note is not None and int(note.group(1)) == note.start():
+        text, total = text[:note.start()], int(note.group(2))
+    else:
+        total = len(text)
+    kept = min(kept, len(text))
+    return text[:kept] + RESULT_CUT_NOTE.format(kept=kept, total=total)
 
 
 def _most_kept(fits: Callable[[int], bool], total: int, guess: int | None = None) -> int:

@@ -346,3 +346,12 @@ def test_a_builtin_with_no_readable_signature_is_still_usable():
 def test_a_builtin_registered_without_a_schema_says_what_to_do():
     with pytest.raises(TypeError, match="pass parameters="):
         ToolRegistry().tool({}.update, description="…", name="remember")
+
+
+def test_a_result_cut_again_counts_the_whole_it_was_first_cut_from():
+    from llama_chat.result_cutting import cut_result
+    once = cut_result("x" * 85, 5)
+    assert once.endswith("(cut: 5 of 85 characters kept)")
+    assert cut_result(once, 4) == "xxxx\n(cut: 4 of 85 characters kept)"
+    assert cut_result(once, 50) == once
+    assert cut_result("Text\n(cut: 9 of 10 characters kept)", 3).endswith("of 35 characters kept)")
