@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .errors import TemplateRefusedError, with_template_reason
-from .messages import (KEPT_TURN, THOUGHT_KEY, UNREADABLE_CALL,
+from .messages import (GENERATED_TURN, THOUGHT_KEY, UNREADABLE_CALL,
                        exchange_starts, system_part)
 from .render_checks import STAND_IN
 from .resolved_template import ResolvedTemplate
@@ -26,29 +26,29 @@ from .tools import ToolSpec
 _ANSWER_MARK = "QQANSWERMARKQQ"
 
 @dataclass(frozen=True, eq=False)
-class KeptTurn:
-    """A turn held as the tokens it was generated as, in place of the template's version of it; the message it ends with holds it under :data:`~llama_chat.messages.KEPT_TURN`."""
+class GeneratedTurn:
+    """A turn held as the tokens it was generated as, in place of the template's version of it; the message it ends with holds it under :data:`~llama_chat.messages.GENERATED_TURN`."""
 
     tokens: tuple[int, ...]
     span: int                             # how many messages it covers, the one holding it the last
     on_call: bool                         # whether it ends on a call, else on a reply's text
 
 
-def kept_turns(messages: list[dict]) -> list[tuple[int, int, KeptTurn]]:
+def generated_turns_in(messages: list[dict]) -> list[tuple[int, int, GeneratedTurn]]:
     """Each turn ``messages`` keep as generated, oldest first: the indexes of its first and last message, and the turn."""
-    return [(i - message[KEPT_TURN].span + 1, i, message[KEPT_TURN])
-            for i, message in enumerate(messages) if KEPT_TURN in message]
+    return [(i - message[GENERATED_TURN].span + 1, i, message[GENERATED_TURN])
+            for i, message in enumerate(messages) if GENERATED_TURN in message]
 
 
-def with_kept(message: dict, turn: KeptTurn | None) -> dict:
+def with_generated_turn(message: dict, turn: GeneratedTurn | None) -> dict:
     """``message``, as a copy, ending ``turn``, or ending none where it is ``None``."""
-    rest = {key: value for key, value in message.items() if key != KEPT_TURN}
-    return rest if turn is None else {**rest, KEPT_TURN: turn}
+    rest = {key: value for key, value in message.items() if key != GENERATED_TURN}
+    return rest if turn is None else {**rest, GENERATED_TURN: turn}
 
 
 @dataclass(frozen=True)
 class Target:
-    """What the cache should hold for some messages, and where each kept turn placed in it begins.
+    """What the cache should hold for some messages, and where each generated turn placed in it begins.
 
     ``anchors`` holds, for the two newest exchanges of the messages rendered
     where known, the index of the message each follows and where in
@@ -57,7 +57,7 @@ class Target:
     """
 
     tokens: list[int]
-    kept_at: dict[KeptTurn, int]
+    turns_at: dict[GeneratedTurn, int]
     anchors: tuple[tuple[int, int], ...] = ()
     exchanges_at: tuple[int, ...] | None = None
 
@@ -70,7 +70,7 @@ class RenderInputs(Protocol):
 
 
 class ConversationRendering:
-    """One conversation's renders, made with its declarations, its reasoning switch and its kept turns.
+    """One conversation's renders, made with its declarations, its reasoning switch and its generated turns.
 
     ``inputs`` holds those, and is read at every use as it is then. Renders
     and splits are reused while the template, the declarations and the
@@ -137,8 +137,8 @@ class ConversationRendering:
         return [spec.as_declaration() for spec in self._inputs.tools] or None
 
     def _as_given(self, messages: list[dict]) -> list[dict]:
-        """``messages`` as the template is given them: each calling message of a kept turn without its text, which the turn's tokens hold."""
-        inside = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
+        """``messages`` as the template is given them: each calling message of a generated turn without its text, which the turn's tokens hold."""
+        inside = {i for first, last, _ in generated_turns_in(messages) for i in range(first, last + 1)}
         if inside or any(UNREADABLE_CALL in c for m in messages for c in m.get("tool_calls") or ()):
             # What a caller gave is the conversation's to give back: not the template's to write.
             messages = [_without_kept_texts(m) for m in messages]
@@ -180,13 +180,13 @@ class ConversationRendering:
     # ----- the target ---------------------------------------------------------------
     def target(self, messages, generation_prompt: bool, upto: int | None = None,
                start: int = 0) -> Target:
-        """``messages`` as the cache holds them: their render tokenized, each kept turn as it was generated.
+        """``messages`` as the cache holds them: their render tokenized, each generated turn as it was generated.
 
         Args:
             upto: Where in the render to stop.
             start: Where in the render to begin, the start of a tag; each
-                kept turn there or after it is placed, and the places in
-                ``kept_at`` count from it.
+                generated turn there or after it is placed, and the places in
+                ``turns_at`` count from it.
 
         Raises:
             ValueError: If the template refuses to write them, or writes a kept
@@ -201,7 +201,7 @@ class ConversationRendering:
                 self.refusal_reason(messages, generation_prompt)))
         end = len(split.text) if upto is None else upto
         placed = []
-        for first, last, kept in kept_turns(messages):
+        for first, last, kept in generated_turns_in(messages):
             found = self.place(first, last, kept.on_call, split)
             if found is None or found[0] < start < found[1]:
                 raise TemplateRefusedError("messages", "this model's template writes a turn that called tools where "
@@ -209,15 +209,15 @@ class ConversationRendering:
                                  "it was generated as")
             if start <= found[0] and found[1] <= end:
                 placed.append((*found, kept))
-        tokens, at, kept_at = [], start, {}
+        tokens, at, turns_at = [], start, {}
         for begins, stop, kept in placed:
-            assert begins >= at, "two kept turns overlap"
+            assert begins >= at, "two generated turns overlap"
             tokens += self.tokenize(split.pieces(at, begins), add_special=not tokens and at == 0)
-            kept_at[kept] = len(tokens)
+            turns_at[kept] = len(tokens)
             tokens += kept.tokens
             at = stop
         tokens += self.tokenize(split.pieces(at, end), add_special=not tokens and at == 0)
-        return Target(tokens, kept_at)
+        return Target(tokens, turns_at)
 
     def written_answer(self, messages: list[dict], answer: str, thought: str = "",
                        cuts: tuple[str, ...] = ()) -> str | None:
@@ -263,7 +263,7 @@ class ConversationRendering:
                     forms[0] if forms else None)
 
     def length(self, messages: list[dict], generation_prompt: bool) -> int:
-        """How many tokens the cache holds for ``messages``, each kept turn as it was generated.
+        """How many tokens the cache holds for ``messages``, each generated turn as it was generated.
 
         Where the template refuses a conversation that ends on a reply, up to
         where a question after it would go.
@@ -285,11 +285,11 @@ class ConversationRendering:
         return common_prefix_length(first, second)
 
     def head(self, messages: list[dict], through: int,
-             kept_turns: bool = False) -> list[int] | None:
+             with_generated_turns: bool = False) -> list[int] | None:
         """The cache's tokens up to the first tag after the reply of oldest exchange ``through``, 0 or 1, from the system message and the oldest two exchanges of ``messages``; ``None`` where they cannot be told.
 
         Args:
-            kept_turns: Whether exchanges that called tools may be among
+            with_generated_turns: Whether exchanges that called tools may be among
                 them, each turn kept as generated placed in their render.
         """
         starts = exchange_starts(messages)
@@ -297,7 +297,7 @@ class ConversationRendering:
             return None
         bounds = starts[1:] + [len(messages)]
         oldest = messages[starts[0]:bounds[min(1, len(bounds) - 1)]]
-        if not kept_turns and not self.template_writes(oldest):
+        if not with_generated_turns and not self.template_writes(oldest):
             return None
         system = system_part(messages)
         written = system + oldest + [{"role": "user", "content": STAND_IN}]
@@ -310,7 +310,7 @@ class ConversationRendering:
         try:
             return self.target(written, True, upto=anchor).tokens
         except ValueError:
-            return None                 # a kept turn its render cannot place
+            return None                 # a generated turn its render cannot place
 
     def tokenize(self, pieces: list[tuple[str, bool]], add_special: bool = False) -> list[int]:
         """``pieces`` as a render tokenizes them, a call's tags as the single tokens a generated call holds."""
@@ -337,10 +337,10 @@ class ConversationRendering:
                 if (text := self._context.token_text(token))}
         return self._tag_tokens[template]
 
-    # ----- kept turns -----------------------------------------------------------------
+    # ----- generated turns -----------------------------------------------------------------
     def place(self, first: int, last: int, on_call: bool,
               split: SplitRender) -> tuple[int, int] | None:
-        """Where the template writes the kept turn of messages ``first`` to ``last`` in ``split``: from the first tag after the question's text to the end of its call, where it ends ``on_call``, or of its reply; ``None`` where it cannot be placed."""
+        """Where the template writes the generated turn of messages ``first`` to ``last`` in ``split``: from the first tag after the question's text to the end of its call, where it ends ``on_call``, or of its reply; ``None`` where it cannot be placed."""
         if not first:
             return None
         start = self.tag_after_content(split, first - 1)
@@ -369,7 +369,7 @@ class ConversationRendering:
 
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""
-        return not any(m["role"] == "tool" or m.get("tool_calls") or KEPT_TURN in m
+        return not any(m["role"] == "tool" or m.get("tool_calls") or GENERATED_TURN in m
                        for m in messages)
 
     # ----- tags ---------------------------------------------------------------------
@@ -411,11 +411,11 @@ class ConversationRendering:
 
 
 def _without_kept_texts(message: dict) -> dict:
-    """``message`` without what the conversation keeps beside it for itself: a kept turn, and the mark of a call that could not be read."""
+    """``message`` without what the conversation keeps beside it for itself: a generated turn, and the mark of a call that could not be read."""
     calls = message.get("tool_calls") or ()
-    if KEPT_TURN not in message and not any(UNREADABLE_CALL in c for c in calls):
+    if GENERATED_TURN not in message and not any(UNREADABLE_CALL in c for c in calls):
         return message
-    message = {key: value for key, value in message.items() if key != KEPT_TURN}
+    message = {key: value for key, value in message.items() if key != GENERATED_TURN}
     if calls:
         message["tool_calls"] = [{key: value for key, value in call.items() if key != UNREADABLE_CALL}
                                  for call in calls]

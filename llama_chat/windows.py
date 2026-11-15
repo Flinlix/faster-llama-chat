@@ -59,7 +59,7 @@ class Windows:
             to_question = self._rendering.target(window, True, upto=run, start=anchor).tokens
             ahead = self._rendering.target(window, True, upto=ahead_run, start=anchor)
         except ValueError:
-            return WHOLE                    # a kept turn the window cannot place
+            return WHOLE                    # a generated turn the window cannot place
         before = ahead.tokens
         question_at, spliced, _ = spliced_at
         at = question_at - len(to_question)
@@ -76,7 +76,7 @@ class Windows:
             length = len(self._rendering.target(window[:-1], False, start=anchor).tokens)
         except ValueError:
             return WHOLE
-        return at, before, length, split, ahead_run, ahead.kept_at
+        return at, before, length, split, ahead_run, ahead.turns_at
 
     def drop_in(self, memory: CacheSync, kept_until, after: int) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
@@ -113,7 +113,7 @@ class Windows:
             # The cache up to the tag after the second oldest exchange's reply, before the drop,
             # checked token for token, as no check at load covers it.
             held = self._rendering.head(self._state.messages, through=1,
-                                        kept_turns=self._state.checks.tool_windows)
+                                        with_generated_turns=self._state.checks.tool_windows)
             if held is None or list(memory.tokens[:len(held)]) != held:
                 return False
             if not self._eviction.drop_oldest_exchange(True):
@@ -132,7 +132,7 @@ class Windows:
         as before.
         """
         wanted = self._rendering.head(self._state.messages, through=0,
-                                      kept_turns=self._state.checks.tool_windows)
+                                      with_generated_turns=self._state.checks.tool_windows)
         if wanted is None:
             return False
         same = common_prefix_length(held, wanted)
@@ -140,6 +140,6 @@ class Windows:
         if end <= same or end > bound or held[end:] != wanted[same:]:
             return False
         memory.remove(same, end)
-        self._state.kept_at = {k: at - (end - same) if at >= end else at
-                               for k, at in self._state.kept_at.items()}
+        self._state.turns_at = {k: at - (end - same) if at >= end else at
+                               for k, at in self._state.turns_at.items()}
         return list(memory.tokens[:len(wanted)]) == wanted

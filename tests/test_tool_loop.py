@@ -741,7 +741,7 @@ def test_a_refusal_while_an_unreadable_call_is_answered_is_raised_not_taken_for_
 
     def refused(self):
         if "nonsense" in held_text(fake):       # only where the call is answered
-            raise ValueError("a kept turn cannot be placed")
+            raise ValueError("a generated turn cannot be placed")
         return fitting_prompt(self)
 
     monkeypatch.setattr(RenderedCache, "_fitting_prompt", refused)

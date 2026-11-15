@@ -18,8 +18,8 @@ THOUGHT_KEY = "reasoning_content"
 # Which name is used does not change what a template renders around it.
 UNKNOWN_FUNCTION = "unknown"
 # Where the message that ends a turn kept as the tokens it was generated as holds that turn.
-KEPT_TURN = "kept_turn"
-# The mark of a call that could not be read: written only as a kept turn's tokens hold it,
+GENERATED_TURN = "generated_turn"
+# The mark of a call that could not be read: written only as a generated turn's tokens hold it,
 # else left out at a begin.
 UNREADABLE_CALL = "unreadable"
 
@@ -132,7 +132,8 @@ def history_count(messages: list[dict]) -> int:
 def exchange_starts(messages: list[dict]) -> list[int]:
     """Where each exchange begins: every user message, where kept history may open.
 
-    See design_history.md, "Eviction removes whole exchanges".
+    See design_history.md, "Structure review: what changed and why", its
+    point "Eviction removes whole exchanges".
     """
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 

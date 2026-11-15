@@ -17,7 +17,7 @@ from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, expected, fixture
 from tests.fake_context import FakeContext
 from tests import internals
-from tests.internals import kept_turns
+from tests.internals import generated_turns_held
 from tests.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
                                       TOOLS_REFUSING_TWO_USER_TURNS)
 from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
@@ -430,10 +430,10 @@ def test_a_resumed_turn_cancelled_before_it_starts_stays_open_and_goes_on_later(
     assert (reply.text, reply.stop_reason) == ("", "interrupted") and _state(w) == before
     fake.call_script = []
     w.reply(tool_call_policy="yield").finish()
-    assert not w.turn_open and kept_turns(w) and "fn:clock{}" in held_text(fake)
+    assert not w.turn_open and generated_turns_held(w) and "fn:clock{}" in held_text(fake)
 
 
-def test_an_action_whose_render_cannot_place_a_kept_turn_is_refused_and_changes_nothing(
+def test_an_action_whose_render_cannot_place_a_generated_turn_is_refused_and_changes_nothing(
         monkeypatch):
     w, fake = tool_wrapper()
     w.begin(opened("persona"))

@@ -1,4 +1,4 @@
-"""Principle 8: actions take turns, a reply asked for while another runs waits for no lock, a cancel from elsewhere stops a reply, and closing ends what the closing thread reads."""
+"""Rule 9: actions take turns, a reply asked for while another runs waits for no lock, a cancel from elsewhere stops a reply, and closing ends what the closing thread reads."""
 
 import threading
 

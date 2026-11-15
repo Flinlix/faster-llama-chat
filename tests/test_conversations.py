@@ -1177,7 +1177,7 @@ def test_a_call_owed_its_result_holds_the_render_up_to_its_turn_and_the_result_o
 def test_a_cache_off_the_render_before_a_call_owed_its_result_is_caught(stem):
     run, _call = _owing_a_call(stem, reasoning=False)
     sound = list(run.context.cache)
-    start = len(sound) - len(internals.kept_turns(run.chat)[-1][0])
+    start = len(sound) - len(internals.generated_turns_held(run.chat)[-1][0])
     mark = ord("#")                     # a token that spells a character no render here holds
     for broken in (sound[:start - 1] + sound[start:], sound[:1] + [mark] + sound[1:]):
         run.context.cache = broken
@@ -1381,7 +1381,7 @@ def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_
         return
     run.chat.truncate_last_reply(keep)
     assert run.chat.conversation()["messages"][-1]["content"] == newest[:min(cut, len(newest) - 1)]
-    assert internals.kept_turns(run.chat), "the turn no longer keeps its tokens as generated"
+    assert internals.generated_turns_held(run.chat), "the turn no longer keeps its tokens as generated"
     run.chat.reply("And tomorrow?").finish()
 
 
@@ -1955,7 +1955,7 @@ def test_beginning_again_from_the_conversation_holds_each_turn_as_generated(stem
     run = _Run(stem)
     _with_a_live_turn(run, unreadable)
     live, saved = list(run.context.cache), run.chat.conversation()
-    kept = [tokens for tokens, _text, _on_call in internals.kept_turns(run.chat)]
+    kept = [tokens for tokens, _text, _on_call in internals.generated_turns_held(run.chat)]
     turns = (saved["generated_turns"] or {}).get("turns", [])
     assert [turn["tokens"] for record in turns for turn in record["kept"]] == kept
 
@@ -1975,11 +1975,11 @@ def test_turns_read_earlier_serve_messages_added_and_dropped_later(stem):
              if isinstance(e, ToolCall)]
     run.chat.inject_tool_result(call.id, "sunny")
     run.chat.reply(tool_call_policy="yield").finish()
-    turns, kept = run.chat.generated_turns(), [k[0] for k in internals.kept_turns(run.chat)]
+    turns, kept = run.chat.generated_turns(), [k[0] for k in internals.generated_turns_held(run.chat)]
     run.chat.reply(QUESTIONS[1]).finish()           # an exchange after it, added below
     messages = after_system(run.chat.conversation()["messages"])[2:]
     run.chat.begin(opened(run.system, messages), tools=[WEATHER], generated_turns=turns)
-    assert [k[0] for k in internals.kept_turns(run.chat)] == kept
+    assert [k[0] for k in internals.generated_turns_held(run.chat)] == kept
 
 
 @pytest.mark.parametrize("unreadable", [False, True], ids=["read", "unreadable"])
@@ -1991,7 +1991,7 @@ def test_another_model_or_no_generated_turns_write_each_turn_as_its_template_doe
     other = _Run(next(s for s in _TOOL_TEMPLATES if s != stem))
     for chat, conversation in ((other.chat, saved), (run.chat, {**saved, "generated_turns": None})):
         chat.begin(**conversation)
-        assert internals.kept_turns(chat) == []
+        assert internals.generated_turns_held(chat) == []
         calls = [call for m in after_system(chat.conversation()["messages"]) for call in m.get("tool_calls", ())]
         # An unreadable call is in the old model's format only: left out, with its error result.
         assert not any("unreadable" in call for call in calls)
@@ -2211,7 +2211,7 @@ def _costs(stem, cache, n_exchanges):
 @pytest.mark.parametrize("cache", sorted(_COST_CACHES))
 @pytest.mark.parametrize("stem", _EVERY)
 def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cache):
-    """Principle 4 on every action and every kind of cache: what an action decodes does not grow with what came before it."""
+    """Rule 4 on every action and every kind of cache: what an action decodes does not grow with what came before it."""
     (short, short_renders, _), (long, long_renders, windows) = (_costs(stem, cache, 6),
                                                                 _costs(stem, cache, 24))
     assert short.keys() == long.keys() and short_renders.keys() == long_renders.keys()
@@ -2224,9 +2224,21 @@ def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cac
                 if long_renders[name] > short_renders[name]} == {}
 
 
+@pytest.mark.parametrize("asks", ["reply", "inject"])
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_question_the_template_does_not_write_is_refused_naming_its_text(stem, asks):
+    run = _Run(stem, replies=["Gladly."] * 6)
+    run.begin()
+    for question in ("", "Thanks!", "Thanks!"):
+        try:
+            run.chat.reply(question).finish() if asks == "reply" else run.chat.inject(question)
+        except TemplateRefusedError as refused:
+            assert refused.field == "text", refused
+
+
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_question_is_refused_only_where_the_template_does_not_write_it_and_the_next_is_answered(stem):
-    """Invariant 4's second refusal: an empty question, and one asked twice, on every template."""
+    """Rule 11's second refusal: an empty question, and one asked twice, on every template."""
     run = _Run(stem, replies=["Gladly."] * 6)
     run.begin()
     run.chat.reply("Thanks!").finish()

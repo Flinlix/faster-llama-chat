@@ -21,7 +21,7 @@ from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
 from .config import Config, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
-from .history_forms import ensure_saved_turns
+from .history_forms import ensure_generated_turns
 from .rendered_cache import RenderedCache
 from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
                      UnsupportedError)
@@ -143,8 +143,9 @@ class ChatWrapper:
                   a call's result, in the order of the calls.
 
                 Every call needs an id of its own. A call whose arguments are
-                no JSON object could not be read: it is left out with its
-                result, and a later result for it is refused. A history that
+                no JSON object, or that names no function, could not be read:
+                it is left out with its result, and a later result for it is
+                refused. A history that
                 ends on a call or a result leaves that turn open, as a live
                 turn is left, for :meth:`reply` to go on with. Only the most
                 recent are kept, from a user turn on: those that fit with the
@@ -221,7 +222,7 @@ class ChatWrapper:
                 reading a reply.
             The previous conversation is left intact on every refusal here.
         """
-        ensure_saved_turns(generated_turns)
+        ensure_generated_turns(generated_turns)
         if messages is not None and (isinstance(messages, (str, bytes, dict))
                                      or not isinstance(messages, Iterable)):
             raise TypeError(f"messages must be a list of chat message dictionaries, the system "
@@ -288,8 +289,9 @@ class ChatWrapper:
             OutOfOrderError: If no conversation has been begun, or an
                 assistant message is given while a tool call has left a reply
                 open.
-            TemplateRefusedError: If the template does not write an assistant
-                message here.
+            TemplateRefusedError: If the template does not write the message
+                here as its text, a question asked twice or an empty one on
+                some templates included, naming ``text``.
             RuntimeError: If the wrapper is closed, or this thread is still
                 reading a reply.
             ContextOverflowError: If the message cannot fit even after
@@ -341,7 +343,10 @@ class ChatWrapper:
                 * ``"withhold"``: the model cannot write a call at all; the
                   token that opens one is never drawn, so the reply is text. A
                   model that wanted to call may then write something else
-                  entirely; see design_history.md, "Second structure review".
+                  entirely; see design_history.md, "Second structure review:
+                  what changed and why". Where a call opens with plain text
+                  rather than a tag, that text ends the reply, and the call is
+                  reported as ``"unfinished"``.
                 * ``"refuse"``: nothing is run, not even a tool that was
                   declared. The call is kept out of the text, the model is
                   told no tool can be run, and the reply goes on without
@@ -356,9 +361,8 @@ class ChatWrapper:
                   is parted from the text before the call as under
                   ``"refuse"``. A call that cannot be read is answered with a
                   failure and the reply goes on; the model may write another
-                  call as long as there is room, and after
-                  ``MAX_UNREADABLE_CALLS_IN_A_ROW`` such calls in a row it is
-                  told not to call again.
+                  call as long as there is room, and after three such calls
+                  in a row it is told not to call again.
                 * A :class:`~llama_chat.tool_registry.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
@@ -413,6 +417,9 @@ class ChatWrapper:
             UnsupportedError: At the first iteration, if a registry holding
                 tools is given to a model that could never call one, naming
                 ``tool_call_policy``.
+            TemplateRefusedError: At the first iteration, if the template does
+                not write the question as its text, such as one asked twice or
+                an empty one on some templates, naming ``text``.
             TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
                 ``tool_call_policy`` is neither a text nor a registry,
                 ``max_calls`` is no whole number, ``stop`` is neither a
@@ -685,7 +692,9 @@ class ChatWrapper:
             ``True`` if the wrapper went idle, ``False`` on timeout.
 
         Raises:
-            ValueError: If ``timeout_s`` is negative or not a number.
+            TypeError: If ``timeout_s`` is neither ``None`` nor a number.
+            InvalidArgumentError: If it is negative or not a number at all
+                (``NaN``).
             RuntimeError: If this thread is reading a reply, which would never
                 end while it waits.
         """
@@ -871,7 +880,8 @@ class ChatWrapper:
                     # A request cancelled before it started leaves an open turn open.
                     if self._conversation.turn_open and generation.stop_reason != "interrupted":
                         # An unreadable call, already answered: the turn goes on, spending
-                        # budget. See design_history.md, "An unreadable call spends the budget".
+                        # budget. See design_history.md, "An unreadable call spends the
+                        # budget; how a failure is told".
                         any_call_asked = True
                         unreadable_in_a_row += 1
                         if registry is not None and budget.calls_left > 0:

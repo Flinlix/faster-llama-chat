@@ -29,14 +29,14 @@ from .config import Config
 from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
 from .history_forms import (answer_in_order, completions_messages, joined_question,
-                            read_messages, with_saved_turns, without_unreadable)
-from .messages import (KEPT_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
+                            read_messages, with_generated_turns, without_unreadable)
+from .messages import (GENERATED_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, rest_stays_after_a_drop, splice_probe,
                             tool_exchanges, tool_turns_stay_written, windows_are_exact)
-from .rendering import ConversationRendering, KeptTurn, Target, kept_turns, with_kept
+from .rendering import ConversationRendering, GeneratedTurn, Target, generated_turns_in, with_generated_turn
 from .eviction import Eviction
 from .result_cutting import ResultCutting
 from .windows import WHOLE, Windows
@@ -268,9 +268,9 @@ class RenderedCache:
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
             joins = self._joins_questions
-            messages, _n_found = with_saved_turns(read_messages(history),
+            messages, _n_found = with_generated_turns(read_messages(history),
                                                   self._usable_turns(generated_turns), joins)
-            held = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
+            held = {i for first, last, _ in generated_turns_in(messages) for i in range(first, last + 1)}
             messages, gone = without_unreadable(messages, held, joins)
             self._state.messages[:] = answer_in_order(messages, result_text(unreadable_result))
             # The messages it opens with that the conversation holds alike are the
@@ -291,8 +291,8 @@ class RenderedCache:
             self._state.n_calls = max(self._state.n_calls, next_call_number(
                 [c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()]
                 + sorted(gone)))
-            held_turns = {turn for _, _, turn in kept_turns(self._state.messages)}
-            self._state.kept_at = ({k: at for k, at in self._state.kept_at.items() if k in held_turns}
+            held_turns = {turn for _, _, turn in generated_turns_in(self._state.messages)}
+            self._state.turns_at = ({k: at for k, at in self._state.turns_at.items() if k in held_turns}
                                    if alike else {})
             self._state.results_cut = []
             limit, room = self._config.evict_above_tokens, self._max_prompt_tokens
@@ -332,8 +332,8 @@ class RenderedCache:
             self._drop_while_over(limit, generation_prompt=False)
             if not asks:
                 self._ensure_within(limit, "shorten the history")
-            self._state.changes.n_turns_restored = len(kept_turns(self._state.messages))
-            # Counted as the caller's messages: those a kept turn holds besides are none of them.
+            self._state.changes.n_turns_restored = len(generated_turns_in(self._state.messages))
+            # Counted as the caller's messages: those a generated turn holds besides are none of them.
             self._state.changes.n_kept_messages = history_count(
                 completions_messages(self._state.messages, joins))
             self._state.called_in_thought = self._open_turn_in_thought()
@@ -352,7 +352,7 @@ class RenderedCache:
                 if opening < len(prompted.tokens) and self._memory.keeps_saved_states:
                     # A state saved before the template's text a reply follows, which a cache
                     # that cannot be cut goes back to where what follows is written otherwise.
-                    self._sync(Target(prompted.tokens[:opening], prompted.kept_at), logits=False,
+                    self._sync(Target(prompted.tokens[:opening], prompted.turns_at), logits=False,
                                dropped=True)
                     self._memory.rest()
                 self._sync(prompted, dropped=True)
@@ -377,7 +377,7 @@ class RenderedCache:
         self._eviction.record(history_count(given), "half_context")
 
     def _usable_turns(self, generated_turns: dict | None) -> list[dict]:
-        """The saved turns of ``generated_turns`` whose tokens are this model's, every one of them; none where they are another model's."""
+        """The generated turns of ``generated_turns`` whose tokens are this model's, every one of them; none where they are another model's."""
         if not generated_turns:
             return []
         if generated_turns["model"] != self._context.model_fingerprint():
@@ -386,15 +386,15 @@ class RenderedCache:
         return generated_turns["turns"]
 
     def _held_indexes(self) -> set[int]:
-        """Where the messages a kept turn's tokens stand for are."""
-        return {i for first, last, _ in kept_turns(self._state.messages)
+        """Where the messages a generated turn's tokens stand for are."""
+        return {i for first, last, _ in generated_turns_in(self._state.messages)
                 for i in range(first, last + 1)}
 
     def _open_turn_in_thought(self) -> bool:
         """Whether the open turn's newest call, kept as generated, was made inside a thought the model had not closed, as its tokens read."""
         tags, messages = self.template.properties.reasoning, self._state.messages
         calling = next((m for m in reversed(messages) if m.get("tool_calls")), None)
-        turn = calling.get(KEPT_TURN) if calling is not None else None
+        turn = calling.get(GENERATED_TURN) if calling is not None else None
         if tags is None or turn is None or not turn.on_call or not self.turn_open \
                 or not tags.thought_open.strip():
             return False
@@ -466,7 +466,8 @@ class RenderedCache:
         """
         self._memory.cancel = cancel
         try:
-            self._ask(text)
+            with _refused_as_the_text():
+                self._ask(text)
         finally:
             self._memory.cancel = None
 
@@ -709,7 +710,7 @@ class RenderedCache:
             ContextOverflowError: If it cannot fit beside the system prompt
                 alone, checked before anything is dropped.
         """
-        with self._action():
+        with _refused_as_the_text(), self._action():
             if role == "user":
                 _ensure_begun(self, "inject into")
             else:
@@ -1023,7 +1024,7 @@ class RenderedCache:
         """Add the newest generation's reply to the messages, its turn kept where it called tools.
 
         Returns:
-            The answer as recorded, and whether a kept turn could no longer be
+            The answer as recorded, and whether a generated turn could no longer be
             placed.
         """
         start, resumed = self._generation
@@ -1049,15 +1050,15 @@ class RenderedCache:
         # its call, and the rest is the template's.
         if (called or resumed) and (answer or asked) and not stopped:
             messages, span = self._state.messages, 1
-            open_turn = self._open_kept() if resumed else None
+            open_turn = self._open_generated_turn() if resumed else None
             if open_turn is not None:
                 # The whole turn is kept, its results and their prompt included.
                 at, turn = open_turn
-                messages[at] = with_kept(messages[at], None)
-                start = min(start, self._state.kept_at.pop(turn))
+                messages[at] = with_generated_turn(messages[at], None)
+                start = min(start, self._state.turns_at.pop(turn))
                 span = len(messages) - (at - turn.span + 1) + 1
-            message[KEPT_TURN] = KeptTurn(tuple(self._memory.tokens[start:]), span, bool(asked))
-            self._state.kept_at[message[KEPT_TURN]] = start
+            message[GENERATED_TURN] = GeneratedTurn(tuple(self._memory.tokens[start:]), span, bool(asked))
+            self._state.turns_at[message[GENERATED_TURN]] = start
         self._state.messages.append(message)
         # A reply that leaves every turn that called tools as it was cannot move one.
         moves_kept = called or resumed or not self._state.checks.tool_turns_stay
@@ -1127,13 +1128,13 @@ class RenderedCache:
         return tags is not None and any(tag.strip() and tag.strip() in text
                                         for tag in (tags.thought_open, tags.thought_close))
 
-    def _open_kept(self) -> tuple[int, KeptTurn] | None:
-        """The kept turn the open reply goes on with, and where its last message stands: the one ending on its newest call, placed in the cache."""
+    def _open_generated_turn(self) -> tuple[int, GeneratedTurn] | None:
+        """The generated turn the open reply goes on with, and where its last message stands: the one ending on its newest call, placed in the cache."""
         messages = self._state.messages
         at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("tool_calls")),
                   None)
-        turn = messages[at].get(KEPT_TURN) if at is not None else None
-        if turn is None or not turn.on_call or turn not in self._state.kept_at:
+        turn = messages[at].get(GENERATED_TURN) if at is not None else None
+        if turn is None or not turn.on_call or turn not in self._state.turns_at:
             return None
         return at, turn
 
@@ -1170,21 +1171,21 @@ class RenderedCache:
     def _forget_calls(self) -> None:
         """Record the newest reply without the call it made, which could be told nothing; its tokens stay as generated."""
         newest = {k: v for k, v in self._state.messages[-1].items() if k != "tool_calls"}
-        turn = newest.get(KEPT_TURN)
+        turn = newest.get(GENERATED_TURN)
         if turn is not None:
-            newest[KEPT_TURN] = KeptTurn(turn.tokens, turn.span, False)
+            newest[GENERATED_TURN] = GeneratedTurn(turn.tokens, turn.span, False)
         self._state.messages[-1] = newest
-        self._state.kept_at = {}
+        self._state.turns_at = {}
         self._drop_unplaceable()
 
     def _drop_unplaceable(self) -> bool:
-        """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was.
+        """Hold each generated turn the template writes where it cannot be placed as the template writes it instead; whether any was.
 
         Where a window of the newest exchanges stands for the render, only
         the turns it holds are placed: those before it stay as they were.
         """
         messages = self._state.messages
-        if not kept_turns(messages):
+        if not generated_turns_in(messages):
             return False
         found = self._window_of(messages)
         system = system_part(messages)
@@ -1194,12 +1195,12 @@ class RenderedCache:
         for generation_prompt in (False, True):
             split = self._rendering.split(rendered, generation_prompt)
             if split is not None:
-                unplaced |= {last + offset for first, last, turn in kept_turns(rendered)
+                unplaced |= {last + offset for first, last, turn in generated_turns_in(rendered)
                              if self._rendering.place(first, last, turn.on_call, split) is None}
         for last in unplaced:
-            messages[last] = with_kept(messages[last], None)
-        held = {turn for _, _, turn in kept_turns(messages)}
-        self._state.kept_at = {k: at for k, at in self._state.kept_at.items() if k in held}
+            messages[last] = with_generated_turn(messages[last], None)
+        held = {turn for _, _, turn in generated_turns_in(messages)}
+        self._state.turns_at = {k: at for k, at in self._state.turns_at.items() if k in held}
         return bool(unplaced)
 
     def close_unanswered(self) -> None:
@@ -1317,27 +1318,27 @@ class RenderedCache:
             if keep_text == newest["content"]:
                 return
             shortened = {**newest, "content": keep_text}
-            turn = newest.get(KEPT_TURN)
+            turn = newest.get(GENERATED_TURN)
             messages = self._state.messages
             if turn is not None and not keep_text:
                 # A reply without text has nothing to place its end by: the turn stays kept up
                 # to its newest call, as one whose reply said nothing is, the rest the template's.
-                del shortened[KEPT_TURN]
+                del shortened[GENERATED_TURN]
                 first = len(messages) - turn.span
                 calling = max(i for i in range(first, len(messages)) if messages[i].get("tool_calls"))
-                cut = self._kept_to_its_call(turn, newest["content"], calling - first + 1)
+                cut = self._generated_to_its_call(turn, newest["content"], calling - first + 1)
                 if cut is None:
                     raise TemplateRefusedError(
                         "keep_text", "the newest reply's tokens as generated cannot be cut "
                         "after its turn's newest call; keep some of its text")
-                messages[calling] = with_kept(messages[calling], cut)
+                messages[calling] = with_generated_turn(messages[calling], cut)
             elif turn is not None:
-                cut = self._kept_up_to(turn, newest["content"], keep_text)
+                cut = self._generated_up_to(turn, newest["content"], keep_text)
                 if cut is None:
                     raise TemplateRefusedError(
                         "keep_text", "the newest reply's tokens as generated hold more than "
                         "its text, such as a call that went, so they cannot be cut at keep_text")
-                shortened[KEPT_TURN] = cut
+                shortened[GENERATED_TURN] = cut
             messages[-1] = shortened
             if not self._writes(self._newest_part(self._state.messages)):
                 raise TemplateRefusedError(
@@ -1346,7 +1347,7 @@ class RenderedCache:
             self._render_ahead()
             self._memory.rest()
 
-    def _kept_up_to(self, turn: KeptTurn, text: str, keep_text: str) -> KeptTurn | None:
+    def _generated_up_to(self, turn: GeneratedTurn, text: str, keep_text: str) -> GeneratedTurn | None:
         """``turn``, ending on a reply's ``text``, as its tokens hold the reply cut to ``keep_text``: its generated tokens up to the last whole one before the cut, the rest of ``keep_text`` tokenized; ``None`` where its tokens do not end on ``text``."""
         pieces = [self._context.token_bytes(token) for token in turn.tokens]
         whole, said = b"".join(pieces), text.encode()
@@ -1359,9 +1360,9 @@ class RenderedCache:
             at -= len(pieces[n])
         rest = whole[at:end].decode()
         tokens = turn.tokens[:n] + tuple(self._rendering.tokenize([(rest, True)]) if rest else ())
-        return KeptTurn(tokens, turn.span, turn.on_call)
+        return GeneratedTurn(tokens, turn.span, turn.on_call)
 
-    def _kept_to_its_call(self, turn: KeptTurn, text: str, span: int) -> KeptTurn | None:
+    def _generated_to_its_call(self, turn: GeneratedTurn, text: str, span: int) -> GeneratedTurn | None:
         """``turn``, ending on a reply's ``text``, as the turn of its first ``span`` messages, ending on its newest call: its generated tokens up to that call's closing; ``None`` where they cannot be told."""
         closing = self.template.properties.call_close_text.encode()
         pieces = [self._context.token_bytes(token) for token in turn.tokens]
@@ -1374,7 +1375,7 @@ class RenderedCache:
         at, end = 0, end + len(closing)
         for n, piece in enumerate(pieces):
             if at == end:
-                return KeptTurn(turn.tokens[:n], span, True)
+                return GeneratedTurn(turn.tokens[:n], span, True)
             at += len(piece)
         return None
 
@@ -1481,7 +1482,7 @@ class RenderedCache:
             plan = self._windows.ahead(self._memory) if self._state.checks.windows else WHOLE
             if plan is not WHOLE:
                 # Dropped first, so the cache shifts before the decode ahead, not before the next question's.
-                at, before, length, split, run, window_kept = plan
+                at, before, length, split, run, window_turns_at = plan
                 held = len(self._memory.tokens)
                 kept_until = lambda: at - (held - len(self._memory.tokens))   # noqa: E731
                 done = self._windows.drop_in(self._memory, kept_until, length)
@@ -1496,9 +1497,9 @@ class RenderedCache:
                         len(self._state.messages) - 1, kept_until() + len(before)
                         - len(self._rendering.tokenize(split.pieces(tag, run)))),)
                     base = kept_until()
-                    kept_at = {**{k: p for k, p in self._state.kept_at.items() if p < base},
-                               **{k: base + p for k, p in window_kept.items()}}
-                    self._sync(Target(list(self._memory.tokens[:base]) + before, kept_at, anchors),
+                    turns_at = {**{k: p for k, p in self._state.turns_at.items() if p < base},
+                               **{k: base + p for k, p in window_turns_at.items()}}
+                    self._sync(Target(list(self._memory.tokens[:base]) + before, turns_at, anchors),
                                logits=False)
                     self._note_ahead(split, run)
                 else:
@@ -1563,7 +1564,7 @@ class RenderedCache:
         if not self._state.checks.tool_windows \
                 and not self._rendering.template_writes(messages[start:]):
             return None
-        kept = tuple(turn for _, _, turn in kept_turns(messages[:anchor.index + 1]))
+        kept = tuple(turn for _, _, turn in generated_turns_in(messages[:anchor.index + 1]))
         if len(kept) != len(anchor.kept) or any(a is not b for a, b in zip(kept, anchor.kept)):
             return None
         return start
@@ -1582,7 +1583,7 @@ class RenderedCache:
             if tag is not None:
                 view = _View(split, window, start - len(system), tag,
                              list(self._memory.tokens[:anchor.at]),
-                             {k: at for k, at in self._state.kept_at.items() if at < anchor.at},
+                             {k: at for k, at in self._state.turns_at.items() if at < anchor.at},
                              generation_prompt)
                 # The tag the window opens with is the one the cache holds there, unless
                 # what follows the anchor's message is written otherwise now.
@@ -1610,7 +1611,7 @@ class RenderedCache:
         conversation = [(i, tag) for i, tag in known
                         if i + 1 + view.offset < len(self._state.messages)]
         return Target(view.base + found.tokens,
-                      {**view.base_kept, **{k: base + p for k, p in found.kept_at.items()}},
+                      {**view.base_turns_at, **{k: base + p for k, p in found.turns_at.items()}},
                       anchors, tuple(at(tag) for _, tag in conversation[-2:]))
 
     def _target_of(self, messages: list[dict], generation_prompt: bool) -> Target:
@@ -1647,7 +1648,7 @@ class RenderedCache:
 
     # ----- the cache against the target -----------------------------------------
     def _sync(self, target: Target, *, logits: bool = True, dropped: bool = False) -> None:
-        """Make the cache hold ``target``, and note where its kept turns begin there.
+        """Make the cache hold ``target``, and note where its generated turns begin there.
 
         Args:
             logits: A generation follows the decode at once.
@@ -1667,10 +1668,10 @@ class RenderedCache:
         same = common_prefix_length(self._memory.tokens, target.tokens)
         self._memory.hold(target.tokens, want_logits=logits,
                           find_dropped_stretch=dropped or moves, rest_at_cut=moves)
-        self._state.kept_at = target.kept_at
+        self._state.turns_at = target.turns_at
         messages = self._state.messages
         new = {index: Anchor(messages[index], index, at, tuple(
-                   turn for _, _, turn in kept_turns(messages[:index + 1])))
+                   turn for _, _, turn in generated_turns_in(messages[:index + 1])))
                for index, at in target.anchors
                if index < len(messages) and _closes_turn(messages[index])}
         standing = {a.index: a for a in self._state.anchors
@@ -1720,13 +1721,13 @@ class RenderedCache:
         return len(target) - (len(tokens) if ends else 0)
 
     def _reply_opening(self, split: SplitRender) -> list[tuple[str, bool]]:
-        """The render ``split`` from where a reply after its newest message begins as a kept turn."""
+        """The render ``split`` from where a reply after its newest message begins as a generated turn."""
         start = self._rendering.tag_after_content(split, len(split.contents) - 1)
         return split.pieces(start) if start is not None else []
 
     def _note_prompt(self, prompt_text: str, reply_opening: list[tuple[str, bool]],
                      target) -> None:
-        """Note the template text a reply follows, and where in ``target`` the reply's kept turn begins: at ``reply_opening``, the render's end."""
+        """Note the template text a reply follows, and where in ``target`` the reply's generated turn begins: at ``reply_opening``, the render's end."""
         self._state.prompt_text = prompt_text
         tokens = self._rendering.tokenize(reply_opening)
         ends = tokens and list(target[-len(tokens):]) == tokens
@@ -1810,6 +1811,17 @@ class RenderedCache:
         return not self.template.properties.writes_two_user_turns
 
 
+@contextlib.contextmanager
+def _refused_as_the_text():
+    """Name the text a question or a message was given as the field of a refusal of the conversation the template will not write with it."""
+    try:
+        yield
+    except TemplateRefusedError as refused:
+        if refused.field != "messages":
+            raise
+        raise TemplateRefusedError("text", str(refused)) from None
+
+
 # ----- what an action may start from -------------------------------------------------
 def _ensure_begun(conversation, into: str) -> None:
     """Refuse an action before a conversation was begun, which alone holds the sequence opener and the system prompt."""
@@ -1869,7 +1881,7 @@ class _View:
     offset: int
     start: int
     base: list[int]
-    base_kept: dict
+    base_turns_at: dict
     generation_prompt: bool
 
 
@@ -1900,7 +1912,7 @@ def _reuse_alike(messages: list[dict], held: list[dict]) -> int:
     """Put each message of ``held`` in the place of the one of ``messages`` there, from the first on, while the two say the same and keep the same turn as generated; how many were put."""
     count = 0
     for given, own in zip(messages, held):
-        turns = given.get(KEPT_TURN), own.get(KEPT_TURN)
+        turns = given.get(GENERATED_TURN), own.get(GENERATED_TURN)
         if _without_turn(given) != _without_turn(own) or (turns[0] is None) != (turns[1] is None) \
                 or turns[0] is not None and (turns[0].tokens, turns[0].span, turns[0].on_call) \
                 != (turns[1].tokens, turns[1].span, turns[1].on_call):
@@ -1911,8 +1923,8 @@ def _reuse_alike(messages: list[dict], held: list[dict]) -> int:
 
 
 def _without_turn(message: dict) -> dict:
-    """``message`` without the kept turn it may end, for comparing what it says."""
-    return {key: value for key, value in message.items() if key != KEPT_TURN}
+    """``message`` without the generated turn it may end, for comparing what it says."""
+    return {key: value for key, value in message.items() if key != GENERATED_TURN}
 
 
 def _goes_on_from(history: list[dict], cached: list[dict]) -> bool:

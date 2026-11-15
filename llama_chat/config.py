@@ -52,7 +52,7 @@ class Config:
             oldest exchanges are evicted. Must be in ``(0, 1]`` and must come
             to at least one token.
         max_history_exchanges: The most exchanges to keep, a second eviction
-            trigger OR'd with ``evict_above_fraction``. An exchange is one
+            trigger beside ``evict_above_fraction``: either one evicts. An exchange is one
             user message and everything after it up to the next, the unit an
             eviction drops; what a history holds before its first user message
             is one more. ``None`` leaves the token threshold as the only
@@ -70,10 +70,13 @@ class Config:
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
-        decode_threads: CPU threads for decode, at least ``1``. ``None`` uses
+        decode_threads: CPU threads for generating a reply, a token at a
+            time, at least ``1``. ``None`` uses
             one per physical core of the processors the process may run on,
             at most as many as its CPU quota allows.
-        prefill_threads: CPU threads for prefill, at least ``1``. ``None``
+        prefill_threads: CPU threads for prefill, the decode of tokens the
+            cache is given, a question or what is decoded again, at least
+            ``1``. ``None``
             means as many as ``decode_threads``, and so one per physical core
             where that is not set either.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer

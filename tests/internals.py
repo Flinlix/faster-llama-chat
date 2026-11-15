@@ -74,20 +74,20 @@ def reasons(wrapper) -> bool:
     return wrapper._conversation.reasoning
 
 
-def kept_turns(wrapper) -> list[tuple[list[int], str, bool]]:
+def generated_turns_held(wrapper) -> list[tuple[list[int], str, bool]]:
     """Each turn kept as generated: its tokens, the text of the message it ends with, and whether it ends on a call."""
     messages = wrapper._conversation.messages
     return [(list(kept.tokens), (messages[last].get("content") or "").strip(), kept.on_call)
-            for _first, last, kept in rendering.kept_turns(messages)]
+            for _first, last, kept in rendering.generated_turns_in(messages)]
 
 
-def kept_turn_spans(wrapper) -> list[tuple[int, int]]:
+def generated_turn_spans(wrapper) -> list[tuple[int, int]]:
     """Each turn kept as generated, as the indexes of its first and its last message among the rendered messages."""
-    return [(first, last) for first, last, _kept in rendering.kept_turns(wrapper._conversation.messages)]
+    return [(first, last) for first, last, _kept in rendering.generated_turns_in(wrapper._conversation.messages)]
 
 
-def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
-    """Where the template writes each kept turn, in each render that splits, with the generation prompt and without."""
+def generated_turn_places(wrapper) -> list[tuple[int, int] | None]:
+    """Where the template writes each generated turn, in each render that splits, with the generation prompt and without."""
     conversation = wrapper._conversation
     messages = conversation.messages
     places = []
@@ -95,7 +95,7 @@ def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
         split = conversation._rendering.split(messages, generation_prompt)
         if split is not None:
             places += [conversation._rendering.place(first, last, kept.on_call, split)
-                       for first, last, kept in rendering.kept_turns(messages)]
+                       for first, last, kept in rendering.generated_turns_in(messages)]
     return places
 
 

@@ -53,9 +53,10 @@ class ToolCall:
         name: The function named. Nothing here checks that it exists.
         arguments: What it was called with, by keyword.
         id: What tells it apart from every other call of its conversation, as
-            the conversation's history holds it; empty for a call not written
-            into one yet, such as one built for a history, which ``begin``
-            gives an id.
+            the conversation's history holds it: the id the model wrote for
+            it where its format holds one, else one the library gives. Empty
+            only for a call that has none: an unfinished one, or one that
+            could not be read where the reply stopped on it.
         status: ``"complete"`` for a call that was read. ``"unreadable"``
             for one that was written but could not be read, which the library
             answers itself, and ``"unfinished"`` for one the reply cap or a

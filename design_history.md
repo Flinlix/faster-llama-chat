@@ -19,19 +19,19 @@ the reasons:
 | The encoding | The cache holds the template's render of the conversation; each action decodes only from the first token that differs. | "The render is the conversation's encoding", "The template as the program" |
 | The caller's text | Each text is placed by a second render with a marker in its place and tokenized with special-token parsing off, so a typed tag stays text. | "Every text placed by a marker render" |
 | Rendering | The library renders the template from the text a context gives; renders are remembered while the template, the tools and the reasoning switch stay. | "The library renders the template; a context gives its text", "Small cleanups after the structure review" |
-| Reading a template | Read once at load, into one record: turns, closing, thought tags, call format, what it does to message text. | "What a template is read for, and refused for", "One record of what a load reads from a template" |
+| Reading a template | Read once at load, into one record: turns, closing, thought tags, call format and where a call's id stands, what it does to message text. | "What a template is read for, and refused for", "One record of what a load reads from a template", "Template properties in a file of their own, read only from the record", "Fixes from the project review" |
 | Reasoning | Only the shared switches are read from a template; an add-on file may name another. | "How reasoning is read", "An add-on file may name what turns reasoning on" |
 | Tool calls | A call is read in the one shape its template writes, answered by the caller or a registry, and every call is reported. | "Tools and tool calls", "Calls are read in the one shape their template writes", "What a failed call is told" |
 | Add-on call formats | Where a template does not show a call, the add-on file says how it is written, and its format wins over the template's. | "How a call's format is recovered", "An add-on file's call format wins over the template's", "Settings, add-on files and logging" |
 | A template for tools | A model's further template for tools writes every conversation begun with tools, given a list of tools always. | "A real model with a template for tools of its own" |
-| Kept turns | A turn that called tools keeps the tokens it was generated as, held on the message it ends with, and a begin on the same model restores them with their own messages. | "The target, built without the cache", "A kept turn on its last message", "Two history forms" |
-| The next question | Prepared after each reply, so a question decodes only its own tokens; windows keep that work from growing. | "Rendering windows", "An injected question waits only for itself" |
-| Eviction | Whole exchanges go, never the system turn; a cache that cannot shift drops far enough that it is rebuilt only every few turns. | "How eviction works", "Structure review: what changed and why", "Where an eviction stops on a cache that cannot shift" |
+| Generated turns | A turn that called tools keeps the tokens it was generated as, held on the message it ends with, and a begin on the same model restores them with their own messages. | "The target, built without the cache", "A kept turn on its last message", "Two history forms" |
+| The next question | Prepared after each reply, after its stream has ended, so a question decodes only its own tokens; windows of the newest exchanges, tool turns included, keep every action's render from growing. | "Rendering windows", "An injected question waits only for itself", "Fixes from the project review" |
+| Eviction | Whole exchanges go, never the system turn; a cache that cannot shift, or a template that writes the rest otherwise once the oldest goes, drops far enough that the cache is rebuilt only every few turns; a begin keeps up to the threshold where the cache holds the history. | "How eviction works", "Structure review: what changed and why", "Where an eviction stops on a cache that cannot shift", "A begin compares with the cache; one action for settings", "Saved states where the newest exchanges begin", "Fixes from the project review" |
 | Failures and refusals | One snapshot per action puts everything back; every refusal is one family, raised before anything changes. | "One undo path", "One family of refusals" |
-| Nothing blocks a question | A question closes an open turn first and joins an unanswered one. | "Nothing blocks a question" |
+| Nothing blocks a question | A question closes an open turn first and joins an unanswered one, or takes its place where the two do not fit; it is refused only where it cannot fit alone or the template does not write it. | "Nothing blocks a question", "Refusals of a question, and a withheld call", "Fixes from the project review" |
 | What changed unasked | Every action reports and logs what it changed beyond what was asked. | "One report of what an action changed" |
-| The message form | A history goes in and comes out as Chat Completions messages, the saved turns beside them. | "Two history forms" |
-| Threads | Actions take turns under one lock, readers see a published copy, and closing on a reply's own thread ends that reply. | "One read of the system prompt and the history", "Closing on the thread that reads a reply ends that reply first", "Load time and thread defaults" |
+| The message form | A history goes in and comes out as Chat Completions messages, the generated turns beside them. | "Two history forms" |
+| Threads | Actions take turns under one lock, readers see a published copy, closing on a reply's own thread ends that reply, and the work after a reply runs on a thread of its own once the stream has ended, giving way to an action that waits. | "One read of the system prompt and the history", "Closing on the thread that reads a reply ends that reply first", "Load time and thread defaults", "Fixes from the project review" |
 | State and its parts | The conversation owns one state object, filled in place by a rollback; eviction, result cutting, publishing and windows are parts made with it. | "One owner of the turn, of the tokens, and of a failed action", "One state object, and evictions recorded where they happen" |
 | The public interface | One way to do each thing. | "One way to do each thing in the public interface" |
 
@@ -595,6 +595,8 @@ again in the result block. The cost is one more template render per render,
 reused within an action.
 
 ### The target, built without the cache
+
+Revised by "A kept turn on its last message": a turn kept as generated is held on the message it ends with.
 
 What the cache should hold is built from the render alone, each kept turn's
 tokens in place of the template's version: from the first tag after the
@@ -4853,6 +4855,8 @@ with the step in which the library renders the template itself (405.6A).
 
 ### Nothing blocks a question
 
+Revised by "Refusals of a question, and a withheld call": a question is also refused where the template does not write it as its text; and by "Fixes from the project review" (458.11): a question that cannot fit joined to an unanswered one takes its place.
+
 The user's rule: "None should block: the model should always be able to
 respond to a question." A question was refused while a turn a call left open
 waited for results or for its reply, after a question no reply followed on
@@ -4947,6 +4951,8 @@ template is given a call body it truly cannot read (399.5).
 
 ### One action changes the tools and the reasoning of a running conversation
 
+Revised by "A begin compares with the cache; one action for settings": `change_settings` is gone, and a begin with the conversation and other settings changes them.
+
 `declare_tools` could only add tools, and only into a conversation begun
 with tools where the model ships a template of its own for them; reasoning
 changed only at `begin`. A server that switched either began again from its
@@ -5027,6 +5033,8 @@ caller to see; the conversation keeps no copy of it. The earlier risk of a
 tag's letters in that text turning into the tag went with the splice.
 
 ### One record of what a load reads from a template
+
+Revised by "Template properties in a file of their own, read only from the record".
 
 Everything a load reads from a template was already worked out in one
 sequence, the template's constructor, but kept in about a dozen loose fields
@@ -5487,13 +5495,13 @@ an action decodes more as the conversation grows.
 
 ### Refusals of a question, and a withheld call
 
-Invariant 4 said a question is refused only where it cannot fit; some
+Rule 11 (then invariant 4) said a question is refused only where it cannot fit; some
 templates refuse one asked twice or an empty one, and one writes an empty
 question otherwise than as its text. The rule now names both refusals, and a
 test checks on every template that a question is refused only where the
 template's own render refuses it or writes it otherwise than as its text.
 Under `"withhold"`, a call whose plain-text opening ended the reply was
-reported nowhere (principle 6); it is now reported `"unfinished"`.
+reported nowhere (rule 7, then principle 6); it is now reported `"unfinished"`.
 
 ### Template properties in a file of their own, read only from the record
 
@@ -5540,3 +5548,173 @@ and the turns it restored as the caller sees them. An unreadable entry owed
 after a long result has room kept for its failure text, and where it finds
 none the turn closes. A cut call handed back is a copy. A test runs 150
 fixed random sequences on six templates.
+
+## 2026-11-15: Fixes from the project review
+
+A whole-project review by four fresh reviewers (458.1 to 458.33 on its page)
+found 33 issues; the user picked to fix all of them, and to refuse an add-on
+file beside the model that is not JSON (458.34). Each section below names the
+findings it answers. Measurements are Python only, on the stand-in tokenizer
+and the test templates, on the development machine; a real model's decode
+time is not in them.
+
+### Windows of the newest exchanges after an anchor
+
+458.3, 458.5, 458.7, 458.14, 458.15, 458.17. A tool exchange rendered the
+whole conversation about 19 times, a shortened reply 10 times, a begin 34 to
+46 times, and every reply after a tool turn, at the eviction threshold or
+with a question in spaces, at least once more; on the gemma-4 test template a
+render of 240 messages takes about 100 ms, and grows with the square of the
+messages. The decode was constant throughout; the render was not.
+
+The state now keeps anchors: where in the cache the tag that opens the
+exchange after a message stands, recorded as that message, its place among
+the messages, the position, and the generated turns up to it by identity, the
+two newest at most. Any target, length, placement of a generated turn or
+refusal of the conversation is then worked out from the cache's tokens up to
+the newest anchor that still stands and a render of the system message and
+the window after it: the anchor's own exchange and at most three more. A
+window is used only where the probes showed the template to write the newest
+exchanges alike in a render of them alone (`windows`), with exchanges that
+called tools as well where the window holds one (`tool_windows`, worked out
+only for a template that can call tools), and only after a reply that closes
+its turn: a turn a result left open, with no reply after it, renders what
+follows otherwise on the invented templates, which a random sequence found.
+Where the tag the window opens with is not the one the cache holds there, as
+where a second reply follows the newest, the older anchor is tried, and else
+the whole conversation is rendered.
+
+A begin puts the conversation's own messages in the place of those its
+history opens with that say the same, so that what was placed after them
+stands, and searches for the history that fits only where the history is not
+the conversation or its start; the load's checks and the room check run again
+only where the system turn, the tools or the reasoning changed. The decode
+ahead after a reply and its evictions take exchanges with generated turns,
+and the oldest exchanges of an eviction in windows may hold one.
+
+Measured on the gemma-4 test template at 240 messages: the call 395 to 4 ms,
+the result 200 to 3 ms, the reply after it 800 to 7.5 ms, the next plain reply
+413 to 6 ms, a question with surrounding spaces 575 to 6.5 ms, a shortened
+reply 290 to 2.4 ms, a begin with the same conversation 630 to 6 ms; at the
+eviction threshold with tool turns in the history, no whole render per reply
+on gemma-4 and qwen-3. A fresh begin still renders the whole conversation
+about four times, 380 ms there, as every one of its tokens is decoded anyway.
+The cost sweep now also bounds the largest render of every action, on every
+template whose windows stand. 3,600 random sequences on the real test
+templates, every cache kind and both tokenizers passed the after-test check
+after every step. Keying the render memo by message identity was refused:
+identities are reused once a message is collected, so a stale render could
+come back; the memo now lasts the outermost action (458.31), and its key
+covers window-sized renders.
+
+### The work after a reply runs after its stream ends
+
+458.4, 458.16. A reply's stream ended only after the evictions and the decode
+ahead of the next question, and a server that speaks a reply's last sentence
+once the stream ends spoke it that much later. A reply now marks that work
+due; the wrapper starts a thread at the stream's end that takes the lock and
+does it, and every action and `wait_idle` does a due one first, so the order
+of the work is as before. An action that waits for the lock sets an event the
+cache watches between the 512-token parts of a long decode, not before a short
+one, so that the decode ahead of a quick next question is not given up; the
+work stopped there is put back as a failed action is, and the next action does
+what it needs. A failure there has no caller to reach: it is logged at
+`WARNING`, the conversation is as it was before that work, and the next action
+decodes the cache again. What that work evicted and decoded is counted by the
+next request, in its `Reply` or the next `Report`, as it makes room and
+prepares for that request; a begin drops it with the conversation it belonged
+to. The tests do that work at once on the reader's thread, before the
+stream's end reaches it, unless a test asks for the thread.
+
+### Calls and their ids
+
+458.1, 458.23. A template that writes the call's id between the name and the
+arguments was read with the probes' own id as part of the delimiter, so every
+real call read as unreadable; the tests scripted calls with that same id. The
+probes now render a call under two ids: an id written between the name and
+the arguments becomes `CallBody.id_open`, one written under a JSON key
+`json_call_id_key`, and an id that cannot be told from the delimiters around it
+refuses the call body, as rule 2 asks. A call keeps the id the model wrote
+where that id is new to the conversation and the template writes the call
+under it; another is given an id of its own, logged, rather than refused, as
+the call itself was read. A call written without its id still reads. The
+tests script calls with an id unlike every one the library gives.
+
+458.2. A reply whose calls could not be read went on in the next reply; a
+second such reply in a row wrote the first one out as a message of its own,
+so `conversation()` held two replies in a row, which five Mistral-family
+templates refuse. Such replies are now joined in a row.
+
+### Shortening the reply that ends a tool turn
+
+458.8. `truncate_last_reply` refused that reply, naming a call it does not
+hold. Its generated turn is now cut at the last whole token before the kept
+text's end, by the tokens' bytes, and the rest of the kept text tokenized;
+cut to nothing, the turn stays generated up to its newest call's closing, the
+result and the empty reply then the template's, as a generated reply without
+text has nothing to place its end by. Refused only where the turn's tokens do
+not end on the reply's text, as where a call went for want of room. The blank
+line a stream shows after a result may open the kept text: one function now
+says what a stream shows between two generations, for the stream and for the
+cut.
+
+### Room, joins and numbered templates
+
+458.10. A conversation whose open call used the room a reply leaves was
+refused by `begin(**conversation())`. A history that ends on a call no result
+follows may now fill the context at a begin, as the call did when it was
+made; its first result closes the turn where it does not fit, as it would
+have live.
+
+458.11. A question that fits beside the system prompt alone was refused once
+it was joined to an unanswered one. The joined question is now measured;
+where it does not fit, the unanswered one goes, counted as evicted, and the
+new one is asked alone, so nothing blocks it (rule 11).
+
+458.6. A template that numbers its messages wrote every message again after
+each eviction on a cache that shifts. The load now checks whether dropping
+the oldest exchange leaves the rest as written; where it does not, eviction
+drops as far as on a cache that cannot shift, so the cache is decoded again
+only every few turns (rule 4). Refusing such a model was not chosen: rule 4
+refuses only one that would need the whole conversation every turn.
+
+458.9. On a cache that only saves states, with declarations that move to the
+newest question, a question joined after an open turn closed decoded more as
+the conversation grew (543, 831 and 1,231 tokens at 4, 16 and 32 exchanges,
+measured by a reviewer): the next cut replaced the state saved at the cut
+before it, which the decode ahead after the reply needed. The cache now keeps
+the states of the two newest cuts, one saved state more on the caches that
+need saved states.
+
+### Smaller fixes
+
+- 458.24: a failure while a stream closed early records its reply now
+  reaches the caller under `"yield"` and `"withhold"`, as under `"refuse"`.
+- 458.26: each stream keeps its own `Reply`.
+- 458.27: a caller's error result in a registry turn with calls left says to
+  try again.
+- 458.29: the model's fingerprint, a hash of the whole vocabulary (223 ms for
+  157k tokens, measured by a reviewer), is taken at load where the model can
+  call tools, not under the lock before the first call is handed over.
+- 458.30: a result's cut is searched outward from what its own first tokens
+  spell within the room left; 200,000 characters now cost 35 ms and 13 window
+  renders (155 to 215 ms and 25 whole renders before).
+- 458.34: a file beside the GGUF that is not JSON is refused at load, naming
+  it. This revises 265.4 and R14, which warned about it; a file that is JSON
+  but no add-on file, or names another template, is still only warned about.
+- 458.18 to 458.22, 458.32, 458.33: texts brought in line with the code; one
+  name, generated turn, for a turn kept as the tokens it was generated as (the
+  code's `KeptTurn`, `KEPT_TURN`, `kept_turns` and `saved_turns` are now
+  `GeneratedTurn`, `GENERATED_TURN`, `generated_turns_in` and
+  `generated_turn_records`; earlier entries keep the old names); a question
+  the template does not write is refused naming `text`; the install hint
+  points at the README.
+- The after-test check accepts two states the library leaves on purpose
+  while a call is owed (458.25): the render a call was generated after, on a
+  template that moves its declarations once a call follows, and the generated
+  turns that stand where the renders with and without the owed result agree.
+  Random sequences found both; one failed on the committed code too.
+- 458.28: random sequences also run on the real test templates, every kind
+  of cache and both tokenizers, a question refused only for the two causes
+  rule 11 allows; the failure sweeps take long questions; the stand-in model
+  no longer writes a call whose opening the library withheld.

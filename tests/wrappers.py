@@ -6,10 +6,10 @@ import os
 import re
 
 from llama_chat.config import Config
-from llama_chat.history_forms import (answer_in_order, ensure_saved_turns, read_messages,
-                                      with_saved_turns, without_unreadable)
-from llama_chat.messages import KEPT_TURN, UNREADABLE_CALL, result_message
-from llama_chat.rendering import kept_turns
+from llama_chat.history_forms import (answer_in_order, ensure_generated_turns, read_messages,
+                                      with_generated_turns, without_unreadable)
+from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL, result_message
+from llama_chat.rendering import generated_turns_in
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tool_registry import ToolRegistry
 from tests.chat_messages import opened
@@ -202,12 +202,12 @@ def _all_marked(value, mark):
 
 
 def assert_cache_reads_as_rendered(wrapper, fake):
-    """``fake``, the wrapper's cache, holds what the wrapper holds it to be, and reads as the template renders the conversation around each kept turn.
+    """``fake``, the wrapper's cache, holds what the wrapper holds it to be, and reads as the template renders the conversation around each generated turn.
 
     The cache is compared as it stands, unless a decode, an edit or a
     generation failed since it was last brought up: then it is brought back
     first, as the next action would bring it back. While a call is owed a
-    result, what the template writes after the newest kept turn is decoded
+    result, what the template writes after the newest generated turn is decoded
     with the results, so a cache that ends with that turn reads as the render
     of the conversation with its results up to it; one that holds no kept
     turn, or none yet where the two renders part before the first, reads as
@@ -222,9 +222,9 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     if not internals.is_begun(wrapper):
         return
     messages = internals.rendered_messages(wrapper)
-    # A kept turn's tokens hold the text of each of its calling messages, so the template
+    # A generated turn's tokens hold the text of each of its calling messages, so the template
     # is given those without it.
-    for first, last in internals.kept_turn_spans(wrapper):
+    for first, last in internals.generated_turn_spans(wrapper):
         for i in range(first, last + 1):
             if messages[i].get("tool_calls"):
                 messages[i] = {**messages[i], "content": ""}
@@ -236,7 +236,7 @@ def assert_cache_reads_as_rendered(wrapper, fake):
                                         typed=True, owned=True)
                            for written in (messages, answered))
     shared = [_shared_whole_tokens(one, other) for one, _ in standing for other, _ in completed]
-    if owed and not internals.kept_turns(wrapper):
+    if owed and not internals.generated_turns_held(wrapper):
         assert typed_text(fake, fake.cache) in shared, \
             "the cache does not read as the template renders the conversation while a call is owed"
         return
@@ -249,26 +249,26 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     renders = standing + (completed + generated_after if owed else [])
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
-    turns = internals.kept_turns(wrapper)
+    turns = internals.generated_turns_held(wrapper)
     kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
              closing if not text and not on_call else "")
             for tokens, text, on_call in turns]
     if owed:
-        # Decoded as far as the renders with and without the results agree, the kept turns
+        # Decoded as far as the renders with and without the results agree, the generated turns
         # that stand there in their places.
         held = typed_text(fake, fake.cache)
         if any(_reads_as(held, _shared_whole_tokens(one, other), kept[:n])
                for one, _ in standing for other, _ in completed for n in range(len(kept) + 1)):
             return
-    # The messages each kept turn stands for; the results still owed come after every message.
-    stands_for = [set(range(first, last + 1)) for first, last in internals.kept_turn_spans(wrapper)]
+    # The messages each generated turn stands for; the results still owed come after every message.
+    stands_for = [set(range(first, last + 1)) for first, last in internals.generated_turn_spans(wrapper)]
     if stands_for:
         stands_for[-1] |= set(range(len(messages), len(answered)))
     assert any(_reads_as(typed_text(fake, fake.cache), render, kept, bool(owed),
                          _owned_by_others(spans, stands_for))
                for render, spans in renders), \
         "the cache does not read as the template renders the conversation"
-    for placed in internals.kept_turn_places(wrapper):
+    for placed in internals.generated_turn_places(wrapper):
         assert placed is not None, "a turn kept as generated was lost"
         assert placed[0] < placed[1], \
             "a turn kept as generated stands in for none of the template's text"
@@ -289,7 +289,7 @@ def _reply_closing(fake, reasoning: bool) -> str:
 
 
 def _owned_by_others(spans, stands_for: list[set[int]]) -> list[list[tuple[int, int]]]:
-    """For each kept turn, where the render holds own texts of messages that turn does not stand for.
+    """For each generated turn, where the render holds own texts of messages that turn does not stand for.
 
     Own texts with no template text between them read as one, so such a run
     counts as the turn's where any of its messages is.
@@ -300,21 +300,21 @@ def _owned_by_others(spans, stands_for: list[set[int]]) -> list[list[tuple[int, 
 
 def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]],
               owed: bool = False, others: list[list[tuple[int, int]]] | None = None) -> bool:
-    """Whether ``held`` is ``render`` with each kept turn in place of the template's version of it, everything around them exactly as rendered.
+    """Whether ``held`` is ``render`` with each generated turn in place of the template's version of it, everything around them exactly as rendered.
 
     ``held``, ``render`` and each turn's text are spelled as :func:`typed_text`
-    spells tokens, so that everything around the kept turns compares token for
+    spells tokens, so that everything around the generated turns compares token for
     token. ``kept`` holds each turn's text, the text of its first and of its
     last token, the text of its last message, and, for a turn that ends on a
     reply without text, the template's closing after a reply. The template's
     version of a turn begins with the same token, and ends with the same
     token, with that message's text, where that closing begins, or, for a turn
-    whose call the template does not write, is where the kept turn begins; so
+    whose call the template does not write, is where the generated turn begins; so
     it takes in none of the template's text beside it. Where a call is
-    ``owed`` and ``held`` ends with the newest kept turn, the rest of the
+    ``owed`` and ``held`` ends with the newest generated turn, the rest of the
     render is not decoded yet. A turn's bounds are found by its characters,
     since a model may write a tag of its turn as text. ``others`` holds, for each
-    kept turn, where the render holds texts of messages it does not stand for:
+    generated turn, where the render holds texts of messages it does not stand for:
     its version takes in none of them, so a whole exchange missing after it is
     caught however the replies repeat their text.
     """
@@ -323,7 +323,7 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]
         return held == render
 
     def placements(n: int, at: int):
-        """Each way the kept turns from the ``n``-th on may stand in ``held`` from ``at`` on."""
+        """Each way the generated turns from the ``n``-th on may stand in ``held`` from ``at`` on."""
         if n == len(kept):
             yield []
             return
@@ -332,7 +332,7 @@ def _reads_as(held: str, render: str, kept: list[tuple[str, str, str, str, str]]
                 yield [found] + rest
 
     def reads(pieces: list[str], n: int, at: int) -> bool:
-        """Whether the render from ``at`` on reads as the kept turns from the ``n``-th on and ``pieces`` around them."""
+        """Whether the render from ``at`` on reads as the generated turns from the ``n``-th on and ``pieces`` around them."""
         if n == len(kept):
             return True
         turn, opening, closing, text, reply_closing = kept[n]
@@ -454,25 +454,25 @@ def add_tools(wrapper, specs) -> int:
 
 
 def assert_conversation_is_its_forms(wrapper):
-    """What ``conversation()`` gives, begin takes, and the conversation the wrapper holds is its Chat Completions messages with each saved turn put back, nothing else needed to go on with it."""
+    """What ``conversation()`` gives, begin takes, and the conversation the wrapper holds is its Chat Completions messages with each generated turn put back, nothing else needed to go on with it."""
     if not internals.is_begun(wrapper):
         return
     saved = wrapper.conversation()
-    ensure_saved_turns(saved["generated_turns"])
+    ensure_generated_turns(saved["generated_turns"])
     joins = internals.joins_questions(wrapper)
     turns = (saved["generated_turns"] or {}).get("turns", [])
-    messages, n_found = with_saved_turns(read_messages(saved["messages"]), turns, joins)
-    held = {i for first, last, _ in kept_turns(messages) for i in range(first, last + 1)}
+    messages, n_found = with_generated_turns(read_messages(saved["messages"]), turns, joins)
+    held = {i for first, last, _ in generated_turns_in(messages) for i in range(first, last + 1)}
     messages, _gone = without_unreadable(messages, held, joins)
     rebuilt = answer_in_order(messages, internals.unreadable_result_text(wrapper))
     assert n_found == sum(len(record["kept"]) for record in turns), \
-        "a saved turn is not found among the messages it was saved with"
+        "a generated turn is not found among the messages it was saved with"
     assert [_comparable(m) for m in rebuilt] \
         == [_comparable(m) for m in internals.rendered_messages(wrapper)], \
-        "the conversation is not its messages with each saved turn put back"
+        "the conversation is not its messages with each generated turn put back"
 
 
 def _comparable(message: dict) -> dict:
     """``message`` with the turn it may end as its tokens and span, to compare by value."""
-    turn = message.get(KEPT_TURN)
-    return {**message, KEPT_TURN: (turn.tokens, turn.span, turn.on_call)} if turn else message
+    turn = message.get(GENERATED_TURN)
+    return {**message, GENERATED_TURN: (turn.tokens, turn.span, turn.on_call)} if turn else message

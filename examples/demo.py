@@ -37,7 +37,7 @@ def load_bar(frac: float, width: int = 40) -> None:
 
 
 def show(w: ChatWrapper) -> None:
-    history = w.conversation()["messages"]
+    history = [m for m in w.conversation()["messages"] if m["role"] != "system"]
     print(f"  cache: {w.total_tokens} tokens across {len(history)} messages after the system prompt")
     for message in history:
         print(f"    {message['role']:<10} ({len(str(message['content']))} chars)")

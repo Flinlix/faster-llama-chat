@@ -16,8 +16,8 @@ import json
 import logging
 
 from .errors import InvalidArgumentError
-from .messages import KEPT_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
-from .rendering import KeptTurn, kept_turns
+from .messages import GENERATED_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
+from .rendering import GeneratedTurn, generated_turns_in
 
 _log = logging.getLogger(__name__)
 
@@ -368,7 +368,7 @@ def joined_question(question: dict, later: dict) -> dict:
 
 
 # ----- turns kept as generated ----------------------------------------------------------
-def saved_turns(messages: list[dict], joins_questions: bool) -> list[dict]:
+def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[dict]:
     """The turns ``messages`` keep as generated, JSON-ready, each with the messages it is put back as: those messages, where each turn's tokens begin among them and how many they stand for, and what they are found again by.
 
     They are found by the Chat Completions messages ``messages`` give for
@@ -381,7 +381,7 @@ def saved_turns(messages: list[dict], joins_questions: bool) -> list[dict]:
     kept, sources, _gone = _without_unreadable(messages, set(), joins_questions)
     portable = [_portable(_as_completions(message)) for message in kept]
     records: list[dict] = []
-    for first, last, turn in kept_turns(messages):
+    for first, last, turn in generated_turns_in(messages):
         end = last
         while end + 1 < len(messages) and messages[end + 1]["role"] == "tool":
             end += 1                # the results written so far in an open turn
@@ -410,8 +410,8 @@ def saved_turns(messages: list[dict], joins_questions: bool) -> list[dict]:
 
 
 def _exact(message: dict) -> dict:
-    """``message`` as a saved turn holds it: as the conversation holds it, without the turn itself."""
-    return copy.deepcopy({k: v for k, v in message.items() if k != KEPT_TURN})
+    """``message`` as a generated turn holds it: as the conversation holds it, without the turn itself."""
+    return copy.deepcopy({k: v for k, v in message.items() if k != GENERATED_TURN})
 
 
 def _portable(message: dict) -> str:
@@ -427,7 +427,7 @@ def _digest_of(portable: list[str]) -> str:
     return hashlib.sha256(("[" + ",".join(portable) + "]").encode()).hexdigest()
 
 
-def with_saved_turns(messages: list[dict], turns: list[dict],
+def with_generated_turns(messages: list[dict], turns: list[dict],
                      joins_questions: bool) -> tuple[list[dict], int]:
     """``messages``, read from the Chat Completions form, with each record of ``turns`` that they still hold put back as the conversation held it, each turn's tokens on its message; and how many turns were.
 
@@ -462,14 +462,14 @@ def with_saved_turns(messages: list[dict], turns: list[dict],
         held = copy.deepcopy(record["messages"])
         for turn in record["kept"]:
             last = turn["start"] + turn["span"] - 1
-            held[last] = {**held[last], KEPT_TURN: KeptTurn(
+            held[last] = {**held[last], GENERATED_TURN: GeneratedTurn(
                 tuple(turn["tokens"]), turn["span"], bool(held[last].get("tool_calls")))}
         put[at:at + record["count"]] = held
     return put, sum(len(record["kept"]) for _, record in places)
 
 
-def ensure_saved_turns(given) -> None:
-    """Refuse saved turns that are not what :func:`saved_turns` and the model's fingerprint make, as a conversation gives them.
+def ensure_generated_turns(given) -> None:
+    """Refuse generated turns that are not what :func:`generated_turn_records` and the model's fingerprint make, as a conversation gives them.
 
     Raises:
         TypeError: If ``given`` is neither ``None`` nor a ``dict``.
@@ -484,14 +484,14 @@ def ensure_saved_turns(given) -> None:
                         f"not {type(given).__name__}")
     turns = given.get("turns")
     if not isinstance(given.get("model"), str) or not isinstance(turns, list) \
-            or not all(_is_saved_turn(turn) for turn in turns):
+            or not all(_is_generated_turn_record(turn) for turn in turns):
         raise InvalidArgumentError("generated_turns", "generated_turns is not what "
                                    "conversation() gives; pass that, or None to write every "
                                    "turn as the template writes it")
 
 
-def _is_saved_turn(record) -> bool:
-    """Whether ``record`` is one record as :func:`saved_turns` gives it."""
+def _is_generated_turn_record(record) -> bool:
+    """Whether ``record`` is one record as :func:`generated_turn_records` gives it."""
     if not isinstance(record, dict) \
             or set(record) != {"messages", "kept", "count", "after", "digest"}:
         return False
@@ -510,7 +510,7 @@ def _is_saved_turn(record) -> bool:
 
 
 def _is_held(message) -> bool:
-    """Whether ``message`` is a question, a reply or a result as a saved turn holds one."""
+    """Whether ``message`` is a question, a reply or a result as a generated turn holds one."""
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):
         return False
     if message.get("role") == "user":

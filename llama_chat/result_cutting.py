@@ -107,7 +107,7 @@ class ResultCutting:
         return dropped
 
     def cut_to_fit(self, room: int, held: set[int]) -> None:
-        """Cut the results of the newest exchange, the newest first, until the conversation fits in ``room`` with the generation prompt, as a result written in a running conversation is cut; none of those at ``held``, which a kept turn's tokens stand for.
+        """Cut the results of the newest exchange, the newest first, until the conversation fits in ``room`` with the generation prompt, as a result written in a running conversation is cut; none of those at ``held``, which a generated turn's tokens stand for.
 
         It is measured with the generation prompt, as a reply follows only
         where the conversation ends on a question or a result.

@@ -1177,6 +1177,7 @@ _PLAIN_REPLY_CODE = {
         "_ensure_begun",
         "_ensure_can_reply",
         "_ensure_ready",
+        "_refused_as_the_text",
         "_reported_calls",
         "_unanswered",
     },
@@ -1204,7 +1205,7 @@ _PLAIN_REPLY_CODE = {
         "ConversationRendering.template_writes",
         "ConversationRendering.template_writes.<locals>.<genexpr>",
         "ConversationRendering.tokenize",
-        "kept_turns",
+        "generated_turns_in",
     },
     "reply.py": {
         "ReplyStream.__init__",
@@ -1318,7 +1319,7 @@ _PLAIN_REPLY_CODE = {
 
 
 def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code():
-    """Invariant 2: no question, reply or token pays for a property the loaded template does not have."""
+    """Rule 5: no question, reply or token pays for a property the loaded template does not have."""
     import sys
     w = ChatWrapper(Config(context_size=1000), context=FakeContext(PLAIN, replies=["Gut.", "Ja."]))
     w.begin(opened("s"))

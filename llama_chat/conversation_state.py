@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 
-from .rendering import KeptTurn
+from .rendering import GeneratedTurn
 from .tools import ToolCall, ToolSpec
 
 
@@ -24,14 +24,14 @@ class MadeFor:
 class Anchor:
     """Where the cache holds the tag that opens the exchange after ``message``, the ``index``-th message, which windows of the newest exchanges are placed after.
 
-    It stands while that message is still the ``index``-th and the kept turns
+    It stands while that message is still the ``index``-th and the generated turns
     up to it are still ``kept``, by identity.
     """
 
     message: dict
     index: int
     at: int
-    kept: tuple[KeptTurn, ...]
+    kept: tuple[GeneratedTurn, ...]
 
 
 @dataclass
@@ -40,7 +40,7 @@ class Ahead:
 
     rest: list[tuple[str, bool]]          # from that run on, the stand-in as the caller's own
     after_question: str                   # the template's text after the question
-    reply_opening: list[tuple[str, bool]]  # the render from where the reply's kept turn begins
+    reply_opening: list[tuple[str, bool]]  # the render from where the reply's generated turn begins
     made_for: MadeFor
 
 
@@ -91,8 +91,8 @@ class ConversationState:
     # declaring some. True wherever ``tools`` holds any.
     uses_tool_template: bool = False
     reasoning: bool = False
-    # Where each placed kept turn starts in the cache.
-    kept_at: dict[KeptTurn, int] = field(default_factory=dict)
+    # Where each placed generated turn starts in the cache.
+    turns_at: dict[GeneratedTurn, int] = field(default_factory=dict)
     n_calls: int = 0
     results_cut: list[ToolCall] = field(default_factory=list)   # since the newest generation
     checks: RenderChecks = RenderChecks()
@@ -150,7 +150,7 @@ class Published:
     turn_open: bool = False
     newest_role: str | None = None
     total_tokens: int = 0
-    # The model's fingerprint, where a turn is kept: what the kept turns' tokens are valid for.
+    # The model's fingerprint, where a turn is kept: what the generated turns' tokens are valid for.
     model: str | None = None
 
 

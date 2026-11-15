@@ -30,17 +30,19 @@ class Reply:
     Attributes:
         text: The assistant's reply, trimmed at any stop string, its thought
             left out.
-        n_prefilled_tokens: Tokens decoded for the request, the opening of
-            each resumption, a reply decoded again as a past reply, and what
-            is decoded after the reply: its closing and the start of the next
-            question.
+        n_prefilled_tokens: Tokens decoded for the request: its question and
+            what was decoded ahead for it after the reply before, the
+            opening of each resumption, and a reply decoded again as a past
+            reply. What is decoded after this reply, its closing and the
+            start of the next question, counts for the next request.
         n_prompt_tokens: Tokens the cache held when the last generation drew
             its first token: everything it was generated from, its generation
             prompt included.
         n_generated_tokens: Tokens sampled.
-        n_evicted_messages: History items evicted to bring the cache back
-            inside both eviction limits: a message, or a whole tool turn,
-            counts as one.
+        n_evicted_messages: History messages evicted for the request, each
+            call's result counting as one, to bring the cache back inside both
+            eviction limits; those evicted after the reply before, to make
+            room for this request, included.
         stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
             a stop string was met, the reply cap was reached, ``cancel`` was
             set, a call was made, or a call was made that could not be read
@@ -101,13 +103,15 @@ class Report:
 
     Attributes:
         n_evicted_messages: History messages that went, each call's result
-            counting as one.
+            counting as one; for the first action after a reply, those that
+            went after that reply too.
         evicted_for: One of :data:`EVICTION_CAUSES`, why they went; ``None``
             where none did.
         n_kept_messages: Of a history given to ``begin``, how many messages
             it kept; ``None`` for any other action.
-        n_left_out_calls: Calls the model wrote unreadably that ``begin`` left
-            out with their error result, no generated turn holding them.
+        n_left_out_calls: Calls of the history ``begin`` was given that could
+            not be read, the model's or the caller's, which it left out with
+            their results, no generated turn holding them.
         n_turns_restored: Turns ``begin`` restored as generated, from the
             generated turns it was given.
         generated_turns_ignored: Whether the generated turns ``begin`` was

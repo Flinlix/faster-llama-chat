@@ -1,6 +1,6 @@
 # faster-llama-chat: a KV-cache manager for llama.cpp
 
-A Python chat engine over llama.cpp whose goal is to **prefill as little as
+A Python chat library over llama.cpp whose goal is to **prefill as little as
 possible**. It keeps the KV cache alive across turns, decodes only what is new,
 and when the context fills it *removes the oldest exchanges and shifts the
 survivors down to close the gap*, reusing their KV instead of decoding them
@@ -171,7 +171,10 @@ writes a system prompt where later questions move it; a refused or failed
 the older messages evicted for it. A user message is added as `reply(text)`
 adds its question, so `inject(text)` followed by `reply()` waits no longer than
 `reply(text)`; the eviction it needs may come after the reply instead, and is
-then counted in that reply's `n_evicted_messages`. An assistant message, or a
+then counted by the next request, as every eviction after a reply is. A
+question after one no reply follows joins it where the template writes no two
+in a row; where the two joined would not fit beside the system prompt, it takes
+the unanswered one's place, which counts as evicted. An assistant message, or a
 user message once `max_history_exchanges` is reached, evicts first. An eviction
 drops up to the next user message, so the messages after the newest one stay;
 an assistant message with which they no longer fit under the threshold is
@@ -193,9 +196,23 @@ read.
 `pending_calls`, oldest first, then `reply()`, which keeps the turn's
 `tool_call_policy`.
 
-**Shortening the newest reply to what was heard.** Refused where the template
-does not write the reply shortened to `keep_text`, as a template that writes no
-empty reply does not write it shortened to `""`.
+**Shortening the newest reply to what was heard.** `keep_text` is a prefix of
+the reply's text, or of the text its stream showed, which after a tool's result
+may open with a blank line. The reply that ends a turn that called tools keeps
+its tokens as generated up to the cut; cut to nothing, its turn keeps them up
+to its newest call. Refused where the template does not write the reply
+shortened to `keep_text`, as a template that writes no empty reply does not
+write it shortened to `""`.
+
+**After a reply.** Its stream ends once the reply is recorded. What follows it,
+the evictions over the limits and the decode ahead of the next question, runs
+right after on a thread of the library's own, holding the wrapper as any
+action does; the next action, or `wait_idle`, waits for it, or does it first
+where that thread has not begun. An action that waits stops a long decode
+there between its parts, and the decode is then left to what that action
+needs. What that work evicted and decoded is counted by the next request: in
+its `Reply`, or in the next `Report`; a `begin` leaves it to the conversation
+it replaces.
 
 **Reading the conversation back.** Everything `begin` takes, by its parameter
 names: `messages` (the Chat Completions messages `begin` takes, the system
@@ -237,14 +254,28 @@ tokens the cache held when the reply's last generation drew its first, which
 is all that generation was conditioned on), `n_generated_tokens`,
 `n_evicted_messages`, `tool_calls`, `tool_limit_reached`, `tool_results_cut`
 (the calls whose result was cut to fit, see "Tool calling"),
-`n_reasoning_tokens` and `thought`, the thought's text, empty where the model
-thought nothing. A stream closed early has no `Reply`; what it generated
-is recorded all the same.
+`n_reasoning_tokens`, `thought`, the thought's text, empty where the model
+thought nothing, `evicted_for`, why history went for it, one of
+`EVICTION_CAUSES`, `taken_back`, whether the reply was taken back with its
+request because the template writes neither it nor an empty reply, and
+`kept_text`, the answer as kept where the template keeps less of it than was
+shown. A stream closed early keeps the newest generation's `Reply`; what it
+generated is recorded all the same.
+
+A `Report`, which `begin`, `inject` and `inject_tool_result` return, holds
+`n_evicted_messages` and `evicted_for` as a `Reply` does; for a `begin`,
+`n_kept_messages` (the history messages it kept), `n_left_out_calls` (calls
+that could not be read, left out with their results), `n_turns_restored` (the
+turns it restored as generated) and `generated_turns_ignored` (the generated
+turns given were another model's); `tool_results_cut`; `turn_closed`, whether
+the action closed a turn a call left open; and `question_joined`, whether a
+question was joined to one no reply followed.
 
 A count of messages, as in `n_evicted_messages` or what `begin`, `inject` and
 `inject_tool_result` return, counts the messages `conversation()["messages"]`
 holds after the system message: a question, a reply and each call's result are
-one each. It is what the action itself evicted, recorded where it evicted.
+one each. It is what the action itself evicted, and for the first action after
+a reply, what went after that reply to make room for it.
 
 **What fails at startup.** Whatever can be settled once is settled while the
 wrapper is built, so a deployment that could never work says so then: every
@@ -425,7 +456,7 @@ cut into the turn being written. A result too long for what is left, with
 `min_reply_tokens` free, first evicts the oldest exchanges, as a question
 does, the open turn kept whole: its question, its calls and its results; on a
 cache that cannot shift it evicts well below that, as every eviction there
-does. `inject_tool_result` returns a `Report` of the history items that went, and under a
+does. `inject_tool_result` returns a `Report` of the history messages that went, and under a
 registry they count in the reply's `n_evicted_messages`. A result still too
 long is cut, its tags kept, and ends with a note the model reads, such as
 `(cut: 3100 of 20000 characters kept)`; the next reply lists its call in
@@ -442,7 +473,7 @@ a reply holding its calls, `{"role": "assistant", "content": text or None,
 "arguments": "{...}"}}]}`, then each result, `{"role": "tool",
 "tool_call_id": id, "content": text}`, in the order of the calls. Every call
 needs its id. A call whose arguments are no JSON object, `""` aside, which is
-none, could not be read: it is left out with its result, said once at
+none, or that names no function, could not be read: it is left out with its result, said once at
 `INFO`, and a later result for it is refused naming that cause. A result out
 of order, one that answers no call, a reply between a call and its result, or
 a result that is no text, is refused naming it. It is written as the template
@@ -610,8 +641,8 @@ value `Config` refuses.
 |------|------|------|
 | `gpu_layers` | `0` | layers offloaded to the GPU, at least `0`; `-1` for all |
 | `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
-| `decode_threads` | `None` | CPU threads for decode, at least `1`; `None` uses one per physical core of the processors the process may run on, at most as many as its CPU quota allows |
-| `prefill_threads` | `None` | CPU threads for prefill, at least `1`; `None` means as many as `decode_threads`, and so one per physical core where that is not set either |
+| `decode_threads` | `None` | CPU threads for generating a reply, a token at a time, at least `1`; `None` uses one per physical core of the processors the process may run on, at most as many as its CPU quota allows |
+| `prefill_threads` | `None` | CPU threads for prefill, the decode of tokens the cache is given (a question, or what is decoded again), at least `1`; `None` means as many as `decode_threads`, and so one per physical core where that is not set either |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
@@ -755,7 +786,9 @@ apart and a reply ends the same on every context.
 else the name of a further one the model ships, such as `TOOL_USE_TEMPLATE`
 from `llama_chat`; a name the model ships no template of answers `None`. A
 context whose `chat_template_text()` answers `None` is refused where it is
-adopted, as a model that ships no chat template is.
+adopted, as a model that ships no chat template is. `model_fingerprint` names
+the model its tokens are valid for: `generated_turns` restore turns as
+generated only on a context whose fingerprint is the one they were saved on.
 Its token ids must lie from -65,536 to 1,048,575: an eviction searches the
 cache's tokens for the stretch it dropped, and an id outside that range fails
 that search. `tests/fake_context.py` is a worked one over a list of ints.
@@ -769,7 +802,8 @@ python examples/demo.py /path/to/model.gguf          # against a real model
 ```
 
 The tests run every chat template in `tests/templates/` with a stand-in
-tokenizer, one token per character and one per tag; each test file's docstring
+tokenizer, one token per character and one per tag, and again with one that
+merges a space with the letter or digit after it; each test file's docstring
 says what it checks. The demo loads a real model with its own tokenizer and
 prints how many tokens each action decodes; add `--gpu-layers -1` to run it on
 the GPU.

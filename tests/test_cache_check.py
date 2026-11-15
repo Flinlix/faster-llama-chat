@@ -23,7 +23,7 @@ def _reasoning():
     return w, fake
 
 
-def _with_a_kept_turn():
+def _with_a_generated_turn():
     w, fake = tool_wrapper()
     w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
@@ -50,7 +50,7 @@ def _one_token_off(tokens):
             yield tokens[:at] + [_MARK] + tokens[at + 1:]
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_generated_turn,
                                           _owed_from_a_history],
                          ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
@@ -65,7 +65,7 @@ def test_a_cache_one_token_off_what_the_wrapper_holds_is_caught(
     fake.cache = sound
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_generated_turn,
                                           _owed_from_a_history],
                          ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_same_or_stops_short(
@@ -83,7 +83,7 @@ def test_a_cache_held_one_token_off_the_render_is_caught_unless_it_reads_the_sam
     overwrite_held_tokens(w, sound)
 
 
-@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_kept_turn,
+@pytest.mark.parametrize("conversation", [_plain, _reasoning, _with_a_generated_turn,
                                           _owed_from_a_history],
                          ids=["plain", "reasoning", "kept-turn", "owed-from-a-history"])
 def test_a_cache_that_reads_the_same_with_its_tags_held_as_their_letters_is_caught(conversation):
@@ -155,8 +155,8 @@ def test_a_cache_holding_a_token_that_spells_the_renders_text_but_is_not_its_tok
     overwrite_held_tokens(w, sound)
 
 
-def test_a_cache_missing_an_exchange_after_a_kept_turn_is_caught_where_replies_repeat_their_text():
-    w, fake = _with_a_kept_turn()
+def test_a_cache_missing_an_exchange_after_a_generated_turn_is_caught_where_replies_repeat_their_text():
+    w, fake = _with_a_generated_turn()
     w.reply("noch?").finish()
     sound = list(fake.cache)
     replies = [m["content"] for m in after_system(w.conversation()["messages"])

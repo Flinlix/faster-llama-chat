@@ -6,8 +6,8 @@ import copy
 from collections.abc import Callable
 
 from .conversation_state import ConversationState, Published
-from .history_forms import completions_messages, saved_turns
-from .rendering import kept_turns
+from .history_forms import completions_messages, generated_turn_records
+from .rendering import generated_turns_in
 from .tools import ToolCall
 
 
@@ -24,7 +24,7 @@ def published(state: ConversationState, pending_calls: list[ToolCall], turn_open
         begun=state.begun, turn_open=turn_open,
         newest_role=state.messages[-1]["role"] if state.messages else None,
         total_tokens=total_tokens,
-        model=model_fingerprint() if kept_turns(state.messages) else None)
+        model=model_fingerprint() if generated_turns_in(state.messages) else None)
 
 
 def conversation_of(published: Published) -> dict:
@@ -40,4 +40,4 @@ def generated_turns_of(published: Published) -> dict | None:
     if published.model is None:
         return None
     return {"model": published.model,
-            "turns": saved_turns(list(published.messages), published.joins_questions)}
+            "turns": generated_turn_records(list(published.messages), published.joins_questions)}

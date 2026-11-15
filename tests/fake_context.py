@@ -1,8 +1,9 @@
 """A model-free stand-in for :class:`~llama_chat.context.KVContext`, worked over a list of ints.
 
 It renders with a test template's renderer, the one a model is loaded with.
-Only the tokenizer is a stand-in, one token per character and one per tag, so
-what is compared is the text. The cache is a plain list of token ids, and the
+Only the tokenizer is a stand-in, one token per character and one per tag, or
+one that also merges a space with the letter or digit after it, so what is
+compared is the text. The cache is a plain list of token ids, and the
 model is a script.
 """
 
