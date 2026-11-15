@@ -1042,9 +1042,13 @@ _PLAIN_REPLY_CODE = {
         "CacheSync._can_cut",
         "CacheSync._decode_at_end",
         "CacheSync._decode_at_end.<locals>.<genexpr>",
+        "CacheSync._forget_states_after",
         "CacheSync._interrupted",
         "CacheSync._pins_to_save",
+        "CacheSync._restore_to",
+        "CacheSync._restore_to.<locals>.<lambda>",
         "CacheSync._save_pinned_state",
+        "CacheSync._save_pinned_state.<locals>.<genexpr>",
         "CacheSync.cut_to",
         "CacheSync.decode",
         "CacheSync.generate",
@@ -1052,6 +1056,9 @@ _PLAIN_REPLY_CODE = {
         "CacheSync.is_current",
         "CacheSync.is_known",
         "CacheSync.keeps_saved_states",
+        "CacheSync.pin",
+        "CacheSync.pinned",
+        "CacheSync.remove",
         "CacheSync.repair",
         "CacheSync.rest",
         "CacheSync.tokens",
@@ -1075,10 +1082,17 @@ _PLAIN_REPLY_CODE = {
     },
     "eviction.py": {
         "Eviction._exchanges_over",
+        "Eviction._keeps_the_rest",
+        "Eviction.drop_bound",
+        "Eviction.drop_oldest_exchange",
+        "Eviction.drop_oldest_exchange.<locals>.<genexpr>",
         "Eviction.drop_while_over",
         "Eviction.drop_while_over.<locals>.length",
         "Eviction.drop_while_over.<locals>.too_many",
+        "Eviction.exchanges_after_drop",
+        "Eviction.record",
         "Eviction.too_many",
+        "Eviction.with_a_short_question",
     },
     "generation.py": {
         "_TextBuffer.__init__",
@@ -1093,6 +1107,8 @@ _PLAIN_REPLY_CODE = {
         "ensure_role",
         "ensure_text",
         "exchange_starts",
+        "history_count",
+        "history_count.<locals>.<genexpr>",
         "system_part",
     },
     "model_template.py": {
@@ -1128,8 +1144,10 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._max_prompt_tokens",
         "RenderedCache._moves_declarations",
         "RenderedCache._newest_exchange",
+        "RenderedCache._newest_exchanges_at",
         "RenderedCache._note_ahead",
         "RenderedCache._note_prompt",
+        "RenderedCache._pin_the_reply",
         "RenderedCache._publish",
         "RenderedCache._publishing",
         "RenderedCache._read_calls",
@@ -1194,6 +1212,7 @@ _PLAIN_REPLY_CODE = {
         "ConversationRendering._template",
         "ConversationRendering.count_tokens",
         "ConversationRendering.forget_renders",
+        "ConversationRendering.head",
         "ConversationRendering.is_plain",
         "ConversationRendering.is_plain.<locals>.<genexpr>",
         "ConversationRendering.length",
@@ -1201,6 +1220,7 @@ _PLAIN_REPLY_CODE = {
         "ConversationRendering.run_start",
         "ConversationRendering.split",
         "ConversationRendering.split.<locals>.<lambda>",
+        "ConversationRendering.split_made",
         "ConversationRendering.tag_after_content",
         "ConversationRendering.tag_from",
         "ConversationRendering.tag_from.<locals>.<genexpr>",
@@ -1282,6 +1302,10 @@ _PLAIN_REPLY_CODE = {
         "tokenize_pieces.<locals>.tokenize",
     },
     "windows.py": {
+        "Windows._drop_in",
+        "Windows._remove_dropped",
+        "Windows._remove_dropped.<locals>.<genexpr>",
+        "Windows._remove_dropped.<locals>.<genexpr>.<genexpr>",
         "Windows.ahead",
         "Windows.drop_in",
     },
@@ -1323,11 +1347,20 @@ _PLAIN_REPLY_CODE = {
 }
 
 
-def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code():
-    """Rule 5: no question, reply or token pays for a property the loaded template does not have."""
+@pytest.mark.parametrize("merges", [False, True], ids=["one token per character", "merging"])
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code(
+        cache, merges):
+    """Rule 5: no question, reply or token pays for a property the loaded template does not have, evictions included."""
     import sys
-    w = ChatWrapper(Config(context_size=1000), context=FakeContext(PLAIN, replies=["Gut.", "Ja."]))
+    fake = FakeContext(PLAIN, merges=merges, **cache)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.8), context=fake)
     w.begin(opened("s"))
+    for n in range(3):
+        fake.replies = [f"Reply {n} " * 3]
+        w.reply(f"Question {n}?").finish()
+    fake.replies = [f"A longer reply number {n} " * 3 for n in range(14)]
     entered = set()
 
     def note(frame, event, _arg):
@@ -1335,16 +1368,19 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
             entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
                         + frame.f_code.co_qualname)
 
+    evicted = 0
     sys.setprofile(note)
     try:
-        w.reply("Wie geht es?").finish()
+        for n in range(12):
+            evicted += w.reply(f"Question number {n}, a longer one?").finish().n_evicted_messages
         w.inject("Noch etwas.")
         w.reply().finish()
     finally:
         sys.setprofile(None)
     assert entered                  # the profile saw the library at work
+    assert evicted                  # evictions among it
     allowed = {f"{file}:{name}" for file, names in _PLAIN_REPLY_CODE.items() for name in names}
-    assert sorted(entered - allowed) == [], "code new to a plain reply"
+    assert sorted(entered - allowed) == [], f"code new to a plain reply: {sorted(entered - allowed)}"
 
 
 def test_the_render_memory_holds_one_actions_renders_however_long_the_conversation():
