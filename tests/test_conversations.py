@@ -2206,3 +2206,22 @@ def test_a_question_is_refused_only_where_the_template_does_not_write_it_and_the
         else:
             assert writes, question
         assert run.chat.reply("And now?").finish().text == "Gladly."
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_call_still_owed_begins_again_with_its_turn_as_generated_and_its_result_reads_in(stem):
+    """Where the declarations move once a result follows, the cache holds the opening alone until the result comes; then it holds what the live conversation held."""
+    run = _Run(stem, context_size=16384)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    run.context.replies = [ScriptedCall(body), "Fine."]
+    run.begin(tools=[WEATHER])
+    call = next(e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+                if isinstance(e, ToolCall))
+    saved = run.chat.conversation()
+    run.chat.inject_tool_result(call.id, "sunny")
+    answered = run.context.text_of(run.context.cache)
+    again = _Run(stem, context_size=16384)
+    again.chat.begin(**saved)
+    assert_cache_reads_as_rendered(again.chat, again.context)
+    again.chat.inject_tool_result(call.id, "sunny")
+    assert again.context.text_of(again.context.cache) == answered     # each stand-in numbers its own merges

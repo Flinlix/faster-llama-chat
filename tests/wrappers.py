@@ -210,8 +210,9 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     result, what the template writes after the newest kept turn is decoded
     with the results, so a cache that ends with that turn reads as the render
     of the conversation with its results up to it; one that holds no kept
-    turn reads as far as that render and the render without the results
-    agree, to the last whole token.
+    turn, or none yet where the two renders part before the first, reads as
+    far as that render and the render without the results agree, to the last
+    whole token.
     """
     internals.bring_cache_back(wrapper)
     assert fake.cache == internals.held_tokens(wrapper), \
@@ -232,11 +233,13 @@ def assert_cache_reads_as_rendered(wrapper, fake):
                                         for_tools=internals.uses_tool_template(wrapper),
                                         typed=True, owned=True)
                            for written in (messages, answered))
+    shared = [_shared_whole_tokens(one, other) for one, _ in standing for other, _ in completed]
     if owed and not internals.kept_turns(wrapper):
-        assert typed_text(fake, fake.cache) in [_shared_whole_tokens(one, other)
-                                                for one, _ in standing for other, _ in completed], \
+        assert typed_text(fake, fake.cache) in shared, \
             "the cache does not read as the template renders the conversation while a call is owed"
         return
+    if owed and typed_text(fake, fake.cache) in shared:
+        return                      # the renders part before the kept turns are decoded
     renders = standing + (completed if owed else [])
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
