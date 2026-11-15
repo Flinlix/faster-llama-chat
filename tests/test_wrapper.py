@@ -1409,3 +1409,15 @@ def test_a_short_question_after_an_unanswered_one_is_joined_to_it():
     reply = w.reply("zwei").finish()
     assert reply.n_evicted_messages == 0
     assert after_system(w.conversation()["messages"])[0]["content"] == "eins\n\nzwei"
+
+
+@pytest.mark.parametrize("template, at_load", [(PLAIN, False), (JSON_TOOLS, True)])
+def test_the_model_is_fingerprinted_at_load_only_where_it_can_keep_a_turn_that_called_tools(
+        template, at_load):
+    """The fingerprint reads the whole vocabulary: a model that can call tools pays for it when it loads, not at its first call, and another never does."""
+    fake = FakeContext(template)
+    counted = []
+    fingerprint = fake.model_fingerprint
+    fake.model_fingerprint = lambda: (counted.append(1), fingerprint())[1]
+    ChatWrapper(Config(context_size=1000), context=fake)
+    assert bool(counted) == at_load

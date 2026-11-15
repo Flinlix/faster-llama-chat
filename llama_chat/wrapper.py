@@ -98,6 +98,9 @@ class ChatWrapper:
             self._config = with_model_sampling(
                 config, self._context.recommended_sampling(), addon)
             self._templates = ResolvedTemplates(self._context, addon["call"], addon["reasoning_on"])
+            if any(self._templates.capabilities(tools).can_call_tools for tools in (False, True)):
+                # Worked out now, so that the first turn kept as generated does not wait for it.
+                self._context.model_fingerprint()
             self._conversation = RenderedCache(self._context, self._templates, self._config)
         except BaseException:
             if owns_context:

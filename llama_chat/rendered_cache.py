@@ -81,7 +81,7 @@ class RenderedCache:
         self._rendering = ConversationRendering(context, lambda: self.template, self._state)
         self._eviction = Eviction(self._rendering, config, context.can_shift, self._state,
                                   self._length)
-        self._cutting = ResultCutting(self._length, self._state)
+        self._cutting = ResultCutting(self._length, self._state, self._text_within)
         self._windows = Windows(self._rendering, self._eviction, config, self._state)
         # Where the newest generation's turn starts in the cache, and whether it went on
         # with an open turn; left as they are by a failed action.
@@ -1568,6 +1568,14 @@ class RenderedCache:
                 return len(self._view_target(view).tokens)
         return self._rendering.length(messages, generation_prompt)
 
+    def _text_within(self, text: str, n_tokens: int) -> int:
+        """How many characters of ``text`` the first ``n_tokens`` of its own tokens spell, as a caller's text."""
+        tokens = self._rendering.tokenize([(text, True)])
+        if n_tokens >= len(tokens):
+            return len(text)
+        return len(b"".join(self._context.token_bytes(token)
+                            for token in tokens[:n_tokens]).decode(errors="ignore"))
+
     def _newest_part(self, messages: list[dict]) -> list[dict]:
         """The system message and the window of the newest of ``messages`` that stands for their render, or all of them where none does; what a refusal of the newest is read from."""
         found = self._window_of(messages)
@@ -1694,7 +1702,8 @@ class RenderedCache:
     @contextlib.contextmanager
     def _action(self):
         """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
-        self._rendering.forget_renders()
+        if not self._depth:
+            self._rendering.forget_renders()    # an action inside another keeps its renders
         self._memory.repair()
         if self._state.begun and self.template.properties.reads_clock:
             opening = self._rendering.opening_render(self._system_part())
