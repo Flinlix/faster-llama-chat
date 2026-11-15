@@ -2273,3 +2273,28 @@ def test_a_call_still_owed_begins_again_with_its_turn_as_generated_and_its_resul
     assert_cache_reads_as_rendered(again.chat, again.context)
     again.chat.inject_tool_result(call.id, "sunny")
     assert again.context.text_of(again.context.cache) == answered     # each stand-in numbers its own merges
+
+
+@pytest.mark.parametrize("cache", sorted(_COST_CACHES))
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_reply_shortened_after_evictions_renders_only_the_newest_exchanges(stem, cache):
+    """A barge-in after the conversation reached its threshold: what the eviction left in place still serves the window."""
+    probe = _Run(stem)
+    probe.begin()
+    # The opening and room for about a dozen exchanges under the threshold.
+    size = int((len(probe.context.cache) + 900) / 0.75)
+    run = _Run(stem, context_size=size, replies=[f"Answer number {i}, kept short enough." for i in range(80)],
+               **_COST_CACHES[cache])
+    run.begin()
+    largest, evicted = [], 0
+    for i in range(40):
+        run.chat.reply(f"Tell me one short fact about the number {i}.").finish()
+        evicted += internals.done_after_the_newest_reply(run.chat)[1]
+        if evicted and i % 5 == 4:
+            text = run.chat.conversation()["messages"][-1]["content"]
+            rendered = len(run.context.rendered)
+            run.chat.truncate_last_reply(text[:len(text) // 2])
+            largest.append(max(run.context.rendered[rendered:], default=0))
+    assert evicted and largest
+    if internals.renders_in_windows(run.chat):
+        assert max(largest) <= 8, largest

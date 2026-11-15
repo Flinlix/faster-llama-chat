@@ -1493,9 +1493,12 @@ class RenderedCache:
                 if done:
                     # The tag the next question's exchange opens with, after the newest reply.
                     tag = self._rendering.tag_after_content(split, len(split.contents) - 2)
-                    anchors = () if tag is None or tag > run else ((
+                    # The tags that open the newest exchange, where the window began, and the
+                    # next question's, after the newest reply.
+                    newest = exchange_starts(self._state.messages)[-1]
+                    anchors = ((newest - 1, kept_until()),) + (() if tag is None or tag > run else ((
                         len(self._state.messages) - 1, kept_until() + len(before)
-                        - len(self._rendering.tokenize(split.pieces(tag, run)))),)
+                        - len(self._rendering.tokenize(split.pieces(tag, run)))),))
                     base = kept_until()
                     turns_at = {**{k: p for k, p in self._state.turns_at.items() if p < base},
                                **{k: base + p for k, p in window_turns_at.items()}}
