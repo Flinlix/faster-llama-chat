@@ -220,6 +220,11 @@ class CacheSync:
         self._forget_states_after(same)
         self._logits = False
 
+    def forget_undecoded(self) -> None:
+        """Forget the tokens the cache was left behind, where it holds those before them exactly, as a decode an interrupt stopped leaves it."""
+        if self._end is not None and self._end == self._valid < len(self._tokens):
+            self.cut_to(self._valid)
+
     def repair(self) -> bool:
         """Bring the cache to its tokens where a change was left for later or failed; whether it was needed.
 

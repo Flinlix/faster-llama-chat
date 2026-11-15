@@ -641,7 +641,8 @@ class ChatWrapper:
                 may open with a blank line, or the whole turn's where one
                 stream showed the text before its call too. A cut inside the
                 text before the turn's call cuts the newest reply to nothing;
-                the text a call followed stays. The whole text changes
+                the text a call followed stays. A cut that reads as either is
+                read as one of the newest reply. The whole text changes
                 nothing.
 
         Raises:

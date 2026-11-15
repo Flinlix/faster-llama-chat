@@ -941,6 +941,18 @@ def test_a_reply_to_an_injected_question_evicts_down_to_the_room_its_reply_needs
     assert reply.n_evicted_messages > 0 and reply.stop_reason == "end_of_turn"
 
 
+def test_an_injected_question_joined_to_an_unanswered_one_leaves_room_for_its_reply():
+    """Where the two joined leave no room for the reply, the older goes and the newer is asked alone."""
+    w = ChatWrapper(Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=150),
+                    context=FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=3))
+    w.begin(opened("s"))
+    w.inject("a" * 250)
+    report = w.inject("b" * 250)
+    assert not report.question_joined and report.n_evicted_messages == 1
+    assert w.conversation()["messages"][-1]["content"] == "b" * 250
+    assert w.reply().finish().stop_reason == "end_of_turn"
+
+
 def test_awaits_reply_says_whether_a_reply_without_text_answers_something():
     w, fake = tool_wrapper()
     assert not w.awaits_reply                   # nothing begun

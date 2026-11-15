@@ -2061,21 +2061,24 @@ def test_a_history_that_keeps_a_turn_open_before_a_question_begins_as_the_questi
         stem, owed):
     steps = (ToolCall(WEATHER.name, {"city": "Bonn"}),) + (() if owed else
                                                           (Result(WEATHER.name, "sunny"),))
-    opened = [{"role": "user", "content": "Weather?"}, *tool_turn(*steps)]
+    called = [{"role": "user", "content": "Weather?"}, *tool_turn(*steps)]
     live = _Run(stem)
-    live.begin(opened, tools=[WEATHER])
+    live.begin(called, tools=[WEATHER])
     live.chat.reply(QUESTIONS[0]).finish()
     # A record that kept the turn as it was asked, as a server may keep it: written as given
     # where the template writes it so, else as the question closed it live.
-    record = opened + [{"role": "user", "content": QUESTIONS[0]},
+    record = called + [{"role": "user", "content": QUESTIONS[0]},
                        {"role": "assistant", "content": ANSWERS[0]}]
     kept = _Run(stem)
-    kept.begin(record, tools=[WEATHER])
+    report = kept.chat.begin(opened(kept.system, record), tools=[WEATHER], reasoning=kept.reasoning)
+
     def said(messages):
         return [(m["role"], m.get("content") or "", [c["function"]["name"] for c in m.get("tool_calls") or ()])
                 for m in after_system(messages)]
-    assert said(kept.chat.conversation()["messages"]) in (
-        said(record), said(live.chat.conversation()["messages"]))
+    begun = said(kept.chat.conversation()["messages"])
+    assert begun in (said(record), said(live.chat.conversation()["messages"]))
+    # Reported where it was closed, as a question closing it live reports it.
+    assert report.turn_closed == (begun != said(record))
     assert kept.chat.reply(QUESTIONS[1]).finish().n_generated_tokens
 
 

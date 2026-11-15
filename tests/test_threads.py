@@ -256,9 +256,10 @@ def test_the_work_after_a_reply_is_left_to_the_next_action_where_the_wrapper_sta
 
 @pytest.mark.parametrize("cache", [dict(can_shift=False, can_cut_tail=True), dict(can_shift=False),
                                    dict(can_shift=True)], ids=["cuts", "saves states", "shifts"])
+@pytest.mark.parametrize("goes_on", [True, False], ids=["next question", "other conversation"])
 def test_an_action_that_interrupts_the_work_after_a_reply_decodes_no_more_than_waiting(
-        settles_in_the_background, cache):
-    """What the interrupted work did stands, so the action only finishes the rest of it."""
+        settles_in_the_background, cache, goes_on):
+    """What the interrupted work did stands, so the action only finishes the rest of it, and a begin of another conversation not even that."""
     def decoded(interrupts: bool) -> int:
         fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.", **cache)
         w = ChatWrapper(Config(context_size=8192, evict_above_fraction=0.5, min_reply_tokens=8),
@@ -283,10 +284,18 @@ def test_an_action_that_interrupts_the_work_after_a_reply_decodes_no_more_than_w
             assert started.wait(timeout=5)
         else:
             w.wait_idle()
-        w.inject("Gleich weiter.")
+        if goes_on:
+            w.inject("Gleich weiter.")
+        else:
+            w.begin(opened("ein ganz anderer Anfang", [{"role": "user", "content": "Hallo?"}]))
         w.reply().finish()
         w.wait_idle()
         assert_consistent(w, fake)
         return fake.total_prefilled() - before
 
-    assert decoded(interrupts=True) <= decoded(interrupts=False) + 8
+    if goes_on or cache["can_shift"]:
+        assert decoded(interrupts=True) <= decoded(interrupts=False) + 8
+    else:
+        # The rest of the conversation it replaces, decoded again after a drop, is never
+        # decoded: at least a part of it saved.
+        assert decoded(interrupts=True) + 256 <= decoded(interrupts=False)

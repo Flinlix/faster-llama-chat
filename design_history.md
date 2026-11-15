@@ -5802,6 +5802,21 @@ and what changed:
   now drops what is over the context as the work after that reply drops it
   live, the oldest exchange first. A newest turn that ends on a call is still
   refused, as dropping it would leave its call unreported.
+- A final review agent read the changes made after the first agents started.
+  A begin of another conversation right after an interrupted after-reply job
+  first decoded the rest of the old one (1,444 tokens instead of 46 on a cache
+  that cuts, measured by the agent); a begin now forgets what was left
+  undecoded, since it decodes only what it holds. An injected question joined
+  to an unanswered one is measured against the room its reply needs, as a lone
+  one is. A begin that closes an open turn reports it as a question closing it
+  live does.
+- Left, with the reason: a cut whose text is the opening of both the turn's
+  earlier text and the newest reply is read as the newest reply's, which is
+  what a reader of each reply's own stream hands over; the call accepts both
+  readings, so no record of the stream can tell them apart. A tool result that
+  itself ends in the cut note counting its own length is read as cut before,
+  which changes only the total the note states; telling the two apart after a
+  restart would need the note's wording, which is all a history keeps.
 - Left, with the reason: two or more unanswered questions joined in one turn
   are decoded again with each further one, as the plain text between two tags
   is tokenized as one run; treating the join as a token boundary would be a

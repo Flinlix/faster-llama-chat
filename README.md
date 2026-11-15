@@ -205,7 +205,8 @@ read.
 the reply's text, or of the text its stream showed, which after a tool's result
 may open with a blank line, and where one stream ran a call and went on, shows
 the text before the call too; a cut inside that earlier text cuts the newest
-reply to nothing, as the text a call followed stays. The newest exchange stays
+reply to nothing, as the text a call followed stays. A cut that reads as either,
+as the opening letters of both, is read as one of the newest reply. The newest exchange stays
 after its reply until the next question comes, however long, while it fits the
 context, so a long reply can still be cut. The reply that ends a turn that called tools keeps
 its tokens as generated up to the cut; cut to nothing, its turn keeps them up

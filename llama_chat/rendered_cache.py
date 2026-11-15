@@ -256,7 +256,7 @@ class RenderedCache:
                 takes, or the template refuses to write the conversation, or
                 writes an older exchange otherwise once another follows.
         """
-        with self._action():
+        with self._action(finishes_what_was_left=False):
             # What the cache holds of a conversation this one may go on with.
             cached = ([_without_turn(m) for m in self._state.messages if m["role"] != "system"]
                       if self._state.begun else [])
@@ -396,6 +396,9 @@ class RenderedCache:
                      (exchange[:1], out))
             chosen = next((form for form, written in forms
                            if self._rendering.render(system + written, True) is not None), exchange)
+            if chosen is not exchange:
+                self._state.changes.turn_closed = True
+                self._state.changes.question_joined |= chosen is forms[-1][0] and self._joins_questions
             closed += messages[done:asked] + chosen
             done = nxt
         closed += messages[done:]
@@ -770,7 +773,7 @@ class RenderedCache:
                     f"the injected message needs {alone} tokens but {bound} fit beside the "
                     f"system prompt; shorten the message or the system prompt, or {RAISE_THE_ROOM}",
                     alone, bound)
-            joined = (self._make_way_for(message, limit, generation_prompt=False)
+            joined = (self._make_way_for(message, bound, generation_prompt=True)
                       if role == "user" else None)
             if joined is None:
                 self._ensure_writes(role, text, generation_prompt=False)
@@ -1870,10 +1873,18 @@ class RenderedCache:
 
     # ----- one action at a time --------------------------------------------------------
     @contextlib.contextmanager
-    def _action(self):
-        """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises."""
+    def _action(self, finishes_what_was_left: bool = True):
+        """Run one action: from a cache brought back where a decode failed, following a clock the template reads, and put back as it was where the action raises.
+
+        Args:
+            finishes_what_was_left: Whether what a decode an interrupt stopped
+                left undecoded is decoded first; a begin, which may hold
+                another conversation, decodes only what it holds.
+        """
         if not self._depth:
             self._rendering.forget_renders()    # an action inside another keeps its renders
+        if not finishes_what_was_left:
+            self._memory.forget_undecoded()
         self._memory.repair()
         if self._state.begun and self.template.properties.reads_clock:
             opening = self._rendering.opening_render(self._system_part())
