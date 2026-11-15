@@ -5735,3 +5735,76 @@ need saved states.
   of cache and both tokenizers, a question refused only for the two causes
   rule 11 allows; the failure sweeps take long questions; the stand-in model
   no longer writes a call whose opening the library withheld.
+
+### The loop's own review
+
+Seven fresh agents reviewed these fixes while they were made, three of them on
+performance; a real GPU run (the gemma-4 26B-A4B, Qwen3.5-9B, Ministral-8B-2410
+and Ministral-3-8B GGUFs, 60 to 200 turns each) found two more. What they found
+and what changed:
+
+- A window trusted the cache before its anchor where something other than a
+  question followed the anchor's reply (a second reply, a client's own call):
+  the template may then write the reply's closing, or the reply itself,
+  otherwise, and the model read a prompt that was not the render (rule 1). An
+  anchor now serves only where a question follows its reply, as in the probes;
+  an eviction in windows drops the oldest exchange only where it ends on a reply
+  that closes its turn, since a turn left open writes what follows otherwise.
+- An action that interrupted the work after a reply put that work back and
+  then decoded it all again, three to four times the cost of waiting (measured
+  by two agents). The work now stands as far as it got, the cache left behind
+  its tokens, and the action only finishes the rest.
+- A begin was refused for a conversation whose newest reply filled the
+  context; a reply now has the room it was generated in, as a call already had.
+  An injected question is refused where its reply would have no room. A begin
+  joins two questions in a row where the template writes no two, as a running
+  conversation does, so a history a server kept with both begins again.
+- A shortening is read against the whole text one stream showed, the text
+  before a call included. The newest exchange stays after its reply until the
+  next question, while it fits the context, so a long reply can be cut.
+- A result cut again keeps the total it was first cut from.
+- An eviction outside the work after a reply tried each candidate on the whole
+  conversation, seconds on gemma-4 near its threshold; on a cache that shifts it
+  now drops in windows of the oldest exchanges, the anchors moved along with
+  what was removed: a long question there now costs 127 ms with no render over
+  6 messages. On a cache that cannot shift the rest is decoded again after a
+  drop anyway, which costs more than the whole render; it is left as it was.
+- After an eviction in windows only the anchor after the newest reply was kept,
+  so a reply shortened next rendered the whole conversation: 2 s at 6,000
+  tokens on the gemma-4 GGUF. The anchor of the newest exchange is kept too.
+- The after-reply thread was a daemon: a script that ended right after a reply
+  crashed at exit (3 of 3 on the Ministral-8B GGUF; the committed library
+  exited cleanly). It is no daemon now, waits for the wrapper at most a second
+  (the next action does the work otherwise), and waits 5 ms before it starts so
+  that the reader takes in the stream's end first.
+- On a cache that only saves states, a question was decoded twice where the
+  template writes a past reply otherwise, and a shortened reply decoded its
+  question again (about 4,900 and 2,440 tokens for a 2,400-character question,
+  measured by an agent). States are now kept where the reply begins and where
+  its generation starts, and where a first question's run starts; none is
+  pinned inside the system turn, and a state saved where another is asked for
+  serves both. Measured after: 2,458 and 19 tokens, as on a cache that cuts.
+- A call format whose id stands anywhere but between the name and the
+  arguments, and is not read from a JSON key, is refused; the drop check also
+  probes exchanges with calls, which a template that numbers its calls by
+  place fails; every waiting action is counted, not only the first.
+- A history that kept a call's turn open before a later question, as a server
+  may record it, was refused at a begin where the template writes no call
+  without its result (found by the review's server fuzzer on the devstral-2
+  template, on a resume). The begin now closes each such turn as the question
+  closed it live, decided from a render of that exchange and the question
+  alone: as it stands, with each owed call told it was not run, with an empty
+  reply after, or taken out and the two questions joined. Refusing it, as
+  before, blocked the resume, which rule 11 rules out.
+- Left, with the reason: two or more unanswered questions joined in one turn
+  are decoded again with each further one, as the plain text between two tags
+  is tokenized as one run; treating the join as a token boundary would be a
+  guess on a merging tokenizer. A begin with other tools still renders the
+  whole conversation about four times, which is small beside decoding it again
+  from the declarations on. The decode parts stay 512 tokens: on a GPU that is
+  about 150 ms, and a rate measured on the machine would be needed to size
+  them by time.
+
+Measured memory on the GPU runs: process RAM grew 51 MB over the first 40
+turns and 11 MB over the next 160 (bounded memos filling), GPU memory stayed
+flat, and closing a wrapper gave both back.

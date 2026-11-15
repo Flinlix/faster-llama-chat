@@ -278,7 +278,8 @@ class RenderedCache:
                                                       joins)
             held = {i for first, last, _ in generated_turns_in(messages) for i in range(first, last + 1)}
             messages, gone = without_unreadable(messages, held, joins)
-            self._state.messages[:] = answer_in_order(messages, result_text(unreadable_result))
+            self._state.messages[:] = self._with_open_turns_closed(
+                answer_in_order(messages, result_text(unreadable_result)))
             # The messages it opens with that the conversation holds alike are the
             # conversation's own, so that what was placed after them in the cache still stands.
             reused = _reuse_alike(self._state.messages, before) if alike else 0
@@ -367,6 +368,33 @@ class RenderedCache:
             self._memory.rest()
             self._state.begun = True
             self._log_begin(sum(m["role"] != "system" for m in history), generated_turns)
+
+    def _with_open_turns_closed(self, messages: list[dict]) -> list[dict]:
+        """``messages`` with each turn left open before a later question closed as that question closes it live: as it stands where the template writes the question after it, else each call still owed told it was not run, then an empty reply after, else the turn taken out and the two questions joined."""
+        turns = _open_turns(messages)
+        if not turns:
+            return messages
+        system = system_part(messages)
+        closed, done = [], 0
+        for asked, nxt, owed in turns:
+            exchange = messages[asked:nxt]
+            results = [result_message(UNKNOWN_FUNCTION if UNREADABLE_CALL in c
+                                      else c["function"]["name"], c["id"],
+                                      result_text(_NOT_RUN)) for c in owed]
+            question = messages[nxt]
+            out = ([joined_question(exchange[0], question)] if self._joins_questions
+                   else exchange[:1] + [question])
+            forms = ((exchange, exchange + [question]),
+                     (exchange + results, exchange + results + [question]),
+                     (exchange + results + [{"role": "assistant", "content": ""}],
+                      exchange + results + [{"role": "assistant", "content": ""}, question]),
+                     (exchange[:1], out))
+            chosen = next((form for form, written in forms
+                           if self._rendering.render(system + written, True) is not None), exchange)
+            closed += messages[done:asked] + chosen
+            done = nxt
+        closed += messages[done:]
+        return with_questions_joined(closed) if self._joins_questions else closed
 
     def _keep_newest_history(self, cached: list[dict]) -> None:
         """Keep the newest of the history being begun that fits under the eviction threshold where the cache holds the oldest of it already, as a conversation this one goes on with, else within half the context; the rest is recorded as evicted."""
@@ -1938,6 +1966,23 @@ _THE_REPLY = "the reply"
 
 # What a call still owed is told when a question closes its turn.
 _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}
+
+
+def _open_turns(messages: list[dict]) -> list[tuple[int, int, list[dict]]]:
+    """Each turn a call left open before a later question: where its question stands, where the later question stands, and the calls still owed a result."""
+    turns, asked, owed, is_open = [], None, [], False
+    for at, message in enumerate(messages):
+        if message["role"] == "user":
+            if is_open and asked is not None:
+                turns.append((asked, at, owed))
+            asked, owed, is_open = at, [], False
+        elif message.get("tool_calls"):
+            owed, is_open = list(message["tool_calls"]), True
+        elif message["role"] == "tool":
+            owed = [c for c in owed if c["id"] != message["tool_call_id"]]
+        elif message["role"] == "assistant":
+            is_open = False
+    return turns
 
 
 

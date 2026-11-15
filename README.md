@@ -150,7 +150,11 @@ is given); questions; replies, a reply's thought under `"reasoning_content"`
 and its calls under `"tool_calls"` with their arguments as a JSON string; and
 each call's result with the role `"tool"` and its `"tool_call_id"` (see [Tool
 calling](#tool-calling)). Anything else of that form, such as a list of content
-parts, the `developer` role or a `name`, is refused, naming where it stands. It
+parts, the `developer` role or a `name`, is refused, naming where it stands. Two
+questions in a row are joined into one where the template writes no two in a
+row, as a running conversation joins them, and a turn a call left open before
+a later question is closed as that question closes it live, where the template
+does not write the question after it as it stands. It
 compares the conversation with what the cache holds and decodes only from where
 they differ, so beginning again with the same conversation and other tools or
 another reasoning setting is how those change. It keeps the newest history that
@@ -197,7 +201,11 @@ read.
 
 **Shortening the newest reply to what was heard.** `keep_text` is a prefix of
 the reply's text, or of the text its stream showed, which after a tool's result
-may open with a blank line. The reply that ends a turn that called tools keeps
+may open with a blank line, and where one stream ran a call and went on, shows
+the text before the call too; a cut inside that earlier text cuts the newest
+reply to nothing, as the text a call followed stays. The newest exchange stays
+after its reply until the next question comes, however long, while it fits the
+context, so a long reply can still be cut. The reply that ends a turn that called tools keeps
 its tokens as generated up to the cut; cut to nothing, its turn keeps them up
 to its newest call. Refused where the template does not write the reply
 shortened to `keep_text`, as a template that writes no empty reply does not

@@ -968,20 +968,12 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
         given = opened("", saved["messages"] + [
             {"role": "user", "content": "Weather in Rome?"}, *unanswered,
             {"role": "user", "content": "Never mind."}])
-        # Refused exactly where the template itself writes no call without its result.
-        writes = run.context.stated_render(
-            answer_in_order(read_messages(given), ""),
-            [spec.as_declaration() for spec in saved["tools"]], reasoning=reasoning,
-            for_tools=True) is not None
-        try:
-            run.chat.begin(given, tools=saved["tools"], reasoning=reasoning)
-        except ValueError as refused:
-            assert not writes and "refuses" in str(refused) and run.chat.conversation() == saved
-        else:
-            assert writes
-            _assert_begins_again_the_same(run.chat)
-            run.chat.reply().finish()
-            _assert_begins_again_the_same(run.chat)
+        # Written as given where the template writes a call without its result, else closed
+        # as the question closes it live.
+        run.chat.begin(given, tools=saved["tools"], reasoning=reasoning)
+        _assert_begins_again_the_same(run.chat)
+        run.chat.reply().finish()
+        _assert_begins_again_the_same(run.chat)
     other = _Run(stem, context_size=run.chat.config.context_size, reasoning=reasoning).chat
     evicted = 0
     for question in QUESTIONS[1:] + [f"{q} Again." for q in QUESTIONS]:
@@ -2061,6 +2053,30 @@ def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
     # The turn stays, its call told it was not run, where the template writes the question
     # after it; else the turn goes and the question joins the one before it.
     assert messages[0]["content"] in ("Weather?", f"Weather?\n\n{QUESTIONS[0]}")
+
+
+@pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_history_that_keeps_a_turn_open_before_a_question_begins_as_the_question_closed_it(
+        stem, owed):
+    steps = (ToolCall(WEATHER.name, {"city": "Bonn"}),) + (() if owed else
+                                                          (Result(WEATHER.name, "sunny"),))
+    opened = [{"role": "user", "content": "Weather?"}, *tool_turn(*steps)]
+    live = _Run(stem)
+    live.begin(opened, tools=[WEATHER])
+    live.chat.reply(QUESTIONS[0]).finish()
+    # A record that kept the turn as it was asked, as a server may keep it: written as given
+    # where the template writes it so, else as the question closed it live.
+    record = opened + [{"role": "user", "content": QUESTIONS[0]},
+                       {"role": "assistant", "content": ANSWERS[0]}]
+    kept = _Run(stem)
+    kept.begin(record, tools=[WEATHER])
+    def said(messages):
+        return [(m["role"], m.get("content") or "", [c["function"]["name"] for c in m.get("tool_calls") or ()])
+                for m in after_system(messages)]
+    assert said(kept.chat.conversation()["messages"]) in (
+        said(record), said(live.chat.conversation()["messages"]))
+    assert kept.chat.reply(QUESTIONS[1]).finish().n_generated_tokens
 
 
 # ----- changing tools and reasoning on the running conversation -----------------------
