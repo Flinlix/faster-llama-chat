@@ -2409,3 +2409,36 @@ def test_a_reply_that_ran_a_call_is_cut_to_what_its_one_stream_showed(stem, cut)
         assert not newest[:len(newest) - len(newest) // 2] or cut == "before the call"
         return                                      # the template writes no empty reply
     run.chat.reply("And tomorrow?").finish()
+
+
+def _rewrites_calls_after_a_drop(stem) -> bool:
+    """Whether the template writes the calls after the oldest exchange otherwise once it goes, as one that numbers them by place does."""
+    from llama_chat.render_checks import rest_stays_after_a_drop, tool_exchanges
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    render = run.chat._conversation._rendering.render
+    system = [{"role": "system", "content": run.system}] if run.system else []
+    return (rest_stays_after_a_drop(render, system)
+            and not rest_stays_after_a_drop(render, system, tool_exchanges(WEATHER.name)))
+
+
+@pytest.mark.parametrize("stem", [s for s in _TOOL_TEMPLATES if _rewrites_calls_after_a_drop(s)])
+def test_a_template_that_renumbers_calls_after_a_drop_evicts_well_below_its_threshold(stem):
+    """Rule 4: dropping a tool exchange rewrites every later call, so the cache is decoded again only every few turns, not after every reply."""
+    history = []
+    for n in range(40):
+        history += [{"role": "user", "content": f"Weather {n}?"},
+                    {"role": "assistant", "content": None, "tool_calls": [
+                        {"id": f"callz{n:04d}", "type": "function",
+                         "function": {"name": WEATHER.name, "arguments": '{"city": "Bonn"}'}}]},
+                    {"role": "tool", "tool_call_id": f"callz{n:04d}", "content": "sunny"},
+                    {"role": "assistant", "content": f"Sunny {n}."}]
+    run = _Run(stem, context_size=6000, replies=[f"Answer {i}." for i in range(30)])
+    run.begin(history, tools=[WEATHER])
+    assert not internals.keeps_the_rest_after_a_drop(run.chat)
+    costs = []
+    for i in range(18):
+        before = run.context.total_prefilled()
+        run.chat.reply(f"Question {i}?").finish()
+        costs.append(run.context.total_prefilled() - before)
+    assert sum(cost > 400 for cost in costs) <= 6, costs

@@ -78,7 +78,8 @@ def extract_tool_fragments(render: Render, fragments: TemplateFragments,
     call_close = _common_suffix(text, number)
     # A template that ignored the arguments renders the two probes identically,
     # and then the shared ending runs back past the call into the conversation.
-    if not call_open or not call_close or TOOL_SENTINEL in call_close:
+    if not call_open or not call_close or TOOL_SENTINEL in call_close \
+            or _PROBE_ID in call_open:
         return None
     return ToolCallFragments(call_open=call_open, call_close=call_close)
 
@@ -209,6 +210,12 @@ def extract_call_body(render: Render, call_open: str,
            for delimiter in dataclasses.astuple(body) if isinstance(delimiter, str)):
         return None
     return _with_id_slot(body, rendered_body, text)
+
+
+def holds_the_probe_id(body: CallBody) -> bool:
+    """Whether a delimiter of ``body`` holds the id the probes' calls carried: an id written where it cannot be told from the text around it, unless a JSON key it stands under reads it."""
+    return any(_PROBE_ID in delimiter for delimiter in dataclasses.astuple(body)
+               if isinstance(delimiter, str))
 
 
 def _with_id_slot(body: CallBody, rendered_body, text: str) -> CallBody | None:

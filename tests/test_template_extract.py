@@ -551,3 +551,21 @@ def test_what_a_template_writes_once_after_the_last_message_is_read_by_tags_of_a
     assert as_probes_read(render, tags)(alone, reasoning=False) == "«user»U«end»"
     # Without the model's tags the end is read wider, taking the turn's own closing.
     assert as_probes_read(render, ())(alone, reasoning=False) == "«user»U"
+
+
+@pytest.mark.parametrize("where, readable", [("[ID]{{c.id}}{ ", True), ("{ ", False)])
+def test_a_call_id_is_read_between_the_name_and_the_arguments_and_refused_elsewhere(where, readable):
+    """Rule 2: an id the template writes where it cannot be told from the text around it leaves no call format, rather than one that misreads every call."""
+    import jinja2
+    from llama_chat.call_format import holds_the_probe_id
+    after = "#{{c.id}}" if not readable else ""
+    template = jinja2.Environment().from_string(
+        "{%- for m in messages -%}<{{m.role}}>{{m.content}}{%- for c in m.tool_calls or [] -%}"
+        "<call>{{c.function.name}}" + where + "{%- for k,v in c.function.arguments.items() -%}"
+        "{{k}}:'{{v}}'{{',' if not loop.last}}{%- endfor -%} }" + after + "</call>"
+        "{%- endfor -%}</{{m.role}}>{%- endfor -%}")
+    body = extract_call_body(lambda messages, reasoning=False, **_: template.render(messages=messages),
+                             "<call>", "</call>")
+    assert body is not None and holds_the_probe_id(body) == (not readable)
+    if readable:
+        assert body.id_open == "[ID]"

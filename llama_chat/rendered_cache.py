@@ -1422,7 +1422,9 @@ class RenderedCache:
             splice_probe=splice_probe(render, system),
             repeats_alike=repeated_question_written_alike(render, system),
             with_a_short_question=self._eviction.with_a_short_question(),
-            rest_stays=rest_stays_after_a_drop(render, system),
+            rest_stays=rest_stays_after_a_drop(render, system) and not (
+                calls and not rest_stays_after_a_drop(
+                    render, system, tool_exchanges(tools[0].name if tools else "probe"))),
             # Without the steps tool calling needs, no turn keeps a call, and the template is
             # not asked.
             tool_turns_stay=self.template.properties.can_call_tools and tool_turns_stay_written(

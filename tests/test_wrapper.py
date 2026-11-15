@@ -1308,6 +1308,8 @@ _PLAIN_REPLY_CODE = {
         "ChatWrapper.reply",
         "ChatWrapper.reply.<locals>.<lambda>",
         "_CallBudget.__post_init__",
+        "_Waiting.__enter__",
+        "_Waiting.__exit__",
         "_answerable",
         "_ensure_cancel_and_sampling",
         "_ensure_max_calls_runs",

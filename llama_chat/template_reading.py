@@ -11,7 +11,7 @@ import dataclasses
 from collections.abc import Mapping
 
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
-                          extract_json_call_id_key, extract_json_call_keys, extract_named_twice_opening,
+                          extract_json_call_id_key, extract_json_call_keys, holds_the_probe_id, extract_named_twice_opening,
                           extract_tool_fragments)
 from .messages import call_id, calling_message, result_message
 from .model_template import RENDERER_VARIABLES, ModelTemplate, names_read
@@ -95,6 +95,9 @@ class TemplateReader:
                            else extract_json_call_keys(self._read_as_probes))
         self._json_id_key = (None if self._json_keys is None
                              else extract_json_call_id_key(self._read_as_probes, self._json_keys))
+        if self._call_body is not None and self._json_keys is None \
+                and holds_the_probe_id(self._call_body):
+            self._call_body = None          # an id it writes where it cannot be read
         self._declares_before_newest_turn = self._resolve_declares_before_newest_turn()
         if not self._declares_before_newest_turn:
             self._variables = self._resolve_declaration_variables()

@@ -113,8 +113,8 @@ class ChatWrapper:
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
         self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
-        # Set while an action waits for the wrapper, which the work after a reply gives way to.
-        self._waiting = threading.Event()
+        # The actions that wait for the wrapper, which the work after a reply gives way to.
+        self._waiting = _Waiting()
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -1105,16 +1105,16 @@ class ChatWrapper:
     def _held(self, settles: bool = True):
         """Hold the wrapper for one action, refusing one the thread that already holds it asks for; the work a reply left is done first, where ``settles``."""
         self._ensure_not_holding()
-        self._waiting.set()
-        with self._lock:
-            self._waiting.clear()
+        with self._waiting:
+            self._lock.acquire()
+        try:
             self._holder = threading.current_thread()
-            try:
-                if settles:
-                    self._settle_due_work()
-                yield
-            finally:
-                self._holder = None
+            if settles:
+                self._settle_due_work()
+            yield
+        finally:
+            self._holder = None
+            self._lock.release()
 
     def _settle_due_work(self) -> None:
         """Do the work a reply left, where the thread for it has not yet; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
@@ -1137,6 +1137,31 @@ class ChatWrapper:
                 "the reply this thread is reading still holds this conversation, and an "
                 "action now would wait for that reply for ever; read the reply to its end "
                 "or close it first, and call nothing on the wrapper from a tool it runs")
+
+
+class _Waiting:
+    """How many actions wait for the wrapper, counted while each waits; set while any does, as an event is."""
+
+    def __init__(self) -> None:
+        self._count = 0
+        self._changed = threading.Condition()
+
+    def __enter__(self) -> None:
+        with self._changed:
+            self._count += 1
+            self._changed.notify_all()
+
+    def __exit__(self, *_) -> None:
+        with self._changed:
+            self._count -= 1
+
+    def is_set(self) -> bool:
+        return self._count > 0
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Block until an action waits; whether one did within ``timeout``."""
+        with self._changed:
+            return self._changed.wait_for(self.is_set, timeout)
 
 
 @dataclass

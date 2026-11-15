@@ -93,10 +93,11 @@ def windows_are_exact(render: Render, system: list[dict], tag_after,
             and dropped[:drop] == head[:in_head] and dropped[drop:] == whole[kept:])
 
 
-def rest_stays_after_a_drop(render: Render, system: list[dict]) -> bool:
-    """Whether the template writes the exchanges after the oldest as before once the oldest goes, as one that numbers its messages does not."""
+def rest_stays_after_a_drop(render: Render, system: list[dict],
+                            probes: tuple[list[dict], ...] = _WINDOW_PROBES) -> bool:
+    """Whether the template writes the exchanges after the oldest as before once the oldest goes, as one that numbers its messages or its calls does not; ``probes`` as :func:`windows_are_exact` takes them."""
     stand_in = [{"role": "user", "content": STAND_IN}]
-    exchanges = [list(e) for e in _WINDOW_PROBES[:3]]
+    exchanges = [list(e) for e in probes[:3]]
     whole = render(system + sum(exchanges, []) + stand_in, True)
     dropped = render(system + sum(exchanges[1:], []) + stand_in, True)
     if whole is None or dropped is None:
