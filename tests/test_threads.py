@@ -138,3 +138,86 @@ def test_waiting_for_idle_takes_infinity_as_no_timeout_and_refuses_what_is_no_ti
             chat.wait_idle(timeout_s)
     else:
         assert chat.wait_idle(timeout_s) is True
+
+
+# ----- the work after a reply, on a thread of its own ---------------------------------
+class _HeldAhead(FakeContext):
+    """A fake cache whose decodes after a reply's generation wait until ``go`` is set, noting in ``waiting`` that one does."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.go, self.waiting, self.holds = threading.Event(), threading.Event(), False
+
+    def prefill(self, token_ids, start_pos, want_logits):
+        if self.holds and not want_logits:
+            self.waiting.set()
+            assert self.go.wait(timeout=5)
+        super().prefill(token_ids, start_pos, want_logits)
+
+
+def test_a_reply_s_stream_ends_before_the_work_after_it_and_the_next_action_waits_for_it(
+        settles_in_the_background):
+    fake = _HeldAhead(PLAIN, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    fake.holds = True
+    assert w.reply("Wie geht es?").finish().text == "Gut."     # the decode ahead still waits
+    assert fake.waiting.wait(timeout=5) and not w.wait_idle(timeout_s=0.05)
+    injected = threading.Thread(target=lambda: w.inject("Noch etwas."), daemon=True)
+    injected.start()
+    injected.join(timeout=0.1)
+    assert injected.is_alive()                  # it waits for the work after the reply
+    fake.holds = False
+    fake.go.set()
+    injected.join(timeout=5)
+    assert not injected.is_alive() and w.wait_idle(timeout_s=5)
+    assert w.reply().finish().text == "Gut."
+    assert_consistent(w, fake)
+
+
+def test_a_long_decode_after_a_reply_gives_way_to_an_action_that_waits(settles_in_the_background):
+    """On a cache that cannot shift, the decode after an eviction stops between its parts once an action waits, and that action does what it needs."""
+    fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.", can_shift=False, can_cut_tail=True)
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=0.5, min_reply_tokens=8),
+                    context=fake)
+    w.begin(opened("s", [m for n in range(60) for m in (
+        {"role": "user", "content": f"Frage {n} " + "x" * 60},
+        {"role": "assistant", "content": "Antwort " + "y" * 60})]))
+    decode, parts, started = fake.prefill, [], threading.Event()
+
+    def watched(token_ids, start_pos, want_logits):
+        if threading.current_thread().name == "llama_chat after a reply":
+            parts.append(len(token_ids))
+            if len(parts) == 1:
+                started.set()
+                assert w._waiting.wait(timeout=5)   # an action waits for the wrapper now
+        decode(token_ids, start_pos, want_logits)
+
+    fake.prefill = watched
+    assert w.reply("frage " + "z" * 200).finish().text == "Gut."
+    assert started.wait(timeout=5), "no eviction after the reply decoded the cache again"
+    w.inject("Gleich weiter.")
+    assert len(parts) == 1                      # it gave way after its first part
+    assert w.wait_idle(timeout_s=5) and w.reply().finish().text == "Gut."
+    assert_consistent(w, fake)
+
+
+def test_a_failure_of_the_work_after_a_reply_is_logged_and_the_next_action_decodes_again(
+        settles_in_the_background, caplog):
+    fake = _HeldAhead(PLAIN, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    decode = fake.prefill
+
+    def failing(token_ids, start_pos, want_logits):
+        if not want_logits:
+            fake.prefill = decode
+            raise RuntimeError("the decode failed")
+        decode(token_ids, start_pos, want_logits)
+
+    fake.prefill = failing
+    with caplog.at_level("WARNING", logger="llama_chat"):
+        assert w.reply("Wie geht es?").finish().text == "Gut."
+        assert w.wait_idle(timeout_s=5)
+    assert any("after a reply failed" in r.getMessage() for r in caplog.records)
+    assert w.reply("Und jetzt?").finish().text == "Gut."

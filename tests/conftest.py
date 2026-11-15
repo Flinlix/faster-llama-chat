@@ -53,3 +53,22 @@ def clock(monkeypatch):
 
     monkeypatch.setattr(model_template, "datetime", _Clock)
     return today
+
+
+@pytest.fixture(autouse=True)
+def _the_work_after_a_reply_is_done_as_its_stream_ends(request, monkeypatch):
+    """Done on the reader's thread, before the stream's end reaches it, so that a test reads the cache as that work left it, and its failures reach the reader; a test that asks for ``settles_in_the_background`` keeps the thread of its own."""
+    if "settles_in_the_background" in request.fixturenames:
+        return
+
+    def at_once(wrapper):
+        if wrapper._conversation.settle_due:
+            with wrapper._lock:
+                wrapper._conversation.settle()
+
+    monkeypatch.setattr(ChatWrapper, "_start_settling", at_once)
+
+
+@pytest.fixture
+def settles_in_the_background():
+    """The work after a reply runs on a thread of its own, as it does outside the tests."""

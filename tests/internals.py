@@ -99,6 +99,12 @@ def kept_turn_places(wrapper) -> list[tuple[int, int] | None]:
     return places
 
 
+def done_after_the_newest_reply(wrapper) -> tuple[int, int]:
+    """How many tokens the work after the newest reply decoded, and how many history messages it evicted, which the next request counts."""
+    conversation = wrapper._conversation
+    return conversation._decoded_after_reply, conversation._evicted_after_reply[0]
+
+
 def keeps_the_rest_after_a_drop(wrapper) -> bool:
     """Whether the template writes the exchanges after the oldest as before once it goes."""
     return wrapper._conversation._state.checks.rest_stays

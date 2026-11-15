@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests import internals
 from tests.chat_messages import opened
 
 from llama_chat.config import Config
@@ -238,9 +239,13 @@ def test_a_cut_leaves_a_state_for_the_next_reply():
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_what_a_reply_decodes_again_is_counted(can_shift):
     w, fake = reasoning_wrapper(can_shift=can_shift)
-    before = fake.total_prefilled()
+    w.reply("eins").finish()
+    before, ahead = fake.total_prefilled(), internals.done_after_the_newest_reply(w)[0]
     reply = w.reply("hi").finish()
-    assert reply.n_prefilled_tokens == fake.total_prefilled() - before
+    # What was decoded ahead for it after the reply before counts, and what is decoded
+    # ahead after it counts for the next.
+    assert reply.n_prefilled_tokens == (fake.total_prefilled() - before + ahead
+                                        - internals.done_after_the_newest_reply(w)[0])
 
 
 @pytest.mark.parametrize("refusal", ["none", "raises"])

@@ -9,6 +9,7 @@ from llama_chat.errors import ContextOverflowError
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
+from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
@@ -338,8 +339,10 @@ def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_ti
     w.begin(opened("sys", [m for _ in range(4000) for m in ({"role": "user", "content": "ok"}, {"role": "assistant", "content": "fine"})]))
     before = len(fake.rendered)
     reply = w.reply("z" * int(context_size * 0.6)).finish()
-    # Dropping hundreds of exchanges costs a few renders, not one each.
-    assert reply.n_evicted_messages > 100 and len(fake.rendered) - before < 40
+    # Dropping hundreds of exchanges costs a few renders, not one each, some of them gone
+    # for the question and the rest after its reply.
+    _decoded, after = internals.done_after_the_newest_reply(w)
+    assert reply.n_evicted_messages + after > 100 and len(fake.rendered) - before < 40
 
 
 def test_beginning_with_a_history_that_fits_renders_as_often_however_long_it_is():

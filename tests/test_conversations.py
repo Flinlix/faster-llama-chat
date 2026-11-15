@@ -238,7 +238,9 @@ def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts
     run.chat.inject(question)
     reply = run.chat.reply().finish()
     assert max(run.context.rendered[rendered:run.renders[-1]]) <= 4
-    assert reply.n_evicted_messages
+    # Evicted after its reply, which the next request reports.
+    went = internals.done_after_the_newest_reply(run.chat)[1]
+    assert went and run.chat.reply(QUESTIONS[4]).finish().n_evicted_messages >= went
 
 
 @pytest.mark.parametrize("stem", _EVERY)

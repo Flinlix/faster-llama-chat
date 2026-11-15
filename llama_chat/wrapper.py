@@ -113,6 +113,8 @@ class ChatWrapper:
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
         self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
+        # Set while an action waits for the wrapper, which the work after a reply gives way to.
+        self._waiting = threading.Event()
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -246,7 +248,7 @@ class ChatWrapper:
             self._templates.ensure_accepts(
                 uses_tools, tools_field="tools" if specs else "messages" if calls else None,
                 reasoning=reasoning, system_prompt_field="messages" if opens_on_system else None)
-            self._conversation.report()         # changes of earlier actions are told already
+            self._conversation.forget_told()    # changes of earlier actions are told already
             # A begin leaves no turn a reply started, so a call it could not read is answered
             # as one in a turn that runs no call.
             self._conversation.start(messages, specs, reasoning, generated_turns,
@@ -300,7 +302,7 @@ class ChatWrapper:
         ensure_text(text, "an injected message's text")
         with self._held():
             self._ensure_open()
-            self._conversation.report()
+            self._conversation.forget_told()
             self._conversation.add(role, text)
             return self._conversation.report()
 
@@ -468,6 +470,7 @@ class ChatWrapper:
                 try:
                     step = next(steps)
                 except StopIteration as ended:
+                    self._start_settling()
                     return ended.value
                 holds = self._holder is threading.current_thread()
                 yield step
@@ -475,14 +478,36 @@ class ChatWrapper:
             # Closed at a step: ``steps`` still waits there, and is closed on this thread.
             if holds:
                 self._holder = threading.current_thread()
-            steps.close()
+            try:
+                steps.close()
+            finally:
+                self._start_settling()
             raise
+
+    def _start_settling(self) -> None:
+        """Have the work a reply left done on a thread of its own, once the reply has ended, so that its stream ends at once; the next action does it first where that thread has not yet."""
+        if self._conversation.settle_due:
+            threading.Thread(target=self._settle_when_free, name="llama_chat after a reply",
+                             daemon=True).start()
+
+    def _settle_when_free(self) -> None:
+        """Do the work a reply left, holding the wrapper, giving way to an action that waits for it."""
+        with self._lock:
+            self._holder = threading.current_thread()
+            try:
+                if not self._closed:
+                    self._conversation.settle(self._waiting)
+            except Exception:
+                _log.warning("the work after a reply failed; the next action decodes the cache "
+                             "again", exc_info=True)
+            finally:
+                self._holder = None
 
     def _replying(self, text: str | None, given: ToolCallPolicy | ToolRegistry | None,
                   max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
         """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's."""
         with self._held():
-            self._conversation.report()         # changes of earlier actions are told already
+            self._conversation.forget_told()    # changes of earlier actions are told already
             goes_on = text is None and self._conversation.turn_open
             policy = self._policy_for(given, goes_on)
             _ensure_max_calls_runs(policy, max_calls)
@@ -574,7 +599,7 @@ class ChatWrapper:
             may_call_again = policy == "yield" or (isinstance(policy, ToolRegistry)
                                                    and self._conversation.turn_budget.calls_left > 0)
             written = _explain_failure(result if failure is None else failure, may_call_again)
-            self._conversation.report()
+            self._conversation.forget_told()
             try:
                 self._conversation.add_result(call_id, written)
             except ContextOverflowError:
@@ -650,7 +675,7 @@ class ChatWrapper:
         return self._context.can_shift
 
     def wait_idle(self, timeout_s: float | None = None) -> bool:
-        """Block until no generation holds the wrapper; advisory, since one may start right after.
+        """Block until no generation holds the wrapper, nor the work after a reply; advisory, since one may start right after.
 
         Args:
             timeout_s: Seconds to wait, at least 0; ``None``, infinity or more
@@ -675,7 +700,10 @@ class ChatWrapper:
         waits = timeout_s is None or timeout_s > threading.TIMEOUT_MAX
         if not self._lock.acquire(timeout=-1 if waits else timeout_s):
             return False
-        self._lock.release()
+        try:
+            self._settle_due_work()
+        finally:
+            self._lock.release()
         return True
 
     def conversation(self) -> dict:
@@ -775,7 +803,7 @@ class ChatWrapper:
                 for steps in [s for s in self._replies if not s.gi_running]:
                     steps.close()
         finally:
-            with self._held():
+            with self._held(settles=False):
                 if not self._closed:
                     self._closed = True
                     self._context.close()
@@ -1053,15 +1081,29 @@ class ChatWrapper:
             raise RuntimeError("ChatWrapper is closed")
 
     @contextlib.contextmanager
-    def _held(self):
-        """Hold the wrapper for one action, refusing one the thread that already holds it asks for."""
+    def _held(self, settles: bool = True):
+        """Hold the wrapper for one action, refusing one the thread that already holds it asks for; the work a reply left is done first, where ``settles``."""
         self._ensure_not_holding()
+        self._waiting.set()
         with self._lock:
+            self._waiting.clear()
             self._holder = threading.current_thread()
             try:
+                if settles:
+                    self._settle_due_work()
                 yield
             finally:
                 self._holder = None
+
+    def _settle_due_work(self) -> None:
+        """Do the work a reply left, where the thread for it has not yet; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
+        if self._closed or not self._conversation.settle_due:
+            return
+        try:
+            self._conversation.settle()
+        except Exception:
+            _log.warning("the work after a reply failed; the cache is decoded again",
+                         exc_info=True)
 
     def _ensure_not_holding(self) -> None:
         """Refuse an action on the thread whose reply still holds the wrapper, which would wait for itself.

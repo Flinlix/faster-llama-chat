@@ -19,6 +19,7 @@ from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
+from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from tests.fake_context import BOS, FakeContext
@@ -150,7 +151,7 @@ def test_a_refusing_reply_prefills_only_new_tokens_and_reuses_context():
 
     # Every decode is counted, and none reaches back into what was held.
     new_prefill = fake.total_prefilled() - prefilled_after_begin
-    assert new_prefill == reply.n_prefilled_tokens
+    assert new_prefill == reply.n_prefilled_tokens + internals.done_after_the_newest_reply(w)[0]
     assert all(start >= held for start, _, _ in fake.prefill_calls[mark:])
     assert reply.n_generated_tokens == 4
     assert reply.stop_reason == "end_of_turn"
@@ -178,7 +179,9 @@ def test_the_request_and_its_opening_tag_are_one_decode():
     prompt_call, ahead_call = fake.prefill_calls[mark:]
     assert prompt_call[2] is True                 # logits: generation follows
     assert ahead_call[2] is False
-    assert prompt_call[1] + ahead_call[1] == reply.n_prefilled_tokens
+    # What is decoded ahead after the reply is the next request's.
+    assert prompt_call[1] == reply.n_prefilled_tokens
+    assert ahead_call[1] == internals.done_after_the_newest_reply(w)[0]
 
 
 def test_a_second_generation_does_not_reprefill_history():
@@ -1137,6 +1140,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._sync.<locals>.<genexpr>",
         "RenderedCache._sync.<locals>.<lambda>",
         "RenderedCache._system_part",
+        "RenderedCache._take_evicted_after_reply",
         "RenderedCache._turn_end_test",
         "RenderedCache._view",
         "RenderedCache._view_target",
@@ -1149,6 +1153,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.begun",
         "RenderedCache.decoded",
         "RenderedCache.ensure_can_reply",
+        "RenderedCache.forget_told",
         "RenderedCache.generate",
         "RenderedCache.generation",
         "RenderedCache.newest_role",
@@ -1161,6 +1166,8 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.record_reply",
         "RenderedCache.report",
         "RenderedCache.results_cut",
+        "RenderedCache.settle",
+        "RenderedCache.settle_due",
         "RenderedCache.template",
         "RenderedCache.total_tokens",
         "RenderedCache.turn_budget",
@@ -1291,6 +1298,8 @@ _PLAIN_REPLY_CODE = {
         "ChatWrapper._reply_cap.<locals>.<genexpr>",
         "ChatWrapper._replying",
         "ChatWrapper._replying.<locals>.<lambda>",
+        "ChatWrapper._settle_due_work",
+        "ChatWrapper._start_settling",
         "ChatWrapper._template",
         "ChatWrapper.inject",
         "ChatWrapper.reply",
@@ -1371,7 +1380,8 @@ def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_
         patched.setattr(publishing, "completions_messages",
                         lambda *a, **k: built.append(1) or [])
         w.reply("zwei").finish()
-    assert len(made) <= 2 and not built        # the question, then the recorded reply
+    # The question, the recorded reply, then the work after it.
+    assert len(made) <= 3 and not built
 
 
 def test_a_stream_never_read_reports_no_other_streams_reply():

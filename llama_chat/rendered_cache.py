@@ -94,6 +94,12 @@ class RenderedCache:
         self._published = Published()
         # How many actions, one inside another, run now; the outermost publishes once it ends.
         self._depth = 0
+        # Whether a reply left the work after it to do, the history messages that work
+        # evicted, with why, which the next action reports, and the tokens it decoded,
+        # which the next request counts as its own.
+        self._settle_due = False
+        self._evicted_after_reply: tuple[int, str | None] = (0, None)
+        self._decoded_after_reply = 0
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -275,6 +281,8 @@ class RenderedCache:
             opened_alike = alike and len(system_part(before)) == len(self._system_part()) <= reused
             if not alike:
                 self._state.anchors = ()        # placed again as the cache is held
+            # What the work after the newest reply did is the conversation's before.
+            self._evicted_after_reply, self._decoded_after_reply = (0, None), 0
             self._state.left_out_calls = frozenset(gone)
             self._state.changes.n_left_out_calls = len(gone)
             # Counted before the oldest are dropped, and never back, so that no later call
@@ -497,7 +505,8 @@ class RenderedCache:
 
     # ----- what an action changed beyond what was asked ------------------------------------
     def report(self) -> Report:
-        """The changes since the caller last asked, and a fresh start for the next."""
+        """The changes since the caller last asked, the evictions after the newest reply included, and a fresh start for the next."""
+        self._take_evicted_after_reply()
         changes, self._state.changes = self._state.changes, Changes()
         return Report(n_evicted_messages=changes.n_evicted,
                       evicted_for=changes.evicted_for if changes.n_evicted else None,
@@ -508,6 +517,58 @@ class RenderedCache:
                       tool_results_cut=tuple(changes.tool_results_cut),
                       turn_closed=changes.turn_closed,
                       question_joined=changes.question_joined)
+
+    def forget_told(self) -> None:
+        """Start the changes afresh, those of earlier actions told already; the evictions after the newest reply are the next report's."""
+        self._state.changes = Changes()
+
+    def _take_evicted_after_reply(self) -> None:
+        """Count the evictions of the work after the newest reply among the changes."""
+        went, cause = self._evicted_after_reply
+        if went:
+            self._state.changes.n_evicted += went
+            self._state.changes.evicted_for = cause
+        self._evicted_after_reply = (0, None)
+
+    # ----- the work after a reply ---------------------------------------------------------
+    @property
+    def settle_due(self) -> bool:
+        """Whether a reply left the work after it to do: the evictions and the decode ahead of the next question."""
+        return self._settle_due
+
+    def settle(self, interrupt: threading.Event | None = None) -> None:
+        """Do the work a reply left, where it left any: drop what is over the limits, then render and decode ahead for the next question.
+
+        Args:
+            interrupt: Set by an action that waits for this one, it stops a
+                long decode between its parts; the work is then put back
+                undone, and the next action does what it needs of it.
+
+        Raises:
+            Exception: What a failed decode raises, which leaves the
+                conversation as it was and the cache to be decoded again.
+        """
+        if not self._settle_due:
+            return
+        self._settle_due = False
+        changes = replace(self._state.changes,
+                          tool_results_cut=list(self._state.changes.tool_results_cut))
+        decoded = self.decoded
+        self._memory.interrupt = interrupt
+        try:
+            self._settle()
+        except Cancelled:
+            _log.debug("the work after a reply gave way to the next action")
+            return
+        finally:
+            self._memory.interrupt = None
+            self._decoded_after_reply += self.decoded - decoded
+        went = self._state.changes.n_evicted - changes.n_evicted
+        if went:
+            # Kept apart, so that the next action reports them though it starts afresh.
+            self._evicted_after_reply = (self._evicted_after_reply[0] + went,
+                                         self._state.changes.evicted_for)
+            self._state.changes = changes
 
     def changes_so_far(self) -> Changes:
         """What the actions changed since the caller last asked for a :meth:`report`, left to be asked for still."""
@@ -787,6 +848,9 @@ class RenderedCache:
             self.roll_back()
             raise
         n_prompt_tokens = self.total_tokens
+        # The request is written: what the work after the newest reply did was done for it.
+        decoded_from, self._decoded_after_reply = decoded_from - self._decoded_after_reply, 0
+        self._take_evicted_after_reply()
         generated = GenerationAccumulator()
         results_cut = self.results_cut
         template = self.template
@@ -1055,7 +1119,7 @@ class RenderedCache:
             # unanswered, as the next question then follows it.
             self._remove_from(len(self._state.messages) - 1)
             return
-        self._settle()
+        self._settle_due = True             # done by :meth:`settle`, once the reply has ended
 
     def _holds_thought_tags(self, text: str) -> bool:
         """Whether ``text`` holds the template's thought opening or closing, which a template may cut a past reply at."""

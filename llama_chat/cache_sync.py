@@ -40,8 +40,10 @@ class CacheSync:
         self._logits = False            # whether the newest decode left logits for its last token
         self.decoded = 0                # every token decoded so far, for what a request cost
         self.version = 0                # changes whenever the tokens do
-        # Watched between the parts of a long decode, which then raises Cancelled.
+        # Watched between the parts of a long decode, which then raises Cancelled; ``cancel``
+        # also before any decode.
         self.cancel: threading.Event | None = None
+        self.interrupt: threading.Event | None = None
         # (tokens held, state): at most the two newest a cache rested in.
         self._rest_states: list[tuple[int, object]] = []
         # Where states are kept besides those, by what they are kept for, and the states kept,
@@ -279,17 +281,17 @@ class CacheSync:
         """Decode ``tokens`` at the cache's end; ``appended`` where they are in :attr:`tokens` already."""
         if not tokens:
             return
-        if self.cancel is not None:
-            if self.cancel.is_set():
-                raise Cancelled("cancelled before the decode")
-            if len(tokens) > _CANCEL_PART_TOKENS:
-                for at in range(0, len(tokens), _CANCEL_PART_TOKENS):
-                    if at and self.cancel.is_set():
-                        raise Cancelled("cancelled during the decode")
-                    part = tokens[at:at + _CANCEL_PART_TOKENS]
-                    self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
-                                        appended)
-                return
+        if self.cancel is not None and self.cancel.is_set():
+            raise Cancelled("cancelled before the decode")
+        watched = [event for event in (self.cancel, self.interrupt) if event is not None]
+        if watched and len(tokens) > _CANCEL_PART_TOKENS:
+            for at in range(0, len(tokens), _CANCEL_PART_TOKENS):
+                if at and any(event.is_set() for event in watched):
+                    raise Cancelled("cancelled during the decode")
+                part = tokens[at:at + _CANCEL_PART_TOKENS]
+                self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
+                                    appended)
+            return
         pin = min((p for p in self._pins_to_save() if self._end < p < self._end + len(tokens)),
                   default=None)
         if pin is not None:
