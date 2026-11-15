@@ -182,8 +182,8 @@ class CacheSync:
             self._end = pos
 
     def hold(self, target: list[int], *, want_logits: bool = False,
-             find_dropped_stretch: bool = False, rest_at_cut: bool = False) -> None:
-        """Make the cache hold ``target``: a stretch it no longer holds removed, everything from the first difference decoded.
+             find_dropped_stretch: bool = False, rest_at_cut: bool = False) -> int:
+        """Make the cache hold ``target``: a stretch it no longer holds removed, everything from the first difference decoded; how many of its tokens it held already, before any stretch was removed.
 
         Args:
             want_logits: A generation follows the decode at once.
@@ -193,7 +193,7 @@ class CacheSync:
             rest_at_cut: Rest where the cache is cut, before the rest is
                 decoded, so that a cache that cannot cut can go back there.
         """
-        same = common_prefix_length(self._tokens, target)
+        same = held = common_prefix_length(self._tokens, target)
         changes = same < len(self._tokens)     # more than an append
         if find_dropped_stretch and same < len(self._tokens):
             found = _dropped_stretch_end(self._tokens, target, same)
@@ -207,6 +207,7 @@ class CacheSync:
                 self._at_cuts = [s for s in self._at_cuts if s[0] < same][-1:] + [
                     self._rest_states[-1]]
         self.decode(target[same:], want_logits=want_logits)
+        return held
 
     def replace(self, tokens: list[int]) -> None:
         """Hold ``tokens`` instead, as :meth:`hold` does without touching the cache, which is brought to them before it is next used."""

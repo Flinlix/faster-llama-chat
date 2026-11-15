@@ -1713,9 +1713,8 @@ class RenderedCache:
         # next question's move back to where this cut is made, or past it.
         moves = self._moves_declarations()
         # The anchors before the first token the target changes still stand.
-        same = common_prefix_length(self._memory.tokens, target.tokens)
-        self._memory.hold(target.tokens, want_logits=logits,
-                          find_dropped_stretch=dropped or moves, rest_at_cut=moves)
+        same = self._memory.hold(target.tokens, want_logits=logits,
+                                 find_dropped_stretch=dropped or moves, rest_at_cut=moves)
         self._state.turns_at = target.turns_at
         messages = self._state.messages
         new = {index: Anchor(messages[index], index, at, tuple(

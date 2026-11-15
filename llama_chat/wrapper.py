@@ -12,6 +12,7 @@ import contextlib
 import logging
 import math
 import threading
+import time
 import weakref
 from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field, replace
@@ -503,6 +504,7 @@ class ChatWrapper:
 
     def _settle_when_free(self) -> None:
         """Do the work a reply left, holding the wrapper, leaving a long decode to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
+        time.sleep(_AFTER_REPLY_PAUSE_S)    # the reader first takes in the stream's end
         if not self._lock.acquire(timeout=_AFTER_REPLY_WAIT_S):
             return
         self._holder = threading.current_thread()
@@ -1243,6 +1245,9 @@ MAX_UNREADABLE_CALLS_IN_A_ROW = 3
 # How long the work after a reply waits for the wrapper before it leaves that work to the
 # next action, which does it first; at most this long a process waits for it at its end.
 _AFTER_REPLY_WAIT_S = 1.0
+# How long the work after a reply waits before it starts, so that the reader of the stream
+# takes in its end without sharing the interpreter with it; at least 0.
+_AFTER_REPLY_PAUSE_S = 0.005
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 
