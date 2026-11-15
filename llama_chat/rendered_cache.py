@@ -1768,8 +1768,31 @@ class RenderedCache:
         return self._config.context_size - self._config.min_reply_tokens
 
     def _drop_while_over(self, limit: int, generation_prompt: bool, **options) -> bool:
-        """Drop the oldest exchanges once the conversation is over ``limit`` or holds too many, as :meth:`Eviction.drop_while_over` does; whether any went."""
-        return self._eviction.drop_while_over(limit, generation_prompt, **options) is not None
+        """Drop the oldest exchanges once the conversation is over ``limit`` or holds too many, as :meth:`Eviction.drop_while_over` does, in windows of the oldest exchanges first where they stand for the render; whether any went."""
+        went = False
+        if not options.get("newest_too"):
+            went = self._drop_in_windows(limit, generation_prompt,
+                                         not options.get("tokens_only"),
+                                         options.get("beside_open_turn", False))
+        return self._eviction.drop_while_over(limit, generation_prompt, **options) is not None \
+            or went
+
+    def _drop_in_windows(self, limit: int, generation_prompt: bool, counts_exchanges: bool,
+                         beside_open_turn: bool) -> bool:
+        """Drop the oldest exchanges as :meth:`Windows.drop_in` does, each checked against a render of the oldest two and removed from the cache, where a window of the newest stands for the rest; whether any went."""
+        # A cache that cannot shift decodes the rest again after a drop, which costs more
+        # than the render; it drops as far as the whole render says, once.
+        if not self._state.checks.rest_stays or not self._context.can_shift:
+            return False
+        view = self._view(self._state.messages, generation_prompt)
+        if view is None or not view.base:
+            return False
+        anchor_at, held = len(view.base), len(self._memory.tokens)
+        after = len(self._view_target(view).tokens) - anchor_at
+        n_before = len(self._state.messages)
+        self._windows.drop_in(self._memory, lambda: anchor_at - (held - len(self._memory.tokens)),
+                              after, limit, counts_exchanges, beside_open_turn)
+        return len(self._state.messages) < n_before
 
     # ----- what a record made ahead was made for ----------------------------------------
     def _note_ahead(self, split: SplitRender, run: int) -> None:

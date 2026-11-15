@@ -8,8 +8,10 @@ conversation's state, and is given its cache. See design_history.md,
 from __future__ import annotations
 
 from .cache_sync import CacheSync
+from dataclasses import replace
+
 from .conversation_state import ConversationState, goes_on_from
-from .messages import exchange_starts, history_count, system_part
+from .messages import GENERATED_TURN, exchange_starts, history_count, system_part
 from .render_checks import STAND_IN
 from .sequences import common_prefix_length
 
@@ -78,7 +80,8 @@ class Windows:
             return WHOLE
         return at, before, length, split, ahead_run, ahead.turns_at
 
-    def drop_in(self, memory: CacheSync, kept_until, after: int) -> bool:
+    def drop_in(self, memory: CacheSync, kept_until, after: int, limit: int | None = None,
+                counts_exchanges: bool = True, beside_open_turn: bool = False) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
 
         It stops before the newest two exchanges, which the window was rendered
@@ -88,26 +91,32 @@ class Windows:
             kept_until: Where in the cache the window's tag sits now; nothing
                 from there on may be removed.
             after: How many tokens the render has from that tag on.
+            limit: The tokens to keep within, by default the eviction
+                threshold.
+            counts_exchanges: Whether ``max_history_exchanges`` binds too.
+            beside_open_turn: As :meth:`Eviction.drop_while_over` takes it.
 
         Returns:
             Whether the cache is the render up to that tag after it; where it
             is not, the whole conversation is to be rendered.
         """
-        limit = self._config.evict_above_tokens
-        if not (kept_until() + after > limit or self._eviction.too_many()):
+        limit = self._config.evict_above_tokens if limit is None else limit
+        too_many = self._eviction.too_many if counts_exchanges else lambda most=None: False
+        if not (kept_until() + after > limit or too_many()):
             return True
-        cause = "exchange_limit" if self._eviction.too_many() else "room"
+        cause = "exchange_limit" if too_many() else "room"
         n_before = history_count(self._state.messages)
         try:
-            return self._drop_in(memory, kept_until, after)
+            return self._drop_in(memory, kept_until, after, limit, too_many, beside_open_turn)
         finally:
             self._eviction.record(n_before, cause)
 
-    def _drop_in(self, memory: CacheSync, kept_until, after: int) -> bool:
+    def _drop_in(self, memory: CacheSync, kept_until, after: int, limit: int, too_many,
+                 beside_open_turn: bool) -> bool:
         """:meth:`drop_in`'s work, once the conversation is over a limit."""
-        limit = self._config.evict_above_tokens
-        bound, most = self._eviction.drop_bound(limit), self._eviction.exchanges_after_drop()
-        while kept_until() + after > bound or self._eviction.too_many(most):
+        bound = self._eviction.drop_bound(limit, beside_open_turn)
+        most = self._eviction.exchanges_after_drop()
+        while kept_until() + after > bound or too_many(most):
             starts = exchange_starts(self._state.messages)
             if len(starts) <= 2:
                 break
@@ -121,14 +130,15 @@ class Windows:
                                         with_generated_turns=self._state.checks.tool_windows)
             if held is None or list(memory.tokens[:len(held)]) != held:
                 return False
+            gone = self._state.messages[starts[0]:starts[1]]
             if not self._eviction.drop_oldest_exchange(True):
                 break
-            if not self._remove_dropped(memory, held, kept_until()):
+            if not self._remove_dropped(memory, held, kept_until(), gone):
                 return False
         return True
 
     def _remove_dropped(self, memory: CacheSync, held: list[int],
-                        bound: int) -> bool:
+                        bound: int, gone: list[dict]) -> bool:
         """Remove the oldest exchange, just dropped, from the cache, which begins with ``held``; nothing from ``bound`` on.
 
         After the drop, the cache up to the tag that ended ``held`` is the
@@ -147,4 +157,10 @@ class Windows:
         memory.remove(same, end)
         self._state.turns_at = {k: at - (end - same) if at >= end else at
                                for k, at in self._state.turns_at.items()}
+        # The anchors after it stand where they were, as many messages and tokens earlier.
+        went = {id(m[GENERATED_TURN]) for m in gone if GENERATED_TURN in m}
+        self._state.anchors = tuple(
+            replace(a, index=a.index - len(gone), at=a.at - (end - same),
+                    kept=tuple(t for t in a.kept if id(t) not in went))
+            for a in self._state.anchors if a.at >= end)
         return list(memory.tokens[:len(wanted)]) == wanted

@@ -2329,14 +2329,17 @@ def _prompt_is_the_render(run, tools=None) -> bool:
     messages = internals.rendered_messages(run.chat)
     asked = max(i for i, m in enumerate(messages) if m["role"] in ("user", "tool"))
     want = run.context.stated_render(messages[:asked + 1], tools, generation_prompt=True,
-                                     for_tools=tools is not None)
+                                     reasoning=run.reasoning, for_tools=tools is not None)
     return run.seen[-1] == want
 
 
 @pytest.mark.parametrize("stem", _EVERY)
-def test_a_reply_injected_after_a_reply_leaves_the_next_prompt_the_templates_render(stem):
-    """A reply after the newest may write the newest's closing otherwise, which no window after it may hide."""
-    run = _Run(stem)
+@pytest.mark.parametrize("reasoning", [False, True], ids=["reasoning off", "reasoning on"])
+def test_a_reply_injected_after_a_reply_leaves_the_next_prompt_the_templates_render(stem, reasoning):
+    """A reply after the newest may write the newest, or its closing, otherwise, which no window after it may hide."""
+    if reasoning and not _FIXTURES.get(stem, {}).get("can_reason"):
+        return
+    run = _Run(stem, reasoning=reasoning)
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
     for said in ("", "Said too."):
@@ -2344,6 +2347,7 @@ def test_a_reply_injected_after_a_reply_leaves_the_next_prompt_the_templates_ren
             run.chat.inject(said, role="assistant")
         except TemplateRefusedError:
             continue
+        assert_cache_reads_as_rendered(run.chat, run.context)    # before any question follows
         run.chat.reply(QUESTIONS[1]).finish()
         assert _prompt_is_the_render(run)
 
