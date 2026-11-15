@@ -8,10 +8,14 @@ import random
 
 import pytest
 
-from llama_chat import ChatWrapper, Config
+from llama_chat import ChatWrapper, Config, ContextOverflowError, TemplateRefusedError
+from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolSpec
 from tests import invented_templates as invented
-from tests.fake_context import FakeContext, ScriptedCall
+from tests.chat_templates import STEMS, fixture
+from tests.fake_context import (FakeContext, ScriptedCall, shipped_addon_call,
+                                shipped_addon_reasoning_on, written_call)
 
 _TEMPLATES = {"tools": invented.TOOLS, "json tools": invented.JSON_TOOLS,
               "two questions refused": invented.TOOLS_REFUSING_TWO_USER_TURNS,
@@ -93,12 +97,6 @@ def _assert_begins_with_its_newest_part(w, saved):
 
 
 # ----- on the test templates of real models ---------------------------------------
-from llama_chat import ContextOverflowError, TemplateRefusedError
-from llama_chat.tools import ToolCall, ToolSpec
-from tests.chat_templates import STEMS, fixture
-from tests.fake_context import written_call
-from llama_chat.resolved_template import ResolvedTemplate
-from tests.fake_context import shipped_addon_call, shipped_addon_reasoning_on
 
 _REAL = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False)]
