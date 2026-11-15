@@ -36,6 +36,7 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
     yield built
     for wrapper, context in zip(built, contexts):
         if not is_closed(wrapper):
+            wrapper.wait_idle(timeout_s=5)  # the work after a reply, on its thread where a test asks
             assert_cache_reads_as_rendered(wrapper, context)
             assert_conversation_is_its_forms(wrapper)
 
