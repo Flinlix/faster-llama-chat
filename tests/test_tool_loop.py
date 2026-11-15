@@ -1912,6 +1912,21 @@ def test_an_error_result_of_the_callers_own_is_told_as_a_registered_tools_is():
     wrapper.reply(tool_call_policy="yield").finish()
 
 
+@pytest.mark.parametrize("max_calls, told", [(None, "try again"), (2, "try again"),
+                                             (1, "do not call again")])
+def test_an_error_result_of_the_callers_own_in_a_registry_turn_says_whether_calls_are_left(
+        max_calls, told):
+    """A stream closed at a call the registry was about to run leaves it owed; the registry goes on with what is left of the turn's calls."""
+    wrapper, fake = tool_wrapper()
+    wrapper.begin(opened("persona"), tools=weather_registry().specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    stream = wrapper.reply("wetter?", tool_call_policy=weather_registry(), max_calls=max_calls)
+    call = next(e for e in stream if isinstance(e, ToolCall))
+    stream.close()
+    wrapper.inject_tool_result(call.id, {"error": "offline", "message": "kein Netz"})
+    assert f"the tool call failed: kein Netz. {told}" in newest_turn(fake)
+
+
 def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whole(monkeypatch):
     """Only what a written call can cause counts as an unreadable call; a fault in the library is raised."""
     wrapper, fake = tool_wrapper()

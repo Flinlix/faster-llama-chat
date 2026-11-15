@@ -1273,7 +1273,6 @@ _PLAIN_REPLY_CODE = {
         "ChatWrapper._generate_until_answered.<locals>.<genexpr>",
         "ChatWrapper._generate_until_answered.<locals>.may_call_after_unreadable",
         "ChatWrapper._held",
-        "ChatWrapper._keep_newest_reply",
         "ChatWrapper._keep_turn",
         "ChatWrapper._noting_each_reader",
         "ChatWrapper._open_turn_text",
@@ -1286,6 +1285,7 @@ _PLAIN_REPLY_CODE = {
         "ChatWrapper._template",
         "ChatWrapper.inject",
         "ChatWrapper.reply",
+        "ChatWrapper.reply.<locals>.<lambda>",
         "_CallBudget.__post_init__",
         "_answerable",
         "_ensure_cancel_and_sampling",
@@ -1362,3 +1362,11 @@ def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_
                         lambda *a, **k: built.append(1) or [])
         w.reply("zwei").finish()
     assert len(made) <= 2 and not built        # the question, then the recorded reply
+
+
+def test_a_stream_never_read_reports_no_other_streams_reply():
+    w, _ = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    unread = w.reply("erste")
+    read = w.reply("zweite").finish()
+    unread.close()
+    assert read.text == "Antwort." and unread.reply is None

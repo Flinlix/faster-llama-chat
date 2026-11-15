@@ -110,8 +110,6 @@ class ChatWrapper:
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
         self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
-        # The newest generation's Reply, which a stream closed early reads.
-        self._newest_reply: Reply | None = None
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -423,8 +421,11 @@ class ChatWrapper:
         ensure_reply_cap(max_reply_tokens)
         stop_texts = _stop_texts(stop)
         _ensure_cancel_and_sampling(cancel, sampling)
+        # This stream's newest generation's Reply, which the stream reads where it is closed early.
+        newest: dict[str, Reply] = {}
         options = dict(max_reply_tokens=max_reply_tokens, stop=stop_texts, cancel=cancel,
-                       sampling=generation_sampling(self._config, sampling))
+                       sampling=generation_sampling(self._config, sampling),
+                       on_reply=lambda reply: newest.update(reply=reply))
         if tool_call_policy is not None and not isinstance(tool_call_policy, (str, ToolRegistry)):
             raise TypeError(f"tool_call_policy must be one of "
                             f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a ToolRegistry, "
@@ -443,10 +444,9 @@ class ChatWrapper:
             tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        self._newest_reply = None
         steps = self._noting_each_reader(self._replying(text, tool_call_policy, max_calls, **options))
         self._replies.add(steps)
-        return ReplyStream(steps, on_close=lambda: self._newest_reply)
+        return ReplyStream(steps, on_close=lambda: newest.get("reply"))
 
     def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
                             ) -> Generator[str | ToolCall, None, Reply]:
@@ -561,8 +561,10 @@ class ChatWrapper:
         with self._held():
             self._ensure_open()
             # A failure is told as a failure a registered tool's is, whoever ran the tool.
-            written = _explain_failure(result if failure is None else failure,
-                                       may_call_again=self._conversation.turn_policy == "yield")
+            policy = self._conversation.turn_policy
+            may_call_again = policy == "yield" or (isinstance(policy, ToolRegistry)
+                                                   and self._conversation.turn_budget.calls_left > 0)
+            written = _explain_failure(result if failure is None else failure, may_call_again)
             self._conversation.report()
             try:
                 self._conversation.add_result(call_id, written)
@@ -916,15 +918,19 @@ class ChatWrapper:
         text starts with it.
         """
         separator = None if after and not after[-1].isspace() else ""
-        while True:
-            try:
-                delta = next(deltas)
-            except StopIteration as ended:
-                return replace(ended.value, text=(separator or "") + ended.value.text)
-            if separator is None and delta:
-                separator = "" if delta[0].isspace() else "\n\n"
-                delta = separator + delta
-            yield delta
+        try:
+            while True:
+                try:
+                    delta = next(deltas)
+                except StopIteration as ended:
+                    return replace(ended.value, text=(separator or "") + ended.value.text)
+                if separator is None and delta:
+                    separator = "" if delta[0].isspace() else "\n\n"
+                    delta = separator + delta
+                yield delta
+        finally:
+            # Closed here, a failure while the generation records itself reaches the caller.
+            deltas.close()
 
     def _open_turn_text(self) -> str:
         """What the model has written so far in the turn a call left open; empty where none is open."""
@@ -993,9 +999,9 @@ class ChatWrapper:
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: Sampling,
-                  withhold: bool = False,
+                  on_reply: Callable[[Reply], None], withhold: bool = False,
                   on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
-        """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it, its Reply kept for a stream closed before it returns; the lock must be held.
+        """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it; the lock must be held.
 
         Args:
             text, stop, cancel: As :meth:`reply`.
@@ -1004,18 +1010,16 @@ class ChatWrapper:
             may_call_again: Whether a call is read again after a call this
                 generation writes that cannot be read, which the answer to
                 that call tells the model.
+            on_reply: Given the generation's Reply once it ends, early or
+                not, for a stream closed before it returns.
         """
         self._ensure_open()
         generation = self._conversation.generation(
             text, recognizes_calls=recognizes_calls, withhold=withhold,
             max_generated_tokens=self._reply_cap(max_reply_tokens), stop=stop, cancel=cancel,
             sampling=sampling, unreadable_result=_explain_failure(_UNREADABLE, may_call_again),
-            on_started=on_started, on_reply=self._keep_newest_reply)
+            on_started=on_started, on_reply=on_reply)
         return (yield from generation)
-
-    def _keep_newest_reply(self, reply: Reply) -> None:
-        """Keep ``reply`` for a stream closed before it returns, which reads it as its reply."""
-        self._newest_reply = reply
 
     def _reply_cap(self, max_reply_tokens: int | None) -> int:
         """The cap on a reply's tokens: ``max_reply_tokens``, else the config's, else the context's size."""

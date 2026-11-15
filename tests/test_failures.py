@@ -935,3 +935,17 @@ def test_a_refusal_carries_what_the_template_itself_says():
         w.inject("verboten")
     with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
         w.begin(opened("s", [{"role": "user", "content": "verboten"}]))
+
+
+@pytest.mark.parametrize("policy", ["refuse", "yield", "withhold"])
+def test_a_failure_while_a_stream_closed_early_records_its_reply_reaches_the_caller(policy):
+    fake = _Flaky(PLAIN, gen_tokens=8, gen_text="Eine lange Antwort.")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    stream = w.reply("hallo", tool_call_policy=policy)
+    next(stream)
+    fake.fail = "decode"            # the decode ahead, once the reply is recorded
+    with pytest.raises(RuntimeError, match="decode failed"):
+        stream.close()
+    assert "".join(w.reply("noch einmal")) == "Eine lan"
+    assert_cache_reads_as_rendered(w, fake)
