@@ -421,7 +421,10 @@ class FakeContext:
             yield from self._call_tokens(ScriptedCall(self.call_script.pop(0)))
         elif self.replies:
             scripted = self.replies.pop(0)
-            if isinstance(scripted, ScriptedCall):
+            if isinstance(scripted, ScriptedCall) and self._call_marks()[0][0] in withheld_tokens:
+                # The call's opening cannot be drawn: the model writes what it wanted to say.
+                yield from self._written(scripted.before or self.gen_text)
+            elif isinstance(scripted, ScriptedCall):
                 yield from self._call_tokens(scripted)
             else:
                 yield from self._written(scripted)

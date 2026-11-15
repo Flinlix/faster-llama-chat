@@ -90,3 +90,78 @@ def _assert_begins_with_its_newest_part(w, saved):
     assert again["messages"] == system + history[len(history) - kept:]
     if kept == len(history):
         assert again == saved
+
+
+# ----- on the test templates of real models ---------------------------------------
+from llama_chat import ContextOverflowError, TemplateRefusedError
+from llama_chat.tools import ToolCall, ToolSpec
+from tests.chat_templates import STEMS, fixture
+from tests.fake_context import written_call
+from llama_chat.resolved_template import ResolvedTemplate
+from tests.fake_context import shipped_addon_call, shipped_addon_reasoning_on
+
+_REAL = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
+_CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False)]
+_WEATHER = ToolSpec("get_weather", "Weather for a city",
+                    {"type": "object", "properties": {"city": {"type": "string"}}})
+
+
+def _real_sequence(seed: int):
+    """A wrapper on a real model's test template after the actions ``seed`` draws: questions, calls answered or left, notes, cuts and begins, on any kind of cache and either tokenizer."""
+    draw = random.Random(seed)
+    stem = draw.choice(_REAL)
+    known = fixture(stem)
+    fake = FakeContext(known, merges=draw.random() < 0.5, **draw.choice(_CACHES))
+    size = draw.choice([1500, 3000, 6000])
+    w = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=fake)
+    text = known["chat_template"]
+    template = ResolvedTemplate(FakeContext(known), shipped_addon_call(text),
+                                reasoning_on=shipped_addon_reasoning_on(text))
+    call = shipped_addon_call(text)
+    body = (_WEATHER.name + call["name_close"] + '{"city": "Bonn"}' if call
+            else written_call(template, fake, _WEATHER.name, {"city": "Bonn"})[1])
+    try:
+        w.begin([{"role": "system", "content": "Be brief."}]
+                if w.capabilities(tools=True).can_take_system_prompt else [], tools=[_WEATHER])
+    except ContextOverflowError:
+        return None                                 # declarations longer than the context
+    for step in range(draw.randint(4, 14)):
+        action = draw.random()
+        try:
+            if action < 0.4:
+                if draw.random() < 0.4:
+                    fake.replies[:0] = [ScriptedCall(body, before=draw.choice(["", "Moment."]))]
+                question = draw.choice([f"Question {step}?", f" spaced {step}\n"])
+                try:
+                    w.reply(question, tool_call_policy=draw.choice(["yield", "refuse"])).finish()
+                except (ContextOverflowError, TemplateRefusedError):
+                    pass                            # the two refusals rule 11 allows
+            elif action < 0.6 and w.pending_calls:
+                w.inject_tool_result(w.pending_calls[0].id,
+                                     draw.choice(["sunny", "x" * draw.choice([10, 3000])]))
+            elif action < 0.7:
+                w.inject(f"note {step}")
+            elif action < 0.8:
+                messages = w.conversation()["messages"]
+                if not w.turn_open and messages[-1]["role"] == "assistant" \
+                        and messages[-1]["content"]:
+                    w.truncate_last_reply(messages[-1]["content"][:draw.randint(0, 5)])
+            elif action < 0.9:
+                w.begin(**w.conversation())
+            elif w.awaits_reply:
+                w.reply().finish()
+        except (TemplateRefusedError, ContextOverflowError):
+            pass                        # a refusal of what is not a question, which changes nothing
+    return w, known, size
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_every_state_a_sequence_on_a_real_template_reaches_begins_again_the_same(seed):
+    made = _real_sequence(seed)
+    if made is None:
+        return
+    w, known, size = made
+    saved = w.conversation()
+    _assert_begins_with_its_newest_part(w, saved)
+    again = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=FakeContext(known))
+    _assert_begins_with_its_newest_part(again, saved)

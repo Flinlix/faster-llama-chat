@@ -161,6 +161,9 @@ _ACTIONS = {
                                     None),
     "begin again from the conversation": (_answered, lambda w, f, s: w.begin(**w.conversation()),
                                           None),
+    "a long question evicting the oldest": (_exchanged, _replying("Eine lange Frage: " + "x" * 30),
+                                            []),
+    "a long question after an unanswered one": (_injected, _replying("Lang: " + "y" * 40), []),
 }
 
 
@@ -182,6 +185,10 @@ def _assert_kept_only_what_it_produced(before, after, shown, calls):
     assert before[0]["messages"][:1] == after[0]["messages"][:1]       # the system message
     held, kept = (_steps(after_system(before[0]["messages"])),
                   _steps(after_system(after[0]["messages"])))
+    # A question the reply asked after an unanswered one may have joined it.
+    if held and isinstance(held[-1], dict) and held[-1]["role"] == "user":
+        held[-1] = next((step for step in kept if isinstance(step, dict) and step["role"] == "user"
+                         and step["content"].startswith(held[-1]["content"] + "\n\n")), held[-1])
     starts = [i for i, step in enumerate(held) if isinstance(step, dict) and step["role"] == "user"]
     evicted = next((i for i in [0] + starts + [len(held)] if kept[:len(held) - i] == held[i:]),
                    None)
