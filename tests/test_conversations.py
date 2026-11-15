@@ -1085,17 +1085,25 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
                             lambda *args, check=check, name=name: (checked.append(name),
                                                                    check(*args))[1])
     run = _dated_run(stem, system)
+
+    def passes() -> int:
+        return checked.count("ensure_history_stays_written")
+
+    def windows() -> int:
+        return checked.count("windows_are_exact")
+
     run.begin()
     run.chat.reply(QUESTIONS[0]).finish()
-    both = ["ensure_history_stays_written", "windows_are_exact"]
-    assert checked == both
+    assert passes() == 1 and windows() >= 1
+    seen = windows()
     add_tools(run.chat, [WEATHER])
     # Declarations that move with each question leave no windows to check.
-    declared = both[:1] if internals.template(run.chat).properties.declares_before_newest_turn else both
-    assert checked == both + declared
+    moves = internals.template(run.chat).properties.declares_before_newest_turn
+    assert passes() == 2 and (windows() == seen) == moves
+    seen = windows()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.chat.reply(QUESTIONS[1]).finish()
-    assert checked == both + declared * 2
+    assert passes() == 3 and (windows() == seen) == moves
 
 
 # ----- reasoning ---------------------------------------------------------------------

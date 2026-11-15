@@ -48,10 +48,18 @@ def with_kept(message: dict, turn: KeptTurn | None) -> dict:
 
 @dataclass(frozen=True)
 class Target:
-    """What the cache should hold for some messages, and where each kept turn placed in it begins."""
+    """What the cache should hold for some messages, and where each kept turn placed in it begins.
+
+    ``anchors`` holds, for the two newest exchanges of the messages rendered
+    where known, the index of the message each follows and where in
+    ``tokens`` the tag that opens it begins; ``exchanges_at`` is where the
+    tags that open the conversation's two newest exchanges begin, those known.
+    """
 
     tokens: list[int]
     kept_at: dict[KeptTurn, int]
+    anchors: tuple[tuple[int, int], ...] = ()
+    exchanges_at: tuple[int, ...] | None = None
 
 
 class RenderInputs(Protocol):
@@ -169,15 +177,19 @@ class ConversationRendering:
         return self.render(system + [{"role": "user", "content": STAND_IN}], True)
 
     # ----- the target ---------------------------------------------------------------
-    def target(self, messages, generation_prompt: bool, upto: int | None = None) -> Target:
+    def target(self, messages, generation_prompt: bool, upto: int | None = None,
+               start: int = 0) -> Target:
         """``messages`` as the cache holds them: their render tokenized, each kept turn as it was generated.
 
         Args:
             upto: Where in the render to stop.
+            start: Where in the render to begin, the start of a tag; each
+                kept turn there or after it is placed, and the places in
+                ``kept_at`` count from it.
 
         Raises:
             ValueError: If the template refuses to write them, or writes a kept
-                turn among them where it cannot be placed.
+                turn among them where it cannot be placed, or across ``start``.
         """
         if not messages:
             return Target(self.tokenize([], add_special=True), {})     # the opener alone
@@ -190,16 +202,16 @@ class ConversationRendering:
         placed = []
         for first, last, kept in kept_turns(messages):
             found = self.place(first, last, kept.on_call, split)
-            if found is None:
+            if found is None or found[0] < start < found[1]:
                 raise TemplateRefusedError("messages", "this model's template writes a turn that called tools where "
                                  "it cannot be told apart, so the turn could not keep the tokens "
                                  "it was generated as")
-            if found[1] <= end:
+            if start <= found[0] and found[1] <= end:
                 placed.append((*found, kept))
-        tokens, at, kept_at = [], 0, {}
-        for start, stop, kept in placed:
-            assert start >= at, "two kept turns overlap"
-            tokens += self.tokenize(split.pieces(at, start), add_special=not tokens and at == 0)
+        tokens, at, kept_at = [], start, {}
+        for begins, stop, kept in placed:
+            assert begins >= at, "two kept turns overlap"
+            tokens += self.tokenize(split.pieces(at, begins), add_special=not tokens and at == 0)
             kept_at[kept] = len(tokens)
             tokens += kept.tokens
             at = stop

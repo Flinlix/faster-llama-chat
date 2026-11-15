@@ -51,15 +51,26 @@ def repeated_question_written_alike(render: Render, system: list[dict]) -> bool:
                == ahead.replace(STAND_IN, text) for text in earlier)
 
 
-def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
+def tool_exchanges(tool: str) -> tuple[list[dict], ...]:
+    """Five exchanges each calling ``tool`` once, answered, then replied to, for :func:`windows_are_exact` to probe a template with."""
+    return tuple([{"role": "user", "content": f"Question {n}, asked plainly."},
+                  calling_message("", [ToolCall(tool, {})], n),
+                  result_message(tool, call_id(n), f"Result {n}."),
+                  {"role": "assistant", "content": f"Reply {n}, given plainly."}] for n in range(5))
+
+
+def windows_are_exact(render: Render, system: list[dict], tag_after,
+                      exchanges: tuple[list[dict], ...] = _WINDOW_PROBES) -> bool:
     """Whether this template writes the newest two exchanges, and the oldest two kept after a drop, as the whole render does.
 
     Args:
         tag_after: ``(text, at)`` to where the first tag at or after ``at``
             begins, ``None`` where there is none.
+        exchanges: Five exchanges to probe with, each ending on a reply:
+            plain ones, or ones that called a tool.
     """
     stand_in = [{"role": "user", "content": STAND_IN}]
-    ex = [list(e) for e in _WINDOW_PROBES]
+    ex = [list(e) for e in exchanges]
     whole = render(system + sum(ex, []) + stand_in, True)
     window = render(system + ex[3] + ex[4] + stand_in, True)
     prompt = render(system + sum(ex[:4], []) + ex[4][:1], True)
@@ -67,7 +78,7 @@ def windows_are_exact(render: Render, system: list[dict], tag_after) -> bool:
     head = render(system + ex[1] + ex[2] + stand_in, True)
     if None in (whole, window, prompt, dropped, head):
         return False
-    older, first = ex[3][1]["content"], ex[1][1]["content"]
+    older, first = ex[3][-1]["content"], ex[1][-1]["content"]
 
     def after(text, content):
         found = text.find(content)

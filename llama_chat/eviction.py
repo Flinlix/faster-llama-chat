@@ -26,12 +26,14 @@ EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 
 
 class Eviction:
-    """Drops the oldest exchanges of the conversation state it was made with, measured with ``rendering``."""
+    """Drops the oldest exchanges of the conversation state it was made with, measured with ``rendering``, or with ``measure`` where a conversation as it stands is measured."""
 
     def __init__(self, rendering, config: Config, can_shift: bool,
-                 state: ConversationState) -> None:
+                 state: ConversationState,
+                 measure: Callable[[list[dict], bool], int] | None = None) -> None:
         self._rendering, self._config, self._can_shift = rendering, config, can_shift
         self._state = state
+        self._measure = measure or rendering.length
 
     def with_a_short_question(self) -> int:
         """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
@@ -100,7 +102,7 @@ class Eviction:
                 room well below ``limit``, measure that room beside the turn.
         """
         def length() -> int:
-            return self._rendering.length(self._state.messages, generation_prompt)
+            return self._measure(self._state.messages, generation_prompt)
 
         def too_many(most: int | None = None) -> int:
             return 0 if tokens_only else self._exchanges_over(most)

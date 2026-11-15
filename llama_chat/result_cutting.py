@@ -36,10 +36,10 @@ def _most_kept(fits: Callable[[int], bool], total: int) -> int:
 
 
 class ResultCutting:
-    """Writes results into the conversation state it was made with, measured with ``rendering``."""
+    """Writes results into the conversation state it was made with, measured with ``measure``, which counts the tokens of messages as :meth:`~llama_chat.rendering.ConversationRendering.length` does."""
 
-    def __init__(self, rendering, state: ConversationState) -> None:
-        self._rendering, self._state = rendering, state
+    def __init__(self, measure: Callable[[list[dict], bool], int], state: ConversationState) -> None:
+        self._measure, self._state = measure, state
 
     def write(self, message: dict, owed_after: list[tuple[ToolCall, str]], room: int,
               make_room: Callable[[], bool]) -> bool:
@@ -119,7 +119,7 @@ class ResultCutting:
         """Whether the conversation, its message at ``at``, a result, holding ``content``, fits in ``room`` with the generation prompt."""
         messages = self._state.messages
         messages[at] = {**messages[at], "content": content}
-        return self._rendering.length(messages, generation_prompt=True) <= room
+        return self._measure(messages, True) <= room
 
     def _cut_an_earlier_result(self, at: int, content: str, room: int) -> None:
         """Cut a result written whole earlier in this round, the newest one that makes room for the one at ``at`` holding ``content``, where one does."""

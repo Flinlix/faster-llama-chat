@@ -20,6 +20,20 @@ class MadeFor:
     cache_version: int
 
 
+@dataclass(frozen=True, eq=False)
+class Anchor:
+    """Where the cache holds the tag that opens the exchange after ``message``, the ``index``-th message, which windows of the newest exchanges are placed after.
+
+    It stands while that message is still the ``index``-th and the kept turns
+    up to it are still ``kept``, by identity.
+    """
+
+    message: dict
+    index: int
+    at: int
+    kept: tuple[KeptTurn, ...]
+
+
 @dataclass
 class Ahead:
     """The render for the next question, decoded up to the run of text the question joins."""
@@ -57,6 +71,9 @@ class RenderChecks:
     repeats_alike: bool = True            # whether a repeated question is written as any other
     # Whether a past turn that called tools is written as before once another exchange follows.
     tool_turns_stay: bool = False
+    # Whether windows of the conversation stand for its render where they hold turns that
+    # called tools too.
+    tool_windows: bool = False
     # What the system turn and a one-character question take, with the generation prompt.
     with_a_short_question: int = 0
     # Whether the exchanges after the oldest are written as before once it goes, so that
@@ -87,6 +104,9 @@ class ConversationState:
     # Where a spliced question's run begins, the tokens decoded there, and what they were
     # decoded for: the conversation with the question newest, and the cache after them.
     spliced_at: tuple[int, list[int], MadeFor] | None = None
+    # Where the cache holds the tags that open the newest exchanges, or the next one, at
+    # most two, the newest last.
+    anchors: tuple[Anchor, ...] = ()
     begun: bool = False
     # What a call that could not be read is answered with, as the newest reply was told.
     unreadable_result: dict | None = None

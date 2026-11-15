@@ -21,12 +21,12 @@ import copy
 import logging
 import threading
 from collections.abc import Callable, Generator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from .generation import GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled
 from .config import Config
-from .conversation_state import (Ahead, Changes, ConversationState, MadeFor, Published,
+from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
 from .history_forms import (answer_in_order, completions_messages, joined_question,
                             read_messages, with_saved_turns, without_unreadable)
@@ -35,7 +35,7 @@ from .messages import (KEPT_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_mes
                        result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
                             repeated_question_written_alike, rest_stays_after_a_drop, splice_probe,
-                            tool_turns_stay_written, windows_are_exact)
+                            tool_exchanges, tool_turns_stay_written, windows_are_exact)
 from .rendering import ConversationRendering, KeptTurn, Target, kept_turns, with_kept
 from .eviction import Eviction
 from .result_cutting import ResultCutting
@@ -79,8 +79,9 @@ class RenderedCache:
         # The one state object every part reads and changes; an action put back fills it in place.
         self._state = ConversationState()
         self._rendering = ConversationRendering(context, lambda: self.template, self._state)
-        self._eviction = Eviction(self._rendering, config, context.can_shift, self._state)
-        self._cutting = ResultCutting(self._rendering, self._state)
+        self._eviction = Eviction(self._rendering, config, context.can_shift, self._state,
+                                  self._length)
+        self._cutting = ResultCutting(self._length, self._state)
         self._windows = Windows(self._rendering, self._eviction, config, self._state)
         # Where the newest generation's turn starts in the cache, and whether it went on
         # with an open turn; left as they are by a failed action.
@@ -253,6 +254,7 @@ class RenderedCache:
             cached = ([_without_turn(m) for m in self._state.messages if m["role"] != "system"]
                       if self._state.begun else [])
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
+            self._state.anchors = ()            # placed again as the cache is held
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
             joins = self._joins_questions
@@ -393,8 +395,8 @@ class RenderedCache:
 
     def _settled_while_owed(self) -> Target:
         """The render of the conversation as far as the results still owed cannot change it: what the cache holds until they are in."""
-        standing = self._rendering.target(self._state.messages, generation_prompt=False)
-        answered = self._rendering.target(
+        standing = self._target_of(self._state.messages, generation_prompt=False)
+        answered = self._target_of(
             self._state.messages + [result_message(call.name, call_id, STAND_IN)
                                     for call, call_id in _unanswered(self._state.messages)],
             generation_prompt=False)
@@ -652,7 +654,7 @@ class RenderedCache:
                 self._state.messages.append(joined or message)
                 dropped = self._drop_while_over(limit, generation_prompt=False)
                 self._ensure_within(limit, "shorten the message or inject a user message first")
-                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
 
@@ -1010,12 +1012,12 @@ class RenderedCache:
             return                          # an entry of a batch that could not be read
         if self.turn_open:
             if unplaced:
-                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False)
             return
         # A reply whose call was withdrawn, for want of room for its answer, is a reply too.
         replied = not self._state.messages[-1].get("tool_calls")
-        if replied and not self._writes(self._state.messages if not answer
+        if replied and not self._writes(self._newest_part(self._state.messages) if not answer
                                         else self._newest_exchange()):
             _log.info("a reply the template does not write, nor an empty one in its place, "
                       "was taken back with its request")
@@ -1094,15 +1096,23 @@ class RenderedCache:
         self._drop_unplaceable()
 
     def _drop_unplaceable(self) -> bool:
-        """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was."""
+        """Hold each kept turn the template writes where it cannot be placed as the template writes it instead; whether any was.
+
+        Where a window of the newest exchanges stands for the render, only
+        the turns it holds are placed: those before it stay as they were.
+        """
         messages = self._state.messages
         if not kept_turns(messages):
             return False
+        found = self._window_of(messages)
+        system = system_part(messages)
+        rendered = messages if found is None else system + messages[found[0]:]
+        offset = 0 if found is None else found[0] - len(system)
         unplaced = set()
         for generation_prompt in (False, True):
-            split = self._rendering.split(messages, generation_prompt)
+            split = self._rendering.split(rendered, generation_prompt)
             if split is not None:
-                unplaced |= {last for first, last, turn in kept_turns(messages)
+                unplaced |= {last + offset for first, last, turn in kept_turns(rendered)
                              if self._rendering.place(first, last, turn.on_call, split) is None}
         for last in unplaced:
             messages[last] = with_kept(messages[last], None)
@@ -1124,7 +1134,8 @@ class RenderedCache:
             self._state.results_cut = []
             self._forget_calls()
             self._state.changes.turn_closed = True
-            if not self._state.messages[-1]["content"] and not self._writes(self._state.messages):
+            if not self._state.messages[-1]["content"] and not self._writes(
+                    self._newest_part(self._state.messages)):
                 # Nothing the template writes is left of the reply: taken back with its request.
                 self._state.changes.taken_back = True
                 _log.info("no room was left to answer the newest calls, and nothing of the "
@@ -1189,7 +1200,7 @@ class RenderedCache:
             if not self.pending_calls:
                 self._sync(self._fitting_prompt(), dropped=dropped)
             elif dropped:
-                self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+                self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False, dropped=True)
             if dropped:
                 self._memory.repair()           # with the logits the reply needs, then saved
@@ -1233,7 +1244,7 @@ class RenderedCache:
                         "its text, such as a call that went, so they cannot be cut at keep_text")
                 shortened[KEPT_TURN] = cut
             self._state.messages[-1] = shortened
-            if not self._writes(self._state.messages):
+            if not self._writes(self._newest_part(self._state.messages)):
                 raise TemplateRefusedError(
                     "keep_text", f"this model's template does not write the newest reply "
                     f"shortened to {keep_text!r}; keep more of its text")
@@ -1271,12 +1282,18 @@ class RenderedCache:
         render = self._rendering.render
         ensure_history_stays_written(render, system)
         tools = self._state.tools
+        # Declarations that move with the newest question leave no window as the whole
+        # render writes it.
+        windows = (not self._moves_declarations()
+                   and windows_are_exact(render, system, self._rendering.tag_from))
+        calls = self.template.properties.can_call_tools
         return RenderChecks(
             opening=self._rendering.opening_render(system),
-            # Declarations that move with the newest question leave no window as the whole
-            # render writes it.
-            windows=(not self._moves_declarations()
-                     and windows_are_exact(render, system, self._rendering.tag_from)),
+            windows=windows,
+            # Only a template that calls tools is asked.
+            tool_windows=windows and calls and windows_are_exact(
+                render, system, self._rendering.tag_from,
+                tool_exchanges(tools[0].name if tools else "probe")),
             splice_probe=splice_probe(render, system),
             repeats_alike=repeated_question_written_alike(render, system),
             with_a_short_question=self._eviction.with_a_short_question(),
@@ -1326,7 +1343,7 @@ class RenderedCache:
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
-        needed = self._rendering.length(self._state.messages, generation_prompt=False)
+        needed = self._length(self._state.messages, generation_prompt=False)
         if needed > limit:
             raise ContextOverflowError(
                 f"the conversation needs {needed} tokens but the eviction threshold is "
@@ -1361,8 +1378,13 @@ class RenderedCache:
                 done = done and not (kept_until() + length > limit or self._eviction.too_many()
                                      or kept_until() + len(before) > self._config.context_size)
                 if done:
+                    # The tag the next question's exchange opens with, after the newest reply.
+                    tag = self._rendering.tag_after_content(split, len(split.contents) - 2)
+                    anchors = () if tag is None or tag > run else ((
+                        len(self._state.messages) - 1, kept_until() + len(before)
+                        - len(self._rendering.tokenize(split.pieces(tag, run)))),)
                     self._sync(Target(list(self._memory.tokens[:kept_until()]) + before,
-                                      self._state.kept_at), logits=False)
+                                      self._state.kept_at, anchors), logits=False)
                     self._note_ahead(split, run)
                 else:
                     self._drop_while_over(limit, generation_prompt=False, newest_too=True)
@@ -1375,11 +1397,12 @@ class RenderedCache:
     def _render_ahead(self, dropped: bool = False) -> None:
         """Decode the render for the next question up to where the question goes."""
         messages = self._state.messages + [{"role": "user", "content": STAND_IN}]
-        split = self._rendering.split(messages, generation_prompt=True)
-        run = (self._rendering.run_start(split, len(messages) - 1, 0)
+        view = self._view(messages, generation_prompt=True)
+        split = view.split if view is not None else None
+        run = (self._rendering.run_start(split, len(split.contents) - 1, view.start)
                if split is not None and split.text.count(STAND_IN) == 1 else None)
         if run is not None:
-            before = self._rendering.target(messages, generation_prompt=True, upto=run)
+            before = self._view_target(view, upto=run)
             if len(before.tokens) <= self._config.context_size:
                 self._sync(before, logits=False, dropped=dropped)
                 self._note_ahead(split, run)
@@ -1387,11 +1410,110 @@ class RenderedCache:
         # The next question will be rendered when it comes.
         if self._state.messages and self._rendering.split(self._state.messages, False) is None:
             return
-        self._sync(self._rendering.target(self._state.messages, generation_prompt=False),
+        self._sync(self._target_of(self._state.messages, generation_prompt=False),
                    logits=False, dropped=dropped)
 
     def _system_part(self) -> list[dict]:
         return system_part(self._state.messages)
+
+    # ----- renders of the newest exchanges --------------------------------------------
+    def _window_of(self, messages: list[dict]) -> tuple[int, Anchor] | None:
+        """Where a window of ``messages`` begins that stands for their render after one of the cache's anchors, the newest that still stands, and that anchor; ``None`` where no window does.
+
+        The window opens with the exchange the anchor's message ends, and
+        holds at most two more.
+        """
+        if not self._state.checks.windows:
+            return None
+        for anchor in reversed(self._state.anchors):
+            found = self._window_after(messages, anchor)
+            if found is not None:
+                return found, anchor
+        return None
+
+    def _window_after(self, messages: list[dict], anchor: Anchor) -> int | None:
+        """Where a window of ``messages`` after ``anchor`` begins, where one stands for their render."""
+        if anchor.index >= len(messages) or messages[anchor.index] is not anchor.message \
+                or len(self._memory.tokens) <= anchor.at:
+            return None
+        starts = exchange_starts(messages)
+        opening = [i for i, at in enumerate(starts) if at <= anchor.index]
+        if not opening or len(starts) - opening[-1] > 3:
+            return None
+        start = starts[opening[-1]]
+        if not self._state.checks.tool_windows \
+                and not self._rendering.template_writes(messages[start:]):
+            return None
+        kept = tuple(turn for _, _, turn in kept_turns(messages[:anchor.index + 1]))
+        if len(kept) != len(anchor.kept) or any(a is not b for a, b in zip(kept, anchor.kept)):
+            return None
+        return start
+
+    def _view(self, messages: list[dict], generation_prompt: bool) -> _View | None:
+        """``messages`` rendered as the cache holds them: a window of the newest of them after the cache's anchor where one stands for the whole, else all of them; ``None`` where the template refuses them."""
+        found = self._window_of(messages)
+        if found is not None:
+            start, anchor = found
+            system = system_part(messages)
+            window = system + messages[start:]
+            split = self._rendering.split(window, generation_prompt)
+            tag = (None if split is None
+                   else self._rendering.tag_after_content(split, len(system) + anchor.index - start))
+            if tag is not None:
+                view = _View(split, window, start - len(system), tag,
+                             list(self._memory.tokens[:anchor.at]),
+                             {k: at for k, at in self._state.kept_at.items() if at < anchor.at},
+                             generation_prompt)
+                opening = self._rendering.target(window, generation_prompt, start=tag).tokens[:1]
+                if opening == list(self._memory.tokens[anchor.at:anchor.at + 1]):
+                    return view
+        split = self._rendering.split(messages, generation_prompt)
+        return None if split is None else _View(split, messages, 0, 0, [], {}, generation_prompt)
+
+    def _view_target(self, view: _View, upto: int | None = None) -> Target:
+        """What the cache should hold for the messages ``view`` stands for, up to ``upto`` in its render, with where the newest exchange of what it renders opens."""
+        rendering, base = self._rendering, len(view.base)
+        found = rendering.target(view.messages, view.generation_prompt, upto=upto, start=view.start)
+
+        def at(tag: int) -> int:
+            return base + len(rendering.target(view.messages, view.generation_prompt, upto=tag,
+                                               start=view.start).tokens)
+
+        starts = [s for s in exchange_starts(view.messages) if s > len(system_part(view.messages))]
+        end = len(view.split.text) if upto is None else upto
+        tags = [(s - 1, rendering.tag_after_content(view.split, s - 1)) for s in starts[-2:]]
+        known = [(i, tag) for i, tag in tags if tag is not None and view.start <= tag <= end]
+        anchors = tuple((i + view.offset, at(tag)) for i, tag in known)
+        # The exchanges of the conversation, not one a stand-in after it opens.
+        conversation = [(i, tag) for i, tag in known
+                        if i + 1 + view.offset < len(self._state.messages)]
+        return Target(view.base + found.tokens,
+                      {**view.base_kept, **{k: base + p for k, p in found.kept_at.items()}},
+                      anchors, tuple(at(tag) for _, tag in conversation[-2:]))
+
+    def _target_of(self, messages: list[dict], generation_prompt: bool) -> Target:
+        """What the cache should hold for ``messages``, from a window of the newest of them where one stands for the whole.
+
+        Raises:
+            ValueError: As :meth:`ConversationRendering.target` does.
+        """
+        view = self._view(messages, generation_prompt)
+        if view is None:
+            return self._rendering.target(messages, generation_prompt)
+        return self._view_target(view)
+
+    def _length(self, messages: list[dict], generation_prompt: bool) -> int:
+        """How many tokens the cache holds for ``messages``, as :meth:`ConversationRendering.length` counts them, from a window of the newest of them where one stands for the whole."""
+        if self._window_of(messages) is not None:
+            view = self._view(messages, generation_prompt)
+            if view is not None and view.base:
+                return len(self._view_target(view).tokens)
+        return self._rendering.length(messages, generation_prompt)
+
+    def _newest_part(self, messages: list[dict]) -> list[dict]:
+        """The system message and the window of the newest of ``messages`` that stands for their render, or all of them where none does; what a refusal of the newest is read from."""
+        found = self._window_of(messages)
+        return messages if found is None else system_part(messages) + messages[found[0]:]
 
     # ----- the cache against the target -----------------------------------------
     def _sync(self, target: Target, *, logits: bool = True, dropped: bool = False) -> None:
@@ -1404,15 +1526,33 @@ class RenderedCache:
         """
         if self._memory.keeps_saved_states:
             # States there let a change to the newest exchanges decode only those exchanges.
-            places = self._newest_exchanges_at()
+            places = (self._newest_exchanges_at() if target.exchanges_at is None
+                      else self._with_older_pinned(target.exchanges_at))
             if places is not None:
                 self._memory.pin(places, _NEWEST_EXCHANGES)
         # Declarations that move with the newest question leave a stretch behind, and the
         # next question's move back to where this cut is made, or past it.
         moves = self._moves_declarations()
+        # The anchors before the first token the target changes still stand.
+        same = common_prefix_length(self._memory.tokens, target.tokens)
         self._memory.hold(target.tokens, want_logits=logits,
                           find_dropped_stretch=dropped or moves, rest_at_cut=moves)
         self._state.kept_at = target.kept_at
+        messages = self._state.messages
+        new = {index: Anchor(messages[index], index, at, tuple(
+                   turn for _, _, turn in kept_turns(messages[:index + 1])))
+               for index, at in target.anchors if index < len(messages)}
+        standing = {a.index: a for a in self._state.anchors
+                    if a.at < same and a.index < min(new, default=len(messages))}
+        self._state.anchors = tuple(sorted({**standing, **new}.values(),
+                                           key=lambda a: a.index)[-2:])
+
+    def _with_older_pinned(self, places: tuple[int, ...]) -> list[int]:
+        """``places``, where a window placed the tags of the newest exchanges it holds, with the newest pinned before them where it holds only one."""
+        if len(places) >= 2:
+            return list(places)
+        older = [at for at in self._memory.pinned(_NEWEST_EXCHANGES) if not places or at < places[0]]
+        return ([max(older)] if older else []) + list(places)
 
     def _newest_exchanges_at(self) -> list[int] | None:
         """Where in the cache each of the two newest exchanges begins, the tag that opens its question, those that cannot be told left out; ``None`` where this action rendered the conversation whole in neither form, which it is not rendered again for."""
@@ -1434,8 +1574,10 @@ class RenderedCache:
 
     def _prompted(self) -> Target:
         """The conversation with the generation prompt after it, noting the template text a reply follows."""
-        target = self._rendering.target(self._state.messages, generation_prompt=True)
-        split = self._rendering.split(self._state.messages, generation_prompt=True)
+        view = self._view(self._state.messages, generation_prompt=True)
+        if view is None:
+            self._rendering.target(self._state.messages, generation_prompt=True)   # its refusal
+        target, split = self._view_target(view), view.split
         last = max((end for _, end in split.own), default=0)
         self._note_prompt(split.text[last:], self._reply_opening(split), target.tokens)
         return target
@@ -1500,6 +1642,7 @@ class RenderedCache:
             if opening != self._state.checks.opening:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._state.checks = self._render_checks()
+                self._state.anchors = ()
                 self._pin_opening()
         saved = self._state.copied()
         held = list(self._memory.tokens)
@@ -1580,6 +1723,24 @@ _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked
 
 
 # ----- helpers ---------------------------------------------------------------------
+@dataclass(frozen=True)
+class _View:
+    """Messages as the cache holds them: rendered whole, or as a window of the newest after the cache's anchor.
+
+    The cache holds ``base`` and then the tokens of ``split`` from ``start``
+    on; ``messages`` is what was rendered, and the conversation's message
+    ``i`` is its ``i - offset``-th, the system message aside.
+    """
+
+    split: SplitRender
+    messages: list[dict]
+    offset: int
+    start: int
+    base: list[int]
+    base_kept: dict
+    generation_prompt: bool
+
+
 def _reported_calls(generated: GenerationAccumulator, pending: list[ToolCall]) -> list[ToolCall]:
     """The calls one generation reports: those it left owed a result, or the one it could not read or finish."""
     if generated.stop_reason == "unreadable_tool_call":
