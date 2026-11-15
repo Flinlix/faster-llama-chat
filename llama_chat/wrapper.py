@@ -72,7 +72,8 @@ class ChatWrapper:
                 a larger context than ``context`` holds, or if ``context`` can
                 neither shift its cache, cut its end nor save a state. Also if
                 the model's add-on file names its template but is malformed,
-                if its ``reasoning_on`` writes the prompt as reasoning off
+                if the file beside the model is not JSON, if its
+                ``reasoning_on`` writes the prompt as reasoning off
                 does, or if a sampling value the model's GGUF recommends, which
                 neither ``config`` nor the add-on file replaces, is refused.
         """

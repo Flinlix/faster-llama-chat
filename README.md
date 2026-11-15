@@ -656,7 +656,8 @@ never from code: the one next to the GGUF with its name and `.json`, else one
 shipped in `llama_chat/addons/`, each used only where it names the model's
 template by its SHA-256. A file next to the GGUF that names no template, or
 another one, or is no JSON object, is not used, and a warning on the logger
-`llama_chat` says why. It fills in only what the template cannot tell; what
+`llama_chat` says why; one that is not JSON at all is refused when the model
+loads, naming the file. It fills in only what the template cannot tell; what
 the template states, the template decides, except a call format the file
 names, which wins. The file used is checked when the
 model loads, each value's type included and a null value refused, and

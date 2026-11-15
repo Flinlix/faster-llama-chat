@@ -47,7 +47,8 @@ def addon_file(model_path: str | None, template: str | None) -> dict:
     model's template; else a file in :data:`SHIPPED_ADDONS` that names it.
 
     Raises:
-        ValueError: If the file found is malformed.
+        ValueError: If the file found is malformed, or the file beside the
+            model is not JSON.
     """
     fingerprint = template_fingerprint(template) if template is not None else None
     own = Path(model_path).with_suffix(".json") if model_path else None
@@ -67,13 +68,18 @@ def addon_file(model_path: str | None, template: str | None) -> dict:
 
 
 def _not_naming(path: Path, fingerprint: str | None) -> str | None:
-    """Why the file at ``path`` is not the add-on file of the template ``fingerprint`` names; ``None`` where it is."""
-    if fingerprint is None:
-        return "the model ships no chat template for it to name"
+    """Why the file at ``path`` is not the add-on file of the template ``fingerprint`` names; ``None`` where it is.
+
+    Raises:
+        ValueError: If it is not JSON.
+    """
     try:
         found = json.loads(path.read_text())
-    except ValueError:
-        return "it is not JSON"
+    except ValueError as error:
+        raise ValueError(f"{path}, the add-on file beside the model, is not valid JSON: "
+                         f"{error}; correct it, or rename it if it is another program's") from None
+    if fingerprint is None:
+        return "the model ships no chat template for it to name"
     if not isinstance(found, dict):
         return "it is not a JSON object"
     named = found.get("templates")

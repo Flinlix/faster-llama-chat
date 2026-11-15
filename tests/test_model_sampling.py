@@ -83,7 +83,6 @@ def test_a_malformed_add_on_file_that_names_the_template_is_refused_when_the_mod
 @pytest.mark.parametrize("contents, why", [
     ({"templates": ["0" * 64], "sampling": {"top_p": 0.5}}, "names other templates"),
     ({"sampling": {"top_p": 0.5}}, "names no template"),
-    ("not json", "is not JSON"),
     ('["a list"]', "is not a JSON object"),
     ({"templates": "abc", "sampling": {"top_p": 2.0}}, "names no template"),
 ])
@@ -98,6 +97,13 @@ def test_a_file_next_to_the_model_that_does_not_name_its_template_is_not_used(
         assert addon_file(model, _TEMPLATE)["sampling"] == {"top_p": 0.8}
     assert len(caplog.records) == 1 and why in caplog.records[0].getMessage()
     assert str(tmp_path / "m.json") in caplog.records[0].getMessage()
+
+
+@pytest.mark.parametrize("template", [_TEMPLATE, None])
+def test_a_file_next_to_the_model_that_is_not_json_is_refused_naming_it(tmp_path, template):
+    model = _own_file(tmp_path, "not json")
+    with pytest.raises(ValueError, match="m.json.*not valid JSON"):
+        addon_file(model, template)
 
 
 def test_a_file_next_to_a_model_without_a_template_is_not_used(tmp_path, caplog):
