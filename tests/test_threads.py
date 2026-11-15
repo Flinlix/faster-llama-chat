@@ -221,3 +221,34 @@ def test_a_failure_of_the_work_after_a_reply_is_logged_and_the_next_action_decod
         assert w.wait_idle(timeout_s=5)
     assert any("after a reply failed" in r.getMessage() for r in caplog.records)
     assert w.reply("Und jetzt?").finish().text == "Gut."
+
+
+def test_the_work_after_a_reply_is_waited_for_when_the_process_ends(settles_in_the_background):
+    """Its thread is no daemon, so that a program that ends right after a reply does not tear the model down under its decode."""
+    fake = _HeldAhead(PLAIN, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    fake.holds = True
+    w.reply("Wie geht es?").finish()
+    assert fake.waiting.wait(timeout=5)
+    working = [t for t in threading.enumerate() if t.name == "llama_chat after a reply"]
+    assert working and not any(t.daemon for t in working)
+    fake.go.set()
+    assert w.wait_idle(timeout_s=5)
+
+
+def test_the_work_after_a_reply_is_left_to_the_next_action_where_the_wrapper_stays_held(
+        monkeypatch):
+    from llama_chat import wrapper as module
+    monkeypatch.setattr(module, "_AFTER_REPLY_WAIT_S", 0.05)
+    fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.")
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    w._conversation._settle_due = True          # as a reply leaves it
+    with w._lock:
+        waiting = threading.Thread(target=w._settle_when_free)
+        waiting.start()
+        waiting.join(timeout=5)
+        assert not waiting.is_alive() and w._conversation.settle_due
+    assert w.reply("Und?").finish().text == "Gut."   # which does it first
+    assert not w._conversation.settle_due

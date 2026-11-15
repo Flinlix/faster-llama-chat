@@ -494,21 +494,24 @@ class ChatWrapper:
     def _start_settling(self) -> None:
         """Have the work a reply left done on a thread of its own, once the reply has ended, so that its stream ends at once; the next action does it first where that thread has not yet."""
         if self._conversation.settle_due:
-            threading.Thread(target=self._settle_when_free, name="llama_chat after a reply",
-                             daemon=True).start()
+            # Not a daemon: a process that ends right after a reply waits for it, rather than
+            # tearing the model down under its decode.
+            threading.Thread(target=self._settle_when_free, name="llama_chat after a reply").start()
 
     def _settle_when_free(self) -> None:
-        """Do the work a reply left, holding the wrapper, giving way to an action that waits for it."""
-        with self._lock:
-            self._holder = threading.current_thread()
-            try:
-                if not self._closed:
-                    self._conversation.settle(self._waiting)
-            except Exception:
-                _log.warning("the work after a reply failed; the next action decodes the cache "
-                             "again", exc_info=True)
-            finally:
-                self._holder = None
+        """Do the work a reply left, holding the wrapper, giving way to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
+        if not self._lock.acquire(timeout=_AFTER_REPLY_WAIT_S):
+            return
+        self._holder = threading.current_thread()
+        try:
+            if not self._closed:
+                self._conversation.settle(self._waiting)
+        except Exception:
+            _log.warning("the work after a reply failed; the next action decodes the cache "
+                         "again", exc_info=True)
+        finally:
+            self._holder = None
+            self._lock.release()
 
     def _replying(self, text: str | None, given: ToolCallPolicy | ToolRegistry | None,
                   max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
@@ -1204,6 +1207,9 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
 
 # How many calls that could not be read one reply answers before it reads no more calls.
 MAX_UNREADABLE_CALLS_IN_A_ROW = 3
+# How long the work after a reply waits for the wrapper before it leaves that work to the
+# next action, which does it first; at most this long a process waits for it at its end.
+_AFTER_REPLY_WAIT_S = 1.0
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 
