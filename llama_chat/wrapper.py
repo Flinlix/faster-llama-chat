@@ -636,7 +636,11 @@ class ChatWrapper:
         Args:
             keep_text: What stays, a prefix of the message's text, or of the
                 text its reply was streamed as, which after a tool's result
-                may open with a blank line. The whole text changes nothing.
+                may open with a blank line, or the whole turn's where one
+                stream showed the text before its call too. A cut inside the
+                text before the turn's call cuts the newest reply to nothing;
+                the text a call followed stays. The whole text changes
+                nothing.
 
         Raises:
             TypeError: If ``keep_text`` is not a ``str``.
@@ -657,9 +661,8 @@ class ChatWrapper:
             self._ensure_open()
             messages = self._conversation.messages
             if messages and messages[-1]["role"] == "assistant":
-                parting = _parting(_shown_before(messages), messages[-1]["content"])
-                if parting and (keep_text.startswith(parting) or parting.startswith(keep_text)):
-                    keep_text = keep_text[len(parting):]
+                keep_text = _kept_of_the_newest(_shown_before(messages), messages[-1]["content"],
+                                                keep_text)
             self._conversation.truncate_newest(keep_text)
 
     # ----- introspection -------------------------------------------------------
@@ -1236,6 +1239,19 @@ def _explain_failure(result, may_call_again: bool):
 def _parting(before: str, text: str) -> str:
     """What a stream shows between ``before``, the text shown before a generation in its turn, and ``text``, that generation's: a blank line where they would join without whitespace."""
     return "\n\n" if before and text and not before[-1].isspace() and not text[0].isspace() else ""
+
+
+def _kept_of_the_newest(before: str, newest: str, keep_text: str) -> str:
+    """What of ``newest``, the newest reply's text, a reader kept who got ``keep_text`` of a stream that showed ``before`` first, the turn's earlier replies, or of one that showed only that reply."""
+    parting = _parting(before, newest)
+    turn = before + parting
+    if before and keep_text.startswith(turn):
+        return keep_text[len(turn):]
+    if before and keep_text and turn.startswith(keep_text) and not newest.startswith(keep_text):
+        return ""                       # it ended before the newest reply's text
+    if parting and (keep_text.startswith(parting) or parting.startswith(keep_text)):
+        return keep_text[len(parting):]
+    return keep_text
 
 
 def _shown_before(messages: list[dict]) -> str:

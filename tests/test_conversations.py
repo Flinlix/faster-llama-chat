@@ -2379,3 +2379,33 @@ def test_dropping_an_exchange_whose_turn_a_question_closed_writes_what_follows_i
     for question in ("Q2", "Q3", "Q4"):
         chat.reply(question).finish()
         assert_cache_reads_as_rendered(chat, fake)
+
+
+@pytest.mark.parametrize("cut", ["all", "in the answer", "before the call"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_reply_that_ran_a_call_is_cut_to_what_its_one_stream_showed(stem, cut):
+    """Under a registry one stream shows the text before the call and the answer after it; a cut is read against that whole text."""
+    registry = ToolRegistry()
+    registry.tool(lambda city: "sunny", description="Weather for a city", name=WEATHER.name,
+                  parameters=WEATHER.parameters)
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+    for before in ("Let me look.", ""):
+        run = _Run(stem, context_size=16384)
+        run.context.replies = [ScriptedCall(body, before=before)] + _as_generated(
+            run.template, ["It is sunny in Bonn.", "Fine."], False)
+        run.begin(tools=[WEATHER])
+        stream = run.chat.reply("Weather?", tool_call_policy=registry)
+        shown = "".join(e for e in stream if isinstance(e, str))
+        if stream.reply.tool_calls:
+            break
+    newest = run.chat.conversation()["messages"][-1]["content"]
+    if not newest or not shown.endswith(newest):
+        return                                      # the template kept no answer text to cut
+    keep = {"all": shown, "in the answer": shown[:len(shown) - len(newest) // 2],
+            "before the call": shown[:len(shown) - len(newest) - 1]}[cut]
+    try:
+        run.chat.truncate_last_reply(keep)
+    except TemplateRefusedError:
+        assert not newest[:len(newest) - len(newest) // 2] or cut == "before the call"
+        return                                      # the template writes no empty reply
+    run.chat.reply("And tomorrow?").finish()
