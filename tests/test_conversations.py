@@ -2155,19 +2155,20 @@ _COST_CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, ca
 
 
 def _costs(stem, cache, n_exchanges):
-    """What each action decodes, by its name, after a begin from ``n_exchanges`` exchanges."""
+    """What each action decodes, and how many messages the largest render it makes holds, by its name, after a begin from ``n_exchanges`` exchanges."""
     run = _Run(stem, context_size=16384, replies=[f"Answer {i}." for i in range(40)],
                **_COST_CACHES[cache])
     calls = run.fixture["calls_tools"]
     run.begin([m for i in range(n_exchanges) for m in (
         {"role": "user", "content": f"Question {i}?"}, {"role": "assistant", "content": f"Answer {i}."})],
         tools=[WEATHER] if calls else None)
-    chat, decoded = run.chat, {}
+    chat, decoded, largest = run.chat, {}, {}
 
     def measured(name, action):
-        before = run.context.total_prefilled()
+        before, rendered = run.context.total_prefilled(), len(run.context.rendered)
         action()
         decoded[name] = run.context.total_prefilled() - before
+        largest[name] = max(run.context.rendered[rendered:], default=0)
 
     injected = {"role": "assistant", "content": "Said too."}
     if run.context.stated_render(_sent(chat) + [injected],
@@ -2196,17 +2197,29 @@ def _costs(stem, cache, n_exchanges):
         measured("question joining it", lambda: chat.reply("Joined?").finish())
     measured("begin again", lambda: chat.begin(**chat.conversation()))
     measured("question after it", lambda: chat.reply("Last?").finish())
-    return decoded
+    # Where the template writes no turn that called tools alike in a window, the actions from
+    # the first call on render the whole conversation.
+    windows = internals.renders_in_windows(chat)
+    if calls and not internals.renders_tool_turns_in_windows(chat):
+        largest = {name: n for name, n in largest.items() if list(largest).index(name)
+                   < list(largest).index("call")}
+    return decoded, largest, windows
 
 
 @pytest.mark.parametrize("cache", sorted(_COST_CACHES))
 @pytest.mark.parametrize("stem", _EVERY)
 def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cache):
     """Principle 4 on every action and every kind of cache: what an action decodes does not grow with what came before it."""
-    short, long = _costs(stem, cache, 6), _costs(stem, cache, 24)
-    assert short.keys() == long.keys()
+    (short, short_renders, _), (long, long_renders, windows) = (_costs(stem, cache, 6),
+                                                                _costs(stem, cache, 24))
+    assert short.keys() == long.keys() and short_renders.keys() == long_renders.keys()
     assert {name: (short[name], long[name]) for name in short
             if long[name] > short[name] + 8} == {}
+    # Nor does it render more of the conversation: the newest exchanges at most, where the
+    # template writes them alike in a render of them alone.
+    if windows:
+        assert {name: (short_renders[name], long_renders[name]) for name in short_renders
+                if long_renders[name] > short_renders[name]} == {}
 
 
 @pytest.mark.parametrize("stem", _EVERY)

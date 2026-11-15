@@ -104,6 +104,11 @@ def keeps_the_rest_after_a_drop(wrapper) -> bool:
     return wrapper._conversation._state.checks.rest_stays
 
 
+def renders_tool_turns_in_windows(wrapper) -> bool:
+    """Whether windows of the conversation stand for its whole render where they hold turns that called tools."""
+    return wrapper._conversation._state.checks.tool_windows
+
+
 def renders_in_windows(wrapper) -> bool:
     """Whether windows of the conversation stand for its whole render."""
     return wrapper._conversation._state.checks.windows

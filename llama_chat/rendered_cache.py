@@ -1472,9 +1472,9 @@ class RenderedCache:
         """Where a window of ``messages`` begins that stands for their render after one of the cache's anchors, the newest that still stands, and that anchor; ``None`` where no window does.
 
         The window opens with the exchange the anchor's message ends, and
-        holds at most two more; both that message and the one before the
-        window are replies that close their turn, as the probes that showed
-        windows to stand for the whole render had them.
+        holds at most three more; that message is a reply that closes its
+        turn, as in the probes that showed windows to stand for the whole
+        render, so that nothing a turn left open carries past it.
         """
         if not self._state.checks.windows:
             return None
@@ -1491,11 +1491,10 @@ class RenderedCache:
             return None
         starts = exchange_starts(messages)
         opening = [i for i, at in enumerate(starts) if at <= anchor.index]
-        if not opening or len(starts) - opening[-1] > 3:
+        if not opening or len(starts) - opening[-1] > 4:
             return None
         start = starts[opening[-1]]
-        if not _closes_turn(messages[anchor.index]) \
-                or start > len(system_part(messages)) and not _closes_turn(messages[start - 1]):
+        if not _closes_turn(messages[anchor.index]):
             return None
         if not self._state.checks.tool_windows \
                 and not self._rendering.template_writes(messages[start:]):
@@ -1506,10 +1505,11 @@ class RenderedCache:
         return start
 
     def _view(self, messages: list[dict], generation_prompt: bool) -> _View | None:
-        """``messages`` rendered as the cache holds them: a window of the newest of them after the cache's anchor where one stands for the whole, else all of them; ``None`` where the template refuses them."""
-        found = self._window_of(messages)
-        if found is not None:
-            start, anchor = found
+        """``messages`` rendered as the cache holds them: a window of the newest of them after the newest of the cache's anchors that still opens with the tag the cache holds there, where one stands for the whole, else all of them; ``None`` where the template refuses them."""
+        for anchor in reversed(self._state.anchors if self._state.checks.windows else ()):
+            start = self._window_after(messages, anchor)
+            if start is None:
+                continue
             system = system_part(messages)
             window = system + messages[start:]
             split = self._rendering.split(window, generation_prompt)
@@ -1520,6 +1520,8 @@ class RenderedCache:
                              list(self._memory.tokens[:anchor.at]),
                              {k: at for k, at in self._state.kept_at.items() if at < anchor.at},
                              generation_prompt)
+                # The tag the window opens with is the one the cache holds there, unless
+                # what follows the anchor's message is written otherwise now.
                 opening = self._rendering.target(window, generation_prompt, start=tag).tokens[:1]
                 if opening == list(self._memory.tokens[anchor.at:anchor.at + 1]):
                     return view
@@ -1597,7 +1599,8 @@ class RenderedCache:
         messages = self._state.messages
         new = {index: Anchor(messages[index], index, at, tuple(
                    turn for _, _, turn in kept_turns(messages[:index + 1])))
-               for index, at in target.anchors if index < len(messages)}
+               for index, at in target.anchors
+               if index < len(messages) and _closes_turn(messages[index])}
         standing = {a.index: a for a in self._state.anchors
                     if a.at < same and a.index < min(new, default=len(messages))}
         self._state.anchors = tuple(sorted({**standing, **new}.values(),

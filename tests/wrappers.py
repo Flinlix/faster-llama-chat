@@ -240,8 +240,6 @@ def assert_cache_reads_as_rendered(wrapper, fake):
         assert typed_text(fake, fake.cache) in shared, \
             "the cache does not read as the template renders the conversation while a call is owed"
         return
-    if owed and typed_text(fake, fake.cache) in shared:
-        return                      # the renders part before the kept turns are decoded
     asked = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=None)
     generated_after = (held_renders(fake, messages[:asked + 1], internals.declarations(wrapper),
                                     reasoning=internals.reasons(wrapper),
@@ -251,9 +249,17 @@ def assert_cache_reads_as_rendered(wrapper, fake):
     renders = standing + (completed + generated_after if owed else [])
     text_of = fake.text_of
     closing = _reply_closing(fake, internals.reasons(wrapper))
+    turns = internals.kept_turns(wrapper)
     kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
              closing if not text and not on_call else "")
-            for tokens, text, on_call in internals.kept_turns(wrapper)]
+            for tokens, text, on_call in turns]
+    if owed:
+        # Decoded as far as the renders with and without the results agree, the kept turns
+        # that stand there in their places.
+        held = typed_text(fake, fake.cache)
+        if any(_reads_as(held, _shared_whole_tokens(one, other), kept[:n])
+               for one, _ in standing for other, _ in completed for n in range(len(kept) + 1)):
+            return
     # The messages each kept turn stands for; the results still owed come after every message.
     stands_for = [set(range(first, last + 1)) for first, last in internals.kept_turn_spans(wrapper)]
     if stands_for:

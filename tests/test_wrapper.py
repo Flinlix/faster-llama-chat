@@ -1166,6 +1166,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.turn_budget",
         "RenderedCache.turn_open",
         "RenderedCache.turn_policy",
+        "_closes_turn",
         "_ensure_begun",
         "_ensure_can_reply",
         "_ensure_ready",
