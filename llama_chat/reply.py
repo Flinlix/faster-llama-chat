@@ -44,7 +44,7 @@ class Reply:
             eviction limits; those evicted after the reply before, to make
             room for this request, included.
         stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
-            a stop string was met, the reply cap was reached, ``cancel`` was
+            a stop string was met, the reply cap or the context ran out, ``cancel`` was
             set, a call was made, or a call was made that could not be read
             and whose failure could not be written for the model to read.
         tool_calls: The calls the model made, in the order it made them.
@@ -86,7 +86,7 @@ class Reply:
     tool_results_cut: list[ToolCall] = field(default_factory=list)
     n_reasoning_tokens: int = 0
     thought: str = ""
-    evicted_for: str | None = None
+    evicted_for: EvictionCause | None = None
     taken_back: bool = False
     kept_text: str | None = None
 
@@ -123,6 +123,9 @@ class Report:
             calls it still owed told they were not run.
         question_joined: Whether a question was joined to one no reply
             followed, the template writing no two in a row.
+        taken_back: Whether a reply was taken back with its request, as one
+            a result found no room for, with nothing of it the template
+            writes, is.
     """
 
     n_evicted_messages: int = 0
@@ -134,6 +137,7 @@ class Report:
     tool_results_cut: tuple[ToolCall, ...] = ()
     turn_closed: bool = False
     question_joined: bool = False
+    taken_back: bool = False
 
 
 _Delta = TypeVar("_Delta")

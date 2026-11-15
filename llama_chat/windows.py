@@ -108,8 +108,13 @@ class Windows:
         limit = self._config.evict_above_tokens
         bound, most = self._eviction.drop_bound(limit), self._eviction.exchanges_after_drop()
         while kept_until() + after > bound or self._eviction.too_many(most):
-            if len(exchange_starts(self._state.messages)) <= 2:
+            starts = exchange_starts(self._state.messages)
+            if len(starts) <= 2:
                 break
+            # An exchange that leaves a turn open writes what follows it otherwise once it goes.
+            oldest_end = self._state.messages[starts[1] - 1]
+            if oldest_end["role"] != "assistant" or oldest_end.get("tool_calls"):
+                return False
             # The cache up to the tag after the second oldest exchange's reply, before the drop,
             # checked token for token, as no check at load covers it.
             held = self._rendering.head(self._state.messages, through=1,

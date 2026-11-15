@@ -338,4 +338,4 @@ class ResolvedTemplates:
         properties = self.for_conversation(uses_tools).properties
         return Capabilities(properties.can_call_tools and self._tools_refused is None,
                             properties.can_reason, properties.can_turn_off_reasoning,
-                            properties.has_system_turn)
+                            properties.can_take_system_prompt)

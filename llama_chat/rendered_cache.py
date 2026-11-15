@@ -139,7 +139,7 @@ class RenderedCache:
 
         Raises:
             ValueError: As :meth:`prompt` and :meth:`generate` refuse, or, with
-                ``asks_question``, as :meth:`ask` does where a reply is open.
+                ``asks_question``, where no conversation was begun.
         """
         _ensure_can_reply(self._published, asks_question)
 
@@ -456,8 +456,8 @@ class RenderedCache:
         """Decode ``text`` as the next question, with the generation prompt after it, the oldest exchanges dropped for it where needed.
 
         Raises:
-            ValueError: If no conversation was begun, a reply is open, or the
-                template does not write the question here.
+            ValueError: If no conversation was begun, or the template does not
+                write the question here; a turn a call left open is closed first.
             ContextOverflowError: If the question cannot fit beside room for
                 its reply, checked against the system prompt alone before
                 anything is dropped.
@@ -517,7 +517,8 @@ class RenderedCache:
                       generated_turns_ignored=changes.generated_turns_ignored,
                       tool_results_cut=tuple(changes.tool_results_cut),
                       turn_closed=changes.turn_closed,
-                      question_joined=changes.question_joined)
+                      question_joined=changes.question_joined,
+                      taken_back=changes.taken_back)
 
     def forget_told(self) -> None:
         """Start the changes afresh, those of earlier actions told already; the evictions after the newest reply are the next report's."""
@@ -705,8 +706,9 @@ class RenderedCache:
         ``max_history_exchanges`` is reached first.
 
         Raises:
-            ValueError: If no conversation was begun, a reply is open, or the
-                template does not write it after this conversation.
+            ValueError: If no conversation was begun, an assistant message is
+                given while a reply is open, or the template does not write it
+                after this conversation.
             ContextOverflowError: If it cannot fit beside the system prompt
                 alone, checked before anything is dropped.
         """
@@ -1541,8 +1543,9 @@ class RenderedCache:
 
         The window opens with the exchange the anchor's message ends, and
         holds at most three more; that message is a reply that closes its
-        turn, as in the probes that showed windows to stand for the whole
-        render, so that nothing a turn left open carries past it.
+        turn and a question follows it, as in the probes that showed windows
+        to stand for the whole render, so that nothing a turn left open
+        carries past it and nothing after it writes its closing otherwise.
         """
         if not self._state.checks.windows:
             return None
@@ -1562,7 +1565,10 @@ class RenderedCache:
         if not opening or len(starts) - opening[-1] > 4:
             return None
         start = starts[opening[-1]]
-        if not _closes_turn(messages[anchor.index]):
+        # As in the probes: a reply that closes its turn, a question after it. Whatever else
+        # follows the reply may write its closing otherwise.
+        if not _closes_turn(messages[anchor.index]) or anchor.index + 1 >= len(messages) \
+                or messages[anchor.index + 1]["role"] != "user":
             return None
         if not self._state.checks.tool_windows \
                 and not self._rendering.template_writes(messages[start:]):
@@ -1843,8 +1849,9 @@ def _ensure_ready(conversation, action: str, into: str | None = None) -> None:
         raise OutOfOrderError(
             None,
             f"cannot {action} while a reply is open: it stopped on a tool "
-            "call and its turn is unclosed. Finish it with "
-            "reply(), or discard it with begin().")
+            "call and its turn is unclosed. Answer each owed call with "
+            "inject_tool_result() and go on with reply(), ask a new question, "
+            "which closes the turn, or begin again.")
 
 
 def _ensure_can_reply(conversation, asks_question: bool) -> None:

@@ -75,7 +75,7 @@ def main() -> None:
     print(f"\nafter inject: {w.total_tokens - before} tokens more")
     show(w)
 
-    # The first reply answers the injected message, so no two user turns follow each other.
+    # The first reply answers the injected message.
     for q in [None, "What's my name?", "What am I building?", "Suggest one optimization."]:
         reply = w.reply(q).finish()
         print(f"\n> {q or '(the injected message)'}")
@@ -117,7 +117,7 @@ def main() -> None:
 
 
 def begin(chat, system_prompt, history=None):
-    """Begin with ``system_prompt``, or without one where the model's template has no system turn."""
+    """Begin with ``system_prompt``, or without one where the model's template moves a system prompt with later questions."""
     takes_system = chat.capabilities(tools=False).can_take_system_prompt
     system = [{"role": "system", "content": system_prompt}] if takes_system else []
     return chat.begin(system + list(history or []))

@@ -190,7 +190,8 @@ class ChatWrapper:
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations
-                leave no room under ``evict_above_tokens`` for a short question,
+                leave no room under the eviction threshold
+                (``evict_above_fraction`` of ``context_size``) for a short question,
                 or the newest exchange of ``messages``, from its user message
                 on, leaves no room for a reply beside them even with its
                 results cut to nothing (one that ends on a call no result
@@ -205,7 +206,7 @@ class ChatWrapper:
                 holds a call or a result, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
                 that template cannot reason; or if a system message is given
-                and it has no system turn. Its ``field`` names the parameter:
+                and the template moves a system prompt with later questions. Its ``field`` names the parameter:
                 ``tools``, ``messages`` or ``reasoning``.
                 :meth:`capabilities` says beforehand what is accepted.
             InvalidArgumentError: If a message holds a key its role does not
@@ -769,12 +770,13 @@ class ChatWrapper:
 
     @property
     def turn_open(self) -> bool:
-        """Whether a reply is unfinished, so no new message may be added.
+        """Whether a reply is unfinished: a call is owed a result, or the results wait for the reply after them.
 
-        True from a call until :meth:`reply` closes the turn, the results in
-        between included. While it is, :meth:`reply` with a request,
-        and :meth:`inject` with an assistant message refuse. Safe from any thread,
-        as :meth:`conversation` is: as the newest finished change left it.
+        True from a call until :meth:`reply` closes the turn, or a question
+        closes it, or a result finds no room. While it is, only an assistant
+        message and a shortened reply are refused; a question closes the turn
+        first. Safe from any thread, as :meth:`conversation` is: as the newest
+        finished change left it.
         """
         return self._conversation.published_turn_open()
 
@@ -1173,7 +1175,7 @@ def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int
     """Refuse a ceiling on calls under a policy that runs none.
 
     Raises:
-        ValueError: If ``max_calls`` is given and ``policy`` is no registry.
+        InvalidArgumentError: If ``max_calls`` is given and ``policy`` is no registry.
     """
     if max_calls is not None and not isinstance(policy, ToolRegistry):
         raise InvalidArgumentError("max_calls", f"max_calls limits calls that are run, and "

@@ -91,7 +91,8 @@ def ensure_declarable(specs: list[ToolSpec]) -> None:
     seen = set()
     for spec in specs:
         if not isinstance(spec, ToolSpec):
-            raise TypeError(f"a declaration holds ToolSpecs or is a ToolRegistry, not {spec!r}")
+            raise TypeError(f"a declaration holds ToolSpecs, such as ToolRegistry.specs() "
+                            f"gives, not {spec!r}")
         if not isinstance(spec.name, str) or not isinstance(spec.description, str) \
                 or not isinstance(spec.parameters, dict):
             raise TypeError(f"a ToolSpec holds a str name, a str description and a dict of "

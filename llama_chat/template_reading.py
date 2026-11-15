@@ -82,7 +82,7 @@ class TemplateReader:
         self._ensure_tags_listed()
         self._reads_clock = _CLOCK in model.text
         self._fragments = self._resolve_fragments()
-        self._has_system_turn = self._resolve_has_system_turn()
+        self._can_take_system_prompt = self._resolve_can_take_system_prompt()
         self._validate_template()
         turn_end_token = self._resolve_turn_end_token()
         # None where this model cannot call tools at all.
@@ -126,7 +126,7 @@ class TemplateReader:
         """Every property this load read from the template, in one record."""
         return TemplateProperties(
             reads_clock=self._reads_clock, fragments=self._fragments,
-            has_system_turn=self._has_system_turn, turn_end_token=self._turn_end_token,
+            can_take_system_prompt=self._can_take_system_prompt, turn_end_token=self._turn_end_token,
             content_rewrites=self._fragments.rewrites, tool_fragments=self._tool_calls,
             boundary=self._boundary, call_close_text=self._call_close_text,
             call_lead_in=self._call_lead_in,
@@ -175,7 +175,7 @@ class TemplateReader:
                              "off does; name the template variables that turn this "
                              "model's reasoning on")
 
-    def _resolve_has_system_turn(self) -> bool:
+    def _resolve_can_take_system_prompt(self) -> bool:
         """Whether a system prompt lies in the opening of two renders that differ only in the oldest question."""
         def render(oldest):
             return self._render([{"role": "system", "content": _SYSTEM},
@@ -553,7 +553,8 @@ class TemplateProperties:
     Attributes:
         reads_clock: The template reads the date, so a render may change with it.
         fragments: The texts around each kind of turn.
-        has_system_turn: A system prompt stays where it is written.
+        can_take_system_prompt: A system prompt stays where it is written: the
+            template does not move it with later questions.
         turn_end_token: The tag that ends a reply, where one does.
         content_rewrites: Texts the template writes otherwise inside a message.
         tool_fragments: The texts around a past call and its result; ``None``
@@ -583,7 +584,7 @@ class TemplateProperties:
 
     reads_clock: bool
     fragments: TemplateFragments
-    has_system_turn: bool
+    can_take_system_prompt: bool
     turn_end_token: int | None
     content_rewrites: tuple
     tool_fragments: ToolCallFragments | None

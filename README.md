@@ -98,8 +98,8 @@ chat.begin([{"role": "system", "content": "You are a helpful assistant."},
 # inject: prefill one message as context, without generating
 chat.inject("Reference: the deadline is Friday. What's the deadline?")
 
-# reply: prefill only what is new, then stream the reply; reply() answers the
-# injected message, as some templates refuse two user turns in a row
+# reply: prefill only what is new, then stream the reply, which answers the
+# injected message
 for delta in chat.reply():
     print(delta, end="", flush=True)
 
@@ -184,8 +184,7 @@ since the system prompt is `begin`'s, and so is a tool result, which
 
 **Asking.** Without `text`, it answers the newest user message already written,
 or goes on with a turn a tool call left open. A conversation that cannot take
-the reply (none begun, a request while a reply is open, a result still owed,
-nothing to answer) is refused when `reply` is called, and so are a `text` that
+the reply (none begun, a result still owed, nothing to answer) is refused when `reply` is called, and so are a `text` that
 is not a `str`, a `max_reply_tokens` of 0 or less, a `tool_call_policy` that is
 none of `TOOL_CALL_POLICIES`, `None` or a `ToolRegistry`, a `stop` that is
 neither a `str` nor an iterable of `str`, a `cancel` that is no event and a
@@ -268,8 +267,10 @@ A `Report`, which `begin`, `inject` and `inject_tool_result` return, holds
 that could not be read, left out with their results), `n_turns_restored` (the
 turns it restored as generated) and `generated_turns_ignored` (the generated
 turns given were another model's); `tool_results_cut`; `turn_closed`, whether
-the action closed a turn a call left open; and `question_joined`, whether a
-question was joined to one no reply followed.
+the action closed a turn a call left open; `question_joined`, whether a
+question was joined to one no reply followed; and `taken_back`, whether a
+reply was taken back with its request, as one a result found no room for is
+where nothing of it is left that the template writes.
 
 A count of messages, as in `n_evicted_messages` or what `begin`, `inject` and
 `inject_tool_result` return, counts the messages `conversation()["messages"]`

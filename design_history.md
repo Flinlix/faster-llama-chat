@@ -18,10 +18,10 @@ the reasons:
 |---|---|---|
 | The encoding | The cache holds the template's render of the conversation; each action decodes only from the first token that differs. | "The render is the conversation's encoding", "The template as the program" |
 | The caller's text | Each text is placed by a second render with a marker in its place and tokenized with special-token parsing off, so a typed tag stays text. | "Every text placed by a marker render" |
-| Rendering | The library renders the template from the text a context gives; renders are remembered while the template, the tools and the reasoning switch stay. | "The library renders the template; a context gives its text", "Small cleanups after the structure review" |
+| Rendering | The library renders the template from the text a context gives; renders are remembered for one outermost action, while the template, the tools and the reasoning switch stay. | "The library renders the template; a context gives its text", "Small cleanups after the structure review", "Fixes from the project review" |
 | Reading a template | Read once at load, into one record: turns, closing, thought tags, call format and where a call's id stands, what it does to message text. | "What a template is read for, and refused for", "One record of what a load reads from a template", "Template properties in a file of their own, read only from the record", "Fixes from the project review" |
-| Reasoning | Only the shared switches are read from a template; an add-on file may name another. | "How reasoning is read", "An add-on file may name what turns reasoning on" |
-| Tool calls | A call is read in the one shape its template writes, answered by the caller or a registry, and every call is reported. | "Tools and tool calls", "Calls are read in the one shape their template writes", "What a failed call is told" |
+| Reasoning | Only the shared switches are read from a template; an add-on file may name another. | "How reasoning is read", "Only the shared reasoning switches are read from a template", "An add-on file may name what turns reasoning on" |
+| Tool calls | A call is read in the one shape its template writes, under the id the model wrote where the template writes one, else one the library gives, answered by the caller or a registry, and every call is reported. | "Tools and tool calls", "Calls are read in the one shape their template writes", "What a failed call is told", "Call ids keep nine characters", "Fixes from the project review" |
 | Add-on call formats | Where a template does not show a call, the add-on file says how it is written, and its format wins over the template's. | "How a call's format is recovered", "An add-on file's call format wins over the template's", "Settings, add-on files and logging" |
 | A template for tools | A model's further template for tools writes every conversation begun with tools, given a list of tools always. | "A real model with a template for tools of its own" |
 | Generated turns | A turn that called tools keeps the tokens it was generated as, held on the message it ends with, and a begin on the same model restores them with their own messages. | "The target, built without the cache", "A kept turn on its last message", "Two history forms" |
@@ -136,7 +136,11 @@ each reasoning mode, went with the pieces.
 
 ### How reasoning is read
 
-Revised by "What a template is read for, and refused for": `can_reason` means
+Revised by 264.3, which looked for the switch among the names a template
+reads, and then by "Only the shared reasoning switches are read from a
+template": only `enable_thinking` and a `reasoning_effort` whose `"none"`
+turns reasoning off are read, and any other switch, an effort whose `"high"`
+turns it on included, is named in the add-on file. Revised by "What a template is read for, and refused for": `can_reason` means
 the template marks a thought, and the switch is the template's. Revised by
 "The rethink's remaining decisions": `reasoning_effort: "none"` is the
 switch's off wherever it changes what follows the user turn.
@@ -1681,6 +1685,8 @@ Qwen3.5-9B Q4_K_M: the wrapper ran with presence penalty 1.5 and the file's
 other values and answered.
 
 **265.4: a file next to the GGUF is used only where it names the template.**
+Revised by "Fixes from the project review" (458.34): a file next to the GGUF
+that is not JSON is refused at load.
 Any file with the model's name and `.json` was taken as its add-on file, even
 one written for another template, and an unrelated file of that name (another
 tool's settings, say) stopped the model from loading. It is now used only
@@ -1726,8 +1732,9 @@ templates and returned no names at all. The names are now parsed by the
 renderer's own environment, so every template the renderer can render has its
 names read. No test template's declaration variable changed.
 
-**264.3: The reasoning switch among the names a template reads.** This
-revises "How reasoning is read". The switch was looked for only in
+**264.3: The reasoning switch among the names a template reads.** Revised by
+"Only the shared reasoning switches are read from a template", which reads
+only the shared switches. This revises "How reasoning is read". The switch was looked for only in
 `enable_thinking` and `reasoning_effort`; templates also switch reasoning
 with `thinking`, `thinking_mode`, `thinking_option`, `reasoning_strength` or
 `reasoning`, and the test templates that do worked only because they read one
@@ -2413,7 +2420,9 @@ it is not written and the call stays owed, since the caller's own result
 would find no room either; that is the one case where a call that ran is
 still owed.
 
-**R14: the constructor names the refusals of the add-on file.** Reading the
+**R14: the constructor names the refusals of the add-on file.** Revised by
+"Fixes from the project review" (458.34): a file next to the model that is not
+JSON is refused. Reading the
 add-on file and the sampling the GGUF recommends moved into the constructor,
 which then raised three `ValueError`s its docstring left out: an add-on file
 that names the model's template but is malformed, a `reasoning_on` that writes
@@ -3433,6 +3442,9 @@ leave it here, and the code keeps what it does and a pointer where one helps.
 
 ## 2026-11-12: While a call is owed, the cache ends with its turn
 
+Revised by "A history that ends on an owed call is decoded only as far as the
+results leave it", which replaces the "Not changed" note below.
+
 A test that ended with a call under `"yield"` still owed a result failed the
 end-of-test check on 26 of the 41 test templates that call tools (49 of 74
 cases, counting each reasoning mode), with reasoning on and off alike, after a
@@ -4267,6 +4279,10 @@ freed even where ending a reply raises.
 
 ### The quick start answers the message it injects
 
+Revised by "Nothing blocks a question": a question after an unanswered one is
+joined to it where the template writes no two in a row, so the reason given
+here no longer holds; the quick start still answers the injected message.
+
 366.7 (D1). The README's quick start injected a message and then asked a
 question, two user turns in a row, which 7 of the 52 test templates refuse
 (Gemma 3, the Mistral and Ministral family, Aya). It now injects the
@@ -4900,7 +4916,8 @@ both are now told the same way.
 
 ### Exact restore with model handover
 
-Revised by "Two history forms": a saved turn carries its own messages and
+Revised by "Fixes from the project review" (458.29): the fingerprint is worked
+out at load where the model can call tools. Revised by "Two history forms": a saved turn carries its own messages and
 is found by its Chat Completions messages and the question before them.
 
 A turn that called tools stays in the cache as the tokens the model generated,
@@ -5522,7 +5539,7 @@ checks compared tokens exactly where a token may join the template's text and
 the caller's; on that tokenizer they compare the text and where each tag
 stands. The thread rules and the eviction limits have test files of their
 own. The failure sweep covers three more actions and a reasoning template.
-The trace test of invariant 2 lists the code a plain reply may run, so code
+The trace test of rule 5 (then invariant 2) lists the code a plain reply may run, so code
 new to it is flagged, where it listed the code that must not run. After every
 test, what `conversation()` gives is taken by `begin`, and the conversation
 is its Chat Completions messages with each saved turn put back.

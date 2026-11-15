@@ -2298,3 +2298,84 @@ def test_a_reply_shortened_after_evictions_renders_only_the_newest_exchanges(ste
     assert evicted and largest
     if internals.renders_in_windows(run.chat):
         assert max(largest) <= 8, largest
+
+
+def test_a_request_taken_back_for_a_result_with_no_room_says_so_in_the_report():
+    """On a template that writes no empty reply, a call alone whose result cannot fit leaves nothing of its reply: the request goes, and the report says it."""
+    stem = next(stem for stem in _TOOL_TEMPLATES if _Run(stem).context.stated_render(
+        [{"role": "user", "content": "Weather?"}, {"role": "assistant", "content": ""}]) is None
+        and not shipped_addon_call(_FIXTURES[stem]["chat_template"]))
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+    for length in range(560, 900, 4):
+        run = _Run(stem, context_size=900)
+        run.context.replies = [ScriptedCall(body)]
+        try:
+            run.begin(tools=[WEATHER])
+            call = next(e for e in run.chat.reply("Weather? " + "x" * length,
+                                                  tool_call_policy="yield")
+                        if isinstance(e, ToolCall))
+        except (ContextOverflowError, StopIteration):
+            continue
+        report = run.chat.inject_tool_result(call.id, "x" * 50_000)
+        if report.turn_closed:
+            assert report.taken_back and not run.chat.turn_open
+            assert all(m["role"] != "user" for m in after_system(run.chat.conversation()["messages"]))
+            return
+    pytest.fail("no context size left the call room but its result none")
+
+
+def _prompt_is_the_render(run, tools=None) -> bool:
+    """Whether the newest reply was generated from the template's render of the conversation it answered."""
+    messages = internals.rendered_messages(run.chat)
+    asked = max(i for i, m in enumerate(messages) if m["role"] in ("user", "tool"))
+    want = run.context.stated_render(messages[:asked + 1], tools, generation_prompt=True,
+                                     for_tools=tools is not None)
+    return run.seen[-1] == want
+
+
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_reply_injected_after_a_reply_leaves_the_next_prompt_the_templates_render(stem):
+    """A reply after the newest may write the newest's closing otherwise, which no window after it may hide."""
+    run = _Run(stem)
+    run.begin()
+    run.chat.reply(QUESTIONS[0]).finish()
+    for said in ("", "Said too."):
+        try:
+            run.chat.inject(said, role="assistant")
+        except TemplateRefusedError:
+            continue
+        run.chat.reply(QUESTIONS[1]).finish()
+        assert _prompt_is_the_render(run)
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_call_a_client_adds_after_a_reply_leaves_the_next_prompt_the_templates_render(stem):
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    run.chat.reply(QUESTIONS[0]).finish()
+    held = [m for m in run.chat.conversation()["messages"] if m["role"] != "system"]
+    call = {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "own000001", "type": "function",
+         "function": {"name": WEATHER.name, "arguments": '{"city": "Rom"}'}}]}
+    run.begin(held + [call, {"role": "tool", "tool_call_id": "own000001", "content": "warm"}],
+              tools=[WEATHER])
+    if run.chat.reply().finish().taken_back:
+        return                          # the template writes no reply after such a turn
+    assert _prompt_is_the_render(run, [WEATHER.as_declaration()])
+
+
+def test_dropping_an_exchange_whose_turn_a_question_closed_writes_what_follows_it_anew():
+    """The invented templates keep a turn open across a question no reply closed: once that exchange goes, the reply after it gets its own header."""
+    from .invented_templates import TOOLS
+    fake = FakeContext(TOOLS, ["reply", "ok", "ok"])
+    chat = ChatWrapper(Config(context_size=2000, max_history_exchanges=3), context=fake)
+    clock = ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})
+    call = {"role": "assistant", "content": "Ich schaue.", "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "clock", "arguments": "{}"}}]}
+    chat.begin([{"role": "system", "content": "s"}, {"role": "user", "content": "alt"},
+                {"role": "assistant", "content": "älter"}, {"role": "user", "content": "Uhr?"},
+                call, {"role": "tool", "tool_call_id": "c1", "content": "12"},
+                {"role": "user", "content": "Q1"}], tools=[clock])
+    for question in ("Q2", "Q3", "Q4"):
+        chat.reply(question).finish()
+        assert_cache_reads_as_rendered(chat, fake)

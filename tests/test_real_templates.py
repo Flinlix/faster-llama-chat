@@ -416,7 +416,7 @@ def test_every_property_a_load_reads_is_what_the_templates_file_states(stem):
     assert [list(r) for r in properties.content_rewrites] == expected(known, "content_rewrites")
     assert properties.writes_two_user_turns == expected(known, "writes_two_user_turns")
     assert properties.call_lead_in == expected(known, "call_lead_in")
-    assert properties.has_system_turn == expected(known, "can_take_system_prompt")
+    assert properties.can_take_system_prompt == expected(known, "can_take_system_prompt")
     assert properties.can_reason == known["can_reason"]
     assert (properties.reasoning is not None) == known["marks_thought"]
     assert (properties.can_declare_tools and properties.can_write_results) == known["calls_tools"] \
