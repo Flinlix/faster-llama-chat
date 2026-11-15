@@ -500,7 +500,7 @@ class ChatWrapper:
             threading.Thread(target=self._settle_when_free, name="llama_chat after a reply").start()
 
     def _settle_when_free(self) -> None:
-        """Do the work a reply left, holding the wrapper, giving way to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
+        """Do the work a reply left, holding the wrapper, leaving a long decode to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
         if not self._lock.acquire(timeout=_AFTER_REPLY_WAIT_S):
             return
         self._holder = threading.current_thread()

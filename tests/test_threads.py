@@ -252,3 +252,41 @@ def test_the_work_after_a_reply_is_left_to_the_next_action_where_the_wrapper_sta
         assert not waiting.is_alive() and w._conversation.settle_due
     assert w.reply("Und?").finish().text == "Gut."   # which does it first
     assert not w._conversation.settle_due
+
+
+@pytest.mark.parametrize("cache", [dict(can_shift=False, can_cut_tail=True), dict(can_shift=False),
+                                   dict(can_shift=True)], ids=["cuts", "saves states", "shifts"])
+def test_an_action_that_interrupts_the_work_after_a_reply_decodes_no_more_than_waiting(
+        settles_in_the_background, cache):
+    """What the interrupted work did stands, so the action only finishes the rest of it."""
+    def decoded(interrupts: bool) -> int:
+        fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.", **cache)
+        w = ChatWrapper(Config(context_size=8192, evict_above_fraction=0.5, min_reply_tokens=8),
+                        context=fake)
+        w.begin(opened("s", [m for n in range(60) for m in (
+            {"role": "user", "content": f"Frage {n} " + "x" * 60},
+            {"role": "assistant", "content": "Antwort " + "y" * 60})]))
+        decode, parts, started = fake.prefill, [], threading.Event()
+
+        def watched(token_ids, start_pos, want_logits):
+            if interrupts and threading.current_thread().name == "llama_chat after a reply":
+                parts.append(len(token_ids))
+                if len(parts) == 1:
+                    started.set()
+                    assert w._waiting.wait(timeout=5)
+            decode(token_ids, start_pos, want_logits)
+
+        fake.prefill = watched
+        before = fake.total_prefilled()
+        w.reply("frage " + "z" * 200).finish()
+        if interrupts:
+            assert started.wait(timeout=5)
+        else:
+            w.wait_idle()
+        w.inject("Gleich weiter.")
+        w.reply().finish()
+        w.wait_idle()
+        assert_consistent(w, fake)
+        return fake.total_prefilled() - before
+
+    assert decoded(interrupts=True) <= decoded(interrupts=False) + 8

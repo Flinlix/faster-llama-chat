@@ -40,8 +40,8 @@ class CacheSync:
         self._logits = False            # whether the newest decode left logits for its last token
         self.decoded = 0                # every token decoded so far, for what a request cost
         self.version = 0                # changes whenever the tokens do
-        # Watched between the parts of a long decode, which then raises Cancelled; ``cancel``
-        # also before any decode.
+        # Watched between the parts of a long decode: ``cancel``, also before any decode, then
+        # raises Cancelled; ``interrupt`` leaves the rest of the decode to the next bring-up.
         self.cancel: threading.Event | None = None
         self.interrupt: threading.Event | None = None
         # (tokens held, state): at most the two newest a cache rested in.
@@ -238,7 +238,9 @@ class CacheSync:
         return True
 
     def rest(self) -> None:
-        """Bring the cache up, then save the state it rests in, where it needs one and can save it."""
+        """Bring the cache up, then save the state it rests in, where it needs one and can save it; nothing where :attr:`interrupt` left the cache behind its tokens."""
+        if self._interrupted and not self.is_current:
+            return
         self._bring_up(want_logits=False)
         if self._can_cut:
             return                      # a cut needs no saved state
@@ -249,6 +251,11 @@ class CacheSync:
             return
         self._rest_states = ([s for s in self._rest_states if s[0] < self._end][-1:]
                              + [(self._end, state)])
+
+    @property
+    def _interrupted(self) -> bool:
+        """Whether :attr:`interrupt` is set, so that a long decode leaves what it has not done."""
+        return self.interrupt is not None and self.interrupt.is_set()
 
     @property
     def keeps_saved_states(self) -> bool:
@@ -286,8 +293,14 @@ class CacheSync:
         watched = [event for event in (self.cancel, self.interrupt) if event is not None]
         if watched and len(tokens) > _CANCEL_PART_TOKENS:
             for at in range(0, len(tokens), _CANCEL_PART_TOKENS):
-                if at and any(event.is_set() for event in watched):
+                if at and self.cancel is not None and self.cancel.is_set():
                     raise Cancelled("cancelled during the decode")
+                if at and self._interrupted:
+                    # Held, not decoded: the next bring-up decodes them.
+                    if not appended:
+                        self._tokens += tokens[at:]
+                    self._logits = False
+                    return
                 part = tokens[at:at + _CANCEL_PART_TOKENS]
                 self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
                                     appended)

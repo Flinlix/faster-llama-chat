@@ -543,8 +543,9 @@ class RenderedCache:
 
         Args:
             interrupt: Set by an action that waits for this one, it stops a
-                long decode between its parts; the work is then put back
-                undone, and the next action does what it needs of it.
+                long decode between its parts; what the work did stands, and
+                the cache is left behind its tokens, which the next action
+                decodes before its own work.
 
         Raises:
             Exception: What a failed decode raises, which leaves the

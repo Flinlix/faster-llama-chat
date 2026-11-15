@@ -1042,6 +1042,7 @@ _PLAIN_REPLY_CODE = {
         "CacheSync._can_cut",
         "CacheSync._decode_at_end",
         "CacheSync._decode_at_end.<locals>.<genexpr>",
+        "CacheSync._interrupted",
         "CacheSync._pins_to_save",
         "CacheSync._save_pinned_state",
         "CacheSync.cut_to",

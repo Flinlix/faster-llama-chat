@@ -208,8 +208,8 @@ the evictions over the limits and the decode ahead of the next question, runs
 right after on a thread of the library's own, holding the wrapper as any
 action does; the next action, or `wait_idle`, waits for it, or does it first
 where that thread has not begun. An action that waits stops a long decode
-there between its parts, and the decode is then left to what that action
-needs. What that work evicted and decoded is counted by the next request: in
+there between its parts: what that work did stands, and the rest of the
+decode is done first by that action. What that work evicted and decoded is counted by the next request: in
 its `Reply`, or in the next `Report`; a `begin` leaves it to the conversation
 it replaces.
 
