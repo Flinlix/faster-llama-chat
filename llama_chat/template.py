@@ -63,8 +63,11 @@ class CallBody:
     shapes these fields take on real models.
 
     Attributes:
-        name_close: After the function name, before the arguments. Empty
-            where the first key's tag follows the name directly.
+        name_close: After the function name, or after its call's id where
+            ``id_open`` is set, before the arguments. Empty where the first
+            key's tag follows the name directly.
+        id_open: Between the function name and the call's id, where the model
+            writes the id between them; empty where it writes none there.
         key_open: Before each key, including the first.
         key_close: Between a key and its value.
         pair_sep: Between one value and the next key.
@@ -104,6 +107,7 @@ class CallBody:
     item_open: str = ""
     item_close: str = ""
     arguments_json: bool = False
+    id_open: str = ""
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:

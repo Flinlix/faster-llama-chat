@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 
-from .messages import calling_message
+from .messages import call_id, calling_message
 from .sequences import common_prefix_length, common_suffix_length
 from .template import (CallBody, TemplateFragments, ToolCallFragments, json_arguments,
                        shared_tags_length)
@@ -30,6 +30,11 @@ _KEY2 = "AKEYTWO"
 _STRING = "VALONE"
 _NUMBER = 1234
 _STRING2 = "VALTWO"
+
+# The ids the probes' calls carry: the first in every probe, the second to tell where a
+# template writes the id.
+_PROBE_ID = call_id(0)
+_OTHER_ID = call_id(1)
 
 
 def extract_tool_fragments(render: Render, fragments: TemplateFragments,
@@ -121,8 +126,8 @@ def extract_call_body(render: Render, call_open: str,
         The grammar, or ``None`` where some delimiter cannot be recovered.
     """
     render = as_probes_read(render)
-    def rendered_body(arguments) -> str | None:
-        rendered = _render_call(render, arguments)
+    def rendered_body(arguments, first_id: int = 0) -> str | None:
+        rendered = _render_call(render, arguments, first_id)
         if rendered is None or call_open not in rendered:
             return None
         after = rendered.split(call_open, 1)[1]
@@ -203,7 +208,19 @@ def extract_call_body(render: Render, call_open: str,
     if any(sentinel in delimiter for sentinel in sentinels
            for delimiter in dataclasses.astuple(body) if isinstance(delimiter, str)):
         return None
-    return body
+    return _with_id_slot(body, rendered_body, text)
+
+
+def _with_id_slot(body: CallBody, rendered_body, text: str) -> CallBody | None:
+    """``body`` with the call's id read where the template writes it between the name and the arguments; ``None`` where the id it writes there cannot be told from the delimiters around it."""
+    if _PROBE_ID not in body.name_close:
+        return body
+    id_open, _, name_close = body.name_close.partition(_PROBE_ID)
+    other = rendered_body({_KEY: _STRING}, first_id=1)
+    if not id_open or not name_close or _PROBE_ID in name_close \
+            or other != text.replace(_PROBE_ID, _OTHER_ID, 1):
+        return None
+    return dataclasses.replace(body, id_open=id_open, name_close=name_close)
 
 
 def _nested_forms(rendered_body, text: str, quote_open: str, quote_close: str) -> dict:
@@ -279,6 +296,16 @@ def _common_suffix(one: str, other: str) -> str:
     return one[len(one) - common_suffix_length(one, other):]
 
 
+def extract_json_call_id_key(render: Render, keys: tuple[str, ...]) -> str | None:
+    """Of ``keys``, those a JSON call is written with, the one holding the call's id, where the template writes the id under one; ``None`` where it does not."""
+    rendered = _render_call(as_probes_read(render), {_KEY: _STRING})
+    other = _render_call(as_probes_read(render), {_KEY: _STRING}, first_id=1)
+    if rendered is None or other != rendered.replace(_PROBE_ID, _OTHER_ID):
+        return None
+    return next((key for key in keys[2:] if f'"{key}": "{_PROBE_ID}"' in rendered
+                 or f'"{key}":"{_PROBE_ID}"' in rendered), None)
+
+
 def extract_json_call_keys(render: Render) -> tuple[str, ...] | None:
     """Where the template writes a call as one JSON object, its keys: the one naming the function, the one holding the arguments, then the others; ``None`` where it does not."""
     arguments = {_KEY: _STRING}
@@ -310,10 +337,11 @@ def _reads_as_json(text: str, arguments: dict) -> bool:
     return decoded == arguments
 
 
-def _render_call(render: Render, arguments: dict) -> str | None:
-    """Render one assistant turn calling ``TOOLNAME`` with ``arguments``."""
+def _render_call(render: Render, arguments: dict, first_id: int = 0) -> str | None:
+    """Render one assistant turn calling ``TOOLNAME`` with ``arguments``, under the id numbered ``first_id``."""
     return render([{"role": "user", "content": USER_SENTINEL},
-                   calling_message("", [ToolCall(TOOL_SENTINEL, arguments)], 0)], reasoning=False)
+                   calling_message("", [ToolCall(TOOL_SENTINEL, arguments)], first_id)],
+                  reasoning=False)
 
 
 def _newest_opening(render: Render, fragments: TemplateFragments) -> str:

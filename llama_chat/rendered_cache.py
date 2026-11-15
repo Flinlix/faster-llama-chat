@@ -856,10 +856,27 @@ class RenderedCache:
         if generated.stop_reason != "tool_call":
             return []
         try:
-            return self.template.read_calls(
+            calls = self.template.read_calls(
                 generated.tool_call, {spec.name: spec.parameters for spec in self._state.tools})
         except ValueError:
             return []
+        return self._with_usable_ids(calls) if any(call.id for call in calls) else calls
+
+    def _with_usable_ids(self, calls: list[ToolCall]) -> list[ToolCall]:
+        """``calls``, each keeping the id the model wrote for it where that id is new to the conversation and the template writes the call under it; any other is given an id of its own."""
+        taken = {c["id"] for m in self._state.messages for c in m.get("tool_calls") or ()}
+        taken |= self._state.left_out_calls
+        usable = []
+        for call in calls:
+            if call.id and (call.id in taken or self._rendering.render(
+                    self._newest_exchange() + [calling_message("", [call])], False) is None):
+                _log.info("the id %r the model wrote for a call to %s is not used, as it is "
+                          "%s; the call is given one of its own", call.id, call.name,
+                          "taken" if call.id in taken else "one the template does not write")
+                call = replace(call, id="")
+            taken.add(call.id)
+            usable.append(call)
+        return usable
 
     def record_reply(self, answer: str, thought: str, calls: list[ToolCall],
                      called: bool, unreadable_result: dict, stopped: bool = False,
@@ -927,7 +944,9 @@ class RenderedCache:
         if thought:
             message["reasoning_content"] = thought
         if asked:
-            self._state.n_calls += len(asked)
+            # Past each id the model wrote too, so that no id given later repeats one.
+            self._state.n_calls = max(self._state.n_calls + len(asked), next_call_number(
+                [c["id"] for c in message["tool_calls"]]))
         # A reply with neither text nor call has nothing to place its end by, and one a stop
         # string ended holds what was generated after it: a turn kept so far stays kept up to
         # its call, and the rest is the template's.

@@ -210,7 +210,8 @@ def test_only_this_layer_names_llama_cpp():
         f"{reaching} name llama_cpp directly; the handle belongs in _backend.py")
 
 
-def test_a_missing_engine_package_names_its_minimum_version_and_the_build_command(monkeypatch):
+def test_a_missing_engine_package_names_its_minimum_version_and_where_the_build_is_described(
+        monkeypatch):
     import importlib
     import sys
 
@@ -221,7 +222,7 @@ def test_a_missing_engine_package_names_its_minimum_version_and_the_build_comman
     with pytest.raises(ImportError) as missing:
         importlib.import_module("llama_chat._backend")
     assert f"llama-cpp-python {floor} or later" in str(missing.value)
-    assert "./install.sh" in str(missing.value)
+    assert "README's install section" in str(missing.value)
 
 
 def test_every_cache_quantization_config_offers_resolves_to_a_type_id():

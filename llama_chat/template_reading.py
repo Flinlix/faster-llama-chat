@@ -11,7 +11,7 @@ import dataclasses
 from collections.abc import Mapping
 
 from .call_format import (extract_call_body, extract_call_close_text, extract_call_separator,
-                          extract_json_call_keys, extract_named_twice_opening,
+                          extract_json_call_id_key, extract_json_call_keys, extract_named_twice_opening,
                           extract_tool_fragments)
 from .messages import call_id, calling_message, result_message
 from .model_template import RENDERER_VARIABLES, ModelTemplate, names_read
@@ -93,6 +93,8 @@ class TemplateReader:
         self._call_body = self._resolve_call_body()
         self._json_keys = (None if self._call_from_file or not self._calls_marked
                            else extract_json_call_keys(self._read_as_probes))
+        self._json_id_key = (None if self._json_keys is None
+                             else extract_json_call_id_key(self._read_as_probes, self._json_keys))
         self._declares_before_newest_turn = self._resolve_declares_before_newest_turn()
         if not self._declares_before_newest_turn:
             self._variables = self._resolve_declaration_variables()
@@ -129,7 +131,7 @@ class TemplateReader:
             boundary=self._boundary, call_close_text=self._call_close_text,
             call_lead_in=self._call_lead_in,
             call_format_from_addon=self._call_from_file, call_body=self._call_body,
-            json_call_keys=self._json_keys,
+            json_call_keys=self._json_keys, json_call_id_key=self._json_id_key,
             declares_before_newest_turn=self._declares_before_newest_turn,
             declaration_variables=dict(self._variables),
             can_declare_tools=self._can_declare_tools,
@@ -565,6 +567,8 @@ class TemplateProperties:
         call_body: How a call's arguments are spelled, where not as JSON.
         json_call_keys: The keys a JSON call names its function and arguments
             by, where a call is JSON.
+        json_call_id_key: Of those keys, the one a call's id is written
+            under, where the template writes one.
         declares_before_newest_turn: The declarations move with each question.
         declaration_variables: The template variables the declarations are
             passed under.
@@ -589,6 +593,7 @@ class TemplateProperties:
     call_format_from_addon: bool
     call_body: CallBody | None
     json_call_keys: tuple[str, ...] | None
+    json_call_id_key: str | None
     declares_before_newest_turn: bool
     declaration_variables: dict
     can_declare_tools: bool

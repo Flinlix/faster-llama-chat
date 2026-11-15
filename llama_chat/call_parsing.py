@@ -25,7 +25,8 @@ MAX_ARGUMENT_DEPTH = 100
 
 def parse_calls(body: str, call_body: CallBody | None,
                 lead_in: str = "", parameters: dict[str, dict] | None = None,
-                json_keys: tuple[str, ...] | None = None) -> list[ToolCall]:
+                json_keys: tuple[str, ...] | None = None,
+                json_id_key: str | None = None) -> list[ToolCall]:
     """Read the calls out of the text a model generated between its call tags.
 
     Args:
@@ -41,9 +42,12 @@ def parse_calls(body: str, call_body: CallBody | None,
             its template writes: the one naming the function, the one holding
             the arguments, then any others. Such a body is read as JSON
             alone, and an object with another key is not a call.
+        json_id_key: Of ``json_keys``, the one a call's id is written under,
+            where the template writes one.
 
     Returns:
-        One :class:`ToolCall` per call, in the order the model wrote them.
+        One :class:`ToolCall` per call, in the order the model wrote them,
+        with the id the model wrote for it where the format holds one.
         Usually one; a JSON array holds a whole batch.
 
     Raises:
@@ -52,7 +56,7 @@ def parse_calls(body: str, call_body: CallBody | None,
             :data:`MAX_ARGUMENT_DEPTH`.
     """
     try:
-        calls = _read_calls(body, call_body, lead_in, json_keys)
+        calls = _read_calls(body, call_body, lead_in, json_keys, json_id_key)
     except RecursionError as e:
         raise ValueError("the call's arguments nest deeper than can be read") from e
     for call in calls:
@@ -65,7 +69,7 @@ def parse_calls(body: str, call_body: CallBody | None,
 
 
 def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
-                json_keys: tuple[str, ...] | None) -> list[ToolCall]:
+                json_keys: tuple[str, ...] | None, json_id_key: str | None) -> list[ToolCall]:
     """:func:`parse_calls` before the depth of the arguments is checked."""
     # Unstripped: the recovered delimiters carry their own whitespace.
     text = body
@@ -76,7 +80,7 @@ def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
         # of that JSON. One that opens with a tag then writes JSON needs the second.
         candidates = [body.strip()] + ([text.strip()] if text is not body else [])
         for candidate in candidates:
-            calls = _as_json_calls(candidate, json_keys)
+            calls = _as_json_calls(candidate, json_keys, json_id_key)
             if calls:
                 return calls
         raise ValueError(f"not a call as this model writes one in JSON: {body!r}")
@@ -97,14 +101,14 @@ def _nesting_depth(value) -> int:
     return deepest
 
 
-def _as_json_calls(text: str, keys: tuple[str, ...]) -> list[ToolCall]:
+def _as_json_calls(text: str, keys: tuple[str, ...], id_key: str | None) -> list[ToolCall]:
     """Read the calls of a JSON body by ``keys``, or nothing where any of them is not a call."""
     try:
         decoded = _SPELLED.decode(text)
     except ValueError:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
-    calls = [_one_json_call(item, keys) for item in batch]
+    calls = [_one_json_call(item, keys, id_key) for item in batch]
     if not calls or all(call is None for call in calls):
         return []
     # Each entry of a batch is judged on its own: one that is no call is unreadable alone.
@@ -112,7 +116,7 @@ def _as_json_calls(text: str, keys: tuple[str, ...]) -> list[ToolCall]:
             for call, item in zip(calls, batch)]
 
 
-def _one_json_call(decoded, keys: tuple[str, ...]) -> ToolCall | None:
+def _one_json_call(decoded, keys: tuple[str, ...], id_key: str | None) -> ToolCall | None:
     """Read one entry of a batch by the keys its template writes, or ``None`` if it is not a call.
 
     Raises:
@@ -127,12 +131,20 @@ def _one_json_call(decoded, keys: tuple[str, ...]) -> ToolCall | None:
     arguments = decoded.get(arguments_key, {})
     if not isinstance(arguments, dict):
         raise ValueError(f"the arguments of the call to {name!r} are no object: {arguments!r}")
-    return ToolCall(name=name, arguments=arguments)
+    written_id = decoded.get(id_key) if id_key is not None else None
+    return ToolCall(name=name, arguments=arguments,
+                    id=written_id if isinstance(written_id, str) else "")
 
 
 def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     """Read a call written with this model's own delimiters."""
-    if call_body.name_close:
+    written_id = ""
+    if call_body.id_open and call_body.id_open in text.partition(call_body.name_close)[0]:
+        name, _, rest = text.partition(call_body.id_open)
+        written_id, found, rest = rest.partition(call_body.name_close)
+        written_id = written_id.strip()
+    elif call_body.name_close:
+        # A call written without its id is read as one too.
         name, found, rest = text.partition(call_body.name_close)
     else:
         # The name runs up to the first key's tag, or to the end.
@@ -143,20 +155,20 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
         raise ValueError(f"not a call: {text!r}")
     whole = _as_json_arguments(rest, call_body) if call_body.arguments_json else None
     if whole is not None:
-        return ToolCall(name=name, arguments=whole)
+        return ToolCall(name=name, arguments=whole, id=written_id)
     if call_body.key_in_close:
-        return ToolCall(name=name, arguments=_parse_keyed_pairs(rest, call_body))
+        return ToolCall(name=name, arguments=_parse_keyed_pairs(rest, call_body), id=written_id)
     # Compared whole, not by its ending: a model that wraps each argument closes
     # the last one with the very same text.
     if rest == call_body.empty_close:
-        return ToolCall(name=name, arguments={})
+        return ToolCall(name=name, arguments={}, id=written_id)
     # A model may write whitespace after the last argument's closing tag.
     closing = call_body.body_close.rstrip()
     if closing and rest.rstrip().endswith(closing):
         rest = rest.rstrip()[:len(rest.rstrip()) - len(closing)]
     if call_body.key_open and rest.startswith(call_body.key_open):
         rest = rest[len(call_body.key_open):]
-    return ToolCall(name=name, arguments=_parse_pairs(rest, call_body))
+    return ToolCall(name=name, arguments=_parse_pairs(rest, call_body), id=written_id)
 
 
 def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:

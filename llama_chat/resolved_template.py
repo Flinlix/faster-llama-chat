@@ -177,7 +177,8 @@ class ResolvedTemplate:
         if properties.call_texts is not None:
             text = properties.call_lead_in + text    # the opening text holds the lead-in's start
         return parse_calls(text, None if properties.json_call_keys else properties.call_body,
-                           properties.call_lead_in, parameters, properties.json_call_keys)
+                           properties.call_lead_in, parameters, properties.json_call_keys,
+                           properties.json_call_id_key)
 
     def ensure_tools_usable(self, field: str) -> None:
         """Refuse to declare tools this model could never use.

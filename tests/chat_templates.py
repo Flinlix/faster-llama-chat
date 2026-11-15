@@ -45,6 +45,8 @@ _UNSTATED = {
     "n_closing_tokens": None,           # tokens the closing after a reply takes at most
     "reads_clock": False,               # the template reads the date
     "json_call_keys": None,             # the keys a JSON call names its function and arguments by
+    "json_call_id_key": None,           # of those, the one a call's id is written under
+    "call_id_open": "",                 # what a call writes between its name and its id
     "declares_before_newest_turn": False,  # the declarations move with each question
     "content_rewrites": [],             # texts the template writes otherwise inside a message
     "writes_two_user_turns": True,      # two questions in a row are written

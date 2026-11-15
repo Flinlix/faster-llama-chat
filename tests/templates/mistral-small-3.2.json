@@ -8,6 +8,7 @@
  "n_closing_tokens": 1,
  "reads_clock": true,
  "declares_before_newest_turn": true,
+ "call_id_open": "[CALL_ID]",
  "call_marks": {"opening": "[TOOL_CALLS]", "closing": "</s>", "tags": true},
  "writes_arguments_as_json": true,
  "render_variables": {

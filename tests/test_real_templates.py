@@ -25,8 +25,8 @@ from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall
 
 from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
-from .fake_context import (FakeContext, call_marks, shipped_addon_call, shipped_addon_reasoning_on,
-                           written_call)
+from .fake_context import (WRITTEN_ID, FakeContext, call_marks, shipped_addon_call,
+                           shipped_addon_reasoning_on, written_call)
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
 _REASONING_STEMS = [stem for stem in STEMS if fixture(stem)["can_reason"]]
@@ -208,13 +208,21 @@ def test_a_call_written_as_the_template_writes_it_reads_back_as_made(stem):
         rendered = context.stated_render(
             [{"role": "user", "content": "Weather?"},
              {"role": "assistant", "content": "", "tool_calls": [
-                 {"id": "call00000", "type": "function", "function": {
+                 {"id": WRITTEN_ID, "type": "function", "function": {
                      "name": "get_weather", "arguments": {"city": "Berlin"}}}]}],
             tools=[WEATHER.as_declaration()])
         opener, closer = call_marks(fixture(stem))
         # The last call: a declaration may show an example call first.
         body = rendered.rsplit(opener, 1)[1].split(closer, 1)[0]
-    assert template.read_calls(body) == [ToolCall("get_weather", {"city": "Berlin"})]
+    assert template.read_calls(body) == [
+        _as_read(stem, ToolCall("get_weather", {"city": "Berlin"}), written=not call)]
+
+
+def _as_read(stem, call: ToolCall, written: bool = True) -> ToolCall:
+    """``call`` as it reads back from a body the template wrote with :data:`WRITTEN_ID`: under that id where the template writes one, which the model writes too."""
+    known = fixture(stem)
+    writes_id = expected(known, "call_id_open") or expected(known, "json_call_id_key")
+    return ToolCall(call.name, call.arguments, WRITTEN_ID) if written and writes_id else call
 
 
 @pytest.mark.parametrize("stem", _TOOL_STEMS)
@@ -325,9 +333,10 @@ def test_every_argument_shape_reads_back_as_the_template_wrote_it(stem, argument
     context, template = _load(stem)
     read = template.read_calls(_call_body(context, template, arguments))
     if set(arguments) & set(expected(fixture(stem), "lost_arguments")):
-        assert read != [ToolCall("fn", arguments)], "now read back: drop it from the template's file"
+        assert read != [_as_read(stem, ToolCall("fn", arguments))], \
+            "now read back: drop it from the template's file"
     else:
-        assert read == [ToolCall("fn", arguments)]
+        assert read == [_as_read(stem, ToolCall("fn", arguments))]
 
 
 @pytest.mark.parametrize("stem", _ARGUMENT_STEMS)
@@ -339,7 +348,7 @@ def test_arguments_written_as_one_json_object_read_back_however_they_are_spaced(
     if json.dumps(arguments) not in written:
         return                          # it writes its arguments as no JSON object
     compact = written.replace(json.dumps(arguments), json.dumps(arguments, separators=(",", ":")))
-    assert template.read_calls(compact) == [ToolCall("fn", arguments)]
+    assert template.read_calls(compact) == [_as_read(stem, ToolCall("fn", arguments))]
 
 
 @pytest.mark.parametrize("arguments", _ARGUMENTS, ids=lambda a: "-".join(a) or "none")
@@ -359,7 +368,7 @@ def test_a_text_that_reads_as_a_number_reads_back_as_text_where_the_template_wri
     assert alike == expected(fixture(stem), "writes_text_and_number_alike")
     if alike:
         return                          # written alike, so it cannot be told from the number
-    assert template.read_calls(as_text) == [ToolCall("fn", {"city": "42"})]
+    assert template.read_calls(as_text) == [_as_read(stem, ToolCall("fn", {"city": "42"}))]
 
 
 @pytest.mark.parametrize("stem", STEMS)
@@ -400,6 +409,9 @@ def test_every_property_a_load_reads_is_what_the_templates_file_states(stem):
                                       or expected(known, "reads_clock"))
     keys = expected(known, "json_call_keys")
     assert properties.json_call_keys == (None if keys is None else tuple(keys))
+    assert properties.json_call_id_key == expected(known, "json_call_id_key")
+    assert (properties.call_body.id_open if properties.call_body else "") == expected(
+        known, "call_id_open")
     assert properties.declares_before_newest_turn == expected(known, "declares_before_newest_turn")
     assert [list(r) for r in properties.content_rewrites] == expected(known, "content_rewrites")
     assert properties.writes_two_user_turns == expected(known, "writes_two_user_turns")

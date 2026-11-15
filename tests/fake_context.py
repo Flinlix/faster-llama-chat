@@ -133,12 +133,17 @@ def call_marks(known: dict) -> tuple[str, str]:
     return marks["opening"], marks["closing"]
 
 
+# The id a scripted model writes for its calls where its template writes one: unlike every
+# id the library gives or probes a template with.
+WRITTEN_ID = "b7k2m9q4x"
+
+
 def written_call(template, context, name: str, arguments: dict) -> tuple[str, str, str]:
-    """A past call to ``name`` with ``arguments`` as the template writes it: its opening, its body and its closing."""
+    """A past call to ``name`` with ``arguments`` and the id :data:`WRITTEN_ID` as the template writes it: its opening, its body and its closing."""
     rendered = context.stated_render(
         [{"role": "user", "content": "x"},
          {"role": "assistant", "content": "", "tool_calls": [
-             {"id": "call00000", "type": "function",
+             {"id": WRITTEN_ID, "type": "function",
               "function": {"name": name, "arguments": arguments}}]}], for_tools=True)
     opener, closer = call_marks(context._fixture)
     # The last call: a declaration may show an example call first.

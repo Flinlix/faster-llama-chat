@@ -30,7 +30,7 @@ from llama_chat.tools import ToolCall, ToolSpec, result_text
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
-from .fake_context import (FakeContext, ScriptedCall, call_marks, shipped_addon_call,
+from .fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
 from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
 
@@ -1292,14 +1292,14 @@ def _spaced(run, body):
     return body
 
 
-def _rendered_turn(run, *after):
-    """The template's render of a question, one call answered by its result, then ``after``."""
+def _rendered_turn(run, *after, call_id: str = "call00000"):
+    """The template's render of a question, one call ``call_id`` answered by its result, then ``after``."""
     return run.render([
         {"role": "user", "content": "Weather in Bonn?"},
         {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "call00000", "type": "function",
+            {"id": call_id, "type": "function",
              "function": {"name": WEATHER.name, "arguments": {"city": "Bonn"}}}]},
-        {"role": "tool", "name": WEATHER.name, "tool_call_id": "call00000",
+        {"role": "tool", "name": WEATHER.name, "tool_call_id": call_id,
          "content": '{"weather": "sunny"}'}, *after], [WEATHER])
 
 
@@ -1333,12 +1333,39 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
     assert answer in before_thanks.split(generated, 1)[1][len(resumed_with):]
     # Around them, the result and the turn after read as the template writes them.
     template_call = opener + written_body + closer
-    turn = _rendered_turn(run)
+    turn = _rendered_turn(run, call_id=call.id)       # the id the model wrote, where it wrote one
     after_call = (turn.split(template_call, 1) if template_call in turn else turn.split(closer, 1))[1]
     assert resumed_with == after_call
     after = _rendered_turn(run, {"role": "assistant", "content": answer},
                            {"role": "user", "content": "Thanks."})
     assert before_thanks.rsplit(answer, 1)[1] == after.rsplit(answer, 1)[1]
+
+
+_WRITES_CALL_IDS = [stem for stem in _TOOL_TEMPLATES if expected(_FIXTURES[stem], "call_id_open")
+                    or expected(_FIXTURES[stem], "json_call_id_key")]
+
+
+@pytest.mark.parametrize("stem", _WRITES_CALL_IDS)
+def test_a_call_keeps_the_id_the_model_wrote_unless_it_is_taken_or_one_the_template_refuses(stem):
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+    refused = body.replace(WRITTEN_ID, "x")             # shorter than the template allows
+    run = _Run(stem, context_size=16384)
+    run.context.replies = [ScriptedCall(body), "Sunny.", ScriptedCall(body), "Still sunny.",
+                           ScriptedCall(refused), "Sunny again."]
+    run.begin(tools=[WEATHER])
+    ids = []
+    for question in ("Weather?", "And now?", "Once more?"):
+        call, = [e for e in run.chat.reply(question, tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        run.chat.inject_tool_result(call.id, "sunny")
+        assert call.id in run.context.text_of(run.context.cache).rsplit(call.name, 1)[1]
+        run.chat.reply(tool_call_policy="yield").finish()
+        ids.append(call.id)
+    assert ids[0] == WRITTEN_ID and len(set(ids)) == 3 and "x" not in ids
+    saved = run.chat.conversation()
+    run.chat.begin(**{**saved, "generated_turns": None})
+    assert run.chat.conversation()["messages"] == saved["messages"]
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)

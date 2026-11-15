@@ -10,6 +10,7 @@
  "declares_before_newest_turn": true,
  "writes_two_user_turns": false,
  "call_lead_in": "[{\"name\": \"",
+ "json_call_id_key": "id",
  "call_marks": {"opening": "[TOOL_CALLS]", "closing": "</s>", "tags": true},
  "writes_arguments_as_json": true,
  "render_variables": {
