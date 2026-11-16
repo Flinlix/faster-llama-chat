@@ -14,7 +14,9 @@ from collections.abc import Callable
 
 from .config import Config
 from .conversation_state import ConversationState
+from .reply import EvictionCause
 from .messages import THOUGHT_KEY, exchange_count, exchange_starts, history_count, system_part
+from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
@@ -67,7 +69,9 @@ class Eviction:
                  + len(str(m.get(THOUGHT_KEY) or "")) for m in self._state.messages]
         chars = lambda count: sum(sizes[opens[-count]:]) or 1         # noqa: E731
         kept, more, jumped = 1, min(2, everything), False
+        growing_variant = LoopVariant("growing the history kept")
         while True:
+            growing_variant.passes((everything - kept, int(more == everything)))
             measured = length(more)
             if measured <= bound:
                 if more == everything:
@@ -82,7 +86,9 @@ class Eviction:
                 more = kept * 2             # the whole did not fit: doubling goes on from what fits
             else:
                 break
+        halving_variant = LoopVariant("searching the history kept")
         while kept < more - 1:
+            halving_variant.passes(more - kept)
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
         self._state.messages[:] = self._state.messages[:first] + self._state.messages[opens[-kept]:]
@@ -109,13 +115,13 @@ class Eviction:
 
         if length() <= limit and not too_many():
             return None
-        cause = "exchange_limit" if too_many() else "room"
+        cause: EvictionCause = "exchange_limit" if too_many() else "room"
         n_before = history_count(self._state.messages)
         bound, most = self.drop_bound(limit, beside_open_turn), self.exchanges_after_drop()
         self._drop_oldest_exchanges(length, bound, too_many(most), newest_too)
         return cause if self.record(n_before, cause) else None
 
-    def record(self, n_before: int, cause: str) -> int:
+    def record(self, n_before: int, cause: EvictionCause) -> int:
         """Record in the state the history messages that went since it held ``n_before``, and ``cause``, one of :data:`~llama_chat.reply.EVICTION_CAUSES`, as why; how many went."""
         n_gone = n_before - history_count(self._state.messages)
         if n_gone:
@@ -149,7 +155,9 @@ class Eviction:
         if at_least:
             low = at_least - 1          # over in count, whatever its length
         halve = False
+        searching_variant = LoopVariant("searching how many to drop")
         while high - low > 1:
+            searching_variant.passes(high - low)
             if halve or long_low <= long_high:
                 count = (low + high) // 2
             else:

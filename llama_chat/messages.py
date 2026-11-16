@@ -8,6 +8,7 @@ import re
 
 from .errors import InvalidArgumentError
 from .tools import ToolCall
+from .loop_variant import LoopVariant
 
 
 # The roles a message of the caller's takes: a question and a reply.
@@ -54,7 +55,9 @@ def ensure_role(role) -> None:
 def call_id(n: int) -> str:
     """The id of the ``n``-th call this library writes: ``call`` and ``n`` in five base-36 digits, nine letters and digits in all for the first 36**5 calls."""
     digits = ""
+    digits_variant = LoopVariant("writing a call id")
     while n or len(digits) < _ID_DIGITS:
+        digits_variant.passes((n, max(0, _ID_DIGITS - len(digits))))
         n, digit = divmod(n, 36)
         digits = _BASE36[digit] + digits
     return "call" + digits
@@ -67,7 +70,9 @@ def next_call_number(ids) -> int:
     if after + _FREE_RUN <= _ID_LIMIT:
         return after
     start = 0
+    runs_variant = LoopVariant("finding a free run of call ids")
     while clash := [n for n in taken if start <= n < start + _FREE_RUN]:
+        runs_variant.passes(max(taken) + 1 - start)
         start = max(clash) + 1
     return start
 

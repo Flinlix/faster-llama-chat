@@ -185,8 +185,8 @@ class ReplyStream(Generic[_Delta]):
         if self.reply is None and self._on_close is not None:
             self.reply = self._on_close()
 
-    def finish(self) -> Reply:
-        """Read the stream to its end, and return its :class:`Reply`."""
+    def finish(self) -> Reply | None:
+        """Read the stream to its end, and return its :class:`Reply`; ``None`` where it was closed before it started."""
         for _ in self:
             pass
         return self.reply

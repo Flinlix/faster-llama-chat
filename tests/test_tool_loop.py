@@ -1598,7 +1598,7 @@ def test_declaring_later_is_checked_the_same_way():
     wrapper = ChatWrapper(Config(context_size=1024), context=fake)
     wrapper.begin(opened("persona"))
     with pytest.raises(ValueError, match="renders no tool result"):
-        add_tools(wrapper, 
+        add_tools(wrapper,
             [ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})])
 
 
@@ -2156,6 +2156,7 @@ def test_stopping_the_second_call_of_a_round_keeps_the_first_calls_result():
     assert wrapper.wait_idle(0)
 
 
+@pytest.mark.counts_work
 def test_writing_a_result_renders_the_whole_conversation_only_to_measure_it():
     wrapper, fake = tool_wrapper(context_size=32768)
     history = [m for i in range(300) for m in ({"role": "user", "content": f"question {i}"}, {"role": "assistant", "content": f"answer {i}"})]

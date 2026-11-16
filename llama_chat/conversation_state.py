@@ -6,6 +6,7 @@ import copy
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 
 from .rendering import GeneratedTurn
+from .reply import EvictionCause
 from .tools import ToolCall, ToolSpec
 
 
@@ -49,7 +50,7 @@ class Changes:
     """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_chat.reply.Report` gives it."""
 
     n_evicted: int = 0                    # history messages evicted, each result counting as one
-    evicted_for: str | None = None
+    evicted_for: EvictionCause | None = None
     n_kept_messages: int | None = None
     n_left_out_calls: int = 0
     n_turns_restored: int = 0

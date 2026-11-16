@@ -9,6 +9,7 @@ from collections.abc import Callable
 from .reply import StopReason
 from .sequences import common_prefix_length, common_suffix_length
 from .template import Reasoning
+from .loop_variant import LoopVariant
 
 
 class ReplyText:
@@ -185,7 +186,9 @@ class _ThoughtFilter:
         self._held += text
         self._uncounted_held += 1
         shown, counted = [], self._in_thought
+        taking_variant = LoopVariant("splitting thought from answer")
         while True:
+            taking_variant.passes(len(self._held))
             if self._in_thought:
                 end = self._held.find(self._close)
                 if end < 0:
@@ -247,9 +250,11 @@ class _ThoughtFilter:
     def _opening_at(self) -> int:
         """Where in the held text a thought opens, -1 where none does."""
         at = self._held.find(self._open)
+        openings_variant = LoopVariant("finding a thought's opening")
         while at >= 0 and self._answered and self._tag_spans is not None \
                 and not _holds_tag(self._tag_spans, self._held_at + at,
                                    self._held_at + at + len(self._open)):
+            openings_variant.passes(len(self._held) - at)
             at = self._held.find(self._open, at + 1)        # its letters, written as text
         return at
 
@@ -352,7 +357,9 @@ def _outside_tags(text: str, at: int, tags: tuple[str, ...], backwards: bool) ->
     """``at``, moved to the start (``backwards``) or the end of a tag of ``tags`` that it falls inside in ``text``."""
     for tag in tags:
         found = text.find(tag)
+        found_variant = LoopVariant("finding a tag around a place")
         while found >= 0:
+            found_variant.passes(len(text) - found)
             if found < at < found + len(tag):
                 return found if backwards else found + len(tag)
             found = text.find(tag, found + 1)

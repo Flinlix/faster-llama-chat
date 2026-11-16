@@ -84,6 +84,14 @@ class Config:
         flash_attention: ``True`` or ``False`` forces flash attention on or
             off. ``None`` leaves it to the engine, except under a quantized
             ``kv_cache_type``, which requires it and turns it on.
+        check_cache: Check, right before every generation and once the work
+            after a reply has ended, that the cache holds what a fresh begin
+            of its conversation holds. A fault found before a generation
+            raises :class:`~llama_chat.errors.InternalError` and the reply is
+            put back; one found after a reply is logged and raised by the next
+            action. A fault the cache keeps is raised again by every reply
+            until the conversation begins again. For finding faults: each
+            check renders and tokenizes the whole conversation.
         kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``.
             Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
             requires flash attention, so is refused with
@@ -120,6 +128,10 @@ class Config:
     max_batch_tokens: int = 2048
     flash_attention: bool | None = None
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
+
+    # Checking
+
+    check_cache: bool = False
 
     def __post_init__(self) -> None:
         ensure_types(self)
@@ -281,7 +293,22 @@ def with_request_sampling(config: Config, sampling: Sampling | None) -> Config:
                               if getattr(sampling, f.name) is not None})
 
 
-def generation_sampling(config: Config, sampling: Sampling | None) -> Sampling:
+@dataclass(frozen=True)
+class DrawnSampling:
+    """Every sampling value a generation draws with, each of them set; a ``seed`` of ``None`` draws a fresh one."""
+
+    temperature: float
+    top_k: int
+    top_p: float
+    min_p: float
+    repetition_penalty: float
+    presence_penalty: float
+    frequency_penalty: float
+    penalty_window_tokens: int
+    seed: int | None
+
+
+def generation_sampling(config: Config, sampling: Sampling | None) -> DrawnSampling:
     """Every sampling value a generation draws with: ``sampling``'s where it sets one, else ``config``'s."""
     applied = with_request_sampling(config, sampling)
-    return Sampling(**{f.name: getattr(applied, f.name) for f in fields(Sampling)})
+    return DrawnSampling(**{f.name: getattr(applied, f.name) for f in fields(DrawnSampling)})

@@ -13,7 +13,9 @@ from dataclasses import replace
 from .conversation_state import ConversationState, goes_on_from
 from .messages import GENERATED_TURN, exchange_starts, history_count, system_part
 from .render_checks import STAND_IN
+from .reply import EvictionCause
 from .sequences import common_prefix_length
+from .loop_variant import LoopVariant
 
 # Returned where a window cannot stand for the whole render.
 WHOLE = object()
@@ -104,7 +106,7 @@ class Windows:
         too_many = self._eviction.too_many if counts_exchanges else lambda most=None: False
         if not (kept_until() + after > limit or too_many()):
             return True
-        cause = "exchange_limit" if too_many() else "room"
+        cause: EvictionCause = "exchange_limit" if too_many() else "room"
         n_before = history_count(self._state.messages)
         try:
             return self._drop_in(memory, kept_until, after, limit, too_many, beside_open_turn)
@@ -116,7 +118,9 @@ class Windows:
         """:meth:`drop_in`'s work, once the conversation is over a limit."""
         bound = self._eviction.drop_bound(limit, beside_open_turn)
         most = self._eviction.exchanges_after_drop()
+        dropping_variant = LoopVariant("dropping in windows")
         while kept_until() + after > bound or too_many(most):
+            dropping_variant.passes(len(self._state.messages))
             starts = exchange_starts(self._state.messages)
             if len(starts) <= 2:
                 break

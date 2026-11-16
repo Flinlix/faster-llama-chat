@@ -434,7 +434,8 @@ def test_a_negative_wait_is_refused_naming_its_setting(timeout_s):
 def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on():
     """An implementer reads the protocol, not the stand-in."""
     from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
-    member = lambda name: getattr(CacheContext, name)
+    def member(name):
+        return getattr(CacheContext, name)
     undocumented = [name for name in CACHE_CONTEXT
                     if not ((member(name).fget if isinstance(member(name), property)
                              else member(name)).__doc__ or "").strip()]
@@ -928,17 +929,17 @@ def test_a_reply_shortened_to_no_text_is_refused_naming_keep_text():
         w.truncate_last_reply(("tuple",))
 
 
-def test_a_reply_to_an_injected_question_evicts_down_to_the_room_its_reply_needs():
-    """Where the eviction threshold lies above the room a reply needs, the reply still gets that room."""
+def test_an_injected_question_evicts_down_to_the_room_its_reply_needs():
+    """Where the eviction threshold lies above the room a reply needs, the question already leaves that room, as a begin of it does."""
     fake = FakeContext(PLAIN, gen_tokens=5)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=100),
                     context=fake)
     w.begin(opened("s", [{"role": "user", "content": "a" * 80}, {"role": "assistant", "content": "b" * 80}, {"role": "user", "content": "c" * 80},
                   {"role": "assistant", "content": "d" * 80}]))
-    w.inject("q" * 230)
-    assert 400 < w.total_tokens <= 500          # over the room, under the threshold
+    report = w.inject("q" * 230)
+    assert report.n_evicted_messages > 0 and w.total_tokens <= 400     # within the room
     reply = w.reply().finish()
-    assert reply.n_evicted_messages > 0 and reply.stop_reason == "end_of_turn"
+    assert reply.n_evicted_messages == 0 and reply.stop_reason == "end_of_turn"
 
 
 def test_an_injected_question_joined_to_an_unanswered_one_leaves_room_for_its_reply():
@@ -951,6 +952,22 @@ def test_an_injected_question_joined_to_an_unanswered_one_leaves_room_for_its_re
     assert not report.question_joined and report.n_evicted_messages == 1
     assert w.conversation()["messages"][-1]["content"] == "b" * 250
     assert w.reply().finish().stop_reason == "end_of_turn"
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
+def test_questions_injected_in_a_row_leave_a_conversation_a_begin_takes(can_shift):
+    """Rule 10: however many questions no reply follows, a fresh begin of the conversation is not refused for its length."""
+    config = Config(context_size=700, evict_above_fraction=1.0, min_reply_tokens=16)
+    w = ChatWrapper(config, context=FakeContext(PLAIN, can_shift=can_shift))
+    w.begin(opened("Be brief. " * 60))         # a long system prompt: a few notes fill the room
+    for n in range(40):
+        try:
+            w.inject(f"Notiz {n}")
+        except ContextOverflowError:
+            break                               # refused, as a question that leaves no room is
+        again = ChatWrapper(config, context=FakeContext(PLAIN, can_shift=can_shift))
+        again.begin(**w.conversation())
+        again.close()
 
 
 def test_awaits_reply_says_whether_a_reply_without_text_answers_something():
@@ -1051,6 +1068,7 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
 _PLAIN_REPLY_CODE = {
     "cache_sync.py": {
         "CacheSync._bring_up",
+        "CacheSync._brought_up_end",
         "CacheSync._can_cut",
         "CacheSync._decode_at_end",
         "CacheSync._decode_at_end.<locals>.<genexpr>",
@@ -1173,6 +1191,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._sync.<locals>.<genexpr>",
         "RenderedCache._sync.<locals>.<lambda>",
         "RenderedCache._system_part",
+        "RenderedCache._take_back_unwritten",
         "RenderedCache._take_evicted_after_reply",
         "RenderedCache._turn_end_test",
         "RenderedCache._view",
@@ -1328,6 +1347,8 @@ _PLAIN_REPLY_CODE = {
         "ChatWrapper._generate_until_answered",
         "ChatWrapper._generate_until_answered.<locals>.<genexpr>",
         "ChatWrapper._generate_until_answered.<locals>.may_call_after_unreadable",
+        "ChatWrapper._generate_until_answered.<locals>.tokens_left",
+        "ChatWrapper._generate_until_answered.<locals>.tokens_left.<locals>.<genexpr>",
         "ChatWrapper._held",
         "ChatWrapper._keep_turn",
         "ChatWrapper._noting_each_reader",
@@ -1356,12 +1377,17 @@ _PLAIN_REPLY_CODE = {
         "_sum_generations",
         "_sum_generations.<locals>.<genexpr>",
     },
+    "loop_variant.py": {
+        "LoopVariant.__init__",
+        "LoopVariant.passes",
+    },
 }
 
 
 @pytest.mark.parametrize("merges", [False, True], ids=["one token per character", "merging"])
 @pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
                                    dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+@pytest.mark.counts_work
 def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code(
         cache, merges):
     """Rule 5: no question, reply or token pays for a property the loaded template does not have, evictions included."""
@@ -1423,6 +1449,7 @@ def test_every_action_reports_no_eviction_where_nothing_went():
     assert [(r.n_evicted_messages, r.evicted_for) for r in reports] == [(0, None)] * len(reports)
 
 
+@pytest.mark.counts_work
 def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_is_read(monkeypatch):
     from llama_chat import publishing, rendered_cache
     w, _fake = begun_wrapper()

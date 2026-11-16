@@ -85,7 +85,7 @@ _WRONG_TYPES = {
     "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64",
     "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
     "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
-    "flash_attention": "auto", "kv_cache_type": 8,
+    "flash_attention": "auto", "kv_cache_type": 8, "check_cache": "yes",
 }
 
 

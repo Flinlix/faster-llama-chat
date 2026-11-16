@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from .messages import THOUGHT_FORMS
 from .sequences import common_prefix_length
+from .loop_variant import LoopVariant
 
 
 @dataclass(frozen=True)
@@ -213,7 +214,9 @@ def _ends_a_tag(text: str, at: int, tags: tuple[str, ...]) -> bool:
         return False
     for tag in tags:
         found = text.find(tag)
+        found_variant = LoopVariant("finding a tag before a place")
         while 0 <= found < at:
+            found_variant.passes(at - found)
             if found + len(tag) > at:
                 return False
             found = text.find(tag, found + 1)
@@ -227,6 +230,8 @@ def shared_tags_length(text: str, other: str, tags: tuple[str, ...]) -> int:
     a word the two spell differently.
     """
     shared = common_prefix_length(text, other)
+    shared_variant = LoopVariant("backing to a word's end")
     while shared and not (text[shared - 1].isspace() or _ends_a_tag(text, shared, tags)):
+        shared_variant.passes(shared)
         shared -= 1
     return shared

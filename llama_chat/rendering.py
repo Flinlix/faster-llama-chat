@@ -209,7 +209,8 @@ class ConversationRendering:
                                  "it was generated as")
             if start <= found[0] and found[1] <= end:
                 placed.append((*found, kept))
-        tokens, at, turns_at = [], start, {}
+        tokens: list[int] = []
+        at, turns_at = start, {}
         for begins, stop, kept in placed:
             assert begins >= at, "two generated turns overlap"
             tokens += self.tokenize(split.pieces(at, begins), add_special=not tokens and at == 0)
@@ -244,7 +245,7 @@ class ConversationRendering:
                 except ValueError:
                     return False            # the template writes it otherwise than as its text
                 where = split.contents[len(messages)] if split is not None else None
-                if where is None or split.text[where[0]:where[1]] not in forms:
+                if split is None or where is None or split.text[where[0]:where[1]] not in forms:
                     return False
             return True
 
@@ -349,8 +350,8 @@ class ConversationRendering:
             closing = self._template.properties.call_close_text
             found = split.text.find(closing, called) if called is not None and closing else -1
             end = found + len(closing) if found >= 0 else None
-        elif split.contents[last] is not None:
-            end = split.contents[last][1]
+        elif (content := split.contents[last]) is not None:
+            end = content[1]
         else:
             # A reply without text: it ends where the template's closing after it begins,
             # the last before the next text of the caller's own after the message before it.
@@ -375,9 +376,10 @@ class ConversationRendering:
     # ----- tags ---------------------------------------------------------------------
     def tag_after_content(self, split: SplitRender, index: int) -> int | None:
         """Where the first tag after message ``index``'s content begins, before the next text of the caller's own."""
-        if split.contents[index] is None:
+        content = split.contents[index]
+        if content is None:
             return None
-        return self.tag_from(split.text, split.contents[index][1], split)
+        return self.tag_from(split.text, content[1], split)
 
     def tag_from(self, text: str, at: int, split: SplitRender | None = None) -> int | None:
         """Where the first tag at or after ``at`` begins, before the next own text of ``split`` where given."""
@@ -393,10 +395,11 @@ class ConversationRendering:
 
     def run_start(self, split: SplitRender | None, index: int, start: int | None) -> int | None:
         """Where the run of text holding message ``index``'s content begins: after the last tag from ``start`` on."""
-        if split is None or start is None or split.contents[index] is None:
+        content = split.contents[index] if split is not None else None
+        if split is None or start is None or content is None:
             return None
         run = None
-        for piece, own in split.pieces(start, split.contents[index][0]):
+        for piece, own in split.pieces(start, content[0]):
             if own:
                 start += len(piece)
                 continue

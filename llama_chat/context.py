@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ._backend import Backend
 from .cache_context import TOOL_USE_TEMPLATE
-from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, Sampling
+from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, DrawnSampling
 from .errors import EngineError
 from .errors import InvalidSettingError
 
@@ -90,7 +90,7 @@ class KVContext:
             texts = {None: template, TOOL_USE_TEMPLATE: self._backend.metadata_value(
                 self._model, f"tokenizer.chat_template.{TOOL_USE_TEMPLATE}")}
             self._template_texts = {name: text for name, text in texts.items() if text}
-            self._special_tokens = None
+            self._special_tokens: tuple[int, ...] | None = None
             self._fingerprint: str | None = None
             self._model_bytes = os.path.getsize(config.model_path)
         except BaseException:
@@ -247,7 +247,7 @@ class KVContext:
                               "action decodes the conversation again")
 
     # ----- the steps a generation takes ----------------------------------
-    def sampled_tokens(self, sampling: Sampling, withheld_tokens: tuple[int, ...]):
+    def sampled_tokens(self, sampling: DrawnSampling, withheld_tokens: tuple[int, ...]):
         """Tokens drawn one at a time from a sampler chain of their own, freed when this is closed."""
         # A chain of its own: penalties count this generation's tokens only, and a seed starts over.
         sampler = self._build_sampler(sampling, withheld_tokens)
@@ -320,7 +320,7 @@ class KVContext:
         finally:
             self._backend.kv_clear(self._engine_context)
 
-    def _build_sampler(self, sampling: Sampling, withheld: tuple[int, ...] = ()):
+    def _build_sampler(self, sampling: DrawnSampling, withheld: tuple[int, ...] = ()):
         """Assemble the sampler chain ``sampling`` asks for, in sampling order, ``withheld`` never drawn."""
         backend = self._backend
         chain = backend.sampler_chain()

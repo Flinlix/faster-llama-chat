@@ -331,6 +331,7 @@ def test_begin_counts_the_messages_kept_and_a_reply_after_a_result_closes_its_tu
     assert after_system(w.conversation()["messages"])[0] == longer[-kept]
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("context_size", [4096, 8192])
 def test_a_long_question_into_a_context_full_of_short_exchanges_renders_a_few_times_however_many_go(
         context_size):

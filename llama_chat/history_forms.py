@@ -9,6 +9,8 @@ a turn kept as generated on the message it ends with. See design_history.md,
 
 from __future__ import annotations
 
+from typing import Any
+
 import collections
 import copy
 import hashlib
@@ -18,6 +20,7 @@ import logging
 from .errors import InvalidArgumentError
 from .messages import GENERATED_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
 from .rendering import GeneratedTurn, generated_turns_in
+from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
@@ -102,8 +105,8 @@ def _reply(item: dict, where: str) -> dict:
     if content is None and not calls:
         raise InvalidArgumentError("messages", f"{where}.content is null, which only a reply "
                                                "that makes calls may be")
-    message = {"role": "assistant",
-               "content": "" if content is None else _text(content, f"{where}.content")}
+    message: dict[str, object] = {
+        "role": "assistant", "content": "" if content is None else _text(content, f"{where}.content")}
     thought = item.get(THOUGHT_KEY)
     if thought:
         message[THOUGHT_KEY] = _text(thought, f"{where}.{THOUGHT_KEY}")
@@ -197,7 +200,9 @@ def answer_in_order(messages: list[dict], unreadable_result: str) -> list[dict]:
     owed: list[dict] = []           # the calls still to be answered, oldest first
 
     def answer_unreadable(upto: str | None) -> None:
+        owing_variant = LoopVariant("answering unreadable calls")
         while owed and UNREADABLE_CALL in owed[0] and owed[0]["id"] != upto:
+            owing_variant.passes(len(owed))
             answered.append(result_message(UNKNOWN_FUNCTION, owed.pop(0)["id"], unreadable_result))
 
     for message in messages:
@@ -394,7 +399,9 @@ def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[
     records: list[dict] = []
     for first, last, turn in generated_turns_in(messages):
         end = last
+        results_variant = LoopVariant("finding an open turn's results")
         while end + 1 < len(messages) and messages[end + 1]["role"] == "tool":
+            results_variant.passes(len(messages) - end)
             end += 1                # the results written so far in an open turn
         own = set(range(first, end + 1))
         window = [k for k, source in enumerate(sources) if source & (own | {first - 1})]
@@ -404,8 +411,8 @@ def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[
             continue                # nothing of it, or before it, is given back to find it by
         lo = min(min(sources[k]) for k in window)
         hi = max(end, max(max(sources[k]) for k in window))
-        part = {"from": window[0], "to": window[-1], "lo": lo, "hi": hi,
-                "kept": [(first, turn)]}
+        part: dict[str, Any] = {"from": window[0], "to": window[-1], "lo": lo, "hi": hi,
+                                "kept": [(first, turn)]}
         shared = records[-1]["to"] - part["from"] + 1 if records else 0
         if shared > 1 or shared == 1 and not portable[part["from"]].startswith('["user"'):
             older = records.pop()
@@ -508,7 +515,7 @@ def _is_generated_turn_record(record) -> bool:
         return False
     held, kept = record["messages"], record["kept"]
     return (isinstance(held, list) and all(_is_held(m) for m in held)
-            and isinstance(kept, list) and kept and all(
+            and isinstance(kept, list) and bool(kept) and all(
                 isinstance(turn, dict) and set(turn) == {"tokens", "start", "span"}
                 and isinstance(turn["tokens"], list)
                 and all(type(token) is int for token in turn["tokens"])

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import logging
 
 import threading
@@ -10,6 +12,7 @@ from .cache_context import CacheContext
 from .generation import GenerationAccumulator
 from .generation import generate
 from .sequences import common_prefix_length
+from .loop_variant import LoopVariant
 
 # Maps a token id to one character, so token lists search as strings.
 _TOKEN_OFFSET = 0x10000
@@ -22,6 +25,12 @@ _log = logging.getLogger(__name__)
 class Cancelled(Exception):
     """A decode that :attr:`CacheSync.cancel` stopped between its parts."""
 
+
+
+class Interrupt(Protocol):
+    """What tells a long decode to stop between its parts: set, it gives way."""
+
+    def is_set(self) -> bool: ...
 
 class CacheSync:
     """The tokens a cache should hold, and that cache brought to hold them.
@@ -43,7 +52,7 @@ class CacheSync:
         # Watched between the parts of a long decode: ``cancel``, also before any decode, then
         # raises Cancelled; ``interrupt`` leaves the rest of the decode to the next bring-up.
         self.cancel: threading.Event | None = None
-        self.interrupt: threading.Event | None = None
+        self.interrupt: Interrupt | None = None
         # (tokens held, state): at most the two newest a cache rested in.
         self._rest_states: list[tuple[int, object]] = []
         # Where states are kept besides those, by what they are kept for, and the states kept,
@@ -121,7 +130,7 @@ class CacheSync:
             return
         finally:
             self.cancel = None
-        start = self._end
+        start = self._brought_up_end
         pieces = generate(self._context, start, max_generated_tokens, out=out, **options)
         try:
             yield from pieces
@@ -250,15 +259,21 @@ class CacheSync:
         self._bring_up(want_logits=False)
         if self._can_cut:
             return                      # a cut needs no saved state
-        state = self._pinned.get(self._end)          # one kept here already serves
+        end = self._brought_up_end
+        state = self._pinned.get(end)               # one kept here already serves
         if state is None:
             try:
                 state = self._context.save_state()
             except RuntimeError:
                 self._rest_states = []  # decoding again stands in where none is saved
                 return
-        self._rest_states = ([s for s in self._rest_states if s[0] < self._end][-1:]
-                             + [(self._end, state)])
+        self._rest_states = [s for s in self._rest_states if s[0] < end][-1:] + [(end, state)]
+
+    @property
+    def _brought_up_end(self) -> int:
+        """Where the cache ends, known once it was brought up, which every decode at its end follows."""
+        assert self._end is not None, "the cache's end is unknown until it is brought up"
+        return self._end
 
     @property
     def _interrupted(self) -> bool:
@@ -313,19 +328,19 @@ class CacheSync:
                 self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
                                     appended)
             return
-        pin = min((p for p in self._pins_to_save() if self._end < p < self._end + len(tokens)),
-                  default=None)
+        end = self._brought_up_end
+        pin = min((p for p in self._pins_to_save() if end < p < end + len(tokens)), default=None)
         if pin is not None:
             # Decoded in two, so that the state where the pin is can be saved; all of
             # them held first, so that a failure in either leaves none out.
             if not appended:
                 self._tokens += tokens
-            split = pin - self._end
+            split = pin - end
             self._decode_at_end(tokens[:split], False, appended=True)
             self._decode_at_end(tokens[split:], want_logits, appended=True)
             return
         try:
-            self._context.prefill(tokens, start_pos=self._end, want_logits=want_logits)
+            self._context.prefill(tokens, start_pos=end, want_logits=want_logits)
         except BaseException:
             self._end = None
             if not appended:
@@ -333,7 +348,7 @@ class CacheSync:
             raise
         if not appended:
             self._tokens += tokens
-        self._end += len(tokens)
+        self._end = end + len(tokens)
         self._valid = self._end
         self._logits = want_logits
         self.decoded += len(tokens)
@@ -400,7 +415,9 @@ def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int 
     best, best_length, at = None, len(probe) - 1, memory.find(probe, start + 1) if probe else -1
     longest = len(wanted) - start
     # Later candidates can only match less than what is left after them.
+    candidates_variant = LoopVariant("finding a dropped stretch")
     while at >= 0 and best_length < min(longest, len(memory) - at):
+        candidates_variant.passes(len(memory) - at)
         length = common_prefix_length(memory[at:], wanted[start:])
         if length > best_length:
             best, best_length = at, length

@@ -1,9 +1,14 @@
 """Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it; and with a conversation that is its two history forms, which begin takes back.
 
 A test that asks for ``clock`` sets the time a template that reads the clock is rendered at.
+Every test ends within its time limit, or the process stops and prints where
+each thread stood.
 """
 
 import datetime
+import faulthandler
+import os
+import sys
 
 import pytest
 
@@ -14,10 +19,57 @@ from .internals import context_of, is_closed
 from .wrappers import assert_cache_reads_as_rendered, assert_conversation_is_its_forms
 
 
+# How long a test may run before it counts as hung; a test that needs longer says so with
+# ``@pytest.mark.time_limit_s(n)``.
+_TIME_LIMIT_S = 60
+
+
 def pytest_configure(config):
-    """Have the library render each template through :class:`RecordedTemplate`, compiled once per text and each render counted."""
+    """Have the library render each template through :class:`RecordedTemplate`, compiled once per text and each render counted; with ``LLAMA_CHAT_CHECK_EVERY_ACTION=1``, check every action's cache against a fresh begin; and keep nothing of Hypothesis's on disk."""
+    from hypothesis import configuration
+    # A home it cannot write to: it then keeps neither examples nor what it read of the code.
+    configuration.set_hypothesis_home_dir(os.devnull)
     from llama_chat import resolved_template
     resolved_template.ModelTemplate = RecordedTemplate
+    if os.environ.get("LLAMA_CHAT_CHECK_EVERY_ACTION") == "1":
+        from dataclasses import replace
+        from llama_chat.rendered_cache import RenderedCache
+        build = RenderedCache.__init__
+
+        def checking(self, context, templates, settings):
+            from llama_chat.cache_check import _ReadsTokensOnly
+            checks = not isinstance(context, _ReadsTokensOnly)     # the fresh begin, not again
+            build(self, context, templates, replace(settings, check_cache=checks))
+        RenderedCache.__init__ = checking
+    config.addinivalue_line("markers", "time_limit_s(seconds): the test may run this long")
+    config.addinivalue_line("markers", "slow: a long run, left out unless asked for with -m slow")
+    config.addinivalue_line("markers", "gpu: runs real model files on the GPU")
+    config.addinivalue_line("markers", "counts_work: counts the library's own renders or calls, "
+                                       "which the check after every action adds to")
+    config.addinivalue_line("markers", "timed: bounds the processor time a test takes, which "
+                                       "mutation testing slows")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Leave out the tests that count the library's work where every action is checked, which adds work of its own."""
+    if os.environ.get("LLAMA_CHAT_CHECK_EVERY_ACTION") != "1":
+        return
+    skip = pytest.mark.skip(reason="counts the library's work, which the check adds to")
+    for item in items:
+        if item.get_closest_marker("counts_work"):
+            item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _within_its_time_limit(request):
+    """Stop the process, printing every thread's stack, once the test runs past its limit, so that a hang is a failure that shows where it hung."""
+    marker = request.node.get_closest_marker("time_limit_s")
+    limit_s = marker.args[0] if marker else _TIME_LIMIT_S
+    faulthandler.dump_traceback_later(limit_s, exit=True, file=sys.stderr)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +90,7 @@ def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
         if not is_closed(wrapper):
             # The work after a reply, on its thread where a test asks.
             assert wrapper.wait_idle(timeout_s=5), "the work after a reply did not end"
+            assert wrapper._conversation._found_fault is None, "check_cache found a fault"
             assert_cache_reads_as_rendered(wrapper, context)
             assert_conversation_is_its_forms(wrapper)
 

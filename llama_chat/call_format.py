@@ -137,7 +137,8 @@ def extract_call_body(render: Render, call_open: str,
     empty, text = rendered_body({}), rendered_body({_KEY: _STRING})
     number, pair = rendered_body({_KEY: _NUMBER}), rendered_body({_KEY: _STRING,
                                                                   _KEY2: _STRING2})
-    if any(r is None or TOOL_SENTINEL not in r for r in (empty, text, number, pair)):
+    if empty is None or text is None or number is None or pair is None \
+            or any(TOOL_SENTINEL not in r for r in (empty, text, number, pair)):
         return None
     # The sentinels the splits below index on. A template that drops one proves
     # nothing about the delimiter that would have surrounded it.
@@ -317,7 +318,9 @@ def extract_json_call_keys(render: Render) -> tuple[str, ...] | None:
     """Where the template writes a call as one JSON object, its keys: the one naming the function, the one holding the arguments, then the others; ``None`` where it does not."""
     arguments = {_KEY: _STRING}
     rendered = _render_call(as_probes_read(render), arguments)
-    at = -1 if rendered is None else rendered.find(TOOL_SENTINEL)
+    if rendered is None:
+        return None
+    at = rendered.find(TOOL_SENTINEL)
     decoder = json.JSONDecoder()
     for start in (i for i in range(at, -1, -1) if rendered[i] in "{["):
         try:

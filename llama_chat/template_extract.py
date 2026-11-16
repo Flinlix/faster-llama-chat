@@ -65,12 +65,12 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
 
     flag_on, flag_off = {_SWITCH_NAMES[0]: True}, {_SWITCH_NAMES[0]: False}
     effort_off = {_SWITCH_NAMES[1]: "none"}
-    found = None
+    found: tuple[dict, dict] | None = None
     if rendered(flag_on) != rendered(flag_off):
         found = flag_on, flag_off
     else:
         none, default = rendered(effort_off), rendered({})
-        if None not in (none, default) \
+        if none is not None and default is not None \
                 and none.split(USER_SENTINEL, 1)[-1] != default.split(USER_SENTINEL, 1)[-1]:
             found = {}, effort_off
     on, off = found or (flag_on, flag_off)
@@ -107,7 +107,7 @@ def as_probes_read(render: Render, tags: tuple[str, ...] = ()) -> Render:
                 and text.endswith(end):
             return text[:-len(end)]
         return text
-    rendered.reads_as_probes = True
+    rendered.reads_as_probes = True  # type: ignore[attr-defined]
     return rendered
 
 
@@ -180,9 +180,10 @@ def extract_reasoning(render: Render, fragments: TemplateFragments,
     off = render(messages, generation_prompt=True, reasoning=False)
     switches = on is not None and off is not None and on != off
     if switches:
-        prompt = _prompt_added(render, True)
-        if prompt is None:
+        added = _prompt_added(render, True)
+        if added is None:
             return None
+        prompt = added
     return Reasoning(thought_open=thought_open, thought_close=thought_close,
                      generation_prompt=prompt, can_turn_off=switches,
                      **_past_thought(render, form))
@@ -404,7 +405,7 @@ def extract_content_rewrites(render: Render, texts,
     content = marks[0] + "".join(text + mark for text, mark in zip(texts, marks[1:]))
     rendered = as_probes_read(render, tags)([{"role": "user", "content": content}], reasoning=False)
     start = -1 if rendered is None else rendered.find(marks[0])
-    if start < 0:
+    if rendered is None or start < 0:
         return ()
     end = start + len(marks[0])
     rewrites = []

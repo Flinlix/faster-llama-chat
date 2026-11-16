@@ -29,13 +29,16 @@ import llama_chat
 
 from llama_chat.addon_files import read_addon_file, with_model_sampling
 from llama_chat._backend import Backend
-from llama_chat.config import KV_CACHE_TYPES
+from llama_chat.config import Config, KV_CACHE_TYPES, Sampling, generation_sampling
 from llama_chat.tokenizing import split_at_tags, tokenize_pieces
 from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
 from llama_chat.generation import GenerationAccumulator
 from llama_chat.context import KVContext, _physical_cores
 from llama_chat.generation import generate
-from llama_chat.config import Config, Sampling
+
+# Every sampling value set, as a generation is given them.
+SAMPLING = generation_sampling(Config(), None)
+
 
 
 def _backend(attr):
@@ -268,7 +271,7 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
         is_special=lambda vocab, token: False,
         token_to_piece_bytes=lambda vocab, token: token.encode())
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 10, out=out, ends_turn=lambda token: token == "<response_end>"))
+    shown = "".join(generate(context, 0, 10, sampling=SAMPLING, out=out, ends_turn=lambda token: token == "<response_end>"))
     assert shown == out.text == "Paris"
     assert decoded == out.token_ids == ["Pa", "ris"]
     assert out.stop_reason == "end_of_turn"
@@ -337,7 +340,7 @@ def test_a_call_without_a_tag_of_its_own_is_read_by_its_texts():
         ["Gleich.", "<close>", "resp", "<sep>", "<open>", "tools", "<sep>", "<open>",
          'call tool="', "clock", '" index="1"', "<sep>", "<close>", "call", "<sep>", "x"])
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS)))
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS)))
     assert shown == out.text == "Gleich."
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock" index="1"'
     assert decoded == out.token_ids and decoded[-1] == "<sep>"
@@ -355,7 +358,7 @@ def test_a_calls_texts_are_matched_without_the_whitespace_around_them_as_a_thoug
         sampled):
     context, decoded, _ = _sampling_context(sampled)
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(
         call_texts=("\n<open>call:\n", "\n<close>"))))
     assert shown == out.text == "Gleich."
     assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
@@ -365,7 +368,7 @@ def test_a_reply_ends_where_its_closing_parts_from_a_call():
     context, decoded, removed = _sampling_context(
         ["Pa", "ris", "<close>", "resp", "<sep>", "<close>", "msg", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS, turn_end_text="<close>resp<sep><close>")))
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(call_texts=_CALL_TEXTS, turn_end_text="<close>resp<sep><close>")))
     assert shown == out.text == "Paris"
     assert out.stop_reason == "end_of_turn" and out.token_ids == ["Pa", "ris"]
     # The closing's first tokens leave the reply; the caller cuts them from the
@@ -390,7 +393,7 @@ _PLAIN = ("assistant to=functions.", "<|call_done|>")
 def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
     context, decoded = _plain_context(sampled)
     out = GenerationAccumulator()
-    "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
+    "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == "clock{}"
     assert decoded[-1] == "<|call_done|>"        # the end-of-generation token that closes it is kept
 
@@ -398,7 +401,7 @@ def test_a_plain_text_opening_opens_a_call_at_the_start_or_after_a_tag(sampled):
 def test_a_plain_text_opening_inside_a_sentence_is_text():
     context, _ = _plain_context(["Say", " assistant", " to=", "functions.", "x", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(call_texts=_PLAIN, opens_as_text=True)))
     assert out.stop_reason == "end_of_turn" and shown == "Say assistant to=functions.x"
 
 
@@ -408,7 +411,7 @@ def test_a_turn_ended_inside_a_call_closes_the_call_as_the_template_does():
     context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     context.tokenize = lambda text, add_special=False, parse_special=True: [text]
     out = GenerationAccumulator()
-    "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
+    "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == "tool_call" and out.tool_call == 'clock"}'
     assert decoded[-1] == "<|turn_ends|>" and "<|call_ends|>" not in decoded
 
@@ -418,7 +421,7 @@ def test_a_tag_a_call_follows_is_the_calls_and_never_shown():
     context, decoded = _plain_context(["Sure.", "<|lead|>", '{"name": "', "clock", '"}', "<|turn_ends|>"])
     context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(
         call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == "tool_call" and shown == out.text == "Sure."
 
@@ -426,7 +429,7 @@ def test_a_tag_a_call_follows_is_the_calls_and_never_shown():
 def test_a_tag_no_call_follows_stays_the_replys():
     context, _ = _plain_context(["<|lead|>", "hi", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(
         call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == "end_of_turn" and shown == "<|lead|>hi"
 
@@ -445,7 +448,7 @@ def test_a_tag_a_call_may_follow_never_reaches_a_reply_that_was_cut(cut_by):
             return token
         context._backend.sample = sample
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 3 if cut_by == "token_limit" else 20, out=out,
+    shown = "".join(generate(context, 0, 3 if cut_by == "token_limit" else 20, sampling=SAMPLING, out=out,
                              cancel=cancel, boundary=CallBoundary(
                                  call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True)))
     assert out.stop_reason == cut_by and shown == out.text == "Sure."
@@ -455,7 +458,7 @@ def test_a_thoughts_closing_tag_a_call_follows_stays_the_replys():
     context, _ = _plain_context(["Hm.", "<|/thought|>", '{"name": "', "clock", '"}', "<|turn_ends|>"])
     context._backend.is_eog = lambda vocab, token: token in ("<|call_ends|>", "<|turn_ends|>")
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(
         call_texts=('{"name": "', "<|turn_ends|>"), opens_as_text=True, thought_tags=("<|/thought|>",))))
     assert out.stop_reason == "tool_call" and shown == "Hm.<|/thought|>"
 
@@ -463,7 +466,7 @@ def test_a_thoughts_closing_tag_a_call_follows_stays_the_replys():
 def test_with_calls_off_a_tag_in_a_reply_that_ends_in_text_is_shown():
     context, _ = _plain_context(["Hi", "<|begin|>", "there", "<|fin|>", "<end>"])
     out = GenerationAccumulator()
-    shown = "".join(generate(context, 0, 20, out=out, boundary=CallBoundary(
+    shown = "".join(generate(context, 0, 20, sampling=SAMPLING, out=out, boundary=CallBoundary(
         opens_as_text=True, turn_end_text="<|fin|>")))
     assert out.stop_reason == "end_of_turn" and shown == "Hi<|begin|>there"
 

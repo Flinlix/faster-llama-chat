@@ -1,0 +1,183 @@
+{
+ "found": "2026-11-15",
+ "what": "an unreadable call whose answer fails",
+ "draws": [
+  {
+   "template": "adb1c45376c8a8a1b7e0063ce87b26c8b9376fd4f0f3cb584ddbba7e66f81d2f"
+  },
+  {
+   "option": 2
+  },
+  0.0,
+  0.0,
+  {
+   "option": 0
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.3747505686290715,
+  0.0,
+  14,
+  {
+   "option": 3
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  51,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 5
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.6743262049417977,
+  0.9999999999999998,
+  0.4519293013558186,
+  0.0,
+  0,
+  0.0,
+  0,
+  {
+   "option": 0
+  }
+ ],
+ "steps": [
+  "set_up",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_wait",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "act_truncate",
+  "keeps_the_rules",
+  "teardown"
+ ]
+}

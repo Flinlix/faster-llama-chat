@@ -21,10 +21,11 @@ import copy
 import logging
 import threading
 from collections.abc import Callable, Generator
+from typing import Any, cast
 from dataclasses import dataclass, replace
 
 from .generation import GenerationAccumulator
-from .cache_sync import CacheSync, Cancelled
+from .cache_sync import CacheSync, Cancelled, Interrupt
 from .config import Config
 from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
@@ -42,15 +43,16 @@ from .eviction import Eviction
 from .result_cutting import ResultCutting
 from .windows import WHOLE, Windows
 from .publishing import conversation_of, generated_turns_of, published
-from .errors import (RAISE_THE_ROOM, ContextOverflowError, InvalidArgumentError,
+from .errors import (RAISE_THE_ROOM, ContextOverflowError, InternalError, InvalidArgumentError,
                      OutOfOrderError, TemplateRefusedError, UnsupportedError,
                      with_template_reason)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
 from .split_render import SplitRender
 from .sequences import common_prefix_length
-from .reply import Reply, Report
+from .reply import EvictionCause, Reply, Report
 from .reply_text import ReplyText
 from .tools import ToolCall, ToolSpec, result_text
+from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
@@ -99,8 +101,11 @@ class RenderedCache:
         # evicted, with why, which the next action reports, and the tokens it decoded,
         # which the next request counts as its own.
         self._settle_due = False
-        self._evicted_after_reply: tuple[int, str | None] = (0, None)
+        self._evicted_after_reply: tuple[int, EvictionCause | None] = (0, None)
         self._decoded_after_reply = 0
+        # What ``check_cache`` found once the work after a reply ended, which the next action
+        # raises, as that work may run on a thread no caller reads.
+        self._found_fault: InternalError | None = None
 
     # ----- what it holds ---------------------------------------------------------------
     @property
@@ -111,6 +116,14 @@ class RenderedCache:
     def conversation(self) -> dict:
         """Everything ``begin`` takes to begin the conversation again, by its parameter names, from one publication, the caller's to change; safe to read unlocked."""
         return conversation_of(self._published)
+
+    def held_tokens(self) -> list[int]:
+        """The tokens the cache holds, or is brought to hold before it is next used."""
+        return list(self._memory.tokens)
+
+    def prompted_tokens(self) -> list[int]:
+        """The tokens of the conversation with the generation prompt after it, as a reply now would be generated after."""
+        return list(self._prompted().tokens)
 
     def generated_turns(self) -> dict | None:
         """Each turn kept as generated, from one publication, as :meth:`start` takes them back; ``None`` where none is; safe to read unlocked."""
@@ -359,15 +372,15 @@ class RenderedCache:
             if self.pending_calls:
                 self._sync(self._settled_while_owed(), logits=False, dropped=True)
             elif self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
-                prompted = self._prompted()
-                opening = self._prompt_text_start(prompted.tokens)
-                if opening < len(prompted.tokens) and self._memory.keeps_saved_states:
+                prompt_target = self._prompted()
+                opening = self._prompt_text_start(prompt_target.tokens)
+                if opening < len(prompt_target.tokens) and self._memory.keeps_saved_states:
                     # A state saved before the template's text a reply follows, which a cache
                     # that cannot be cut goes back to where what follows is written otherwise.
-                    self._sync(Target(prompted.tokens[:opening], prompted.turns_at), logits=False,
-                               dropped=True)
+                    self._sync(Target(prompt_target.tokens[:opening], prompt_target.turns_at),
+                               logits=False, dropped=True)
                     self._memory.rest()
-                self._sync(prompted, dropped=True)
+                self._sync(prompt_target, dropped=True)
             else:
                 self._render_ahead(dropped=True)
             self._memory.rest()
@@ -580,7 +593,7 @@ class RenderedCache:
         """Whether a reply left the work after it to do: the evictions and the decode ahead of the next question."""
         return self._settle_due
 
-    def settle(self, interrupt: threading.Event | None = None) -> None:
+    def settle(self, interrupt: Interrupt | None = None) -> None:
         """Do the work a reply left, where it left any: drop what is over the limits, then render and decode ahead for the next question.
 
         Args:
@@ -602,6 +615,13 @@ class RenderedCache:
         self._memory.interrupt = interrupt
         try:
             self._settle()
+            if self._config.check_cache:
+                try:
+                    if interrupt is None or not interrupt.is_set():
+                        self._check_cache(prompted=False)
+                except InternalError as fault:
+                    _log.error("check_cache: %s", fault)
+                    self._found_fault = fault       # raised by the next action, on any thread
         except Cancelled:
             _log.debug("the work after a reply gave way to the next action")
             return
@@ -782,8 +802,10 @@ class RenderedCache:
                     or exchange_count(self._state.messages) < self._config.max_history_exchanges)
             if role != "user" or joined is not None or not fits or not self._splice(message, room):
                 self._state.messages.append(joined or message)
-                dropped = self._drop_while_over(limit, generation_prompt=False)
-                self._ensure_within(limit, "shorten the message or inject a user message first")
+                # A question keeps the room its reply needs, as a begin of it does.
+                dropped = self._drop_while_over(bound, generation_prompt=asks)
+                self._ensure_within(bound, "shorten the message or inject a user message first",
+                                    generation_prompt=asks)
                 self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
@@ -899,6 +921,8 @@ class RenderedCache:
                 self.ask(text, cancel)
             elif not self.turn_open:
                 self.prompt()
+            if self._config.check_cache:
+                self._check_cache(prompted=True)
         except Cancelled:
             self.roll_back()
             return Reply(text="", n_prefilled_tokens=self.decoded - decoded_from,
@@ -970,7 +994,8 @@ class RenderedCache:
                 n_generated_tokens=len(generated.token_ids),
                 n_evicted_messages=n_evicted_messages,
                 stop_reason=generated.stop_reason,
-                tool_calls=_reported_calls(generated, self.pending_calls),
+                # A reply taken back made no call; what is owed then is the turn it went back to.
+                tool_calls=_reported_calls(generated, [] if changes.taken_back else self.pending_calls),
                 tool_results_cut=results_cut,
                 n_reasoning_tokens=reply_text.thought_pieces,
                 thought=reply_text.thought,
@@ -1091,13 +1116,14 @@ class RenderedCache:
         if answer and not calls and self._holds_thought_tags(answer):
             # Where the template writes none of it as text, it is recorded as an answer with no text.
             tags = self.template.properties.reasoning
+            assert tags is not None, "thought tags are held only where the template reasons"
             answer = self._rendering.written_answer(
                 self._state.messages, answer, thought,
                 (tags.thought_close.strip(), tags.thought_open.strip())) or ""
         asked = calls or ([ToolCall("", {}, status="unreadable")]
                           if unreadable else [])
-        message = ({"role": "assistant", "content": answer} if not asked
-                   else calling_message(answer, asked, self._state.n_calls))
+        message: dict[str, Any] = ({"role": "assistant", "content": answer} if not asked
+                                   else calling_message(answer, asked, self._state.n_calls))
         if thought:
             message["reasoning_content"] = thought
         if asked:
@@ -1147,6 +1173,8 @@ class RenderedCache:
                 written = self._write_unreadable(unreadable_result)
             except BaseException:
                 self._forget_calls()        # the cache is decoded again by the next action
+                # Without its call, the reply may be one the template does not write.
+                self._take_back_unwritten(answer)
                 raise
             if not written:
                 self._forget_calls()
@@ -1159,19 +1187,7 @@ class RenderedCache:
             return
         # A reply whose call was withdrawn, for want of room for its answer, is a reply too.
         replied = not self._state.messages[-1].get("tool_calls")
-        if replied and not self._writes(self._newest_part(self._state.messages) if not answer
-                                        else self._newest_exchange()):
-            _log.info("a reply the template does not write, nor an empty one in its place, "
-                      "was taken back with its request")
-            if self._request is not None:
-                # Taken back with the question this request asked, and what it evicted.
-                self._go_back_to(self._request)
-                self._state.changes.taken_back = True
-                self._publish()
-                return
-            self._state.changes.taken_back = True
-            starts = exchange_starts(self._state.messages)
-            self._remove_from(starts[-1] if starts else len(self._system_part()))
+        if replied and self._take_back_unwritten(answer):
             return
         if not answer and not called and not resumed \
                 and self.template.properties.writes_two_user_turns:
@@ -1193,7 +1209,7 @@ class RenderedCache:
         at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("tool_calls")),
                   None)
         turn = messages[at].get(GENERATED_TURN) if at is not None else None
-        if turn is None or not turn.on_call or turn not in self._state.turns_at:
+        if at is None or turn is None or not turn.on_call or turn not in self._state.turns_at:
             return None
         return at, turn
 
@@ -1211,13 +1227,33 @@ class RenderedCache:
 
     def _answer_unreadable_owed(self) -> bool:
         """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; whether the turn closed instead, for want of room for it."""
+        answering_variant = LoopVariant("answering unreadable calls")
         while self.pending_calls and self.pending_calls[0].status == "unreadable" \
                 and self._state.unreadable_result is not None:
+            answering_variant.passes(len(self.pending_calls))
             if not self._write_unreadable(self._state.unreadable_result):
                 # Left owed, it would hold the turn open with no call the caller can answer.
                 self.close_unanswered()
                 return True
         return False
+
+    def _take_back_unwritten(self, answer: str) -> bool:
+        """Take the newest reply back with its request where the template writes neither it nor an empty one in its place; whether it did."""
+        if self._writes(self._newest_part(self._state.messages) if not answer
+                        else self._newest_exchange()):
+            return False
+        _log.info("a reply the template does not write, nor an empty one in its place, "
+                  "was taken back with its request")
+        if self._request is not None:
+            # Taken back with the question this request asked, and what it evicted.
+            self._go_back_to(self._request)
+            self._state.changes.taken_back = True
+            self._publish()
+            return True
+        self._state.changes.taken_back = True
+        starts = exchange_starts(self._state.messages)
+        self._remove_from(starts[-1] if starts else len(self._system_part()))
+        return True
 
     def _renders_result(self, message: dict) -> bool:
         """Whether the template writes ``message``, a result, after the conversation."""
@@ -1414,7 +1450,9 @@ class RenderedCache:
             return None
         end = len(whole) - len(said) + len(keep_text.encode())
         n, at = len(pieces), len(whole)
+        backing_variant = LoopVariant("finding the last whole token")
         while n and (at > end or not _decodes(whole[at:end])):
+            backing_variant.passes(n)
             n -= 1
             at -= len(pieces[n])
         rest = whole[at:end].decode()
@@ -1520,18 +1558,18 @@ class RenderedCache:
                 f"question but the eviction threshold is {limit}; {remedy}, or {RAISE_THE_ROOM}",
                 needed, limit)
 
-    def _ensure_within(self, limit: int, remedy: str) -> None:
-        """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped.
+    def _ensure_within(self, limit: int, remedy: str, generation_prompt: bool = False) -> None:
+        """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped, measured with the generation prompt where ``generation_prompt``.
 
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
-        needed = self._length(self._state.messages, generation_prompt=False)
+        needed = self._length(self._state.messages, generation_prompt=generation_prompt)
         if needed > limit:
             raise ContextOverflowError(
-                f"the conversation needs {needed} tokens but the eviction threshold is "
-                f"{limit}, and the messages no user message follows cannot be evicted; "
-                f"{remedy}, or {RAISE_THE_ROOM}", needed, limit)
+                f"the conversation needs {needed} tokens but {limit} fit, and the messages no "
+                f"user message follows cannot be evicted; {remedy}, or {RAISE_THE_ROOM}",
+                needed, limit)
 
     def _remove_from(self, first: int) -> None:
         """Take the messages from ``first`` on out again, then drop what is over the limits."""
@@ -1552,7 +1590,7 @@ class RenderedCache:
             plan = self._windows.ahead(self._memory) if self._state.checks.windows else WHOLE
             if plan is not WHOLE:
                 # Dropped first, so the cache shifts before the decode ahead, not before the next question's.
-                at, before, length, split, run, window_turns_at = plan
+                at, before, length, split, run, window_turns_at = cast(tuple, plan)
                 held = len(self._memory.tokens)
                 kept_until = lambda: at - (held - len(self._memory.tokens))   # noqa: E731
                 done = self._windows.drop_in(self._memory, kept_until, length)
@@ -1596,8 +1634,9 @@ class RenderedCache:
         view = self._view(messages, generation_prompt=True)
         split = view.split if view is not None else None
         run = (self._rendering.run_start(split, len(split.contents) - 1, view.start)
-               if split is not None and split.text.count(STAND_IN) == 1 else None)
-        if run is not None:
+               if view is not None and split is not None and split.text.count(STAND_IN) == 1
+               else None)
+        if run is not None and view is not None and split is not None:
             before = self._view_target(view, upto=run)
             if len(before.tokens) <= self._config.context_size:
                 self._sync(before, logits=False, dropped=dropped)
@@ -1664,7 +1703,7 @@ class RenderedCache:
             split = self._rendering.split(window, generation_prompt)
             tag = (None if split is None
                    else self._rendering.tag_after_content(split, len(system) + anchor.index - start))
-            if tag is not None:
+            if tag is not None and split is not None:
                 view = _View(split, window, start - len(system), tag,
                              list(self._memory.tokens[:anchor.at]),
                              {k: at for k, at in self._state.turns_at.items() if at < anchor.at},
@@ -1794,6 +1833,7 @@ class RenderedCache:
         view = self._view(self._state.messages, generation_prompt=True)
         if view is None:
             self._rendering.target(self._state.messages, generation_prompt=True)   # its refusal
+        assert view is not None, "a conversation without a view is one the template refuses"
         target, split = self._view_target(view), view.split
         last = max((end for _, end in split.own), default=0)
         self._note_prompt(split.text[last:], self._reply_opening(split), target.tokens)
@@ -1854,8 +1894,10 @@ class RenderedCache:
     # ----- what a record made ahead was made for ----------------------------------------
     def _note_ahead(self, split: SplitRender, run: int) -> None:
         """Note ``split``, decoded up to ``run``, as the render made ahead for the conversation and the cache as they are now."""
+        question = split.contents[-1]
+        assert question is not None, "a render made ahead holds the stand-in question"
         self._state.ahead = Ahead(rest=split.pieces(run),
-                                   after_question=split.text[split.contents[-1][1]:],
+                                   after_question=split.text[question[1]:],
                                    reply_opening=self._reply_opening(split),
                                    made_for=self._made_for_now())
 
@@ -1881,8 +1923,14 @@ class RenderedCache:
                 left undecoded is decoded first; a begin, which may hold
                 another conversation, decodes only what it holds.
         """
+        if self._found_fault is not None:
+            # What the check found after the newest reply, on a thread no caller reads.
+            fault, self._found_fault = self._found_fault, None
+            raise fault
         if not self._depth:
             self._rendering.forget_renders()    # an action inside another keeps its renders
+        # Put back whole where the action fails, the part an interrupt left undecoded included.
+        whole = list(self._memory.tokens)
         if not finishes_what_was_left:
             self._memory.forget_undecoded()
         self._memory.repair()
@@ -1894,7 +1942,7 @@ class RenderedCache:
                 self._state.anchors = ()
                 self._pin_opening()
         saved = self._state.copied()
-        held = list(self._memory.tokens)
+        held = whole if len(whole) > len(self._memory.tokens) else list(self._memory.tokens)
         with self._publishing():
             try:
                 yield
@@ -1920,6 +1968,16 @@ class RenderedCache:
         self._published = published(self._state, self.pending_calls, self.turn_open,
                                     len(self._memory.tokens), self._joins_questions,
                                     self._context.model_fingerprint)
+
+    def _check_cache(self, prompted: bool) -> None:
+        """Raise :class:`InternalError` where the cache disagrees with a fresh begin of the conversation, ``prompted`` where a reply is about to be generated."""
+        from .cache_check import check_cache       # only where the setting asks for it
+        check_cache(list(self._memory.tokens),
+                    conversation_of(published(self._state, self.pending_calls, self.turn_open,
+                                              len(self._memory.tokens), self._joins_questions,
+                                              self._context.model_fingerprint)),
+                    self._state.unreadable_result, self._context, self._templates, self._config,
+                    RenderedCache, prompted=prompted)
 
     @property
     def _joins_questions(self) -> bool:
@@ -1986,7 +2044,9 @@ _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked
 
 def _open_turns(messages: list[dict]) -> list[tuple[int, int, list[dict]]]:
     """Each turn a call left open before a later question: where its question stands, where the later question stands, and the calls still owed a result."""
-    turns, asked, owed, is_open = [], None, [], False
+    turns: list[tuple[int, int, list[dict]]] = []
+    owed: list[dict] = []
+    asked, is_open = None, False
     for at, message in enumerate(messages):
         if message["role"] == "user":
             if is_open and asked is not None:
@@ -2048,10 +2108,11 @@ def _reuse_alike(messages: list[dict], held: list[dict]) -> int:
     """Put each message of ``held`` in the place of the one of ``messages`` there, from the first on, while the two say the same and keep the same turn as generated; how many were put."""
     count = 0
     for given, own in zip(messages, held):
-        turns = given.get(GENERATED_TURN), own.get(GENERATED_TURN)
-        if _without_turn(given) != _without_turn(own) or (turns[0] is None) != (turns[1] is None) \
-                or turns[0] is not None and (turns[0].tokens, turns[0].span, turns[0].on_call) \
-                != (turns[1].tokens, turns[1].span, turns[1].on_call):
+        given_turn, own_turn = given.get(GENERATED_TURN), own.get(GENERATED_TURN)
+        if _without_turn(given) != _without_turn(own) or (given_turn is None) != (own_turn is None) \
+                or given_turn is not None and own_turn is not None \
+                and (given_turn.tokens, given_turn.span, given_turn.on_call) \
+                != (own_turn.tokens, own_turn.span, own_turn.on_call):
             break
         messages[count] = own
         count += 1

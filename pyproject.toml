@@ -24,10 +24,38 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "pytest-xdist>=3"]
+test = ["pytest>=7", "pytest-xdist>=3", "hypothesis>=6"]
+dev = ["mypy>=1", "ruff>=0.5", "mutmut>=3"]
 
 [tool.setuptools.packages.find]
 include = ["llama_chat*"]
 
 [tool.setuptools.package-data]
 llama_chat = ["addons/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The long random runs and the runs on real model files are asked for by name: -m slow, -m gpu.
+addopts = "-m 'not slow and not gpu'"
+
+[tool.ruff]
+# The project's one-line docstrings run long; the length of a line is left to the writer.
+lint.select = ["E", "F", "W", "B"]
+lint.ignore = ["E501", "B905"]
+
+[tool.mypy]
+packages = ["llama_chat"]
+# The engine's bindings ship no types.
+ignore_missing_imports = true
+
+[tool.mutmut]
+# A run now and then, for hours: mutmut run, then mutmut results.
+source_paths = ["llama_chat/"]
+# The protocol a cache context answers, which the library reads by its method names, and the
+# engine's own modules, which only a real model runs.
+do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py", "llama_chat/context.py"]
+# What the tests read besides the code.
+also_copy = ["README.md", "design_history.md", "CLAUDE.md", "pyproject.toml", "install.sh",
+             "LICENSE", "NOTICE", "examples", "hooks"]
+# A test that bounds its processor time runs slower under mutation than it allows.
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-x", "-q", "-m", "not slow and not gpu and not timed"]

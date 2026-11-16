@@ -271,7 +271,7 @@ class Backend:
             n = self._token_to_piece(vocab, token, buf, len(buf), 0, True)
             if n < 0:
                 raise EngineError(f"the engine could not spell token {token}")
-        return bytes(buf[:n])
+        return buf.raw[:n]
 
     def token_to_piece(self, vocab, token: int) -> str:
         """Decode one token to text. Not safe across a codepoint boundary."""

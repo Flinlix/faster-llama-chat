@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .errors import TemplateRefusedError
+from .loop_variant import LoopVariant
 
 # A marker: letters and digits only, so that trimming, escaping and quoting leave it whole.
 _MARKER = re.compile(r"(QQ\d+MQQ)")
@@ -75,7 +76,7 @@ def split_render(render: Callable[[list[dict], list[dict] | None], str | None],
         ValueError: If the render is not the marked render with each marker
             replaced by its text.
     """
-    for attempt in range(2 if reads_clock else 1):
+    for _attempt in range(2 if reads_clock else 1):
         rendered = render(messages, declarations)
         if rendered is None:
             return None
@@ -155,12 +156,13 @@ def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: i
     if placed is None:
         return None
     own, contents = [], [None] * n_messages
-    last_call = {}
+    last_call: dict[int, int] = {}
     for value in values.values():
         last_call[value.message] = max(last_call.get(value.message, -1), value.call)
     # A template may write a call's name again elsewhere, in its result say; its
     # arguments, and the name where first written, are the call's own.
-    argument_ends, name_ends = {}, {}
+    argument_ends: dict = {}
+    name_ends: dict = {}
     for value, span, own_span in placed:
         if own_span[1] > own_span[0]:
             own.append(own_span)
@@ -187,7 +189,9 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
 
     def matched_from(k: int, at: int) -> tuple[int, tuple | None]:
         placed = []                 # a list, as a tuple grown one at a time costs its length each time
+        parts_variant = LoopVariant("placing a render's parts")
         while k < len(parts):
+            parts_variant.passes(len(parts) - k)
             part = parts[k]
             if k % 2 == 0:
                 if not rendered.startswith(part, at):
@@ -209,7 +213,9 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
             if not following:
                 return 0, None
             ways, found, start = 0, None, at
+            ends_variant = LoopVariant("trying where a value ends")
             while (end := rendered.find(following, start)) >= 0 and ways < 2:
+                ends_variant.passes(len(rendered) - start)
                 gap = rendered[at:end]
                 inner = gap.find(value.text) if value.text and gap.count(value.text) == 1 else -1
                 own = (at + inner, at + inner + len(value.text)) if inner >= 0 else (at, end)

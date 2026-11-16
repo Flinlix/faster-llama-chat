@@ -10,12 +10,14 @@ import bisect
 import codecs
 import threading
 from dataclasses import dataclass, field
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator
 
 from .cache_context import CacheContext
-from .config import Sampling
+from .config import DrawnSampling
+from .reply import StopReason
 from .reply_text import earliest, partial_match_at
 from .template import CallBoundary
+from .loop_variant import LoopVariant
 
 
 @dataclass
@@ -45,7 +47,7 @@ class GenerationAccumulator:
 
     token_ids: list[int] = field(default_factory=list)
     text_pieces: list[str] = field(default_factory=list)
-    stop_reason: str = "token_limit"
+    stop_reason: StopReason = "token_limit"
     tool_call: str = ""
     cached_beyond: int = 0
     cut_inside_call: bool = False
@@ -120,13 +122,13 @@ class _TextBuffer:
 
 
 def generate(
-    context: CacheContext, start_pos: int, max_generated_tokens: int,
+    context: CacheContext, start_pos: int, max_generated_tokens: int, *,
+    sampling: DrawnSampling,
     out: GenerationAccumulator | None = None,
     cancel: threading.Event | None = None,
-    sampling: Sampling | None = None,
     ends_turn: Callable[[int], bool] | None = None,
-    boundary: CallBoundary = CallBoundary(),
-) -> Iterator[str]:
+    boundary: CallBoundary = CallBoundary(),  # noqa: B008 (frozen, so one instance serves)
+) -> Generator[str, None, None]:
     """Stream a reply, yielding text deltas as tokens are sampled.
 
     The caller must have prefilled the generation prompt with
@@ -174,6 +176,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     # A call's texts are matched without the whitespace around them, as a thought's tags are.
     open_text, close_text = ((text.strip() for text in boundary.call_texts)
                              if boundary.call_texts else (None, None))
+    close_written = boundary.call_texts[1] if boundary.call_texts else ""
     opens_as_text = boundary.opens_as_text and open_text is not None
     # Where the template writes a call after text, one inside a thought is still a mention.
     thought = (_ThoughtState(*boundary.thought_tags, boundary.starts_in_thought)
@@ -182,7 +185,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     # An opening in plain text counts only after a tag, unless the template writes a call after text.
     call_opens_as_text = opens_as_text and not boundary.follows_text
     marks = [mark for mark in (open_text, boundary.turn_end_text) if mark]
-    opening_owns_space = open_text is not None and boundary.call_texts[0][:1].isspace()
+    opening_owns_space = boundary.call_texts is not None and boundary.call_texts[0][:1].isspace()
     starts = []            # where each token's text begins in ``visible``
     ended_at_text = False
     withheld_call = False           # whether a withheld call's plain opening ended the reply
@@ -202,9 +205,11 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
             + context.token_bytes(tok).decode("utf-8", errors="replace")))
         if ends and not closes_call and call is not None:
             # Ended inside a call: the call ends here, closed as the template closes one.
-            closing = ([call_close] if close_text is None else
-                       context.tokenize(boundary.call_texts[1], add_special=False,
-                                        parse_special=True))
+            if close_text is None:
+                assert call_close is not None, "a call its tag opened closes with its tag"
+                closing = [call_close]
+            else:
+                closing = context.tokenize(close_written, add_special=False, parse_special=True)
             context.decode_generated(closing, pos)
             pos += len(closing)
             generated.token_ids.extend(closing)
@@ -249,10 +254,12 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                     and piece.strip() not in boundary.thought_tags:
                 held_tag = (starts[-1], len(visible))
             mark_at = visible.find(marks, marks_from)
-            while (mark_at is not None and call_opens_as_text
+            mentions_variant = LoopVariant("skipping mentions of a call")
+            while (mark_at is not None and call_opens_as_text and open_text is not None
                    and visible.startswith(open_text, mark_at)
                    and not _after_tag(context, starts, generated.token_ids,
                                       visible.content_end(mark_at))):
+                mentions_variant.passes(len(visible) + 1 - marks_from)
                 marks_from = mark_at + 1        # a mention, not a call
                 mark_at = visible.find(marks, marks_from)
             if mark_at is not None:
@@ -263,7 +270,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                         upto = visible.content_end(mark_at)     # the opening's own
                     if held_tag is not None:
                         upto = held_tag[0]          # the tag the call follows is the call's
-                if opens_call and not boundary.ends_at_call:
+                if opens_call and open_text is not None and not boundary.ends_at_call:
                     call = [visible.since(mark_at + len(open_text))]
                     call_tail = call[0]
                 else:
@@ -320,7 +327,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         # A reply cut before a call could follow its tag ends before the tag, as a cut
         # thought's tag is dropped.
         cut = generated.stop_reason in ("token_limit", "interrupted") and held_tag is not None
-        delta = visible.emit(held_tag[0] if cut else len(visible))
+        delta = visible.emit(held_tag[0] if cut and held_tag is not None else len(visible))
         if delta:
             generated.text_pieces.append(delta)
             yield delta
@@ -336,7 +343,9 @@ class _ThoughtState:
     def read(self, piece: str) -> bool:
         """Read ``piece``; whether the text now ends inside a thought."""
         self._tail += piece
+        tags_variant = LoopVariant("reading thought tags")
         while (at := self._tail.find(self._closing if self._inside else self._opening)) >= 0:
+            tags_variant.passes(len(self._tail))
             self._tail = self._tail[at + len(self._closing if self._inside else self._opening):]
             self._inside = not self._inside
         keep = max(len(self._opening), len(self._closing)) - 1

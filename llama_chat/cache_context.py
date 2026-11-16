@@ -12,7 +12,7 @@ import inspect
 from collections.abc import Generator, Mapping
 from typing import Protocol
 
-from .config import Sampling
+from .config import DrawnSampling
 
 # The name of the further chat template a GGUF may ship for a conversation that
 # declares tools, beside its default one.
@@ -82,7 +82,7 @@ class CacheContext(ModelReader, Protocol):
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         """Decode ``token_ids`` from ``start_pos``, keeping the last one's logits for a draw where ``want_logits``."""
 
-    def sampled_tokens(self, sampling: Sampling,
+    def sampled_tokens(self, sampling: DrawnSampling,
                        withheld_tokens: tuple[int, ...]) -> Generator[int, None, None]:
         """Tokens drawn one at a time, each from the logits of the newest decode.
 

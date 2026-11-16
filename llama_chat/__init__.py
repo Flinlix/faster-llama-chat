@@ -20,9 +20,10 @@ argument spelling being recovered from that template.
 """
 
 from .cache_context import TOOL_USE_TEMPLATE, CacheContext
-from .config import Config, Sampling
-from .errors import (ContextOverflowError, EngineError, InvalidArgumentError, InvalidSettingError,
-                     OutOfOrderError, RefusalError, TemplateRefusedError, UnsupportedError)
+from .config import Config, DrawnSampling, Sampling
+from .errors import (ContextOverflowError, EngineError, InternalError, InvalidArgumentError,
+                     InvalidSettingError, OutOfOrderError, RefusalError, TemplateRefusedError,
+                     UnsupportedError)
 from .tool_registry import ToolRegistry
 from .tools import ToolCall, ToolCallStatus, ToolSpec
 from .reply import (EVICTION_CAUSES, STOP_REASONS, TOOL_CALL_POLICIES, EvictionCause, Reply,
@@ -34,6 +35,7 @@ __all__ = [
     "Config",
     "InvalidSettingError",
     "Sampling",
+    "DrawnSampling",
     "ChatWrapper",
     "RefusalError",
     "InvalidArgumentError",
@@ -42,6 +44,7 @@ __all__ = [
     "OutOfOrderError",
     "ContextOverflowError",
     "EngineError",
+    "InternalError",
     "Capabilities",
     "Reply",
     "ReplyStream",

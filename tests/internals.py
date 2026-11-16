@@ -34,9 +34,10 @@ def leave_cache_behind(wrapper, tokens: list[int]) -> None:
 
 
 def bring_cache_back(wrapper) -> None:
-    """Bring the cache back where a failed decode, edit or generation left it unknown, as the next action would."""
+    """Bring the cache up where a failed decode, edit or generation left it unknown, or an interrupt left it holding the beginning of its tokens, as the next action would."""
     memory = wrapper._conversation._memory
-    if not memory.is_known:
+    interrupted = memory._end == memory._valid < len(memory.tokens)
+    if not memory.is_known or interrupted:
         memory.repair()
 
 

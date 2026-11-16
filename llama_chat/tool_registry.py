@@ -91,7 +91,7 @@ class ToolRegistry:
         """Register ``function``, as :meth:`tool` describes."""
         name = name or _callable_name(function)
         if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function) \
-                or inspect.iscoroutinefunction(getattr(function, "__call__", None)):
+                or inspect.iscoroutinefunction(getattr(function, "__call__", None)):  # noqa: B004 (reads the method)
             raise TypeError(f"the tool {name!r} is asynchronous, and a tool is called and its "
                             "result read at once; register a function that returns the result")
         if description is None:

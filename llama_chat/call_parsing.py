@@ -16,6 +16,7 @@ from typing import Any
 
 from .template import CallBody, json_arguments
 from .tools import ToolCall
+from .loop_variant import LoopVariant
 
 # How many levels of lists and objects a call's arguments may nest, the arguments'
 # own object counted. Well inside the interpreter's recursion limit, so that every
@@ -141,15 +142,16 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     written_id = ""
     if call_body.id_open and call_body.id_open in text.partition(call_body.name_close)[0]:
         name, _, rest = text.partition(call_body.id_open)
-        written_id, found, rest = rest.partition(call_body.name_close)
-        written_id = written_id.strip()
+        written_id, separator, rest = rest.partition(call_body.name_close)
+        written_id, found = written_id.strip(), bool(separator)
     elif call_body.name_close:
         # A call written without its id is read as one too.
-        name, found, rest = text.partition(call_body.name_close)
+        name, separator, rest = text.partition(call_body.name_close)
+        found = bool(separator)
     else:
         # The name runs up to the first key's tag, or to the end.
-        name, found, rest = text.partition(call_body.key_open)
-        rest, found = found + rest, True
+        name, separator, rest = text.partition(call_body.key_open)
+        rest, found = separator + rest, True
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
@@ -173,8 +175,11 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
 
 def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
     """Read pairs whose values each close with a tag naming their own key."""
-    parsed, at = {}, len(call_body.key_open) if text.startswith(call_body.key_open) else 0
+    parsed: dict[str, object] = {}
+    at = len(call_body.key_open) if text.startswith(call_body.key_open) else 0
+    pairs_variant = LoopVariant("reading keyed pairs")
     while at < len(text):
+        pairs_variant.passes(len(text) - at)
         key_end = text.find(call_body.key_close, at)
         if key_end < 0:
             if text[at:].strip():
@@ -219,7 +224,7 @@ def _as_json_arguments(rest: str, call_body: CallBody) -> dict | None:
 
 def _parse_pairs(text: str, call_body: CallBody) -> dict:
     """Read ``key`` and value pairs separated by this model's own delimiter."""
-    parsed = {}
+    parsed: dict[str, object] = {}
     for chunk in _split_on(text, call_body.pair_sep, call_body):
         key, found, value = chunk.partition(call_body.key_close)
         if not found:
@@ -421,7 +426,9 @@ def _parse_elements(text: str, call_body: CallBody) -> Any:
 def _elements(text: str, opening, closing) -> list[str]:
     """The values of the elements ``text`` consists of, each between ``opening(at)`` and its closing."""
     values, at = [], 0
+    elements_variant = LoopVariant("reading elements")
     while at < len(text):
+        elements_variant.passes(len(text) - at)
         opened = opening(at)
         if not text.startswith(opened, at):
             raise ValueError(f"not an element: {text[at:]!r}")
@@ -440,7 +447,9 @@ def _elements(text: str, opening, closing) -> list[str]:
 def _matching_close(text: str, at: int, opening: str, closing: str) -> int:
     """Where the ``closing`` that matches an ``opening`` just before ``at`` starts, or -1."""
     depth = 0
+    closes_variant = LoopVariant("finding the matching close")
     while True:
+        closes_variant.passes(len(text) - at)
         next_open, next_close = text.find(opening, at), text.find(closing, at)
         if next_close < 0:
             return -1
@@ -479,7 +488,9 @@ def _split_on(text: str, separator: str, call_body: CallBody) -> list[str]:
                        call_body.body_close)):
         opener = closer = ""
     parts, start, depth, quoted, at = [], 0, 0, False, 0
+    splits_variant = LoopVariant("splitting on a separator")
     while at < len(text):
+        splits_variant.passes(len(text) - at)
         if opener and not quoted and text.startswith(opener, at):
             quoted, at = True, at + len(opener)
             continue

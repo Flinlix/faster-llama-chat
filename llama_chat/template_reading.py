@@ -147,8 +147,10 @@ class TemplateReader:
 
     def _generation_prompt(self, reasoning: bool) -> str:
         """The generation prompt a reply is sampled after, in the reasoning mode given."""
-        return (self._reasoning.generation_prompt if reasoning
-                else self._fragments.generation_prompt_without_reasoning)
+        if not reasoning:
+            return self._fragments.generation_prompt_without_reasoning
+        assert self._reasoning is not None, "a reply reasons only where the template does"
+        return self._reasoning.generation_prompt
 
     @property
     def _read_as_probes(self):
@@ -352,8 +354,8 @@ class TemplateReader:
             lead_in = self._text_after_last_tag(call_texts[0])
         turn_end_text = self._resolve_turn_end_text(call_texts)
         boundary = CallBoundary(tool_tokens, call_texts, opens_as_text, turn_end_text,
-                                follows_text=opens_as_text and self._writes_call_after_text(
-                                    call_texts[0]))
+                                follows_text=opens_as_text and call_texts is not None
+                                and self._writes_call_after_text(call_texts[0]))
         return boundary, lead_in, from_file, None if turn_end_text else turn_end_token
 
     def _resolve_call_texts(self) -> tuple[tuple[str, str] | None, bool]:

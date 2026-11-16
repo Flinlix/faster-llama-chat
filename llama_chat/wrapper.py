@@ -11,15 +11,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import inspect
 import threading
 import time
 import weakref
-from collections.abc import Callable, Generator, Iterable
+from typing import Any
+from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
-from .config import Config, Sampling, ensure_reply_cap, generation_sampling
+from .config import Config, DrawnSampling, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_generated_turns
@@ -30,6 +32,7 @@ from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolic
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tool_registry import ToolRegistry
 from .tools import ToolCall, ToolSpec, ensure_declarable, unwritable_failure
+from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
@@ -113,7 +116,7 @@ class ChatWrapper:
         # The thread that holds it while one does: for a reply, the one that read it last.
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
-        self._replies: weakref.WeakSet[Generator] = weakref.WeakSet()
+        self._replies: weakref.WeakSet[Generator[Any, Any, Any]] = weakref.WeakSet()
         # The actions that wait for the wrapper, which the work after a reply gives way to.
         self._waiting = _Waiting()
 
@@ -719,7 +722,7 @@ class ChatWrapper:
         self._ensure_not_holding()
         # Longer than the lock can wait is waiting indefinitely, infinity included.
         waits = timeout_s is None or timeout_s > threading.TIMEOUT_MAX
-        if not self._lock.acquire(timeout=-1 if waits else timeout_s):
+        if not self._lock.acquire(timeout=-1 if waits or timeout_s is None else timeout_s):
             return False
         try:
             self._settle_due_work()
@@ -823,7 +826,8 @@ class ChatWrapper:
         try:
             if self._holder is threading.current_thread():
                 # From a tool the reply runs, that reply is running, and close() is refused below.
-                for steps in [s for s in self._replies if not s.gi_running]:
+                for steps in [s for s in self._replies
+                              if inspect.getgeneratorstate(s) != inspect.GEN_RUNNING]:
                     steps.close()
         finally:
             with self._held(settles=False):
@@ -886,7 +890,9 @@ class ChatWrapper:
                                 may_call_again=may_call_after_unreadable(),
                                 max_reply_tokens=reply_cap, on_started=on_started, **kwargs)
         try:
+            rounds_variant = LoopVariant("a reply's rounds of calls")
             while True:
+                rounds_variant.passes(tokens_left())
                 generation = yield from self._read_generation(
                     deltas, after=open_turn_text + "".join(g.text for g in generations))
                 generations.append(generation)
@@ -964,7 +970,9 @@ class ChatWrapper:
         reply_cap = self._reply_cap(max_reply_tokens)
         open_turn_text = self._open_turn_text()
         generations: list[Reply] = []
+        tries_variant = LoopVariant("a reply's tries after unreadable calls")
         while True:
+            tries_variant.passes(reply_cap - sum(g.n_generated_tokens for g in generations))
             used = sum(g.n_generated_tokens for g in generations)
             unreadable_in_a_row = len(generations)
             recognizes_calls = unreadable_in_a_row < MAX_UNREADABLE_CALLS_IN_A_ROW
@@ -1029,7 +1037,7 @@ class ChatWrapper:
         Returns:
             The ``(call, result)`` pairs.
         """
-        settled = []
+        settled: list[tuple[ToolCall, object]] = []
         for call in asked:
             if registry is None:
                 # Not "no tools exist": `begin` may have declared some. Raising
@@ -1055,7 +1063,7 @@ class ChatWrapper:
             settled.append((call, result))
         return settled
 
-    def _write_results(self, settled: list[tuple[ToolCall, object]], may_call_again: bool) -> int:
+    def _write_results(self, settled: Sequence[tuple[ToolCall, object]], may_call_again: bool) -> int:
         """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
         def write() -> None:
             for call, result in settled:
@@ -1070,7 +1078,7 @@ class ChatWrapper:
 
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
-                  cancel: threading.Event | None, sampling: Sampling,
+                  cancel: threading.Event | None, sampling: DrawnSampling,
                   on_reply: Callable[[Reply], None], withhold: bool = False,
                   on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
         """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it; the lock must be held.

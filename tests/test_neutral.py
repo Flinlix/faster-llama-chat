@@ -41,8 +41,8 @@ def _checked_files() -> list[Path]:
     """Every file of the project that is not hidden, built, exempt or a model file."""
     def skipped(path):
         parts = path.relative_to(_ROOT).parts
-        return (any(part.startswith(".") or part == "__pycache__" or part.endswith(".egg-info")
-                    for part in parts)
+        return (any(part.startswith(".") or part in ("__pycache__", "mutants")
+                    or part.endswith(".egg-info") for part in parts)
                 or path in _EXEMPT or any(folder in path.parents for folder in _MODEL_FOLDERS))
     return [path for path in sorted(_ROOT.rglob("*")) if path.is_file() and not skipped(path)]
 

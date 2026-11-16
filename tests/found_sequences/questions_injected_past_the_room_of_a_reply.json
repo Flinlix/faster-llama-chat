@@ -1,0 +1,221 @@
+{
+ "found": "2026-11-15",
+ "what": "questions injected past the room of a reply",
+ "draws": [
+  {
+   "template": "e004c3c276288d3b4100c0bab0bb86850ce05f20e7142dd38fb0cb1ee23c4e45"
+  },
+  {
+   "option": 2
+  },
+  0.0,
+  0.0,
+  {
+   "option": 0
+  },
+  {
+   "option": 3
+  },
+  {
+   "option": 0
+  },
+  0.9093458827566508,
+  0.5843369395019202,
+  0.0,
+  0.7676690875850453,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.9881684125248601,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  9,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.943285063120957,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.4422501490524922,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  },
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.2569677174152798,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  }
+ ],
+ "steps": [
+  "set_up",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "teardown"
+ ]
+}

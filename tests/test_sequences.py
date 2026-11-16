@@ -1,165 +1,148 @@
-"""Random sequences of actions, from fixed seeds, on templates that call tools: every state they reach begins again from conversation() unchanged, and from its messages alone.
+"""Random sequences of actions, drawn and shrunk by Hypothesis, on every template that calls tools, every kind of cache and both tokenizers: every state they reach keeps the rules.
 
-The checks after every test (see conftest.py) also run on each state reached:
-the cache is the template's render, and the conversation is its two forms.
+After every action: the cache is the template's render (rule 1), a refused or
+failed action changed nothing (rule 6), the conversation begins again the same
+(rule 10), and a question asked then is answered (rule 11). A failing sequence
+is shrunk to the shortest one that still fails and printed step by step, with
+the blob that replays it.
 """
 
-import random
+import json
+import os
+from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, assume, note, settings, strategies as st
+from hypothesis.stateful import (RuleBasedStateMachine, initialize, invariant, precondition, rule,
+                                 run_state_machine_as_test)
 
-from llama_chat import ChatWrapper, Config, ContextOverflowError, TemplateRefusedError
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolSpec
-from tests import invented_templates as invented
-from tests.chat_templates import STEMS, fixture
-from tests.fake_context import (FakeContext, ScriptedCall, shipped_addon_call,
-                                shipped_addon_reasoning_on, written_call)
+from llama_chat.addon_files import template_fingerprint
+from tests.sequence_run import KINDS, SequenceRun, _known
 
-_TEMPLATES = {"tools": invented.TOOLS, "json tools": invented.JSON_TOOLS,
-              "two questions refused": invented.TOOLS_REFUSING_TWO_USER_TURNS,
-              "thoughts kept": invented.REASONING_KEEPING_THOUGHTS,
-              "open turns closed": invented.TOOLS_CLOSING_OPEN_TURNS,
-              "result lines": invented.RESULT_LINES}
-_PLAIN_CALLS = ["fn:clock{}", "fn:nonsense with no name"]
-_JSON_CALLS = ['{"name": "clock", "arguments": {}}', '{"no": "call"}',
-               '[{"no": "call"}, {"name": "clock", "arguments": {}}]',
-               '[{"name": "clock", "arguments": {}}, {"no": "call"}]']
+# Each run draws its choices from the test's own source, so that nothing is saved between
+# runs and every failure is printed with what replays it.
+_SHARED = dict(database=None, deadline=None, print_blob=True,
+               suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large,
+                                      HealthCheck.filter_too_much])
+# A run of the suite: the same sequences every time. A slow run: new ones every time.
+_EVERY_RUN = settings(max_examples=40, stateful_step_count=12, derandomize=True, **_SHARED)
+_SLOW_RUN = settings(max_examples=int(os.environ.get("LLAMA_CHAT_SLOW_EXAMPLES", "1500")),
+                     stateful_step_count=24, **_SHARED)
 
 
-def _sequence(seed: int):
-    """A wrapper after the actions ``seed`` draws, and its template."""
-    draw = random.Random(seed)
-    name = draw.choice(sorted(_TEMPLATES))
-    template = _TEMPLATES[name]
-    calls = _JSON_CALLS if "json" in name else _PLAIN_CALLS
-    fake = FakeContext(template)
-    size = draw.choice([400, 700, 2048])
-    w = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=fake)
-    registry = ToolRegistry()
-    registry.tool(lambda: "12:00", description="Zeit", name="clock",
-                  parameters={"type": "object", "properties": {}})
-    w.begin([{"role": "system", "content": "s"}] if draw.random() < 0.8 else [],
-            tools=registry.specs(), reasoning="thoughts" in name and draw.random() < 0.5)
-    for step in range(draw.randint(2, 8)):
-        action = draw.random()
-        try:
-            if action < 0.45:
-                fake.replies = [ScriptedCall(draw.choice(calls), before=draw.choice(["", "Ich schaue."]))
-                                for _ in range(draw.randint(0, 3))] + [draw.choice(["Fertig.", ""])]
-                fails_at = draw.randint(1, 3) if draw.random() < 0.2 else None
-                counted = [0]
+class _Draw:
+    """The ``random()``, ``choice()`` and ``randint()`` a sequence draws with, answered by Hypothesis so that it can shrink them."""
 
-                def fail(_text):
-                    counted[0] += 1
-                    if counted[0] == fails_at:
-                        raise RuntimeError("the decode failed")
-                fake.before_reply = fail
-                text = draw.choice(["frage", f"frage {step}"] + ([None] if w.awaits_reply else []))
-                policy = draw.choice(["yield", registry, "refuse"])
-                w.reply(text, tool_call_policy=policy).finish()
-            elif action < 0.7 and w.pending_calls:
-                w.inject_tool_result(w.pending_calls[0].id,
-                                     draw.choice(["12:00", "x" * draw.choice([10, 3000])]))
-            elif action < 0.8:
-                w.inject(f"info {step}")
-            else:
-                w.reply(f"neu {step}").finish()
-        except RuntimeError:
-            pass                        # a failed decode, which leaves everything as it was
-        except ValueError:
-            pass                        # a refusal, which leaves everything as it was
-        fake.before_reply = None
-    return w, template, size
+    def __init__(self, data) -> None:
+        self._data = data
+
+    def random(self) -> float:
+        return self._data.draw(st.floats(0, 1, exclude_max=True))
+
+    def choice(self, options):
+        return self._data.draw(st.sampled_from(list(options)))
+
+    def randint(self, low: int, high: int) -> int:
+        return self._data.draw(st.integers(low, high))
 
 
-@pytest.mark.parametrize("seed", range(150))
-def test_every_state_a_sequence_reaches_begins_again_the_same(seed):
-    w, template, size = _sequence(seed)
-    saved = w.conversation()
-    _assert_begins_with_its_newest_part(w, saved)          # the cache holds it already
-    again = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=FakeContext(template))
-    _assert_begins_with_its_newest_part(again, saved)
-    alone = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=FakeContext(template))
-    alone.begin(saved["messages"], tools=saved["tools"], reasoning=saved["reasoning"])
+class Sequences(RuleBasedStateMachine):
+    """One conversation on one drawn setup; each rule an action, the rules checked after each."""
+
+    run: SequenceRun | None = None
+    begun = False
+    steps = 0
+
+    @initialize(data=st.data())
+    def set_up(self, data):
+        self.run = SequenceRun(_Draw(data), note)
+        self.begun = self.run.first_begin()
+        assume(self.begun)              # declarations longer than the context drawn
+        self.run.check("the first begin")
+
+    def _act(self, data, kind: str) -> None:
+        self.run.draw = _Draw(data)
+        self.steps += 1
+        note(f"step {self.steps}: {kind}")
+        self.run.act(kind, self.steps)
+
+    for _kind in KINDS:
+        def _rule(self, data, kind=_kind):
+            self._act(data, kind)
+        _rule.__name__ = f"act_{_kind}"
+        locals()[_rule.__name__] = precondition(lambda self: self.begun)(rule(data=st.data())(_rule))
+    del _kind, _rule
+
+    @precondition(lambda self: self.begun)
+    @rule()
+    def ask_a_question(self):
+        self.run.question_answered(f"step {self.steps}")
+
+    @invariant()
+    def keeps_the_rules(self):
+        if self.begun:
+            self.run.check(f"step {self.steps}")
+
+    def teardown(self):
+        if self.run is not None:
+            if self.begun:
+                self.run.question_answered("the end")
+                self.run.check("the end")
+            self.run.wrapper.close()
 
 
-def _assert_begins_with_its_newest_part(w, saved):
-    """``begin(**saved)`` on ``w`` holds the newest part of the conversation a begin keeps, each message unchanged and in its place; all of it where it keeps every message."""
-    kept = w.begin(**saved).n_kept_messages
-    system = [m for m in saved["messages"][:1] if m["role"] == "system"]
-    history = saved["messages"][len(system):]
-    again = w.conversation()
-    assert again["messages"] == system + history[len(history) - kept:]
-    if kept == len(history):
-        assert again == saved
+@pytest.mark.time_limit_s(900)
+def test_every_sequence_drawn_keeps_the_rules():
+    run_state_machine_as_test(Sequences, settings=_EVERY_RUN)
 
 
-# ----- on the test templates of real models ---------------------------------------
-
-_REAL = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
-_CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False)]
-_WEATHER = ToolSpec("get_weather", "Weather for a city",
-                    {"type": "object", "properties": {"city": {"type": "string"}}})
+@pytest.mark.slow
+@pytest.mark.time_limit_s(3 * 3600)
+def test_many_new_sequences_keep_the_rules():
+    run_state_machine_as_test(Sequences, settings=_SLOW_RUN)
 
 
-def _real_sequence(seed: int):
-    """A wrapper on a real model's test template after the actions ``seed`` draws: questions, calls answered or left, notes, cuts and begins, on any kind of cache and either tokenizer."""
-    draw = random.Random(seed)
-    stem = draw.choice(_REAL)
-    known = fixture(stem)
-    fake = FakeContext(known, merges=draw.random() < 0.5, **draw.choice(_CACHES))
-    size = draw.choice([1500, 3000, 6000])
-    w = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=fake)
-    text = known["chat_template"]
-    template = ResolvedTemplate(FakeContext(known), shipped_addon_call(text),
-                                reasoning_on=shipped_addon_reasoning_on(text))
-    call = shipped_addon_call(text)
-    body = (_WEATHER.name + call["name_close"] + '{"city": "Bonn"}' if call
-            else written_call(template, fake, _WEATHER.name, {"city": "Bonn"})[1])
-    try:
-        w.begin([{"role": "system", "content": "Be brief."}]
-                if w.capabilities(tools=True).can_take_system_prompt else [], tools=[_WEATHER])
-    except ContextOverflowError:
-        return None                                 # declarations longer than the context
-    for step in range(draw.randint(4, 14)):
-        action = draw.random()
-        try:
-            if action < 0.4:
-                if draw.random() < 0.4:
-                    fake.replies[:0] = [ScriptedCall(body, before=draw.choice(["", "Moment."]))]
-                question = draw.choice([f"Question {step}?", f" spaced {step}\n"])
-                try:
-                    w.reply(question, tool_call_policy=draw.choice(["yield", "refuse"])).finish()
-                except (ContextOverflowError, TemplateRefusedError):
-                    pass                            # the two refusals rule 11 allows
-            elif action < 0.6 and w.pending_calls:
-                w.inject_tool_result(w.pending_calls[0].id,
-                                     draw.choice(["sunny", "x" * draw.choice([10, 3000])]))
-            elif action < 0.7:
-                w.inject(f"note {step}")
-            elif action < 0.8:
-                messages = w.conversation()["messages"]
-                if not w.turn_open and messages[-1]["role"] == "assistant" \
-                        and messages[-1]["content"]:
-                    w.truncate_last_reply(messages[-1]["content"][:draw.randint(0, 5)])
-            elif action < 0.9:
-                w.begin(**w.conversation())
-            elif w.awaits_reply:
-                w.reply().finish()
-        except (TemplateRefusedError, ContextOverflowError):
-            pass                        # a refusal of what is not a question, which changes nothing
-    return w, known, size
+# ----- sequences once found failing, replayed every run ---------------------------
+_FOUND = sorted((Path(__file__).parent / "found_sequences").glob("*.json"))
 
 
-@pytest.mark.parametrize("seed", range(60))
-def test_every_state_a_sequence_on_a_real_template_reaches_begins_again_the_same(seed):
-    made = _real_sequence(seed)
-    if made is None:
-        return
-    w, known, size = made
-    saved = w.conversation()
-    _assert_begins_with_its_newest_part(w, saved)
-    again = ChatWrapper(Config(context_size=size, min_reply_tokens=16), context=FakeContext(known))
-    _assert_begins_with_its_newest_part(again, saved)
+class _Recorded:
+    """The values a sequence once drew, given back in the order it drew them: a choice by its place among the options, the template by its fingerprint, so that the record names neither."""
+
+    def __init__(self, values: list) -> None:
+        self._values = iter(values)
+
+    def random(self) -> float:
+        return next(self._values)
+
+    def randint(self, low: int, high: int) -> int:
+        return next(self._values)
+
+    def choice(self, options):
+        options, drawn = list(options), next(self._values)
+        if "template" in drawn:
+            return next(name for name in options
+                        if template_fingerprint(_known(name)["chat_template"]) == drawn["template"])
+        return options[drawn["option"]]
+
+
+@pytest.mark.parametrize("path", _FOUND, ids=[path.stem for path in _FOUND])
+def test_each_sequence_once_found_failing_keeps_the_rules(path):
+    """A failing sequence the random runs found, kept as its drawn values and its steps, as Hypothesis keeps none on disk; it replays only while ``sequence_run`` draws in the same order."""
+    record = json.loads(path.read_text())
+    run, steps = None, 0
+    for step in record["steps"]:
+        if step == "set_up":
+            run = SequenceRun(_Recorded(record["draws"]), lambda _text: None)
+            assert run.first_begin()
+            run.check("the first begin")
+        elif step.startswith("act_"):
+            steps += 1
+            run.act(step[len("act_"):], steps)
+        elif step == "keeps_the_rules":
+            run.check(f"step {steps}")
+        elif step == "ask_a_question":
+            run.question_answered(f"step {steps}")
+    run.question_answered("the end")
+    run.check("the end")
+    run.wrapper.close()

@@ -5835,3 +5835,107 @@ and what changed:
 Measured memory on the GPU runs: process RAM grew 51 MB over the first 40
 turns and 11 MB over the next 160 (bounded memos filling), GPU memory stayed
 flat, and closing a wrapper gave both back.
+
+## 2026-11-15: Faults that show themselves
+
+The user asked to make the project as error proof as possible and to enforce
+as many rules as a machine can. What was built, and why each is shaped so:
+
+- **Every loop has a variant.** Each `while` loop gives a `LoopVariant` a
+  measure at the start of every pass: a whole number of at least 0, or a tuple
+  of them, which must be smaller than the pass before. A pass that does not
+  raises `InternalError` naming the loop. `tests/test_loops.py` reads the
+  source and fails for a loop without one, except three forms that end by
+  construction: a loop that takes each step of an iterator (`next`), an
+  endless generator whose every pass yields, and a work list popped from a
+  finite value. The hang of a reply cut by the cap inside a call (found by a
+  fuzzer timeout the same day) is the kind this catches. Two parser loops
+  would spin on an empty tag; the variant turns that into an error. Cost: a
+  method call and a comparison per pass.
+- **Every test has a time limit**, 60 s by default, set by `faulthandler`,
+  which stops the process and prints every thread's stack. Chosen over the
+  pytest-timeout package: no dependency, and the stack is what finds a hang.
+  The slowest test took 3.4 s when the limit was set.
+- **`check_cache`**, a setting off by default, compares the cache with a fresh
+  begin of the same conversation, run on a context that reads the model's
+  tokens and decodes nothing. A fresh begin renders the whole conversation and
+  reaches every place in the cache from nothing, so it is the measure for every
+  faster path. It checks at two points only: right before a generation, where
+  the two must be equal, and once the work after a reply has ended, where they
+  may differ in length but in no shared token. A check between any two actions
+  was tried first and refused: between actions the library leaves tokens stale
+  on purpose (a reply still as generated until the work after it, a result the
+  next generation decodes), which the next prompt decodes from the first
+  difference; 78 alarms in the suite were all such states. What the check
+  finds after a reply is raised by the next action, since that work may run on
+  a thread no caller reads. With every wrapper checked
+  (`LLAMA_CHAT_CHECK_EVERY_ACTION=1`) the suite raised no alarm; a test shows
+  that a cache holding one wrong token is caught.
+- **Random sequences by Hypothesis.** The agents' fuzzer became
+  `tests/sequence_run.py`, its every choice drawn through an adapter, and a
+  `RuleBasedStateMachine` in `tests/test_sequences.py` replaced the seeded
+  sequences there. Hypothesis shrinks a failing sequence to the shortest one
+  that still fails; the hang above took about 15 manual steps to cut down. Its
+  database is off and its home is the null device, so nothing is kept on disk
+  (rule: nothing persists that was not asked for); a failure prints the blob
+  that replays it. The suite draws 40 fixed sequences, `-m slow` 1500 new ones
+  (13 minutes on the development machine), the pre-push hook 200.
+- **Every order of the thread hand-over.** In place of a TLA+ model, which
+  would need Java and drift from the code, `tests/test_thread_orders.py` holds
+  the work after a reply at each point where it hands over (before it takes
+  the wrapper, during its first and second decode part, after it ends) and
+  runs each kind of action there: 96 orders on three cache kinds.
+- **The contract and the prose are tested.** Every file a rule names exists,
+  the rules are numbered without a gap, and every cited rule number exists.
+  The prose test checks em dashes (in every line), dashes between clauses and
+  paths of one machine. A check for measured numbers was refused: a
+  measurement cannot be told from a documented default or a test value by its
+  form (the server's 25 MB upload limit, 200 ms of test speech).
+- **Lint and type checks are tests.** ruff with E, F, W and B, line length left
+  to the writer and `zip` without `strict` allowed (some calls pair sequences of
+  different lengths on purpose); mypy with optional values checked. Fixing its
+  112 errors made one fault structural: the engine's sampler reads every
+  sampling value as set, but `generate` accepted none, so `DrawnSampling`, every
+  value set, is now the only kind a generation takes. The tools run without
+  their caches.
+- **Real model files** are named by the environment (`LLAMA_CHAT_TEST_MODELS`),
+  never in the tree, so rule 3 holds; so is the command that measures GPU
+  memory, which names the GPU's maker. On an Nvidia card:
+  `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND='nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits | awk -F", " "\$1=={pid}{print \$2}"'`. Each runs 120 turns with `check_cache`
+  on, cuts, begins again, and bounds growth after 30 turns: 64 MiB of RAM, 16 MiB
+  of GPU memory. Run on Gemma 3 1B and Llama 3.2 3B on the CPU: both passed in
+  12 minutes.
+- **Before each push**, `hooks/pre-push` runs the suite and 200 new
+  sequences; `install.sh --dev` sets it as the checkout's hooks folder.
+- **Mutation testing** by mutmut. The cache-context protocol is not mutated:
+  the library reads its method names, and the mutants' added names break that
+  check. Nor are the engine modules, which only a real model runs. The tests
+  that count work or time are left out of mutation runs, which slow every call.
+- **What the new checks found** (each fixed, each now a test):
+  - A refused begin that met interrupted work after a reply put back a cache
+    list already cut to what was decoded, so `total_tokens` changed and the
+    cache no longer read as the render until the next reply (rule 6; the
+    loop's review agent). The whole list is put back now.
+  - The slow random runs found three more, on the Devstral and Mistral
+    templates and a Hermes one, all with a cache that cannot shift. A reply
+    whose unreadable call failed to be answered was left as an empty reply
+    the template refuses to write, and every later question was refused (rule
+    11); it is taken back with its question now. A reply taken back on a turn
+    a call left open reported that call as its own, and the loop answered it
+    again with no token spent; the loop variant stopped it (472.1's kind),
+    and a reply taken back now reports no call. Questions injected in a row
+    were held to the eviction threshold, not the room a reply needs, so a
+    begin of the conversation was refused for its length (rule 10); an
+    injected question keeps that room now, as a begin of it does.
+  - Each failing sequence is kept in `tests/found_sequences/` as what it drew
+    (a choice by its place among the options, the template by its
+    fingerprint, so that no record names a model) and its steps, and replayed
+    every run, since Hypothesis keeps no
+    database on disk here. A replay stays valid only while
+    `tests/sequence_run.py` draws in the same order; a change to its draws
+    means recording the sequences again from the printed failure.
+  - Mutation testing of the eviction module against its own tests: 205
+    mutants caught, 176 not. Of six of those run against the whole suite,
+    five were caught; the sixth only made the drop search need 13 measures
+    instead of 5, and a test now bounds them.
+

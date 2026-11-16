@@ -61,6 +61,10 @@ class EngineError(RuntimeError):
     """The engine failed while it decoded, edited or generated; the next action brings the cache back first."""
 
 
+class InternalError(RuntimeError):
+    """A fault of this library, found before it could spoil the conversation, such as a loop that made no progress; the conversation stays usable, as after any failed action."""
+
+
 def with_template_reason(refusal: str, reason: str | None) -> str:
     """``refusal``, followed by what the template itself said where it said something."""
     return refusal if not reason else f"{refusal} (the template says: {reason})"

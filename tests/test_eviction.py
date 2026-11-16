@@ -241,3 +241,34 @@ def test_a_reply_over_the_threshold_alone_stays_until_the_next_question_so_it_ca
     w.truncate_last_reply(text[:20])
     assert w.reply("Und kurz?").finish().text
     assert w.conversation()["messages"][-2]["content"] == "Und kurz?"
+
+
+@pytest.mark.counts_work
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
+def test_the_search_for_how_many_exchanges_to_drop_measures_a_few_times(can_shift):
+    """Each guess is placed by how far over the limit the last measure was, so 300 exchanges take a few measures, not one per halving."""
+    from llama_chat import eviction
+    from tests.invented_templates import NUMBERED
+    measures = []
+    search = eviction.Eviction._drop_oldest_exchanges
+
+    def counted(self, length, bound, at_least, newest_too):
+        count = [0]
+
+        def measured():
+            count[0] += 1
+            return length()
+        went = search(self, measured, bound, at_least, newest_too)
+        measures.append(count[0])
+        return went
+    eviction.Eviction._drop_oldest_exchanges = counted
+    try:
+        fake = FakeContext(NUMBERED, gen_tokens=2, gen_text="Ja.", can_shift=can_shift)
+        history = [m for n in range(300) for m in (
+            {"role": "user", "content": f"Frage {n} " + "x" * 10}, {"role": "assistant", "content": "y" * 10})]
+        w = ChatWrapper(Config(context_size=16000, evict_above_fraction=0.9), context=fake)
+        w.begin(opened("s", history))
+        w.reply("Q " + "x" * (15000 - w.total_tokens)).finish()
+    finally:
+        eviction.Eviction._drop_oldest_exchanges = search
+    assert measures and max(measures) <= 7

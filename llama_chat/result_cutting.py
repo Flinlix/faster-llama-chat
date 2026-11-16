@@ -15,6 +15,7 @@ from .conversation_state import ConversationState
 from .errors import RAISE_THE_ROOM, ContextOverflowError
 from .messages import UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message, with_result_text
 from .tools import ToolCall, result_text
+from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
@@ -48,17 +49,23 @@ def _most_kept(fits: Callable[[int], bool], total: int, guess: int | None = None
         step = 16
         if fits(guess):
             low = guess
+            upwards_variant = LoopVariant("widening a cut upwards")
             while low + step < total and fits(low + step):
+                upwards_variant.passes(total - low)
                 low, step = low + step, step * 2
             high = min(total, low + step) - 1
             if high == total - 1 and fits(total):
                 return total
         else:
             high = guess - 1
+            downwards_variant = LoopVariant("widening a cut downwards")
             while high - step > 0 and not fits(high - step):
+                downwards_variant.passes(high)
                 high, step = high - step, step * 2
             low = max(0, high - step)
+    halving_variant = LoopVariant("searching a cut")
     while low < high:
+        halving_variant.passes(high - low)
         middle = (low + high + 1) // 2
         low, high = (middle, high) if fits(middle) else (low, middle - 1)
     return low
@@ -136,8 +143,8 @@ class ResultCutting:
                 messages[at] = with_result_text(message, cut_result(text, 0))
                 self._note(self._call_answered(at), 0, len(text), "a result", "at the begin")
                 continue
-            kept = _most_kept(lambda n: self._fits(at, cut_result(text, n), room), len(text),
-                              self._guess(at, text, room))
+            kept = _most_kept(lambda n: self._fits(at, cut_result(text, n), room),  # noqa: B023 (called in this pass)
+                              len(text), self._guess(at, text, room))
             messages[at] = with_result_text(message, cut_result(text, kept))
             self._note(self._call_answered(at), kept, len(text), "a result", "at the begin")
             return
@@ -175,7 +182,7 @@ class ResultCutting:
             whole = earlier["content"]
 
             def fits(kept: int) -> bool:
-                messages[j] = with_result_text(earlier, cut_result(whole, kept))
+                messages[j] = with_result_text(earlier, cut_result(whole, kept))  # noqa: B023 (called in this pass)
                 return self._fits(at, content, room)
 
             if not fits(0):

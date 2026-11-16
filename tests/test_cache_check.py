@@ -2,8 +2,11 @@
 
 import pytest
 
+from llama_chat import ChatWrapper, Config
 from llama_chat.tools import ToolCall
 from tests.chat_messages import tool_turn, opened, after_system
+from tests.fake_context import FakeContext
+from tests.invented_templates import PLAIN
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)
@@ -177,3 +180,55 @@ def test_a_cache_missing_an_exchange_after_a_generated_turn_is_caught_where_repl
         assert_cache_reads_as_rendered(w, fake)
     fake.cache = sound
     overwrite_held_tokens(w, sound)
+
+
+# ----- the check_cache setting ----------------------------------------------------
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_check_cache_stops_a_reply_the_cache_no_longer_holds_the_render_for(cache):
+    from llama_chat import InternalError
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja.", "Auch."], **cache)
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    wrapper.reply("Wie geht es?").finish()
+    memory = wrapper._conversation._memory
+    hold = memory.hold
+
+    def holding_one_token_wrong(target, **options):
+        # A fault behind the sync: the cache holds another token than it was told to.
+        held = hold(target, **options)
+        at = len(memory.tokens) // 2
+        memory._tokens[at] = fake.cache[at] = memory.tokens[at - 1]
+        return held
+    memory.hold = holding_one_token_wrong
+    with pytest.raises(InternalError, match="differs from a fresh render of its conversation"):
+        wrapper.reply("Und dir?").finish()
+        wrapper.reply("Und sonst?").finish()
+    wrapper.close()                             # its cache holds the wrong token on purpose
+
+
+def test_check_cache_finds_nothing_in_a_conversation_kept_right():
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja.", "Auch."])
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    for question in ("Wie geht es?", "Und dir?", "Schön."):
+        wrapper.reply(question).finish()
+
+
+def test_check_cache_logs_a_fault_it_finds_after_a_reply(caplog):
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja."])
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    memory = wrapper._conversation._memory
+    hold = memory.hold
+
+    def holding_one_token_wrong(target, **options):
+        held = hold(target, **options)
+        at = len(memory.tokens) // 2
+        memory._tokens[at] = fake.cache[at] = memory.tokens[at - 1]
+        return held
+    memory.hold = holding_one_token_wrong
+    with caplog.at_level("ERROR", logger="llama_chat"):
+        wrapper.reply("Wie geht es?").finish()
+    assert any("check_cache" in r.getMessage() for r in caplog.records)
+    wrapper.close()                             # its cache holds the wrong token on purpose

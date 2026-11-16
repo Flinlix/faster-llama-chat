@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 from .cache_context import ModelReader
 
 
-def split_at_tags(reader: ModelReader, text: str) -> list[tuple[str, bool]] | None:
+class Tokenizer(Protocol):
+    """What tokenizing a render takes of a model: its tokens, and which of them are its own tags."""
+
+    def tokenize(self, text: str, add_special: bool = False,
+                 parse_special: bool = True) -> list[int]: ...
+
+    def token_text(self, token: int) -> str: ...
+
+    def is_special(self, token: int) -> bool: ...
+
+
+def split_at_tags(reader: Tokenizer, text: str) -> list[tuple[str, bool]] | None:
     """``text`` as the model's tags and the plain text between them, each marked whether a tag.
 
     ``None`` where a tag the tokenizer finds cannot be located in the text.
@@ -41,7 +53,7 @@ def tag_texts(reader: ModelReader) -> tuple[str, ...]:
                  if text)
 
 
-def tokenize_pieces(reader: ModelReader, pieces: list[tuple[str, bool]], *,
+def tokenize_pieces(reader: Tokenizer, pieces: list[tuple[str, bool]], *,
                     add_special: bool = False,
                     tag_tokens: dict[str, int] | None = None) -> list[int]:
     """``pieces`` as one render tokenizes them.

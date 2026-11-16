@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+from llama_chat.config import generation_sampling
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
 from llama_chat.rendered_cache import RenderedCache
@@ -224,7 +225,7 @@ def test_nothing_an_action_failing_at_any_point_leaves_blocks_a_question(cache, 
     """Whatever state a failure leaves, owed calls and open turns included, the next question is answered at once."""
     prepare, act, _calls = _ACTIONS[action]
     for template in (TOOLS, TOOLS_REFUSING_TWO_USER_TURNS):
-        def prepared():
+        def prepared(template=template):
             fake = _Flaky(template, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
             w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
                                    min_reply_tokens=20), context=fake)
@@ -258,7 +259,7 @@ def test_an_action_failing_at_any_point_leaves_everything_as_it_was_and_usable(c
     for refuses_two_user_turns, template, reasons in (
             (False, TOOLS, False), (True, TOOLS_REFUSING_TWO_USER_TURNS, False),
             (False, REASONING, True)):
-        def prepared():
+        def prepared(template=template, reasons=reasons):
             fake = _Flaky(template, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
             fake.reasons = reasons
             w = ChatWrapper(Config(context_size=160, evict_above_fraction=0.6,
@@ -660,7 +661,8 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
         return [draw.randrange(1, 5) for _ in range(draw.randrange(4))]
 
     def generate(closed_early):
-        pieces = memory.generate(draw.randrange(3), GenerationAccumulator())
+        pieces = memory.generate(draw.randrange(3), GenerationAccumulator(),
+                                 sampling=generation_sampling(Config(), None))
         if closed_early:
             next(pieces, None)
             pieces.close()

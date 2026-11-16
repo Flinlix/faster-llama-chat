@@ -109,6 +109,7 @@ class ResolvedTemplate:
         if not reasoning:
             return self.properties.fragments.generation_prompt_without_reasoning
         self.ensure_can_reason()
+        assert self.properties.reasoning is not None, "a template that can reason says how"
         return self.properties.reasoning.generation_prompt
 
     def reply_header(self, reasoning: bool = False) -> tuple[str, str] | None:

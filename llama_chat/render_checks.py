@@ -8,6 +8,8 @@ bound into ``render``.
 
 from __future__ import annotations
 
+from typing import cast
+
 from collections.abc import Callable
 
 from .errors import TemplateRefusedError
@@ -76,7 +78,7 @@ def windows_are_exact(render: Render, system: list[dict], tag_after,
     prompt = render(system + sum(ex[:4], []) + ex[4][:1], True)
     dropped = render(system + sum(ex[1:], []) + stand_in, True)
     head = render(system + ex[1] + ex[2] + stand_in, True)
-    if None in (whole, window, prompt, dropped, head):
+    if whole is None or window is None or prompt is None or dropped is None or head is None:
         return False
     older, first = ex[3][-1]["content"], ex[1][-1]["content"]
 
@@ -88,7 +90,7 @@ def windows_are_exact(render: Render, system: list[dict], tag_after,
           ((whole, older), (window, older), (dropped, first), (head, first), (whole, first))]
     if None in at:
         return False
-    tail, in_window, drop, in_head, kept = at
+    tail, in_window, drop, in_head, kept = cast("list[int]", at)
     return (whole[tail:] == window[in_window:] and prompt[:tail] == whole[:tail]
             and dropped[:drop] == head[:in_head] and dropped[drop:] == whole[kept:])
 

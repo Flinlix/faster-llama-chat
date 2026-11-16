@@ -54,7 +54,9 @@ CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
 # without setting PYTHONPATH. Pass --dev to also install test dependencies.
 echo "Installing faster-llama-chat (editable)..."
 if [ "$DEV" = 1 ]; then
-    "$PIP" install -e ".[test]"
+    "$PIP" install -e ".[test,dev]"
+    # The checks before every push: hooks/pre-push.
+    git config core.hooksPath hooks
 else
     "$PIP" install -e "."
 fi

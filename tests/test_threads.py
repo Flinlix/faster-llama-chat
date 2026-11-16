@@ -4,13 +4,17 @@ import threading
 
 import pytest
 
-from llama_chat.config import Config
+from llama_chat.config import Config, generation_sampling
 from llama_chat import ChatWrapper, InvalidArgumentError
 from llama_chat.generation import generate
+
 from tests.chat_messages import opened
 from tests.fake_context import FakeContext
 from tests.invented_templates import PLAIN
 from tests.wrappers import add_tools, assert_consistent, tool_wrapper, rows
+
+# Every sampling value set, as a generation is given them.
+SAMPLING = generation_sampling(Config(), None)
 
 
 def test_asking_for_a_reply_while_another_runs_does_not_wait_for_it():
@@ -72,7 +76,7 @@ def test_generator_close_marks_interrupted():
 
     fake = FakeContext(PLAIN, gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
-    g = generate(fake, 0, 5, out=acc)
+    g = generate(fake, 0, 5, sampling=SAMPLING, out=acc)
     next(g)
     g.close()
     assert acc.stop_reason == "interrupted"
@@ -299,3 +303,11 @@ def test_an_action_that_interrupts_the_work_after_a_reply_decodes_no_more_than_w
         # The rest of the conversation it replaces, decoded again after a drop, is never
         # decoded: at least a part of it saved.
         assert decoded(interrupts=True) + 256 <= decoded(interrupts=False)
+
+
+def test_a_stream_closed_before_it_started_finishes_with_no_reply():
+    w, fake = tool_wrapper()
+    w.begin(opened("s"))
+    stream = w.reply("hi")
+    stream.close()
+    assert stream.finish() is None

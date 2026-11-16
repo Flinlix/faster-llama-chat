@@ -79,6 +79,7 @@ pip install -e ".[test]"
 
 It installs as `faster-llama-chat` and is imported as `llama_chat`.
 
+
 ## Quick start
 
 ```python
@@ -320,7 +321,13 @@ the argument or setting it is about, where it is about one:
 
 A wrong type is a `TypeError` that names the argument. An `EngineError`, a
 `RuntimeError`, says the engine failed while it decoded, edited or generated;
-the next action brings the cache back first.
+the next action brings the cache back first. An `InternalError`, a
+`RuntimeError` too, is a fault of this library, found before it could spoil the
+conversation: a loop that made no progress, or, with `check_cache`, a cache that
+does not read as the render. After a loop that made no progress the
+conversation stays usable, as after any failed action; a fault the check finds
+in the cache is raised again by every reply until the conversation begins
+again. Either is a fault to report.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
 or reply that does not), whether the model calls a tool that exists, and what
@@ -658,6 +665,7 @@ value `Config` refuses.
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
+| `check_cache` | `False` | for finding faults: after the work after every reply and before every generation, compare the cache with a fresh begin of its conversation, and raise `InternalError` where they differ; each check renders and tokenizes the whole conversation |
 
 `ChatWrapper` also takes, outside `Config` because neither is a value to
 tune: `context=` (a [cache context of your own](#your-own-cache-context)) and
@@ -768,7 +776,8 @@ past midnight is decoded again once, from the date on.
 `ChatWrapper(context=...)` takes any object that answers the protocol
 `CacheContext`: the model's tokenizer, its tags, its chat template and the
 sampling it recommends, and the cache a conversation is decoded into, with the
-type one of its members takes: `Sampling`, from `llama_chat`.
+type one of its members takes: `DrawnSampling`, every sampling value set, from
+`llama_chat`.
 Nothing to subclass or register; the members are checked where the context is
 adopted, so a missing one, or a method that does not take the arguments its
 protocol method takes, positionally and by name, is a `TypeError` from the
@@ -810,8 +819,36 @@ that search. `tests/fake_context.py` is a worked one over a list of ints.
 ```bash
 python -m pytest -q                                  # no model needed
 python -m pytest -q -n auto                          # the same, on every processor core
+python -m pytest -q -m slow                          # many new random sequences of actions
+python -m pytest -q -m gpu                           # real model files, named as below
 python examples/demo.py /path/to/model.gguf          # against a real model
 ```
+
+The suite also runs the linter and the type checker, and checks the writing
+rules of the prose and that every file the contract names exists. Every test
+has a time limit; past it the run stops and prints where each thread stood.
+`LLAMA_CHAT_CHECK_EVERY_ACTION=1` runs the suite with `check_cache` on in every
+wrapper, the tests that count the library's work left out.
+
+The random sequences are drawn by Hypothesis: a failing one is cut down to the
+shortest that still fails and printed step by step, with what replays it. The
+suite draws the same ones every run; `-m slow` draws new ones,
+`LLAMA_CHAT_SLOW_EXAMPLES` of them, 1500 by default. Nothing of either is kept
+on disk by Hypothesis; a sequence once found failing is kept in
+`tests/found_sequences/` instead, as what it drew and its steps, and replayed
+every run.
+
+The tests on real model files read their paths from `LLAMA_CHAT_TEST_MODELS`,
+separated as the system separates paths, and offload `LLAMA_CHAT_TEST_GPU_LAYERS`
+layers, all by default. Each runs a long conversation with `check_cache` on and
+bounds how much the process grows; `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND`, a shell
+command that prints the MiB the process `{pid}` holds on the GPU, bounds GPU
+memory too; the design history, "Faults that show themselves", holds one.
+
+`./install.sh --dev` switches on `hooks/pre-push`, which refuses a push the
+suite and a shorter slow run do not pass. Mutation testing, `mutmut run` and then
+`mutmut results`, changes the code on purpose and lists each change no test
+noticed; it runs for hours, and writes its copies to `mutants/`.
 
 The tests run every chat template in `tests/templates/` with a stand-in
 tokenizer, one token per character and one per tag, and again with one that

@@ -195,6 +195,7 @@ def test_every_reply_starts_from_the_templates_render_of_what_was_sent(stem, spe
     _assert_each_reply_followed_what_was_sent(run, QUESTIONS)
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("injected", [False, True], ids=["asked", "injected-then-answered"])
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_a_question_waits_only_for_its_own_tokens(stem, injected):
@@ -217,6 +218,7 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
     assert max(run.context.rendered[rendered:run.renders[-1]]) <= 4
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts_after_its_reply(stem):
     question = "Some background you need not repeat. " * 6 + QUESTIONS[3]
@@ -354,6 +356,8 @@ def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
 
 
+@pytest.mark.timed
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_many_past_calls_whose_text_the_template_wraps_are_placed_in_little_time(stem):
     """A text the template writes otherwise than as it is (escaped, wrapped) is still placed, and fast."""
@@ -640,6 +644,7 @@ def test_a_history_ending_on_a_question_costs_a_cache_that_cannot_be_cut_no_deco
     assert run.context.total_prefilled() - decoded < held // 3
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 def test_after_the_first_replies_only_windows_are_rendered(stem, can_shift):
@@ -1070,6 +1075,7 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
 
 @pytest.mark.parametrize("stem, system", [run for run in _DATED_RUNS
                                           if _FIXTURES[run.values[0]]["calls_tools"]])
+@pytest.mark.counts_work
 def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
         stem, system, clock, monkeypatch):
     from llama_chat import rendered_cache
@@ -1715,6 +1721,7 @@ def test_a_call_after_text_is_read_where_the_template_writes_a_call_after_text(s
     assert called == ([ToolCall(WEATHER.name, {"city": "Bonn"}, called[0].id)] if reads_after_text else [])
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_a_reply_after_a_tool_turn_the_template_keeps_as_written_renders_no_more_than_after_its_history(
         stem):
@@ -1806,6 +1813,7 @@ def test_a_first_reply_that_produces_nothing_leaves_what_begin_decoded_in_the_ca
     assert chat.total_tokens >= begun
 
 
+@pytest.mark.counts_work
 def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_render(monkeypatch):
     from llama_chat.rendering import ConversationRendering
 
@@ -2278,6 +2286,7 @@ def _costs(stem, cache, n_exchanges):
     return decoded, largest, windows
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("cache", sorted(_COST_CACHES))
 @pytest.mark.parametrize("stem", _EVERY)
 def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cache):
@@ -2345,6 +2354,7 @@ def test_a_call_still_owed_begins_again_with_its_turn_as_generated_and_its_resul
     assert again.context.text_of(again.context.cache) == answered     # each stand-in numbers its own merges
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("cache", sorted(_COST_CACHES))
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_reply_shortened_after_evictions_renders_only_the_newest_exchanges(stem, cache):
@@ -2516,3 +2526,49 @@ def test_a_template_that_renumbers_calls_after_a_drop_evicts_well_below_its_thre
         run.chat.reply(f"Question {i}?").finish()
         costs.append(run.context.total_prefilled() - before)
     assert sum(cost > 400 for cost in costs) <= 6, costs
+
+
+# ----- a reply the template does not write, taken back -----------------------------
+def _refuses_an_empty_reply(stem):
+    run = _Run(stem)
+    return run.render([{"role": "user", "content": "One?"}, {"role": "assistant", "content": ""},
+                       {"role": "user", "content": "Two?"}]) is None
+
+
+_REFUSING_AN_EMPTY_REPLY = [stem for stem in _TOOL_TEMPLATES if _refuses_an_empty_reply(stem)]
+
+
+@pytest.mark.parametrize("stem", _REFUSING_AN_EMPTY_REPLY)
+def test_a_reply_taken_back_on_a_turn_a_call_left_open_reports_no_call_and_ends(stem):
+    """The call the turn it went back to owes is not the reply's own: it is neither reported nor answered again."""
+    run = _Run(stem)
+    _opener, body, _closer = _call_body(run, {"city": "Bonn"})
+    run.begin()
+    run.context.replies = [ScriptedCall(body)]
+    called = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert called and run.chat.pending_calls
+    before = run.chat.conversation()
+    run.context.replies = [""]                  # the model says nothing
+    reply = run.chat.reply("frage", tool_call_policy="refuse").finish()
+    assert reply.taken_back and reply.tool_calls == []
+    assert run.chat.conversation() == before
+
+
+@pytest.mark.parametrize("stem", _REFUSING_AN_EMPTY_REPLY)
+def test_a_reply_whose_unreadable_call_fails_to_be_answered_is_taken_back(stem, monkeypatch):
+    """Without its call, the reply is one the template does not write; it goes with its question, and the next question is answered."""
+    from llama_chat.rendered_cache import RenderedCache
+    run = _Run(stem)
+    run.begin()
+    before = run.chat.conversation()
+    run.context.replies = [ScriptedCall("@@ not a call at all")]
+
+    def fails(self, unreadable_result):
+        raise RuntimeError("the decode failed")
+    monkeypatch.setattr(RenderedCache, "_write_unreadable", fails)
+    with pytest.raises(RuntimeError):
+        run.chat.reply("Weather?", tool_call_policy="yield").finish()
+    monkeypatch.undo()
+    assert run.chat.conversation()["messages"] == before["messages"]
+    run.context.replies = ["Sunny."]
+    assert run.chat.reply("And now?").finish().text == "Sunny."
