@@ -20,6 +20,10 @@ from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_K
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows, ask_through_a_tool_call)
 from tests.chat_templates import STEMS, WEATHER, fixture
+from llama_chat.history_forms import (completions_messages, generated_turn_records, read_messages,
+                                      with_generated_turns)
+from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL
+from llama_chat.rendering import GeneratedTurn
 
 
 # ----- beginning again from conversation() ---------------------------------
@@ -784,3 +788,133 @@ def test_a_turn_kept_as_generated_stays_kept_when_the_exchanges_after_it_are_tak
     for dropped in (2, 4):
         w.begin(**{**saved, "messages": saved["messages"][:-dropped]})
         assert internals.generated_turns_held(w) == kept
+
+
+_SYSTEM = {"role": "system", "content": "persona"}
+
+
+def _question(text):
+    return {"role": "user", "content": text}
+
+
+def _reply(text, calls=(), turn=None):
+    """A reply, ending the generated turn ``turn`` (its tokens and span) where one is given."""
+    message = {"role": "assistant", "content": text}
+    if calls:
+        message["tool_calls"] = list(calls)
+    if turn is not None:
+        tokens, span = turn
+        message[GENERATED_TURN] = GeneratedTurn(tokens, span, bool(calls))
+    return message
+
+
+def _call(call_id):
+    return {"id": call_id, "type": "function", "function": {"name": "clock", "arguments": {}}}
+
+
+def _unreadable(call_id):
+    return {"id": call_id, "type": "function", UNREADABLE_CALL: True,
+            "function": {"name": "unknown", "arguments": {}}}
+
+
+def _result(call_id, name="clock"):
+    return {"role": "tool", "name": name, "tool_call_id": call_id, "content": f"Ergebnis {call_id}"}
+
+
+# Each history, whether it joins questions, and for each generated turn the Chat Completions
+# messages it is found by, as a slice of those messages: the question before it, its own
+# messages and results, and the message after it where it gives none of its own. ``None`` is
+# a turn with nothing given back to find it by.
+_HISTORIES_WITH_KEPT_TURNS = {
+    "closed by its answer": (
+        [_SYSTEM, _question("Q1"), _reply("", [_call("c")]), _result("c"),
+         _reply("Antwort", turn=((11, 12, 13), 3)), _question("Q2"), _reply("A2")],
+        False, [(1, 5)]),
+    "two exchanges": (
+        [_SYSTEM, _question("Q1"), _reply("", [_call("c")]), _result("c"),
+         _reply("Antwort", turn=((11, 12), 3)), _question("Q2"), _reply("", [_call("d")]),
+         _result("d"), _reply("Antwort 2", turn=((21, 22), 3))],
+        False, [(1, 5), (5, 9)]),
+    "open, closed by a question": (
+        [_SYSTEM, _question("Q1"), _reply("", [_call("c")], turn=((11,), 1)), _result("c"),
+         _question("Q2"), _reply("A2")],
+        False, [(1, 4)]),
+    "nothing of its own, at the end": (
+        [_SYSTEM, _question("Q1"), _reply("", [_unreadable("u")], turn=((11,), 1)),
+         _result("u", "unknown")],
+        False, [(1, 2)]),
+    "nothing of its own, a question and a reply after it": (
+        [_SYSTEM, _question("Q1"), _reply("", [_unreadable("u")], turn=((11,), 1)),
+         _result("u", "unknown"), _question("Q2"), _reply("A2")],
+        False, [(1, 3)]),
+    "nothing of its own, the newest question after it": (
+        [_SYSTEM, _question("Q1"), _reply("", [_unreadable("u")], turn=((11,), 1)),
+         _result("u", "unknown"), _question("Q2")],
+        False, [(1, 3)]),
+    "nothing of its own, then a turn after the question that closed it": (
+        [_question("Q1"), _reply("", [_unreadable("u")], turn=((11,), 1)), _result("u", "unknown"),
+         _question("Q2"), _reply("", [_call("c")]), _result("c"),
+         _reply("Fertig", turn=((21, 22), 3))],
+        False, [(0, 2), (1, 5)]),
+    "nothing to find it by, then a turn": (
+        [_reply("", [_unreadable("u")], turn=((11,), 1)), _result("u", "unknown"),
+         _question("Q2"), _reply("", [_call("c")]), _result("c"),
+         _reply("Fertig", turn=((21, 22), 3))],
+        False, [None, (0, 4)]),
+    "a turn going on from the results of the one before": (
+        [_SYSTEM, _question("Q1"), _reply("", [_call("c")], turn=((11,), 1)), _result("c"),
+         _reply("Antwort", turn=((21,), 1)), _question("Q2"), _reply("A2")],
+        False, [(1, 5), (1, 5)]),
+}
+
+
+def _altered(message):
+    """``message``, a Chat Completions message, with its text changed."""
+    return {**message, "content": (message.get("content") or "") + " (geändert)"}
+
+
+def _turns_put_back(given, records, joins):
+    """The tokens of each generated turn :func:`with_generated_turns` puts back into ``given``."""
+    put, _n = with_generated_turns(read_messages(given), records, joins)
+    return [message[GENERATED_TURN].tokens for message in put if GENERATED_TURN in message]
+
+
+@pytest.mark.parametrize("name", list(_HISTORIES_WITH_KEPT_TURNS))
+def test_a_generated_turn_is_found_by_exactly_the_messages_its_record_names(name):
+    """A turn is put back in the messages it is found by alone, and in none of them with one of those messages changed, so that a history cut or edited elsewhere keeps it."""
+    messages, joins, windows = _HISTORIES_WITH_KEPT_TURNS[name]
+    given = completions_messages(messages, joins)
+    records = generated_turn_records(messages, joins)
+    turns = [m[GENERATED_TURN].tokens for m in messages if GENERATED_TURN in m]
+    assert _turns_put_back(given, records, joins) == [t for t, w in zip(turns, windows) if w]
+    for tokens, window in zip(turns, windows):
+        if window is None:
+            continue
+        lo, hi = window
+        assert tokens in _turns_put_back(given[lo:hi], records, joins), \
+            f"the turn is not found in messages {lo} to {hi - 1}, those it is found by"
+        for i in range(lo, hi):
+            edited = given[:i] + [_altered(given[i])] + given[i + 1:]
+            assert tokens not in _turns_put_back(edited, records, joins), \
+                f"the turn is found with message {i}, one it is found by, changed"
+
+
+def test_each_generated_turn_stays_kept_when_begin_is_given_the_history_up_to_its_end():
+    """A client that cuts the history after a turn, as a regenerate does, keeps that turn and every one before it, each record standing on its own."""
+    w, fake = tool_wrapper(context_size=4096)
+    ask_through_a_tool_call(w, fake)
+    fake.call_script = ["fn:clock{}"]
+    call, = [step for step in w.reply("und jetzt?", tool_call_policy="yield")
+             if isinstance(step, ToolCall)]
+    w.inject_tool_result(call.id, "12:05")
+    w.reply(tool_call_policy="yield").finish()
+    w.reply("Danke").finish()
+    kept, spans = internals.generated_turns_held(w), internals.generated_turn_spans(w)
+    assert len(kept) == 2
+    saved = w.conversation()
+    assert len(saved["messages"]) == len(internals.rendered_messages(w))
+    for length in range(1, len(saved["messages"]) + 1):
+        w.begin(**{**saved, "messages": saved["messages"][:length]})
+        assert internals.generated_turns_held(w) == [
+            turn for turn, (_first, last) in zip(kept, spans) if last < length], \
+            f"a turn is lost from the history cut to {length} messages"
