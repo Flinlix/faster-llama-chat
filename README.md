@@ -812,7 +812,11 @@ the model its tokens are valid for: `generated_turns` restore turns as
 generated only on a context whose fingerprint is the one they were saved on.
 Its token ids must lie from -65,536 to 1,048,575: an eviction searches the
 cache's tokens for the stretch it dropped, and an id outside that range fails
-that search. `tests/fake_context.py` is a worked one over a list of ints.
+that search. `llama_chat.testing` ships a worked one, `FakeContext` in
+`llama_chat/testing/fake_context.py`, over a list of ints and a scripted model,
+with the small invented templates it renders in
+`llama_chat/testing/invented_templates.py`, for tests of code that drives a
+wrapper without loading a model.
 
 ## Verify
 

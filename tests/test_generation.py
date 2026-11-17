@@ -6,8 +6,8 @@ from llama_chat.generation import generate
 from llama_chat.template import CallBoundary
 from llama_chat.wrapper import ChatWrapper
 from tests.chat_messages import opened, after_system
-from tests.fake_context import FakeContext
-from tests.invented_templates import TOOLS
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import TOOLS
 from tests.wrappers import rows
 
 # Every sampling value set, as a generation is given them.

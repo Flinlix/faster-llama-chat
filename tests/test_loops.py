@@ -93,8 +93,8 @@ def test_a_reply_whose_turn_never_closes_stops_instead_of_running_on():
     """A generation loop that makes no progress is stopped by its variant, the conversation left usable as after any failed reply."""
     from llama_chat.wrapper import ChatWrapper
     from llama_chat import Config
-    from tests.fake_context import FakeContext, ScriptedCall
-    from tests.invented_templates import TOOLS
+    from llama_chat.testing.fake_context import FakeContext, ScriptedCall
+    from llama_chat.testing.invented_templates import TOOLS
     from tests.chat_messages import opened
     fake = FakeContext(TOOLS)
     wrapper = ChatWrapper(Config(context_size=2048), context=fake)

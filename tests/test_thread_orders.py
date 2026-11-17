@@ -16,8 +16,8 @@ import pytest
 from llama_chat import ChatWrapper, Config
 from llama_chat import wrapper as wrapper_module
 from tests.chat_messages import opened
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
 from tests.internals import held_tokens
 from tests.wrappers import assert_consistent
 

@@ -16,10 +16,10 @@ from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, expected, fixture
-from tests.fake_context import FakeContext
+from llama_chat.testing.fake_context import FakeContext
 from tests import internals
 from tests.internals import generated_turns_held
-from tests.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
+from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
                                       TOOLS_REFUSING_TWO_USER_TURNS)
 from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)

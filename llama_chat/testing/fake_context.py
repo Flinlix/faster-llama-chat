@@ -1,6 +1,6 @@
-"""A model-free stand-in for :class:`~llama_chat.context.KVContext`, worked over a list of ints.
+"""A model-free stand-in for a loaded model's cache context, worked over a list of ints.
 
-It renders with a test template's renderer, the one a model is loaded with.
+It renders with a template's own renderer, the one a model is loaded with.
 Only the tokenizer is a stand-in, one token per character and one per tag, or
 one that also merges a space with the letter or digit after it, so what is
 compared is the text. The cache is a plain list of token ids, and the
@@ -19,7 +19,6 @@ from llama_chat.addon_files import addon_file
 from llama_chat.cache_context import TOOL_USE_TEMPLATE
 from llama_chat.model_template import ModelTemplate
 
-from .chat_templates import expected
 
 
 class _Renders:
@@ -223,8 +222,8 @@ class FakeContext:
         self._listed = tuple(self._tag_token(tag) for tag in sorted(found))
         self._tag_pattern = re.compile("|".join(map(re.escape, sorted(found, key=len, reverse=True)))
                                        or r"(?!)")
-        self._ending_tags = {fixture["eos_token"], *expected(fixture, "ends_generation")}
-        self._call_mark_tokens = None
+        self._ending_tags = {fixture["eos_token"], *fixture.get("ends_generation", ())}
+        self._call_mark_tokens: tuple[list[int], list[int]] | None = None
         self.cache: list[int] = []
         self.can_shift = can_shift
         self.can_cut_tail = can_cut_tail
@@ -247,8 +246,8 @@ class FakeContext:
         self.prefill_calls: list[tuple[int, int, bool]] = []  # (start_pos, n, want_logits)
         # ("cut", position), ("shift", start, tokens) and ("restore", position).
         self.edits: list[tuple] = []
-        self.samplings = []                      # the sampling each generation was handed
-        self.recommended = {}                    # the sampling the model states for itself
+        self.samplings: list = []                # the sampling each generation was handed
+        self.recommended: dict[str, float] = {}  # the sampling the model states for itself
         self.resets = 0
         self.saved_states = 0
 
@@ -448,8 +447,9 @@ class FakeContext:
         """The template's own call tags as tokens, else its call texts as characters."""
         if self._call_mark_tokens is None:
             by_tags = self._fixture["call_marks"]["tags"]
-            self._call_mark_tokens = tuple(self._tokens(text, parse_special=by_tags)
-                                           for text in call_marks(self._fixture))
+            opening, closing = call_marks(self._fixture)
+            self._call_mark_tokens = (self._tokens(opening, parse_special=by_tags),
+                                      self._tokens(closing, parse_special=by_tags))
         return self._call_mark_tokens
 
     def _written(self, text: str) -> list[int]:

@@ -21,8 +21,8 @@ from llama_chat.template_extract import (as_probes_read, extract_content_rewrite
                                          extract_fragments, reasoning_switch)
 
 from .chat_templates import STEMS, expected, fixture
-from .fake_context import FakeContext
-from .invented_templates import TAGS as INVENTED_TAGS
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import TAGS as INVENTED_TAGS
 
 
 def _tool_fragments(render, tags=INVENTED_TAGS):

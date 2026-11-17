@@ -6,8 +6,8 @@ import pytest
 from llama_chat.config import Config
 from llama_chat import ChatWrapper, ContextOverflowError
 from tests.chat_messages import opened, after_system
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
 from tests.wrappers import assert_consistent, held_text, rows
 
 
@@ -248,7 +248,7 @@ def test_a_reply_over_the_threshold_alone_stays_until_the_next_question_so_it_ca
 def test_the_search_for_how_many_exchanges_to_drop_measures_a_few_times(can_shift):
     """Each guess is placed by how far over the limit the last measure was, so 300 exchanges take a few measures, not one per halving."""
     from llama_chat import eviction
-    from tests.invented_templates import NUMBERED
+    from llama_chat.testing.invented_templates import NUMBERED
     measures = []
     search = eviction.Eviction._drop_oldest_exchanges
 

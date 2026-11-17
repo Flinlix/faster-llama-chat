@@ -746,7 +746,7 @@ def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
 
 
 def test_every_method_takes_the_arguments_the_written_boundary_lists():
-    from tests.fake_context import FakeContext
+    from llama_chat.testing.fake_context import FakeContext
 
     def parameters(owner, name):
         member = inspect.getattr_static(owner, name, None)

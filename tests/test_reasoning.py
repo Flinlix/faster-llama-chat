@@ -13,8 +13,8 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.template import Reasoning
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from tests.fake_context import FakeContext
-from tests.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
                                       THINK_ON)
 
 from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
@@ -97,7 +97,7 @@ def test_the_reply_hands_back_the_thought_it_kept_out_of_the_answer():
 
 def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
     from llama_chat.tool_registry import ToolRegistry
-    from tests.fake_context import ScriptedCall
+    from llama_chat.testing.fake_context import ScriptedCall
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Uhrzeit.", name="uhr", parameters={"type": "object"})
     fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=[

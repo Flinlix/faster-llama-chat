@@ -25,7 +25,7 @@ from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall
 
 from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
-from .fake_context import (WRITTEN_ID, FakeContext, call_marks, shipped_addon_call,
+from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]

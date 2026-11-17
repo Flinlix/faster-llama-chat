@@ -1,4 +1,4 @@
-"""Small chat templates in an invented format, each a fixture as a file of ``tests/templates/`` holds one.
+"""Small chat templates in an invented format, each a fixture of the form :class:`~llama_chat.testing.fake_context.FakeContext` takes.
 
 Every tag is invented, not any real model's, so nothing can pass by matching a
 format hard-coded somewhere. Each template is the one Jinja text below, with

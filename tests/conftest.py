@@ -14,7 +14,7 @@ import pytest
 
 from llama_chat.wrapper import ChatWrapper
 
-from .fake_context import RecordedTemplate
+from llama_chat.testing.fake_context import RecordedTemplate
 from .internals import context_of, is_closed
 from .wrappers import assert_cache_reads_as_rendered, assert_conversation_is_its_forms
 

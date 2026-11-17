@@ -146,8 +146,8 @@ def test_a_model_path_that_names_no_file_is_a_refused_setting(tmp_path, model_pa
 @pytest.mark.parametrize("cap", [0, -1])
 def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
     from llama_chat import ChatWrapper
-    from tests.fake_context import FakeContext
-    from tests.invented_templates import PLAIN
+    from llama_chat.testing.fake_context import FakeContext
+    from llama_chat.testing.invented_templates import PLAIN
     wrapper = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN))
     wrapper.begin(opened("s"))
     with pytest.raises(InvalidSettingError) as refused:

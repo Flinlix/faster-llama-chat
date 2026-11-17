@@ -10,9 +10,9 @@ from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
 from tests.chat_templates import STEMS, expected, fixture
-from tests.fake_context import FakeContext
+from llama_chat.testing.fake_context import FakeContext
 from tests.internals import token_id_range
-from tests.invented_templates import PLAIN, TOOLS
+from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
                             reasoning_wrapper, rendered_reply, rows)
 def _without_restore(fake):

@@ -22,9 +22,9 @@ from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
-from tests.fake_context import BOS, FakeContext
+from llama_chat.testing.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
-from tests.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
+from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
 from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent,
                             begun_wrapper, tool_wrapper, rows)
@@ -615,7 +615,7 @@ def test_every_generation_is_handed_every_sampling_value():
 
 
 def test_what_the_model_can_do_is_answered_per_kind_of_conversation_and_never_changes():
-    from tests.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
+    from llama_chat.testing.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
 
     # The template for tools can reason, the default template cannot.
     fake = FakeContext({**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN,
@@ -749,7 +749,7 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
         stem, nothing):
     """These templates write no empty reply, so the request is taken back whole and the next question is answered; a later round cancelled before its first word leaves its turn open."""
     from llama_chat.resolved_template import ResolvedTemplate
-    from tests.fake_context import ScriptedCall, written_call
+    from llama_chat.testing.fake_context import ScriptedCall, written_call
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
     cancel, options = threading.Event(), {}
@@ -1402,7 +1402,8 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
     entered = set()
 
     def note(frame, event, _arg):
-        if event == "call" and "llama_chat/" in frame.f_code.co_filename:
+        if event == "call" and "llama_chat/" in frame.f_code.co_filename \
+                and "llama_chat/testing/" not in frame.f_code.co_filename:
             entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
                         + frame.f_code.co_qualname)
 

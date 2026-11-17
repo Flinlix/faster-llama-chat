@@ -31,9 +31,9 @@ from llama_chat.tools import ToolCall, ToolSpec, result_text
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
-from .fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
+from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
-from .invented_templates import NUMBERED
+from llama_chat.testing.invented_templates import NUMBERED
 from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
@@ -676,7 +676,8 @@ def _library_steps_per_token(run, stream, length):
         return count
 
     def enter(frame, event, arg):
-        if frame.f_code.co_filename.startswith(_LIBRARY):
+        if frame.f_code.co_filename.startswith(_LIBRARY) \
+                and not frame.f_code.co_filename.startswith(_STAND_IN):
             frame.f_trace_opcodes = True
             return count
         return None
@@ -698,6 +699,8 @@ def _library_steps_per_token(run, stream, length):
 
 
 _LIBRARY = os.path.dirname(llama_chat.__file__)
+# The stand-in model the tests run on, which is no part of what a reply costs.
+_STAND_IN = os.path.join(_LIBRARY, "testing")
 
 
 @pytest.mark.parametrize("stem, reasoning, policy", [
@@ -800,7 +803,7 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
 
 
 def test_a_reply_whose_tokens_as_generated_hold_a_call_that_went_is_not_shortened():
-    from tests.invented_templates import TOOLS
+    from llama_chat.testing.invented_templates import TOOLS
     for size in range(200, 900, 2):
         context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
         chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
@@ -1622,7 +1625,7 @@ def test_a_reply_that_can_begin_no_call_and_no_ending_streams_each_character_as_
 
 # ----- one template's own cases ------------------------------------------------------
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
-    from tests.invented_templates import TOOLS
+    from llama_chat.testing.invented_templates import TOOLS
     from tests.wrappers import weather_registry
     fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Sonnig")
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
@@ -2450,7 +2453,7 @@ def test_a_call_a_client_adds_after_a_reply_leaves_the_next_prompt_the_templates
 
 def test_dropping_an_exchange_whose_turn_a_question_closed_writes_what_follows_it_anew():
     """The invented templates keep a turn open across a question no reply closed: once that exchange goes, the reply after it gets its own header."""
-    from .invented_templates import TOOLS
+    from llama_chat.testing.invented_templates import TOOLS
     fake = FakeContext(TOOLS, ["reply", "ok", "ok"])
     chat = ChatWrapper(Config(context_size=2000, max_history_exchanges=3), context=fake)
     clock = ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})

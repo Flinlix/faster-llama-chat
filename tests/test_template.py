@@ -3,8 +3,8 @@
 import pytest
 
 from llama_chat.resolved_template import ResolvedTemplate
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
 
 
 def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_to_it():

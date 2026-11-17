@@ -229,6 +229,6 @@ def test_a_file_writes_no_tag_of_a_real_template(path):
 
 
 def test_the_invented_templates_tags_are_no_real_templates():
-    from .invented_templates import INVENTED
+    from llama_chat.testing.invented_templates import INVENTED
     invented = {tag for template in INVENTED.values() for tag in template["tags"]}
     assert invented and not invented & _template_tags()

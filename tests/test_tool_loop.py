@@ -15,8 +15,8 @@ from llama_chat import ChatWrapper, ContextOverflowError, OutOfOrderError, Unsup
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
-from tests.fake_context import FakeContext, ScriptedCall, written_call
-from tests.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
+from llama_chat.testing.fake_context import FakeContext, ScriptedCall, written_call
+from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
                                       NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN, TOOLS,
                                       TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)

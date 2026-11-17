@@ -14,9 +14,9 @@ from llama_chat import (ChatWrapper, Config, ContextOverflowError, OutOfOrderErr
                         TemplateRefusedError, ToolRegistry, ToolSpec, UnsupportedError)
 from llama_chat.errors import InternalError, RefusalError
 from tests import internals
-from tests import invented_templates as invented
+from llama_chat.testing import invented_templates as invented
 from tests.chat_templates import STEMS, fixture
-from tests.fake_context import FakeContext, ScriptedCall, shipped_addon_call, written_call
+from llama_chat.testing.fake_context import FakeContext, ScriptedCall, shipped_addon_call, written_call
 from tests.test_failures import _Flaky
 from tests.wrappers import assert_cache_reads_as_rendered, assert_conversation_is_its_forms
 

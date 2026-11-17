@@ -5,8 +5,8 @@ import pytest
 from llama_chat import ChatWrapper, Config
 from llama_chat.tools import ToolCall
 from tests.chat_messages import tool_turn, opened, after_system
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper)

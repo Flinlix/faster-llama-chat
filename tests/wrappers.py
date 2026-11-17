@@ -16,8 +16,8 @@ from tests.chat_messages import opened
 from llama_chat.wrapper import ChatWrapper
 from tests import internals
 from tests.chat_templates import in_each_thought_form
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN, REASONING, TOOLS
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
 
 
 def tool_wrapper(context_size=512, template=None, **kw):

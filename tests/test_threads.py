@@ -9,8 +9,8 @@ from llama_chat import ChatWrapper, InvalidArgumentError
 from llama_chat.generation import generate
 
 from tests.chat_messages import opened
-from tests.fake_context import FakeContext
-from tests.invented_templates import PLAIN
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
 from tests.wrappers import add_tools, assert_consistent, tool_wrapper, rows
 
 # Every sampling value set, as a generation is given them.
