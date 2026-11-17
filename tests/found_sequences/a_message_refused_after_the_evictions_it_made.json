@@ -1,0 +1,230 @@
+{
+ "found": "2026-11-16",
+ "what": "a message refused after the evictions it made",
+ "draws": [
+  {
+   "template": "06cada875e3a04665f9cf47deae9ef32e16ede2c6511205a4031c8b48140d01b"
+  },
+  {
+   "option": 0
+  },
+  5.494920523421832e-216,
+  0.18149777249722376,
+  {
+   "option": 4
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.75,
+  {
+   "option": 0
+  },
+  0.6693227643092581,
+  0.8043614023351132,
+  0.6001118926441584,
+  {
+   "option": 1
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 0
+  },
+  0.005,
+  34,
+  {
+   "option": 2
+  },
+  0.8207704480106744,
+  {
+   "option": 1
+  },
+  0.6774797187783153,
+  0.06664335033636637,
+  {
+   "option": 1
+  },
+  0.7445860977760603,
+  0.8410934875693815,
+  0.043649320821899096,
+  37,
+  {
+   "option": 3
+  },
+  {
+   "option": 9
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 4
+  },
+  {
+   "option": 3
+  },
+  0.6097920411456015,
+  26,
+  {
+   "option": 4
+  },
+  5e-324,
+  {
+   "option": 4
+  },
+  0.8054638232788845,
+  0.23332578406551832,
+  0.5990554923911096,
+  0.5,
+  0.5777818633480187,
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  },
+  {
+   "option": 9
+  },
+  0.998550576839948,
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  },
+  {
+   "option": 12
+  },
+  2.225073858507203e-309,
+  26,
+  {
+   "option": 0
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 1
+  },
+  0.8,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 1
+  },
+  0.24048968145237806,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 3
+  },
+  0.8,
+  1,
+  {
+   "option": 4
+  },
+  0.9999999999999998,
+  {
+   "option": 2
+  },
+  {
+   "option": 6
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 3
+  },
+  1.401298464324817e-45,
+  10,
+  {
+   "option": 4
+  },
+  0.26298213315593677,
+  {
+   "option": 2
+  },
+  0.8709889877409934,
+  1.401298464324817e-45,
+  {
+   "option": 2
+  },
+  0.03234100639047721,
+  0.43081393022188746,
+  5,
+  0.131487399234544,
+  1,
+  0.8115747880670611,
+  {
+   "option": 0
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 2
+  },
+  0.33902914834225806,
+  {
+   "option": 2
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 8
+  }
+ ],
+ "steps": [
+  "set_up",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "act_result",
+  "keeps_the_rules",
+  "act_result",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_result",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_truncate",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "teardown"
+ ]
+}

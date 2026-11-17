@@ -12,7 +12,7 @@ import json
 
 from llama_chat import (ChatWrapper, Config, ContextOverflowError, OutOfOrderError,
                         TemplateRefusedError, ToolRegistry, ToolSpec, UnsupportedError)
-from llama_chat.errors import InternalError, RefusalError
+from llama_chat.errors import LIBRARY_ERRORS, EngineError, InternalError, InvalidArgumentError
 from tests import internals
 from llama_chat.testing import invented_templates as invented
 from tests.chat_templates import STEMS, fixture
@@ -52,6 +52,27 @@ def clock() -> str:
 
 
 CALENDAR = ToolSpec("kalender", "Die Termine.", {"type": "object", "properties": {}})
+
+# Texts no model can read, and texts every model must take.
+LONE_SURROGATE = "halb \ud800 Zeichen"
+ODD_TEXTS = ["\u200b", "🙂 ü ß \u202e", "\x00\x1b[0m", "a\u0301\u0301\u0301", " " * 30]
+
+
+class _BrokenMapping(dict):
+    """A result whose own methods fail when JSON writes it."""
+
+    def items(self):
+        raise KeyError("broken")
+
+    def __iter__(self):
+        raise KeyError("broken")
+
+
+def _deep(levels: int):
+    value: list = []
+    for _ in range(levels):
+        value = [value]
+    return value
 
 
 def _known(name: str) -> dict:
@@ -153,7 +174,7 @@ class SequenceRun:
             again.close()
 
     def question_answered(self, where: str) -> bool:
-        """Rule 11: a question asked now is answered, or refused for one of its two causes, which change nothing."""
+        """Rule 11: a question asked now is answered, or refused as one the template does not write, which changes nothing."""
         wrapper, fake = self.wrapper, self.fake
         fake.call_script, fake.replies = [], []
         before = self._state()
@@ -161,33 +182,18 @@ class SequenceRun:
         text = f"Und jetzt bitte {self.questions}?"
         try:
             reply = wrapper.reply(text).finish()
-        except ContextOverflowError:
-            self._assert_overflows_alone(text, where)
-            self._assert_unchanged(before, f"an overflowed question after {where}")
-            return False
+        except ContextOverflowError as refused:
+            raise AssertionError(f"rule 11: a question was refused for its length after {where}: "
+                                 f"{refused}") from None
         except TemplateRefusedError:
             self._assert_refused_alone(text, where)
             self._assert_unchanged(before, f"a refused question after {where}")
             return False
         assert not wrapper.turn_open or reply.stop_reason == "tool_call", \
             f"rule 11: a turn stays open after an answered question after {where}"
+        assert reply.text.strip() or reply.tool_calls, \
+            f"rule 11: a question got an empty reply after {where}"
         return True
-
-    def _assert_overflows_alone(self, text: str, where: str) -> None:
-        """A question refused for its length cannot fit beside the system prompt alone."""
-        saved = self.wrapper.conversation()
-        system = [m for m in saved["messages"][:1] if m["role"] == "system"]
-        alone = ChatWrapper(self.config(), context=self._new_fake())
-        try:
-            alone.begin(system, tools=saved["tools"], reasoning=saved["reasoning"])
-            alone._context.replies = []
-            alone.reply(text).finish()
-        except ContextOverflowError:
-            return
-        finally:
-            alone.close()
-        raise AssertionError(f"rule 11: a question that fits beside the system prompt was refused "
-                             f"for its length after {where}")
 
     def _assert_refused_alone(self, text: str, where: str) -> None:
         """A question refused as one the template does not write is refused beside the system prompt alone too."""
@@ -283,7 +289,8 @@ class SequenceRun:
         try:
             if kind == "question":
                 text = draw.choice([f"Frage {step}?", "frage", f" spaced {step}\n",
-                                    "x" * draw.choice([5, 200, 900]), ""])
+                                    "x" * draw.choice([5, 200, 900, 20000]), "", LONE_SURROGATE,
+                                    *ODD_TEXTS])
                 before = None if fails else self._state()
                 try:
                     self._reply(text)
@@ -293,10 +300,13 @@ class SequenceRun:
                     assert refused.field == "tool_call_policy", f"rule 11: {refused}"
                     if before is not None:
                         self._assert_unchanged(before, f"a refused tool runner at step {step}")
-                except ContextOverflowError:
+                except ContextOverflowError as refused:
+                    raise AssertionError(f"rule 11: a question was refused for its length at step "
+                                         f"{step}: {refused}") from None
+                except InvalidArgumentError as refused:
+                    assert text == LONE_SURROGATE and refused.field == "text", f"rule 11: {refused}"
                     if before is not None:
-                        self._assert_overflows_alone(text, f"step {step}")
-                        self._assert_unchanged(before, f"an overflowed question at step {step}")
+                        self._assert_unchanged(before, f"an unreadable question at step {step}")
                 except TemplateRefusedError:
                     if before is not None:
                         self._assert_unchanged(before, f"a refused question at step {step}")
@@ -312,12 +322,15 @@ class SequenceRun:
                 call_id = (pending[0].id if pending and draw.random() < 0.9
                            else draw.choice(["nope", "call_x"] + [c.id for c in pending]))
                 result = draw.choice(["sunny", "x" * draw.choice([10, 500, 3000, 20000]),
-                                      {"error": "kaputt"}, {"t": 1, "u": [1, 2]}, "", float("nan")])
+                                      {"error": "kaputt"}, {"t": 1, "u": [1, 2]}, "", float("nan"),
+                                      LONE_SURROGATE, _BrokenMapping(a=1), _deep(5000),
+                                      *ODD_TEXTS])
                 self.note(f"result for {call_id}: {repr(result)[:40]}")
                 self._guarded(lambda: wrapper.inject_tool_result(call_id, result), fails, step, "result")
             elif kind == "inject":
                 role = draw.choice(["user", "user", "assistant"])
-                text = draw.choice([f"Notiz {step}", "", "y" * draw.choice([10, 400])])
+                text = draw.choice([f"Notiz {step}", "", "y" * draw.choice([10, 400, 20000]),
+                                    LONE_SURROGATE, *ODD_TEXTS])
                 self.note(f"inject {role} {text[:20]!r}")
                 self._guarded(lambda: wrapper.inject(text, role), fails, step, "inject")
             elif kind == "truncate":
@@ -334,8 +347,8 @@ class SequenceRun:
                 wrapper.wait_idle(timeout_s=10)
         except InternalError:
             raise
-        except RuntimeError:
-            assert fails, f"a RuntimeError at step {step} with no failure injected"
+        except EngineError:
+            assert fails, f"an engine failure at step {step} with no failure injected"
             if kind in ("question", "reply"):
                 self.reply_failed = True
         except (TemplateRefusedError, ContextOverflowError, OutOfOrderError):
@@ -355,9 +368,9 @@ class SequenceRun:
             action()
         except InternalError:
             raise
-        except (RefusalError, ValueError, TypeError, RuntimeError) as error:
+        except LIBRARY_ERRORS as error:
             self.fake.fail_at = None
-            if isinstance(error, RuntimeError):
+            if isinstance(error, EngineError):
                 assert fails, f"{what} raised {error!r} at step {step} with no failure injected"
             self._assert_unchanged(before, f"a refused or failed {what} at step {step}")
 
