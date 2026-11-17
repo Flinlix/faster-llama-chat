@@ -17,7 +17,7 @@ from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
                                       THINK_ON)
 
-from tests.wrappers import (THOUGHTFUL, assert_consistent, held_text, reasoning_wrapper,
+from tests.wrappers import (THOUGHTFUL, UNGUARDED, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
 # ----- reasoning, as the template turns it on ------------------------------
 def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
@@ -149,7 +149,8 @@ def test_a_reply_kept_without_its_thought_is_cut_as_the_past_reply_it_is():
 
 
 def test_a_reply_that_is_all_thought_is_removed():
-    w, fake = reasoning_wrapper()
+    w, fake = reasoning_wrapper(config=Config(context_size=500, evict_above_fraction=1.0,
+                                              **UNGUARDED))
     reply = w.reply("hi", max_reply_tokens=12).finish()   # cut inside the thought
     assert reply.text == "" and reply.stop_reason == "token_limit"
     assert [m["role"] for m in rows(w)] == ["system", "user"]

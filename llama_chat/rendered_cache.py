@@ -24,7 +24,7 @@ from collections.abc import Callable, Generator
 from typing import Any, cast
 from dataclasses import dataclass, replace
 
-from .generation import GenerationAccumulator
+from .generation import AnswerGuard, GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled, Interrupt
 from .config import Config
 from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
@@ -79,6 +79,8 @@ class RenderedCache:
         self._templates = templates
         self._config = config
         self._memory = CacheSync(context)
+        # Each template's answer guard, by the template's identity, the template kept alive with it.
+        self._guards: dict[int, tuple[ResolvedTemplate, AnswerGuard]] = {}
         # The one state object every part reads and changes; an action put back fills it in place.
         self._state = ConversationState()
         self._rendering = ConversationRendering(context, lambda: self.template, self._state)
@@ -973,12 +975,14 @@ class RenderedCache:
                                    template.answer_opening(self.reasoning),
                                    template.reply_header(self.reasoning),
                                    self.prompt_text, list(stop), generated.tag_spans,
-                                   inside=goes_on and self.called_in_thought)
+                                   inside=goes_on and self.called_in_thought,
+                                   stops_after_text=self._config.min_answer_tokens is not None)
             pieces = self.generate(
                 max_generated_tokens, generated, cancel=cancel, sampling=sampling,
                 ends_turn=self._turn_end_test(reply_text, generated),
                 boundary=replace(template.call_boundary(recognizes_calls, withhold),
-                                 starts_in_thought=reply_text.opens_in_thought))
+                                 starts_in_thought=reply_text.opens_in_thought),
+                guard=self._answer_guard(template), answer_so_far=lambda: reply_text.answer)
             if on_started is not None:
                 on_started()
         except BaseException:
@@ -1031,6 +1035,28 @@ class RenderedCache:
             )
             on_reply(reply)
         return reply
+
+    def _answer_guard(self, template: ResolvedTemplate) -> AnswerGuard:
+        """What keeps a generation on ``template`` from ending without an answer, worked out once per template."""
+        known = self._guards.get(id(template))
+        if known is not None:
+            return known[1]
+        context = self._context
+        ends = [token for token in context.special_tokens() if context.ends_generation(token)]
+        turn_end = template.properties.turn_end_token
+        if turn_end is not None and turn_end not in ends:
+            ends.append(turn_end)
+        reasoning = template.properties.reasoning
+        guard = AnswerGuard(
+            end_tokens=tuple(ends), min_answer_tokens=self._config.min_answer_tokens,
+            thought_tags=(reasoning.thought_open.strip(), reasoning.thought_close.strip())
+            if reasoning is not None else (),
+            thought_closing=tuple(context.tokenize(reasoning.thought_close, add_special=False,
+                                                   parse_special=True))
+            if reasoning is not None else (),
+            answer_room_tokens=self._config.answer_room_tokens)
+        self._guards[id(template)] = (template, guard)
+        return guard
 
     def _turn_end_test(self, reply_text: ReplyText,
                        generated: GenerationAccumulator) -> Callable[[int], bool] | None:

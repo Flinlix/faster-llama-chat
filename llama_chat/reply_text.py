@@ -29,6 +29,8 @@ class ReplyText:
             tag spells counts as the tag.
         inside: Whether the text begins inside a thought the model opened
             before, such as one a call it made inside its thought left open.
+        stops_after_text: Whether a stop string ends the answer only once it
+            holds text other than whitespace.
 
     Once answer text has passed, a thought opens only at the model's own tag,
     not at its letters. A tag the model writes is never shown, except, before
@@ -38,7 +40,8 @@ class ReplyText:
 
     def __init__(self, reasoning: Reasoning | None, answer_opening: str,
                  header: tuple[str, str] | None, prompt_text: str, stops: list[str],
-                 tag_spans: list[tuple[int, int]] | None = None, inside: bool = False) -> None:
+                 tag_spans: list[tuple[int, int]] | None = None, inside: bool = False,
+                 stops_after_text: bool = False) -> None:
         self._reasoning = reasoning
         self._opens_in_thought = reasoning is not None and (
             inside or begins_in_thought(reasoning, prompt_text))
@@ -49,7 +52,7 @@ class ReplyText:
         self._thought = (_ThoughtFilter(reasoning, self._opens_in_thought, tag_spans, self._frames)
                          if reasoning is not None else None)
         self._opening = _AnswerOpening(answer_opening, header)
-        self._stops = _AnswerStops(stops)
+        self._stops = _AnswerStops(stops, stops_after_text)
         self._tag_spans = tag_spans
         self._fed = 0               # how much text was fed
         self._hides_tags = False    # set once answer text has passed
@@ -425,8 +428,10 @@ class _AnswerStops:
     not to. Without stop strings everything passes at once.
     """
 
-    def __init__(self, stops: list[str]) -> None:
+    def __init__(self, stops: list[str], after_text: bool = False) -> None:
         self._stops = [s for s in stops if s]
+        # Whether a stop string counts only once the answer holds text other than whitespace.
+        self._after_text = after_text
         self._held = ""
         self._passed: list[str] = []
         self.stopped = False
@@ -443,6 +448,10 @@ class _AnswerStops:
             return piece
         self._held += piece
         hit = earliest(self._held, self._stops)
+        leading_variant = LoopVariant("skipping stop strings before the answer's first text")
+        while hit is not None and self._after_text and not (self.text + self._held[:hit]).strip():
+            leading_variant.passes(len(self._held) - hit)
+            hit = earliest(self._held, self._stops, hit + 1)
         if hit is not None:
             self.stopped = True
             return self._pass(self._held[:hit], "")

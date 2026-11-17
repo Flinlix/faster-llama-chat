@@ -29,7 +29,7 @@ from llama_chat.testing.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
-from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent,
+from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent,
                             begun_wrapper, tool_wrapper, rows)
 def _n_exchanges(wrapper):
     """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
@@ -727,7 +727,7 @@ def test_inject_refuses_a_message_of_another_role_naming_where_it_goes(role, cau
 
 # ----- two user turns in a row ---------------------------------------------
 def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_template_does():
-    w, fake = begun_wrapper(JOINS_USER_TURNS, gen_tokens=0)
+    w, fake = begun_wrapper(JOINS_USER_TURNS, guarded=False, gen_tokens=0)
     w.reply("eins").finish()
     assert [m["role"] for m in rows(w)] == ["system", "user"]
     fake.gen_tokens = 5
@@ -736,7 +736,7 @@ def test_a_request_after_a_reply_without_an_answer_closes_the_user_turn_as_the_t
 
 
 def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer():
-    w, fake = begun_wrapper(REFUSES_TWO_USER_TURNS, gen_tokens=0)
+    w, fake = begun_wrapper(REFUSES_TWO_USER_TURNS, guarded=False, gen_tokens=0)
     w.reply("eins").finish()
     found = [(m["role"], m["text"]) for m in rows(w)]
     assert found[1:] == [("user", "eins"), ("assistant", "")]
@@ -754,7 +754,7 @@ def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_quest
     from llama_chat.resolved_template import ResolvedTemplate
     from llama_chat.testing.fake_context import ScriptedCall, written_call
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
-    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0, **UNGUARDED), context=fake)
     cancel, options = threading.Event(), {}
     if nothing == "cancelled-by-a-tool":
         registry = ToolRegistry()
@@ -1145,6 +1145,12 @@ _PLAIN_REPLY_CODE = {
         "_raising_library_errors.<locals>.guarded",
     },
     "generation.py": {
+        "AnswerGuard.thought_limit",
+        "_Draws.__init__",
+        "_Draws.__init__.<locals>.<lambda>",
+        "_Draws.close",
+        "_Draws.next",
+        "_sample_into.<locals>.ends_here",
         "_TextBuffer.__init__",
         "_TextBuffer.__len__",
         "_TextBuffer.append",
@@ -1173,6 +1179,10 @@ _PLAIN_REPLY_CODE = {
         "question_splices",
     },
     "rendered_cache.py": {
+        "RenderedCache._answer_guard",
+        "RenderedCache._cut_to_fit",
+        "RenderedCache._cut_to_fit.<locals>.fits",
+        "RenderedCache.generation.<locals>.<lambda>",
         "RenderedCache.__init__.<locals>.<lambda>",
         "RenderedCache._action",
         "RenderedCache._after_reply",

@@ -1,5 +1,7 @@
 """Settings refused where they are built."""
 
+import dataclasses
+import re
 from dataclasses import fields
 
 import pytest
@@ -70,6 +72,11 @@ def test_the_kv_cache_follows_the_model_by_default():
     ("decode_threads", -2),
     ("prefill_threads", 0),
     ("gpu_layers", -2),
+    ("min_answer_tokens", 0),
+    ("answer_room_tokens", 0),
+    ("max_calls", -1),
+    ("tool_timeout_s", 0),
+    ("unread_reply_timeout_s", -1.0),
 ])
 def test_config_rejects_invalid_values(field, value):
     with pytest.raises(InvalidSettingError, match=field) as refused:
@@ -86,6 +93,8 @@ _WRONG_TYPES = {
     "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
     "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
     "flash_attention": "auto", "kv_cache_type": 8, "check_cache": "yes",
+    "min_answer_tokens": 1.0, "answer_room_tokens": "1024", "max_calls": 2.5,
+    "tool_timeout_s": "60", "unread_reply_timeout_s": [60],
 }
 
 
@@ -207,3 +216,18 @@ def test_a_refused_setting_names_its_field_as_data(settings, field):
     with pytest.raises(InvalidSettingError) as refused:
         Config(**settings)
     assert refused.value.field == field and isinstance(refused.value, ValueError)
+
+
+@pytest.mark.parametrize("settings", [Config, Sampling])
+def test_each_settings_docstring_lists_its_settings_in_the_order_the_code_declares_them(settings):
+    documented = re.findall(r"^        (\w+):", settings.__doc__, flags=re.MULTILINE)
+    assert documented == [field.name for field in dataclasses.fields(settings)]
+
+
+def test_the_settings_that_keep_a_question_answered_are_on_by_default_and_each_can_be_switched_off():
+    on = Config()
+    assert (on.min_answer_tokens, on.answer_room_tokens, on.max_calls, on.tool_timeout_s,
+            on.unread_reply_timeout_s) == (1, 1024, 10, 60.0, 60.0)
+    off = Config(min_answer_tokens=None, answer_room_tokens=None, max_calls=None,
+                 tool_timeout_s=None, unread_reply_timeout_s=None)
+    assert off.max_calls is None and off.tool_timeout_s is None

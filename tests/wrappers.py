@@ -385,9 +385,14 @@ def weather_registry():
     return registry
 
 
-def begun_wrapper(template=PLAIN, **fake_kw):
+# The settings that let a reply end without an answer, for a test about what such a reply leaves.
+UNGUARDED = {"min_answer_tokens": None, "answer_room_tokens": None}
+
+
+def begun_wrapper(template=PLAIN, guarded=True, **fake_kw):
     fake = FakeContext(template, **fake_kw)
-    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0,
+                           **({} if guarded else UNGUARDED)), context=fake)
     w.begin(opened("s"))
     return w, fake
 

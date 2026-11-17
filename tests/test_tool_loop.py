@@ -22,7 +22,7 @@ from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS
                                       TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
-from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
+from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, system_turn, tool_wrapper, weather_registry,
                             without_ids, rows)
 

@@ -91,7 +91,8 @@ class _Run:
     """
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
-                 writes_tags=False, extra_tags=(), tokens_spell_text=True, can_cut_tail=False):
+                 writes_tags=False, extra_tags=(), tokens_spell_text=True, can_cut_tail=False,
+                 guarded=False, answer_room_tokens=1024):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         text = self.fixture["chat_template"]
@@ -102,8 +103,13 @@ class _Run:
                                    can_shift=can_shift, can_cut_tail=can_cut_tail,
                                    writes_tags=writes_tags, merges=_TOKENIZER["merges"],
                                    extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
+        # The answer guard is off but where a test is about it: the others script replies
+        # that end at once or inside a thought, which it would not let end.
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
-                                       min_reply_tokens=8), context=self.context)
+                                       min_reply_tokens=8,
+                                       min_answer_tokens=1 if guarded else None,
+                                       answer_room_tokens=answer_room_tokens if guarded else None),
+                                context=self.context)
         takes_system = self.chat.capabilities(tools=False).can_take_system_prompt
         self.system = "Be brief." if takes_system else ""
         self.reasoning = reasoning
@@ -354,6 +360,39 @@ def test_a_reply_all_thought_leaves_its_question_unanswered_where_two_questions_
     assert run.chat.reply(QUESTIONS[0]).finish().text == ""
     assert after_system(run.chat.conversation()["messages"])[-1] == {"role": "user", "content": QUESTIONS[0]}
     assert run.chat.reply(QUESTIONS[1]).finish().text == ANSWERS[1]
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_question_asked_again_with_tools_declared_is_answered_even_where_the_template_compares_texts(
+        stem):
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    run.chat.reply(QUESTIONS[0]).finish()
+    assert run.chat.reply(QUESTIONS[0]).finish().text == ANSWERS[1]
+    assert run.chat.reply(QUESTIONS[0]).finish().text == ANSWERS[2]
+
+
+@pytest.mark.parametrize("stem, reasoning", [mode.values for mode in _each_mode(sorted(_FIXTURES))])
+def test_a_model_that_would_end_at_once_answers_and_the_cache_stays_the_render(stem, reasoning):
+    run = _Run(stem, replies=["", ANSWERS[1]], reasoning=reasoning, guarded=True)
+    run.begin()
+    reply = run.chat.reply(QUESTIONS[0]).finish()
+    assert reply.text.strip()
+    assert after_system(run.chat.conversation()["messages"])[-1]["role"] == "assistant"
+    assert run.chat.reply(QUESTIONS[1]).finish().text.strip()
+
+
+@pytest.mark.parametrize("stem", [stem for stem in sorted(_FIXTURES) if _FIXTURES[stem]["can_reason"]])
+def test_a_thought_that_would_spend_the_whole_reply_is_closed_and_the_model_answers(stem):
+    run = _Run(stem, reasoning=True, guarded=True, answer_room_tokens=24)
+    run.begin()
+    tags = run.template.properties.reasoning
+    opens = begins_in_thought(tags, run.template.generation_prompt(True))
+    run.context.replies = [("" if opens else tags.thought_open.strip()) + "ich denke nach " * 40]
+    reply = run.chat.reply(QUESTIONS[0], max_reply_tokens=120).finish()
+    assert reply.thought.strip() and reply.text.strip()
+    assert reply.n_generated_tokens <= 120
+    assert run.chat.reply(QUESTIONS[1]).finish().stop_reason == "end_of_turn"
 
 
 @pytest.mark.timed

@@ -65,6 +65,29 @@ class Config:
             this many tokens would be left for the reply. ``0`` disables it,
             and it must stay below ``context_size``, which no request can leave
             entirely free.
+        min_answer_tokens: The end of the turn is not drawn until a reply
+            holds this many tokens of answer, a thought left out, or a call,
+            so that a model that would end at once answers. ``None`` lets it
+            end at any token; otherwise at least ``1``.
+        answer_room_tokens: The tokens a reply keeps for its answer where the
+            model thinks first: a thought that reaches the rest of the
+            generation's room is closed, as the template closes one, so that
+            the model answers in these. At most half the generation's room is
+            kept so. ``None`` lets a thought run until the room is spent;
+            otherwise at least ``1``.
+        max_calls: The ceiling on calls one turn run against a registry may
+            use, where a request gives none; in the last permitted round the
+            model can no longer call, so it answers. ``None`` sets none;
+            otherwise at least ``0``.
+        tool_timeout_s: How long a tool a registry runs may take; one that
+            has not returned by then is answered with a failure, and what it
+            returns later is dropped. ``None`` waits for it; otherwise above
+            ``0``.
+        unread_reply_timeout_s: How long an action waits for a reply whose
+            stream nobody reads on, before it ends that reply as closing its
+            stream does and goes on; an action on the thread that reads it
+            ends it at once. ``None`` waits until the stream is read on,
+            closed or collected; otherwise above ``0``.
         gpu_layers: Layers to offload to GPU, at least ``0``. ``0`` for a
             CPU-only build, ``-1`` for all of them.
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
@@ -84,6 +107,10 @@ class Config:
         flash_attention: ``True`` or ``False`` forces flash attention on or
             off. ``None`` leaves it to the engine, except under a quantized
             ``kv_cache_type``, which requires it and turns it on.
+        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``.
+            Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
+            requires flash attention, so is refused with
+            ``flash_attention=False``.
         check_cache: Check, right before every generation and once the work
             after a reply has ended, that the cache holds what a fresh begin
             of its conversation holds. A fault found before a generation
@@ -92,10 +119,6 @@ class Config:
             action. A fault the cache keeps is raised again by every reply
             until the conversation begins again. For finding faults: each
             check renders and tokenizes the whole conversation.
-        kv_cache_type: KV-cache quantization, one of ``KV_CACHE_TYPES``.
-            Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
-            requires flash attention, so is refused with
-            ``flash_attention=False``.
     """
 
     # Model
@@ -118,6 +141,14 @@ class Config:
     max_history_exchanges: int | None = None
     max_reply_tokens: int | None = None
     min_reply_tokens: int = 32
+
+    # Replies
+
+    min_answer_tokens: int | None = 1
+    answer_room_tokens: int | None = 1024
+    max_calls: int | None = 10
+    tool_timeout_s: float | None = 60.0
+    unread_reply_timeout_s: float | None = 60.0
 
     # Backend / hardware
 
@@ -167,6 +198,16 @@ class Config:
                 f"min_reply_tokens ({self.min_reply_tokens}) must be below "
                 f"context_size ({self.context_size}); no request could leave "
                 "that many tokens free, so every one of them would be refused")
+        for name in ("min_answer_tokens", "answer_room_tokens"):
+            if getattr(self, name) is not None and getattr(self, name) < 1:
+                raise InvalidSettingError(name, f"{name} must be None or >= 1 (None turns it off)")
+        if self.max_calls is not None and self.max_calls < 0:
+            raise InvalidSettingError("max_calls", "max_calls must be None or >= 0 "
+                                                   "(None sets no ceiling)")
+        for name in ("tool_timeout_s", "unread_reply_timeout_s"):
+            if getattr(self, name) is not None and getattr(self, name) <= 0:
+                raise InvalidSettingError(name, f"{name} must be None or above 0 (None waits "
+                                                f"without a limit)")
         if self.max_history_exchanges is not None and self.max_history_exchanges < 1:
             raise InvalidSettingError(
                 "max_history_exchanges",

@@ -21,7 +21,7 @@ from tests import internals
 from tests.internals import generated_turns_held
 from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
                                       TOOLS_REFUSING_TWO_USER_TURNS)
-from tests.wrappers import (add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
+from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
 
 
@@ -912,8 +912,8 @@ def test_a_cancel_at_the_first_draw_of_a_turn_going_on_leaves_it_open_with_its_r
                                   if not expected(fixture(stem), "writes_empty_reply")])
 def test_a_reply_taken_back_with_its_question_puts_back_what_the_question_evicted(stem):
     fake = FakeContext(fixture(stem), gen_tokens=0)
-    w = ChatWrapper(Config(context_size=4096, evict_above_fraction=1.0, min_reply_tokens=32),
-                    context=fake)
+    w = ChatWrapper(Config(context_size=4096, evict_above_fraction=1.0, min_reply_tokens=32,
+                           **UNGUARDED), context=fake)
     w.begin(opened("", [{"role": "user", "content": "a" * 500}, {"role": "assistant", "content": "b" * 500}, {"role": "user", "content": "c" * 500},
                  {"role": "assistant", "content": "d" * 250}]))
     history = after_system(w.conversation()["messages"])

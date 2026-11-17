@@ -121,6 +121,40 @@ class _TextBuffer:
         return self._emitted + len(self._kept)
 
 
+@dataclass(frozen=True)
+class AnswerGuard:
+    """What keeps a generation from ending without an answer.
+
+    Attributes:
+        end_tokens: Every token that ends the turn where it is drawn.
+        min_answer_tokens: Until the generation holds this many tokens of
+            answer, or a call, no token of ``end_tokens`` is drawn; ``None``
+            for no such floor.
+        thought_tags: The opening and closing tags of a thought, whitespace
+            around them left out; empty where the model marks none.
+        thought_closing: The tokens that close a thought as the template
+            writes it.
+        answer_room_tokens: The tokens kept for the answer: a thought that
+            reaches the rest of the generation's room, at most half of it,
+            beside its closing, is closed with ``thought_closing``; ``None``
+            keeps none.
+    """
+
+    end_tokens: tuple[int, ...] = ()
+    min_answer_tokens: int | None = None
+    thought_tags: tuple[str, ...] = ()
+    thought_closing: tuple[int, ...] = ()
+    answer_room_tokens: int | None = None
+
+    def thought_limit(self, max_generated_tokens: int) -> int | None:
+        """How many tokens of a generation of at most ``max_generated_tokens`` may pass before a thought still open is closed; ``None`` for no limit."""
+        if self.answer_room_tokens is None or len(self.thought_tags) != 2 \
+                or not self.thought_closing:
+            return None
+        kept = min(self.answer_room_tokens, max_generated_tokens // 2) + len(self.thought_closing)
+        return max(0, max_generated_tokens - kept)
+
+
 def generate(
     context: CacheContext, start_pos: int, max_generated_tokens: int, *,
     sampling: DrawnSampling,
@@ -128,6 +162,8 @@ def generate(
     cancel: threading.Event | None = None,
     ends_turn: Callable[[int], bool] | None = None,
     boundary: CallBoundary = CallBoundary(),  # noqa: B008 (frozen, so one instance serves)
+    guard: AnswerGuard = AnswerGuard(),  # noqa: B008 (frozen, so one instance serves)
+    answer_so_far: Callable[[], str] | None = None,
 ) -> Generator[str, None, None]:
     """Stream a reply, yielding text deltas as tokens are sampled.
 
@@ -149,23 +185,55 @@ def generate(
             closes with ``stop_reason == "tool_call"``, or where the turn ends
             inside it, closed as the template closes one; one the reply cap
             cuts short is dropped, and the reply ends with ``"token_limit"``.
+        guard: Keeps the generation from ending before it answers, and
+            closes a thought in time to leave the answer its room.
+        answer_so_far: The answer the text yielded so far holds, as its
+            reader reads it, which ``guard``'s floor counts; ``None`` sets no
+            floor.
 
     Yields:
         Visible reply text deltas; their concatenation equals ``out.text``.
     """
-    tokens = context.sampled_tokens(sampling, boundary.withheld_tokens)
+    draws = _Draws(context, sampling, boundary.withheld_tokens, guard.end_tokens)
     try:
         yield from _sample_into(
-            context, tokens, start_pos, max_generated_tokens, out, cancel, ends_turn, boundary)
+            context, draws, start_pos, max_generated_tokens, out, cancel, ends_turn, boundary,
+            guard, answer_so_far)
     finally:
-        tokens.close()
+        draws.close()
 
 
-def _sample_into(context: CacheContext, tokens: Generator[int, None, None], start_pos: int,
+class _Draws:
+    """The tokens a generation draws: from its own sampler, and, where the turn may not end yet, from one that withholds the tokens ending it."""
+
+    def __init__(self, context: CacheContext, sampling: DrawnSampling,
+                 withheld: tuple[int, ...], end_tokens: tuple[int, ...]) -> None:
+        self._open = lambda extra: context.sampled_tokens(sampling, withheld + extra)
+        self._tokens = self._open(())
+        self._end_tokens = end_tokens
+        self._without_end: Generator[int, None, None] | None = None
+
+    def next(self, may_end: bool, ends: Callable[[int], bool]) -> int:
+        """The next token; where not ``may_end``, one that does not end the turn."""
+        tok = next(self._tokens)
+        if may_end or not self._end_tokens or not ends(tok):
+            return tok
+        if self._without_end is None:
+            self._without_end = self._open(self._end_tokens)
+        return next(self._without_end)
+
+    def close(self) -> None:
+        self._tokens.close()
+        if self._without_end is not None:
+            self._without_end.close()
+
+
+def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
                  max_generated_tokens: int, out: GenerationAccumulator | None,
                  cancel: threading.Event | None, ends_turn: Callable[[int], bool] | None,
-                 boundary: CallBoundary):
-    """The generation loop of :func:`generate`, drawing from ``tokens``."""
+                 boundary: CallBoundary, guard: AnswerGuard,
+                 answer_so_far: Callable[[], str] | None):
+    """The generation loop of :func:`generate`, drawing from ``draws``."""
     generated = out if out is not None else GenerationAccumulator()
     pos = start_pos
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -191,14 +259,40 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
     withheld_call = False           # whether a withheld call's plain opening ended the reply
     marks_from = 0         # where the next search for a mark begins
     held_tag = None        # where a tag a call may follow begins and ends, not shown yet
+    # The answer guard: whether the generation is inside a thought, and how far it got.
+    thinking = (_ThoughtState(*guard.thought_tags, boundary.starts_in_thought)
+                if len(guard.thought_tags) == 2 else None)
+    thought_limit = guard.thought_limit(max_generated_tokens)
+    answer_tokens = 0                   # draws made since the answer holds text
+    floor = guard.min_answer_tokens if answer_so_far is not None else None
+    closing_thought: list[int] = []     # the closing still to be written in place of draws
+
+    def ends_here(token: int) -> bool:
+        return context.ends_generation(token) or (ends_turn is not None and ends_turn(token))
 
     for _ in range(max(0, max_generated_tokens)):
         if cancel is not None and cancel.is_set():
             generated.stop_reason = "interrupted"
             break
-        tok = next(tokens)
-        ends = context.ends_generation(tok) or (
-            ends_turn is not None and ends_turn(tok))
+        if len(generated.token_ids) >= max_generated_tokens:
+            generated.stop_reason = "token_limit"
+            break
+        in_thought = thinking is not None and thinking.inside
+        if in_thought and call is None and not closing_thought and thought_limit is not None \
+                and len(generated.token_ids) >= thought_limit:
+            closing_thought = list(guard.thought_closing)
+            thought_limit = None            # one closing per generation
+        forced = bool(closing_thought)
+        if forced:
+            tok = closing_thought.pop(0)
+        else:
+            if floor is not None and answer_tokens < floor and answer_so_far is not None \
+                    and (answer_tokens or answer_so_far().strip()):
+                answer_tokens += 1
+            may_end = call is not None or floor is None or answer_tokens >= floor
+            tok = draws.next(may_end, ends_here)
+        # A closing written for the model ends nothing, though a tag of it may end a turn.
+        ends = not forced and ends_here(tok)
         # A call may close with the token that otherwise ends a turn.
         closes_call = call is not None and (tok == call_close or (
             close_text is not None and close_text in call_tail
@@ -225,6 +319,10 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
         pos += 1
         generated.token_ids.append(tok)
         piece = decoder.decode(context.token_bytes(tok))
+        if call is None and thinking is not None:
+            thinking.read(piece)
+        if tok == call_open and floor is not None:
+            answer_tokens = floor               # a call is an answer
 
         if call is not None:
             if tok == call_close:
@@ -240,7 +338,7 @@ def _sample_into(context: CacheContext, tokens: Generator[int, None, None], star
                     break
                 call_tail = call_tail[max(0, len(call_tail) - len(close_text) + 1):]
             continue
-        if tok == call_open:
+        if tok == call_open and not forced:
             # The held-back tail is ordinary reply text; release it.
             call = []
             upto = len(visible)
@@ -339,6 +437,11 @@ class _ThoughtState:
     def __init__(self, opening: str, closing: str, inside: bool) -> None:
         self._opening, self._closing, self._inside = opening, closing, inside
         self._tail = ""             # text a tag may still begin in
+
+    @property
+    def inside(self) -> bool:
+        """Whether the text read so far ends inside a thought."""
+        return self._inside
 
     def read(self, piece: str) -> bool:
         """Read ``piece``; whether the text now ends inside a thought."""

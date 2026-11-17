@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import itertools
 import json
 import re
 import sys
@@ -415,6 +416,9 @@ class FakeContext:
     def sampled_tokens(self, sampling, withheld_tokens):
         """The next scripted call where its opening may be drawn, else the next scripted reply, else the default one; then the end of generation."""
         self.samplings.append(sampling)
+        if any(self.ends_generation(token) for token in withheld_tokens):
+            # Kept from ending, the model writes on, and never ends here.
+            yield from itertools.cycle(self._written(self.gen_text or "x"))
         if self.before_reply is not None:
             self.before_reply(self.text_of(self.cache))
         if self.call_script and self._call_marks()[0][0] not in withheld_tokens:
