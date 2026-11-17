@@ -3068,3 +3068,19 @@ def test_a_reply_that_produced_nothing_and_evicts_decodes_its_question_only_once
     assert len(after) < len(before) + 1, "nothing was evicted"
     question_tokens = len(fake.tokenize(text))
     assert fake.total_prefilled() - decoded < question_tokens + question_tokens // 2
+
+
+@pytest.mark.counts_work
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_reply_to_a_question_a_begin_ended_on_decodes_nothing_of_that_question_again_on_a_cache_that_saves_states(stem):
+    """The begin keeps a state where the template text the reply follows begins, which the reply goes back to where the template writes the closed reply otherwise."""
+    run = _Run(stem, context_size=16384, replies=_ANSWERS, **_COST_CACHES["saves states"])
+    question = "A question begun with, long enough to stand apart from its tags?"
+    run.begin([{"role": "user", "content": "First question?"},
+               {"role": "assistant", "content": "First answer."},
+               {"role": "user", "content": question}])
+    first = len(run.context.prefill_calls)
+    run.chat.reply().finish()
+    run.chat.wait_idle()
+    question_end = _text_end(run.context, run.context.cache, question)
+    assert [call for call in run.context.prefill_calls[first:] if call[0] < question_end] == []

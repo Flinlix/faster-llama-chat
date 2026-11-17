@@ -2,7 +2,7 @@
 
 import pytest
 
-from llama_chat import ChatWrapper, Config
+from llama_chat import ChatWrapper, Config, InternalError
 from llama_chat.tools import ToolCall
 from tests.chat_messages import tool_turn, opened, after_system
 from llama_chat.testing.fake_context import FakeContext
@@ -232,3 +232,24 @@ def test_check_cache_logs_a_fault_it_finds_after_a_reply(caplog):
         wrapper.reply("Wie geht es?").finish()
     assert any("check_cache" in r.getMessage() for r in caplog.records)
     wrapper.close()                             # its cache holds the wrong token on purpose
+
+
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_check_cache_stops_a_reply_whose_cache_lacks_the_end_of_its_generation_prompt(cache):
+    """A cache one token short of the render the model reads is a fault there, though it would pass as work still to do after a reply."""
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja.", "Auch."], **cache)
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    wrapper.reply("Wie geht es?").finish()
+    conversation = wrapper._conversation
+    memory, ask = conversation._memory, conversation.ask
+
+    def asking_one_token_short(text, cancel=None):
+        # A fault behind the question: the cache gives up the last token it was told to hold.
+        ask(text, cancel)
+        memory.hold(list(memory.tokens)[:-1], want_logits=True)
+    conversation.ask = asking_one_token_short
+    with pytest.raises(InternalError, match="where the model reads it"):
+        wrapper.reply("Und dir?").finish()
+    wrapper.close()                             # its cache lacks a token on purpose
