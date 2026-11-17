@@ -6098,3 +6098,90 @@ tool in a way that closes this.
 - **485.10 stays.** The answer guard's second sampler keeps counting only
   its own draws for the repetition penalties, as recorded above; the user
   chose to keep it.
+
+## 2026-11-17: Fixes from the review of the reply rule
+
+- **A question is cut to the room under the eviction threshold** (493.1, the
+  user's choice). A reply's question was cut to the whole context less
+  `min_reply_tokens`, an injected one to the threshold already; both now take
+  the room the system turn leaves under the threshold. A begin already
+  refuses a system turn that leaves no room there for a short question, so
+  the two limits agree. Rejected: cutting to the whole context as before,
+  which let one question leave the reply only `min_reply_tokens`.
+- **The reply always keeps room for an answer.** The tokens a reply may take
+  are what is left after the closing after the reply, so a `min_reply_tokens`
+  of 1 or 2 left a reply of no token (measured with the review's probe on two
+  invented templates, a context of 256 and the threshold at the whole
+  context: 72 to 75 of 110 setups gave an empty reply at 1 and 2, none at 4;
+  10 to 12 of 110 at the default threshold). The cache now leaves at least
+  the shortest reply that holds an answer, which the load works out from the
+  template for the reasoning mode that needs most: what the model writes
+  before its answer (the answer's opening the generation prompt leaves to
+  it, and where the template marks thoughts, the thought's closing and,
+  where the prompt does not open the thought, its opening), one token of
+  answer, and the closing after the reply. The thought counts because the
+  answer guard closes a thought still open before the answer: with the
+  closing after the reply alone, 52 of 164 cases over the test templates
+  (`min_reply_tokens` 0 and 1) still ended inside a thought with one token
+  generated, and the review of this change found 21 of 21 edge setups empty
+  on eight templates whose model opens its own thought or writes an answer
+  opening. So `min_reply_tokens` 0 now keeps only that room instead of none.
+  Still open: a model that opens a call in that room is cut off, and the
+  reply reports an unfinished call and no text.
+- **A question may be asked as the cut mark alone** (493.10, the user's
+  choice B). A begin measures the room for a question with the cut mark and
+  `?`; a question whose last character takes more tokens than that, at a
+  system prompt that leaves just that room, keeps none of its text, and the
+  model answers the mark. Rejected: refusing such a system prompt at begin,
+  sized for the costliest character, which would make a working setup refuse
+  every question; and refusing a system prompt over a fixed fraction of the
+  context, which the threshold already bounds and which would refuse
+  setups that work. Rule 11 now says the question keeps as much of its end as
+  fits, possibly none of it.
+- **An injected reply that cannot fit is refused before anything goes**
+  (493.3). An assistant message joins the newest exchange, which no eviction
+  drops; it is measured beside the system turn and that exchange before any
+  older exchange is dropped. The undo after the drops stays for what that
+  measure cannot see. Measured before: such a refusal decoded 868 of the 887
+  tokens held again.
+- **Every end of an unfinished reply goes through its stream** (493.4, 493.9).
+  `close()` on the reading thread now ends the reply as the next action does,
+  so the stream keeps its summary. An action or a `close()` on the thread
+  that read the reply, while another thread has begun a step of it, waits
+  for that reply instead of being refused for it or closing it under that
+  thread. A thread that takes a step marks itself as the holder before it
+  takes the stream off the list of replies waiting for their reader, so the
+  thread that read before never finds itself holding with no reply waiting.
+- **A tool past its time limit is told why it may not act** (493.6). Its
+  thread is noted when its time runs out; an action from it is refused with
+  that cause, not with the one for a tool its reply still waits for.
+- **A fault the cache check found stays until a begin succeeds** (493.8),
+  whether the begin is refused or fails before its work starts.
+- **The test stand-in writes the closing's first tag** (494.2). It ended each
+  reply with an end of generation of its own, so the end of a reply at the
+  template's closing tag, which the engine may not stop at, ran only on the
+  engine; it now writes the template's `turn_end_token`, or its
+  end-of-sequence tag, after each reply, unless that tag may not be drawn.
+  No test changed with it.
+- **Checked and no longer so** (494.3, 494.4). A reply that stops on a call
+  that could not be read and one whose answer to that call fails to decode
+  keep the same record: the call as generated in the saved turn, the
+  messages with an empty reply. A template variable named `reasoning`, from
+  an add-on file's `reasoning_on`, reaches the template.
+- **The engine keeps its own micro-batch, measured on the card** (496.3).
+  The entry "The engine keeps its own micro-batch" left the card unmeasured.
+  Measured with gemma-4-26B-A4B Q4_K_M on the RTX 3090 with the server's
+  settings (context 8192, all layers on the card, q8_0 cache, flash
+  attention), a 5,221-token question and a begin of 240 messages, three runs
+  each, the micro-batch set to the batch by a patch in the measuring script
+  only:
+
+  | Micro-batch | Question | First token | Begin | Card memory, peak |
+  |---|---|---|---|---|
+  | default (512), batch 512, 1024 or 2048 | 4,583 to 4,693 tok/s | 1.11 to 1.14 s | 1.89 to 1.91 s | 18,274 MiB |
+  | 1024 | 5,180 to 5,547 tok/s | 0.94 to 1.01 s | 1.72 to 1.73 s | 18,838 MiB |
+  | 2048 | 5,298 to 6,051 tok/s | 0.86 to 0.99 s | 1.60 s | 19,966 MiB |
+
+  A larger micro-batch reads a long question about 13 to 15 percent faster,
+  0.1 to 0.15 s on 5,000 tokens, and takes 564 or 1,692 MiB more on the card.
+  The library is unchanged; whether to set it is the user's decision.
