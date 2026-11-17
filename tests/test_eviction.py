@@ -215,6 +215,32 @@ def test_a_question_longer_than_the_room_keeps_its_end_and_is_answered(asks, cap
     assert w.total_tokens <= w.config.context_size
 
 
+class _CostlyLastCharacter(FakeContext):
+    """A stand-in on which one character takes three tokens, more than the ``?`` a begin measures its room with."""
+
+    COSTLY = "😀"
+
+    def _plain(self, text):
+        return [token for c in text for token in ([ord(c), 0, 0] if c == self.COSTLY else [ord(c)])]
+
+
+def test_a_question_whose_last_character_does_not_fit_is_asked_as_the_cut_mark_and_answered(caplog):
+    """At the edge a begin leaves, the cut may keep nothing of the question; the model still answers the mark."""
+    cases = set()
+    for system_length in range(150, 260):
+        w = ChatWrapper(Config(context_size=256, min_reply_tokens=8, evict_above_fraction=1.0),
+                        context=_CostlyLastCharacter(PLAIN, gen_tokens=2))
+        try:
+            w.begin(opened("s" * system_length))
+        except ContextOverflowError:
+            continue
+        reply = w.reply("x" * 500 + " Frage " + _CostlyLastCharacter.COSTLY).finish()
+        asked = [m for m in after_system(w.conversation()["messages"]) if m["role"] == "user"][-1]
+        assert reply.text
+        cases.add(asked["content"] == QUESTION_CUT_MARK)
+    assert cases == {True, False}
+
+
 def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
     """Nothing in it can be evicted, since an eviction drops up to the next user message."""
     fake = FakeContext(PLAIN)
