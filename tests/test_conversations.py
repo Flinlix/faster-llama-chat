@@ -10,6 +10,7 @@ renders fail the checks the shortcuts rest on, so that the paths an unknown
 template takes are driven too.
 """
 
+import datetime
 import itertools
 import datetime as real_datetime
 import json
@@ -36,6 +37,7 @@ from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCa
                            shipped_addon_reasoning_on, written_call)
 from llama_chat.testing.invented_templates import NUMBERED
 from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
+from tests.wrappers import rows
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -2770,3 +2772,70 @@ def test_a_call_keeps_the_id_the_model_wrote_on_a_template_that_refuses_only_wha
     assert call.id == WRITTEN_ID
     run.chat.inject_tool_result(call.id, "sunny")
     assert run.chat.reply(tool_call_policy="yield").finish().text == "Sunny."
+
+
+# ----- a date the template writes that grows at midnight ---------------------------------
+_BEFORE_MIDNIGHT = datetime.datetime(2026, 7, 31, 23, 59)
+
+
+_AFTER_MIDNIGHT = datetime.datetime(2026, 8, 1, 0, 1)
+
+
+def _date_growth(stem: str) -> int:
+    """How many characters longer the template writes the date after midnight than before it."""
+    form = expected(fixture(stem), "date_format")
+    return len(_AFTER_MIDNIGHT.strftime(form)) - len(_BEFORE_MIDNIGHT.strftime(form)) if form else 0
+
+
+# Each template whose date is written longer once the month changes.
+_GROWING_DATE = [stem for stem in STEMS if _date_growth(stem) > 0]
+
+
+_DATE_ROOM_TOKENS, _MIN_REPLY_TOKENS = 500, 100
+
+
+def _filled_to_the_room(stem: str, can_shift: bool, clock, n_exchanges: int, short_by: int):
+    """A conversation of ``n_exchanges`` before midnight, then a question injected that leaves the reply's room ``short_by`` tokens from full."""
+    clock[0] = _BEFORE_MIDNIGHT
+    fake = FakeContext(fixture(stem), ANSWERS, can_shift=can_shift)
+    chat = ChatWrapper(Config(context_size=_DATE_ROOM_TOKENS + _MIN_REPLY_TOKENS,
+                              evict_above_fraction=1.0, min_reply_tokens=_MIN_REPLY_TOKENS,
+                              min_answer_tokens=None, answer_room_tokens=None), context=fake)
+    system = "Be brief." if chat.capabilities(tools=False).can_take_system_prompt else ""
+    chat.begin(opened(system))
+    for question in QUESTIONS[:n_exchanges]:
+        chat.reply(question).finish()
+    one_letter = chat.conversation()["messages"] + [{"role": "user", "content": "x"}]
+    length = len(fake.tokenize(fake.stated_render(one_letter, generation_prompt=True)))
+    chat.inject("x" * (_DATE_ROOM_TOKENS - length + 1 - short_by))
+    return chat
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("stem", _GROWING_DATE)
+def test_an_injected_question_that_fills_the_room_is_answered_after_midnight_lengthens_the_date(
+        stem, can_shift, clock):
+    """The longer date leaves the reply too little room until the oldest exchanges go."""
+    for short_by in range(_date_growth(stem)):
+        chat = _filled_to_the_room(stem, can_shift, clock, n_exchanges=2, short_by=short_by)
+        clock[0] = _AFTER_MIDNIGHT
+        assert chat.reply().finish().n_evicted_messages > 0
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("stem", _GROWING_DATE)
+def test_a_reply_the_lengthened_date_leaves_no_room_is_answered_or_refused_naming_what_it_needs_and_what_fits(
+        stem, can_shift, clock):
+    """With no exchange to drop, the injected question alone is past the room once the date grows."""
+    for short_by in range(_date_growth(stem)):
+        chat = _filled_to_the_room(stem, can_shift, clock, n_exchanges=0, short_by=short_by)
+        clock[0] = _AFTER_MIDNIGHT
+        before = rows(chat)
+        try:
+            chat.reply().finish()
+        except ContextOverflowError as refused:
+            needed, available = refused.needed_tokens, refused.available_tokens
+            assert isinstance(needed, int) and isinstance(available, int) and needed > available
+            assert f"{needed} tokens" in str(refused) and f"{available} leave room" in str(refused)
+            assert rows(chat) == before
+        chat.reply("Next?").finish()

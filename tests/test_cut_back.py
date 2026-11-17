@@ -9,7 +9,7 @@ from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tools import ToolSpec
 from llama_chat.wrapper import ChatWrapper
-from tests.chat_templates import STEMS, expected, fixture
+from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS
 from llama_chat.testing.fake_context import FakeContext
 from tests.internals import token_id_range
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
@@ -312,3 +312,25 @@ def test_a_reply_cut_to_nothing_after_its_call_keeps_neither_its_text_nor_the_re
     wrapper.truncate_last_reply(shown[:len(shown) - len(newest)])
     held = held_text(fake)
     assert "Es ist" not in held and held.count("<result>") == 1
+
+
+@pytest.mark.parametrize("stem", STEMS)
+def test_on_a_cache_that_cannot_be_cut_a_reply_written_again_goes_back_no_further_than_its_question(stem):
+    """A state is kept where the reply begins, so that a reply the template writes otherwise than it was generated decodes only itself."""
+    fake = FakeContext(fixture(stem), ANSWERS, can_shift=False)
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8, min_answer_tokens=None,
+                              answer_room_tokens=None), context=fake)
+    system = "Be brief." if chat.capabilities(tools=False).can_take_system_prompt else ""
+    chat.begin(opened(system))
+    for asked, question in enumerate(QUESTIONS[:3]):
+        edits = len(fake.edits)
+        if asked % 2:
+            chat.inject(question)
+            chat.reply().finish()
+        else:
+            chat.reply(question).finish()
+        held, written = internals.held_tokens(chat), fake.tokenize(question, parse_special=False)
+        starts = [at for at in range(len(held) - len(written) + 1)
+                  if held[at:at + len(written)] == written]
+        question_end = starts[-1] + len(written)
+        assert all(edit[1] >= question_end for edit in fake.edits[edits:] if edit[0] == "restore")

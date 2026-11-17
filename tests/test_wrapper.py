@@ -1556,3 +1556,22 @@ def test_the_model_is_fingerprinted_at_load_only_where_it_can_keep_a_turn_that_c
     fake.model_fingerprint = lambda: (counted.append(1), fingerprint())[1]
     ChatWrapper(Config(context_size=1000), context=fake)
     assert bool(counted) == at_load
+
+
+def test_a_reply_read_after_an_injected_reply_answered_its_question_is_refused_as_having_nothing_to_answer():
+    """The check at once reads the question; the one when the stream is read finds it answered, before the template is asked for a generation prompt after a reply."""
+    context_size, min_reply_tokens = 300, 100
+    fake = FakeContext(PLAIN)
+    chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=1.0,
+                              min_reply_tokens=min_reply_tokens), context=fake)
+    chat.begin(opened("s"))
+    chat.inject("Frage?")
+    stream = chat.reply()
+    # A reply that fits the context but leaves the reply no room after it.
+    chat.inject("a" * (context_size - min_reply_tokens), role="assistant")
+    before = rows(chat)
+    with pytest.raises(OutOfOrderError, match="nothing to answer") as refused:
+        list(stream)
+    assert refused.value.field == "text"
+    assert rows(chat) == before
+    chat.reply("Weiter?").finish()
