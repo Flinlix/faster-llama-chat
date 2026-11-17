@@ -2986,3 +2986,36 @@ def test_a_call_begun_without_a_question_is_taken_back_where_its_result_has_no_r
             assert run.chat.reply("Weather?").finish().text
             return
     pytest.fail("no call length left the call room but its result none")
+
+
+def test_a_reply_after_a_call_whose_tokens_end_past_its_text_is_refused_a_cut_to_nothing_naming_keep_text():
+    """An answer the template keeps only after its thought's closing, trimmed, leaves tokens as generated that end past its text."""
+    from tests.test_conversations import _TOOL_TEMPLATES, _Run, _call_body
+    refused_on = []
+    for stem in _TOOL_TEMPLATES:
+        probe = _Run(stem)
+        tags = probe.template.properties.reasoning
+        if tags is None:
+            continue
+        _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+        run = _Run(stem, context_size=16384)
+        run.context.replies = [ScriptedCall(body, before="Let me look."),
+                               tags.thought_close + "Antwort.\n", "Fine."]
+        run.begin(tools=[WEATHER])
+        call = next((e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+                     if isinstance(e, ToolCall)), None)
+        if call is None:
+            continue
+        run.chat.inject_tool_result(call.id, "sunny")
+        "".join(run.chat.reply(tool_call_policy="yield"))
+        before = run.chat.conversation()
+        try:
+            run.chat.truncate_last_reply("")
+        except TemplateRefusedError as refused:
+            if "shortened to ''" in str(refused):
+                continue                                # the template writes no empty reply
+            assert refused.field == "keep_text", (stem, refused)
+            assert run.chat.conversation() == before
+            refused_on.append(stem)
+            assert run.chat.reply("And tomorrow?").finish().text
+    assert refused_on, "no template left tokens as generated past the reply's text"

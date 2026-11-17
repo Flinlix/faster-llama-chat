@@ -3,19 +3,20 @@
 import pytest
 
 from tests import internals
-from tests.chat_messages import opened
+from tests.chat_messages import opened, Result, tool_turn
 
 from llama_chat.config import Config
 from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tools import ToolSpec
+from llama_chat.tools import ToolSpec, ToolCall
 from llama_chat.wrapper import ChatWrapper
-from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS
-from llama_chat.testing.fake_context import FakeContext
+from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS, WEATHER
+from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import token_id_range
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
                             reasoning_wrapper, rendered_reply, rows)
-from llama_chat import OutOfOrderError
+from llama_chat import OutOfOrderError, ContextOverflowError, TemplateRefusedError
+from llama_chat.errors import InvalidArgumentError
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -355,3 +356,58 @@ def test_a_cut_refused_while_a_call_waits_names_the_cut_as_the_action_refused():
         pass
     with pytest.raises(OutOfOrderError, match="^cannot truncate a reply while a reply is open"):
         wrapper.truncate_last_reply("")
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if not expected(fixture(stem), "writes_empty_reply")])
+def test_every_cut_refused_for_its_text_names_keep_text(stem):
+    """A text that is not a prefix and a reply the template does not write shortened are both about ``keep_text``."""
+    fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
+    w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0), context=fake)
+    w.begin(opened(""))
+    w.reply("Hallo").finish()
+    for keep_text, error in (("Tschüss", InvalidArgumentError), ("", TemplateRefusedError)):
+        with pytest.raises(error) as refused:
+            w.truncate_last_reply(keep_text)
+        assert refused.value.field == "keep_text", (keep_text, refused.value)
+
+
+def _closed_without_its_call():
+    """A wrapper whose newest reply keeps its tokens as generated, its unreadable call gone for want of room."""
+    for size in range(200, 900, 2):
+        context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
+        chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
+                                  min_reply_tokens=120), context=context)
+        try:
+            chat.begin(opened("Be brief."), tools=[WEATHER])
+            reply = chat.reply("Weather?", tool_call_policy="yield").finish()
+        except ContextOverflowError:
+            continue
+        if reply.stop_reason == "unreadable_tool_call" and not chat.turn_open:
+            return chat
+    pytest.fail("no context size left the error result without room")
+
+
+def test_a_reply_whose_tokens_as_generated_hold_a_call_that_went_is_refused_naming_keep_text():
+    chat = _closed_without_its_call()
+    before = chat.conversation()
+    with pytest.raises(TemplateRefusedError, match="cannot be cut at keep_text") as refused:
+        chat.truncate_last_reply("Mo")
+    assert refused.value.field == "keep_text"
+    assert chat.conversation() == before
+
+
+def test_a_reply_cut_to_nothing_after_a_call_that_went_leaves_an_older_turns_call_as_it_was():
+    """Only a call of the newest reply's own turn can hold what stays of its tokens; an older exchange's call is not one."""
+    saved = _closed_without_its_call().conversation()
+    older = [{"role": "user", "content": "Wetter?"}, *tool_turn(
+        ToolCall(WEATHER.name, {"city": "Bonn"}), Result(WEATHER.name, "sonnig"), "Sonnig.")]
+    chat = ChatWrapper(Config(context_size=4096, evict_above_fraction=1.0),
+                       context=FakeContext(TOOLS))
+    chat.begin(**{**saved, "messages": opened("Be brief.", older) + saved["messages"][1:]})
+    assert any(m.get("tool_calls") for m in chat.conversation()["messages"])
+    assert internals.generated_turns_held(chat)
+    chat.truncate_last_reply("")
+    assert chat.conversation()["messages"][-1] == {"role": "assistant", "content": ""}
+    assert not internals.generated_turns_held(chat)
+    assert chat.reply("weiter").finish().text
