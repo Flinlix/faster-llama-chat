@@ -14,7 +14,8 @@ from tests.chat_messages import Result, tool_turn, opened, after_system
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
 from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_KEEPING_THOUGHTS, TOOLS,
-                                      TOOLS_CLOSING_OPEN_TURNS, JSON_TOOLS, REFUSES_A_TEXT)
+                                      TOOLS_CLOSING_OPEN_TURNS, JSON_TOOLS, REFUSES_A_TEXT,
+                                      REFUSES_TWO_USER_TURNS)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows, ask_through_a_tool_call)
@@ -726,3 +727,60 @@ def test_a_begin_past_the_eviction_limit_keeps_up_to_it_only_where_it_goes_on_wi
         assert report.evicted_for == "half_context"
         assert kept == fresh.conversation()["messages"]
     wrapper.reply("und?").finish()
+
+
+@pytest.mark.parametrize("exchanges_before", [1, 2])
+def test_two_questions_in_a_row_after_earlier_exchanges_are_joined_in_their_own_place(exchanges_before):
+    """The joined question takes the place of the first of the two, wherever the two stand, and the messages before them stay as they were."""
+    earlier = [message for n in range(exchanges_before)
+               for message in ({"role": "user", "content": f"Frage {n}"},
+                               {"role": "assistant", "content": f"Antwort {n}"})]
+    w = ChatWrapper(Config(context_size=1000),
+                    context=FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=3))
+    report = w.begin(opened("s", earlier + [{"role": "user", "content": "eins"},
+                                            {"role": "user", "content": "zwei"}]))
+    assert report.question_joined
+    assert after_system(w.conversation()["messages"]) == earlier + [
+        {"role": "user", "content": "eins\n\nzwei"}]
+    assert w.reply().finish().n_generated_tokens
+
+
+def test_an_open_turn_with_an_unreadable_entry_begins_again_with_the_answer_it_was_given():
+    """The library's own answer to the unreadable entry, written after the caller's result, is part of the turn and comes back as it was, the cache unchanged."""
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin(opened("persona"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
+    fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"}]']
+    list(w.reply("wie spät?", tool_call_policy="yield"))
+    w.inject_tool_result(w.pending_calls[0].id, "12:00")
+    assert w.turn_open and not w.pending_calls
+    live, held, saved = list(fake.cache), internals.rendered_messages(w), w.conversation()
+    w.begin(**saved)
+    assert internals.rendered_messages(w) == held and fake.cache == live
+    assert w.conversation() == saved
+    assert w.reply().finish().n_generated_tokens
+
+
+def _turn_left_open_until_a_question(w, fake):
+    w.begin(opened("persona"))
+    fake.call_script = ["fn:clock{}"]
+    call, = [step for step in w.reply("wie spät?", tool_call_policy="yield")
+             if isinstance(step, ToolCall)]
+    w.inject_tool_result(call.id, "12:00")
+
+
+@pytest.mark.parametrize("call_turn", [ask_through_a_tool_call, _turn_left_open_until_a_question],
+                         ids=["closed by its reply", "closed by the next question"])
+def test_a_turn_kept_as_generated_stays_kept_when_the_exchanges_after_it_are_taken_from_the_history(
+        call_turn):
+    """A record is found by the turn's own messages and the question before them, so that a client that drops later messages, as a regenerate does, keeps it."""
+    w, fake = tool_wrapper(context_size=2048)
+    call_turn(w, fake)
+    w.reply("Und?").finish()
+    w.reply("Und dann?").finish()
+    kept = internals.generated_turns_held(w)
+    assert kept
+    saved = w.conversation()
+    for dropped in (2, 4):
+        w.begin(**{**saved, "messages": saved["messages"][:-dropped]})
+        assert internals.generated_turns_held(w) == kept
