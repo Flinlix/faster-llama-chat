@@ -267,8 +267,10 @@ def test_without_a_time_limit_a_tool_runs_on_the_thread_that_reads_the_reply():
     assert ran_on == [threading.current_thread()]
 
 
-def test_a_huge_time_limit_is_waited_as_no_limit():
-    fake = FakeContext(TOOLS)
+def test_a_huge_time_limit_is_waited_as_no_limit(monkeypatch):
+    raised = []
+    monkeypatch.setattr(threading, "excepthook", raised.append)
+    fake = FakeContext(TOOLS, gen_tokens=20)
     wrapper = ChatWrapper(Config(context_size=512, tool_timeout_s=1e300,
                                  unread_reply_timeout_s=1e300), context=fake)
     registry = ToolRegistry()
@@ -277,6 +279,18 @@ def test_a_huge_time_limit_is_waited_as_no_limit():
     fake.call_script = ["fn:ok{}"]
     assert wrapper.reply("los", tool_call_policy=registry).finish().text
     assert not wrapper.turn_open
+    # An action that waits for a reply held unread arms the unread-reply timer with that limit.
+    stream = wrapper.reply("noch was")
+    next(stream)
+    waiting = threading.Thread(target=lambda: wrapper.inject("Notiz"), daemon=True)
+    waiting.start()
+    deadline = time.monotonic() + 60
+    while wrapper._unread_watch is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert wrapper._unread_watch is not None and waiting.is_alive()
+    stream.finish()
+    waiting.join(10)
+    assert not waiting.is_alive() and raised == []
 
 
 def test_closing_a_stream_another_thread_is_reading_is_refused_rather_than_waiting(settles_in_the_background):
