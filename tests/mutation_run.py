@@ -78,14 +78,14 @@ def _reach(stats: dict, test_functions: set[str]) -> set[str]:
             if any(_function_of(test) in test_functions for test in tests)}
 
 
-def _clear_results(reached: set[str]) -> int:
-    """Clear the result of every mutant in a function of ``reached``, so that the next run tests it."""
+def _clear_results(reached: set[str] | None) -> int:
+    """Clear the result of every mutant in a function of ``reached``, or of every mutant where ``None``, so that the next run tests it."""
     cleared = 0
     for results_file in _RESULTS.rglob("*.py.meta"):
         data = json.loads(results_file.read_text())
         results = data["exit_code_by_key"]
         keys = [key for key, result in results.items()
-                if result is not None and key.partition(_MUTANT_MARK)[0] in reached]
+                if result is not None and (reached is None or key.partition(_MUTANT_MARK)[0] in reached)]
         for key in keys:
             results[key] = None
         if keys:
@@ -126,10 +126,15 @@ def main(arguments: list[str]) -> None:
             stats = json.loads(_STATS.read_text())
             cleared = _clear_results(_reach(stats, changed))
             _forget(stats, changed)
-            _STATS.write_text(json.dumps(stats))
-            print(f"{len(changed)} test functions changed; collecting what they reach now")
-            _mutmut_run(_cheapest_mutant(stats), *arguments)
-            cleared += _clear_results(_reach(json.loads(_STATS.read_text()), changed))
+            if any(stats["tests_by_mangled_function_name"].values()):
+                _STATS.write_text(json.dumps(stats))
+                print(f"{len(changed)} test functions changed; collecting what they reach now")
+                _mutmut_run(_cheapest_mutant(stats), *arguments)
+                cleared += _clear_results(_reach(json.loads(_STATS.read_text()), changed))
+            else:
+                # Every test changed: the tool collects what each one reaches, as on its first run.
+                cleared += _clear_results(None)
+                _STATS.unlink()
             print(f"{cleared} mutants to test again")
     _FINGERPRINTS.write_text(json.dumps(fingerprints, indent=1))
     _mutmut_run(*arguments)

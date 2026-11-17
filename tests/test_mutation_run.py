@@ -61,3 +61,43 @@ def test_what_changed_tests_reached_is_tested_again_and_collected_again(project)
     mutation_run._forget(stats, changed)
     assert stats == {"duration_by_test": {"tests/test_a.py::test_two": 1.0},
                      "tests_by_mangled_function_name": {"pkg.mod.x_f": [], "pkg.mod.x_g": ["tests/test_a.py::test_two"]}}
+
+
+def _saved_run(project, monkeypatch):
+    """A run whose tool calls are recorded instead of made, after a first run recorded the tests."""
+    results = project.parent / "mutants"
+    (results / "mutmut-stats.json").write_text(json.dumps({
+        "duration_by_test": {"tests/test_a.py::test_one": 1.0, "tests/test_b.py::TestGroup::test_three": 1.0},
+        "tests_by_mangled_function_name": {"pkg.mod.x_f": ["tests/test_a.py::test_one"],
+                                           "pkg.mod.x_g": ["tests/test_b.py::TestGroup::test_three"]}}))
+    (results / "mod.py.meta").write_text(json.dumps({"exit_code_by_key": {
+        "pkg.mod.x_f__mutmut_1": 1, "pkg.mod.x_g__mutmut_1": 0, "pkg.mod.x_h__mutmut_1": 33}}))
+    calls = []
+    monkeypatch.setattr(mutation_run, "_mutmut_run", lambda *arguments: calls.append(arguments))
+    monkeypatch.setattr(mutation_run, "_STATS", results / "mutmut-stats.json")
+    monkeypatch.setattr(mutation_run, "_FINGERPRINTS", results / "mutmut-test-fingerprints.json")
+    mutation_run.main([])
+    calls.clear()
+    return results, calls
+
+
+def test_a_run_after_shared_test_code_changed_tests_everything_again_and_the_next_run_goes_on(project, monkeypatch):
+    results, calls = _saved_run(project, monkeypatch)
+    (project / "helper.py").write_text("VALUE = 2\n")
+    mutation_run.main(["--max-children", "2"])
+    assert calls == [("--max-children", "2")]
+    assert not (results / "mutmut-stats.json").exists()
+    assert set(json.loads((results / "mod.py.meta").read_text())["exit_code_by_key"].values()) == {None}
+    calls.clear()
+    mutation_run.main([])
+    assert calls == [()]
+
+
+def test_a_run_after_one_test_changed_collects_what_it_reaches_first(project, monkeypatch):
+    results, calls = _saved_run(project, monkeypatch)
+    test_a = project / "test_a.py"
+    test_a.write_text(test_a.read_text().replace("assert 1", "assert 11"))
+    mutation_run.main([])
+    assert calls == [("pkg.mod.x_g__mutmut_1",), ()]
+    assert json.loads((results / "mod.py.meta").read_text())["exit_code_by_key"] == {
+        "pkg.mod.x_f__mutmut_1": None, "pkg.mod.x_g__mutmut_1": 0, "pkg.mod.x_h__mutmut_1": 33}
