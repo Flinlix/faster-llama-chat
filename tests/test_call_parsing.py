@@ -338,3 +338,8 @@ def test_a_delimited_call_with_a_blank_pair_or_a_key_twice_is_unreadable(body):
 def test_a_json_call_with_a_key_twice_is_unreadable(body):
     with pytest.raises(ValueError):
         parse_calls(body, None, json_keys=("name", "arguments"))
+
+
+@pytest.mark.parametrize("value", ["o'", "it's", "'"])
+def test_a_value_that_holds_the_closing_quote_is_read_as_written(value):
+    assert parse_calls("fn:say{text:" + value + "}", CALL_BODY, "fn:")[0].arguments == {"text": value}

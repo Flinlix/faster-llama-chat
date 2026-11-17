@@ -217,3 +217,13 @@ def test_a_call_left_out_shares_no_id_with_one_kept():
     with pytest.raises(ValueError, match="two calls"):
         read_messages([*_call("{", call="x"), {"role": "tool", "tool_call_id": "x", "content": "r"},
                        {"role": "assistant", "content": "a"}, *_call("{}", call="x")])
+
+
+def test_a_call_name_of_the_wrong_type_is_refused_naming_where_it_stands():
+    from llama_chat.errors import ArgumentTypeError
+    from tests.wrappers import tool_wrapper
+    wrapper, _ = tool_wrapper()
+    called = {"type": "function", "id": "c1", "function": {"name": 5, "arguments": "{}"}}
+    with pytest.raises(ArgumentTypeError, match=r"function\.name must be a str"):
+        wrapper.begin([{"role": "user", "content": "a"},
+                       {"role": "assistant", "content": "", "tool_calls": [called]}])

@@ -13,7 +13,7 @@ from tests.chat_templates import STEMS, expected, fixture
 from llama_chat.testing.fake_context import FakeContext
 from tests.internals import token_id_range
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
-from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn,
+from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
                             reasoning_wrapper, rendered_reply, rows)
 def _without_restore(fake):
     class Wrapped:
@@ -295,3 +295,20 @@ def test_a_cache_context_whose_list_of_tags_leaves_one_out_is_refused_at_load_na
 
     with pytest.raises(ValueError, match="list every tag"):
         ChatWrapper(Config(context_size=500), context=_FewTags(PLAIN))
+
+
+def test_a_reply_cut_to_nothing_after_its_call_keeps_neither_its_text_nor_the_result_in_the_turn():
+    """The cut searches for the call's closing only before the reply's own text, which may spell it."""
+    from llama_chat.tool_registry import ToolRegistry
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(context_size=2048, writes_tags=False)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:clock{}"]
+    fake.replies = ["Es ist </call> zwölf."]
+    shown = "".join(step for step in wrapper.reply("wie spät?", tool_call_policy=registry)
+                    if isinstance(step, str))
+    newest = wrapper.conversation()["messages"][-1]["content"]
+    wrapper.truncate_last_reply(shown[:len(shown) - len(newest)])
+    held = held_text(fake)
+    assert "Es ist" not in held and held.count("<result>") == 1

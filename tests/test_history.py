@@ -538,3 +538,58 @@ def test_two_questions_in_a_row_are_joined_at_a_begin_where_the_template_writes_
     assert after_system(w.conversation()["messages"]) == [
         {"role": "user", "content": "eins\n\nzwei"}]
     assert w.reply().finish().n_generated_tokens
+
+
+def test_two_turns_kept_as_generated_around_questions_joined_are_one_record():
+    """A record that joins two questions takes in the turn kept before them, the branch that merges records."""
+    from llama_chat.history_forms import generated_turn_records
+    from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL
+    from llama_chat.rendering import GeneratedTurn
+    unreadable = {"id": "u", "type": "function", UNREADABLE_CALL: True,
+                  "function": {"name": "unknown", "arguments": {}}}
+    called = {"id": "c", "type": "function", "function": {"name": "f", "arguments": {}}}
+    messages = [{"role": "user", "content": "Q1"},
+                {"role": "assistant", "content": "", "tool_calls": [unreadable],
+                 GENERATED_TURN: GeneratedTurn((1, 2), 1, True)},
+                {"role": "tool", "name": "unknown", "tool_call_id": "u", "content": "failed"},
+                {"role": "user", "content": "Q2"},
+                {"role": "assistant", "content": "", "tool_calls": [called]},
+                {"role": "tool", "name": "f", "tool_call_id": "c", "content": "12:00"},
+                {"role": "assistant", "content": "Done.", GENERATED_TURN: GeneratedTurn((3, 4, 5), 3, False)}]
+    assert [len(record["kept"]) for record in generated_turn_records(messages, True)] == [2]
+
+
+@pytest.mark.parametrize("broken", [
+    lambda turn: turn.update(tokens=["x"]),
+    lambda turn: turn.update(span=99),
+    lambda turn: turn.update(start=-1),
+], ids=["tokens as text", "span past the messages", "start before them"])
+def test_a_kept_turn_broken_in_one_field_is_refused_naming_generated_turns(broken):
+    from llama_chat.errors import InvalidArgumentError
+    from llama_chat.history_forms import ensure_generated_turns
+    from tests.wrappers import weather_registry
+    wrapper, fake = tool_wrapper(context_size=2048)
+    registry = weather_registry()
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    wrapper.reply("wetter?", tool_call_policy=registry).finish()
+    records = json.loads(json.dumps(wrapper.conversation()["generated_turns"]))
+    broken(records["turns"][0]["kept"][0])
+    with pytest.raises(InvalidArgumentError) as refused:
+        ensure_generated_turns(records)
+    assert refused.value.field == "generated_turns"
+
+
+def test_saved_turns_stored_with_their_keys_sorted_are_restored():
+    """The record is JSON, and a store may write its keys in another order."""
+    from tests.wrappers import weather_registry
+    wrapper, fake = tool_wrapper(context_size=2048)
+    registry = weather_registry()
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    wrapper.reply("wetter?", tool_call_policy=registry).finish()
+    saved = wrapper.conversation()
+    stored = {**saved, "generated_turns": json.loads(json.dumps(saved["generated_turns"],
+                                                                sort_keys=True))}
+    again, _ = tool_wrapper(context_size=2048)
+    assert again.begin(**stored).n_turns_restored == 1

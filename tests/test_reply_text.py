@@ -100,3 +100,11 @@ def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
     g = ReplyText(tags, "", None, "", [])
     assert g.feed(" ") + g.feed("<thought>a</thought>") + g.feed("b") \
         + g.finish("end_of_turn") == "b"
+
+
+def test_a_stop_string_ends_the_answer_before_it_even_where_a_later_piece_holds_it_twice():
+    from llama_chat.reply_text import _AnswerStops
+    stops = _AnswerStops(["\n"])
+    stops.feed("Hello")
+    stops.feed("\n\nmore")
+    assert stops.text == "Hello"

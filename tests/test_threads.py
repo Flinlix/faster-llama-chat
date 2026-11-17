@@ -313,3 +313,19 @@ def test_a_stream_closed_before_it_started_finishes_with_no_reply():
     stream = w.reply("hi")
     stream.close()
     assert stream.finish() is None
+
+
+def test_close_from_another_thread_waits_for_the_reply_being_read():
+    import time
+    from tests.wrappers import begun_wrapper
+    text = "Ein langer Satz, der viele Token braucht."
+    wrapper, _ = begun_wrapper(gen_tokens=len(text), gen_text=text)
+    stream = wrapper.reply("hi")
+    first = next(stream)
+    closing = threading.Thread(target=wrapper.close, daemon=True)
+    closing.start()
+    time.sleep(0.3)
+    assert closing.is_alive(), "close() did not wait for the reply being read"
+    assert first + "".join(stream) == text
+    closing.join(10)
+    assert not closing.is_alive()

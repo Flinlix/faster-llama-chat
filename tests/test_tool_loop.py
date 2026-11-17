@@ -2280,3 +2280,36 @@ def test_an_unreadable_call_followed_by_only_whitespace_on_a_template_of_its_own
     wrapper.reply("are you there?").finish()
     wrapper.wait_idle()
     assert_cache_reads_as_rendered(wrapper, fake)
+
+
+def test_a_failed_call_answered_after_the_last_allowed_one_is_told_not_to_call_again():
+    registry = ToolRegistry()
+
+    def broken():
+        raise RuntimeError("broken")
+    registry.tool(broken, description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS, context_size=2048)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    stream = wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=2)
+    handed = 0
+    for step in stream:
+        if not isinstance(step, str):
+            handed += 1
+            if handed == 2:
+                stream.close()
+                break
+    told = [m["content"] for m in wrapper.conversation()["messages"] if m["role"] == "tool"]
+    assert "do not call again" in told[0]
+
+
+def test_a_call_past_the_ceiling_is_answered_as_a_failure_telling_the_model_not_to_call_again():
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"clock","arguments":{}}]']
+    wrapper.reply("wie spät?", tool_call_policy=registry, max_calls=1).finish()
+    told = [m["content"] for m in wrapper.conversation()["messages"] if m["role"] == "tool"]
+    refused = json.loads(told[1])
+    assert refused["error"] == "tool_limit_reached" and "do not call again" in refused["message"]

@@ -355,3 +355,22 @@ def test_a_result_cut_again_counts_the_whole_it_was_first_cut_from():
     assert cut_result(once, 4) == "xxxx\n(cut: 4 of 85 characters kept)"
     assert cut_result(once, 50) == once
     assert cut_result("Text\n(cut: 9 of 10 characters kept)", 3).endswith("of 35 characters kept)")
+
+
+def test_a_tool_spec_of_the_wrong_types_is_refused_naming_what_each_must_be():
+    from llama_chat.errors import ArgumentTypeError
+    from llama_chat.tools import ToolSpec
+    with pytest.raises(ArgumentTypeError, match="str name, a str description and a dict"):
+        ToolSpec(1, "Sagt die Zeit.", {})
+
+
+def test_an_asynchronous_generator_or_a_callable_object_with_an_asynchronous_call_is_refused_as_a_tool():
+    class Clock:
+        async def __call__(self, city: str) -> str:
+            return "09:00"
+
+    async def times(city: str):
+        yield "09:00"
+    for asynchronous in (Clock(), times):
+        with pytest.raises(TypeError, match="asynchronous"):
+            ToolRegistry().tool(asynchronous, name="clock", description="Sagt die Zeit.")
