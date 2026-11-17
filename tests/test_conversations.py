@@ -2839,3 +2839,38 @@ def test_a_reply_the_lengthened_date_leaves_no_room_is_answered_or_refused_namin
             assert f"{needed} tokens" in str(refused) and f"{available} leave room" in str(refused)
             assert rows(chat) == before
         chat.reply("Next?").finish()
+
+
+def _one_block_batch(context, cities):
+    """The body of the one call block a batch of calls for ``cities`` is written in, each under :data:`WRITTEN_ID`; ``None`` where the template writes a block per call."""
+    opener, closer = call_marks(context._fixture)
+    rendered = context.stated_render(
+        [{"role": "user", "content": "x"},
+         {"role": "assistant", "content": "", "tool_calls": [
+             {"id": WRITTEN_ID, "type": "function",
+              "function": {"name": WEATHER.name, "arguments": {"city": city}}}
+             for city in cities]}], for_tools=True)
+    body = rendered.rsplit(opener, 1)[1].rsplit(closer, 1)[0]
+    return body if all(city in body for city in cities) else None
+
+
+_BATCHES_IN_ONE_BLOCK = [stem for stem in _WRITES_CALL_IDS
+                         if _one_block_batch(FakeContext(fixture(stem)), ["Bonn", "Rom"])]
+
+
+@pytest.mark.parametrize("stem", _BATCHES_IN_ONE_BLOCK)
+def test_calls_of_one_batch_written_under_one_id_are_each_given_an_id_of_their_own(stem):
+    cities = ["Bonn", "Rom", "Wien"]
+    run = _Run(stem, context_size=16384)
+    run.context.replies = [ScriptedCall(_one_block_batch(run.context, cities)), "Sunny."]
+    run.begin(tools=[WEATHER])
+    calls = [e for e in run.chat.reply("Weather?", tool_call_policy="yield")
+             if isinstance(e, ToolCall)]
+    assert [call.arguments["city"] for call in calls] == cities
+    assert calls[0].id == WRITTEN_ID and len({call.id for call in calls}) == len(cities)
+    for call in calls:
+        run.chat.inject_tool_result(call.id, "sunny")
+    run.chat.reply(tool_call_policy="yield").finish()
+    saved = run.chat.conversation()
+    run.chat.begin(**saved)
+    assert run.chat.conversation() == saved

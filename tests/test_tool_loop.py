@@ -25,6 +25,7 @@ from tests.internals import held_tokens
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, system_turn, tool_wrapper, weather_registry,
                             without_ids, rows)
+from tests import internals
 
 
 def _result_of(fake):
@@ -2347,3 +2348,70 @@ def test_a_question_closing_a_turn_is_checked_as_it_is_asked_with_the_reply_afte
     assert wrapper.reply("Neu?").finish().text
     roles = [m["role"] for m in wrapper.conversation()["messages"]]
     assert roles[-4:] == ["tool", "assistant", "user", "assistant"]
+
+
+# A template that writes a result only under the name of the function it answers.
+_NAMED_RESULTS = dict(TOOLS, chat_template=(
+    "{% for m in messages if m.role == 'tool' and not m.name %}"
+    "{{ raise_exception('a result names its function') }}{% endfor %}" + TOOLS["chat_template"]))
+
+
+# A template that writes a result only as plain text, never as a JSON object.
+_PLAIN_RESULTS = dict(TOOLS, chat_template=(
+    "{% for m in messages if m.role == 'tool' and m.content.startswith('{') %}"
+    "{{ raise_exception('a result is plain text') }}{% endfor %}" + TOOLS["chat_template"]))
+
+
+@pytest.mark.parametrize("template, told", [(TOOLS, True), (_NAMED_RESULTS, True),
+                                            (NO_RESULT_BLOCK, False), (_PLAIN_RESULTS, False)],
+                         ids=["any-result", "named-results", "no-result", "plain-results"])
+def test_an_unreadable_call_is_told_so_where_the_template_writes_that_and_else_closes_the_reply(
+        template, told):
+    fake = FakeContext(template)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened("persona"))
+    fake.call_script = ["fn:nonsense with no name"]
+    reply = wrapper.reply("wie spät?", tool_call_policy="yield").finish()
+    assert [call.status for call in reply.tool_calls] == ["unreadable"]
+    assert ("could not be read" in held_text(fake)) is told
+    assert reply.stop_reason == ("end_of_turn" if told else "unreadable_tool_call")
+    assert not wrapper.turn_open and not wrapper.pending_calls
+    fake.call_script = []
+    assert wrapper.reply("und jetzt?").finish().stop_reason == "end_of_turn"
+
+
+# The template that writes no result, writing the generation prompt after a call as well.
+_NO_RESULT_PROMPTED = dict(NO_RESULT_BLOCK, chat_template=NO_RESULT_BLOCK["chat_template"].replace(
+    "{%- if add_generation_prompt and not ns.open -%}", "{%- if add_generation_prompt -%}"))
+
+
+@pytest.mark.parametrize("template", [NO_RESULT_BLOCK, _NO_RESULT_PROMPTED],
+                         ids=["no-prompt-after-a-call", "prompt-after-a-call"])
+def test_a_template_with_no_result_block_refuses_the_result_whatever_it_writes_after_a_call(template):
+    assert _NO_RESULT_PROMPTED["chat_template"] != NO_RESULT_BLOCK["chat_template"]
+    fake = FakeContext(template)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened("persona"))
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    before = wrapper.conversation()
+    with pytest.raises(UnsupportedError, match="renders no tool result"):
+        wrapper.inject_tool_result(wrapper.pending_calls[0].id, "ok")
+    assert wrapper.conversation() == before and [c.name for c in wrapper.pending_calls] == ["clock"]
+
+
+@pytest.mark.parametrize("system_prompt", ["persona", ""], ids=["system", "no-system"])
+def test_a_turn_that_called_tools_is_held_whole_from_its_call_to_its_answer(system_prompt):
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened(system_prompt))
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    wrapper.inject_tool_result(wrapper.pending_calls[0].id, "ok")
+    fake.call_script = []
+    answer = wrapper.reply(tool_call_policy="yield").finish().text
+    messages = wrapper._conversation.messages
+    calling = next(i for i, m in enumerate(messages) if m.get("tool_calls"))
+    assert internals.generated_turn_spans(wrapper) == [(calling, len(messages) - 1)]
+    assert [(text, on_call) for _, text, on_call in internals.generated_turns_held(wrapper)] \
+        == [(answer, False)]
