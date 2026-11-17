@@ -1,6 +1,7 @@
 """A history in the Chat Completions form begin takes, as the messages a template is given, and back."""
 
 import itertools
+import logging
 
 import pytest
 
@@ -10,7 +11,7 @@ from llama_chat.messages import (UNREADABLE_CALL, call_id, exchange_count, excha
                                  history_count, next_call_number)
 from llama_chat.tools import ToolCall
 from tests.chat_messages import Result, opened, tool_turn
-from llama_chat.errors import InvalidArgumentError
+from llama_chat.errors import InvalidArgumentError, ArgumentTypeError
 
 
 def test_kept_history_opens_on_each_user_turn():
@@ -258,3 +259,28 @@ def test_a_call_without_its_type_is_read_as_a_function_call():
     typed = {"id": "c", "type": "function", "function": _FUNCTION}
     untyped = {"id": "c", "function": _FUNCTION}
     assert read_messages(_calling(untyped)) == read_messages(_calling(typed))
+
+
+def test_a_call_without_its_arguments_is_read_as_a_call_with_no_arguments():
+    without = {"id": "c", "type": "function", "function": {"name": "f"}}
+    empty = {"id": "c", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    assert read_messages(_calling(without)) == read_messages(_calling(empty))
+
+
+@pytest.mark.parametrize("field", ["name", "arguments"])
+@pytest.mark.parametrize("given", [5, 1.5, True, ["f"], {"x": 1}, b"f"])
+def test_a_call_field_of_the_wrong_type_is_refused_naming_the_type_it_was_given(field, given):
+    function = {"name": "f", "arguments": "{}", field: given}
+    with pytest.raises(ArgumentTypeError) as refused:
+        read_messages(_calling({"id": "c", "type": "function", "function": function}))
+    assert f"messages[1].tool_calls[0].function.{field} must be" in str(refused.value)
+    assert str(refused.value).endswith(f"not {type(given).__name__}")
+
+
+@pytest.mark.parametrize("function", [{"name": "f", "arguments": "{"}, {"name": "", "arguments": "{}"}])
+def test_a_call_that_could_not_be_read_is_said_once_at_info(function, caplog):
+    with caplog.at_level(logging.INFO, logger="llama_chat"):
+        read_messages(_calling({"id": "c", "type": "function", "function": function}))
+    said = [r for r in caplog.records if r.name == "llama_chat.history_forms"]
+    assert len(said) == 1 and said[0].levelno == logging.INFO
+    assert "could not be read" in said[0].getMessage()
