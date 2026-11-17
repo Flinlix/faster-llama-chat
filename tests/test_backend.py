@@ -818,15 +818,24 @@ def test_set_kv_cache_on_gpu_bool_build(enable):
     assert cparams.offload_kqv is enable
 
 
+@pytest.mark.parametrize("micro_batch_tokens", [None, 8, 1024])
 @pytest.mark.parametrize("max_batch_tokens", [8, 512, 2048])
-def test_the_batch_is_the_callers_and_the_micro_batch_stays_the_engines(max_batch_tokens):
+def test_the_batch_is_the_callers_and_the_micro_batch_the_engines_unless_set(
+        max_batch_tokens, micro_batch_tokens):
     created = []
     backend = Backend.__new__(Backend)
     backend._llama_cpp = llama_cpp
     backend._new_ctx = lambda model, cparams: created.append(cparams) or "ctx"
-    backend.new_context("model", 4096, None, max_batch_tokens)
+    backend.new_context("model", 4096, None, max_batch_tokens, n_ubatch=micro_batch_tokens)
     assert created[0].n_batch == max_batch_tokens
-    assert created[0].n_ubatch == llama_cpp.llama_context_default_params().n_ubatch
+    assert created[0].n_ubatch == (llama_cpp.llama_context_default_params().n_ubatch
+                                   if micro_batch_tokens is None else micro_batch_tokens)
+
+
+@pytest.mark.parametrize("micro_batch_tokens", [None, 1024])
+def test_a_load_hands_the_engine_the_micro_batch_setting(tmp_path, monkeypatch, micro_batch_tokens):
+    asked = _context_settings(tmp_path, monkeypatch, micro_batch_tokens=micro_batch_tokens)
+    assert asked["n_ubatch"] == micro_batch_tokens
 
 
 # ----- the sampler chain per generation ------------------------------------

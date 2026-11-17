@@ -105,6 +105,12 @@ class Config:
             where that is not set either.
         max_batch_tokens: Most tokens handed to the engine in one decode call; a longer
             prefill is chunked to this.
+        micro_batch_tokens: Most tokens the engine computes at once, the
+            size its compute buffer is reserved for; at most
+            ``max_batch_tokens``. ``None`` leaves the engine's own default.
+            A larger one can read a long prefill faster and takes more
+            memory on the device; see design_history.md, "The engine keeps
+            its own micro-batch".
         flash_attention: ``True`` or ``False`` forces flash attention on or
             off. ``None`` leaves it to the engine, except under a quantized
             ``kv_cache_type``, which requires it and turns it on.
@@ -158,6 +164,7 @@ class Config:
     decode_threads: int | None = None
     prefill_threads: int | None = None
     max_batch_tokens: int = 2048
+    micro_batch_tokens: int | None = None
     flash_attention: bool | None = None
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
 
@@ -180,6 +187,12 @@ class Config:
                 "so not even a system prompt would ever fit")
         if self.max_batch_tokens <= 0:
             raise InvalidSettingError("max_batch_tokens", "max_batch_tokens must be positive")
+        if self.micro_batch_tokens is not None \
+                and not 1 <= self.micro_batch_tokens <= self.max_batch_tokens:
+            raise InvalidSettingError(
+                "micro_batch_tokens",
+                f"micro_batch_tokens must be None or from 1 to max_batch_tokens "
+                f"({self.max_batch_tokens}), not {self.micro_batch_tokens}")
         if self.penalty_window_tokens is not None and self.penalty_window_tokens < 0:
             raise InvalidSettingError("penalty_window_tokens",
                                       "penalty_window_tokens must be None or >= 0")

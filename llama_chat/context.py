@@ -78,7 +78,7 @@ class KVContext:
             cores = _physical_cores()
             self._engine_context = self._backend.new_context(
                 self._model, config.context_size, n_threads=config.decode_threads or cores,
-                n_batch=config.max_batch_tokens,
+                n_batch=config.max_batch_tokens, n_ubatch=config.micro_batch_tokens,
                 flash_attn=_flash_attention(config), type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
                 n_threads_batch=config.prefill_threads or config.decode_threads or cores)

@@ -174,10 +174,12 @@ class Backend:
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool | None = None, type_k: int | None = None,
                     type_v: int | None = None, kv_cache_on_gpu: bool = True,
-                    n_threads_batch: int | None = None):
+                    n_threads_batch: int | None = None, n_ubatch: int | None = None):
         cparams = self._llama_cpp.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
+        if n_ubatch is not None:
+            cparams.n_ubatch = n_ubatch
         if n_threads:
             cparams.n_threads = n_threads
             cparams.n_threads_batch = n_threads

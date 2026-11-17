@@ -58,6 +58,8 @@ def test_the_kv_cache_follows_the_model_by_default():
 
 @pytest.mark.parametrize("field,value", [
     ("max_batch_tokens", 0),
+    ("micro_batch_tokens", 0),
+    ("micro_batch_tokens", 4096),
     ("max_reply_tokens", 0),
     ("min_reply_tokens", -1),
     ("context_size", 0),
@@ -92,6 +94,7 @@ _WRONG_TYPES = {
     "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64",
     "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
     "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
+    "micro_batch_tokens": 512.0,
     "flash_attention": "auto", "kv_cache_type": 8, "check_cache": "yes",
     "min_answer_tokens": 1.0, "answer_room_tokens": "1024", "max_calls": 2.5,
     "tool_timeout_s": "60", "unread_reply_timeout_s": [60],
