@@ -423,11 +423,24 @@ def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[
                     "lo": min(older["lo"], lo), "hi": max(older["hi"], hi),
                     "kept": older["kept"] + part["kept"]}
         records.append(part)
-    return [{"messages": [_exact(m) for m in messages[r["lo"]:r["hi"] + 1]],
+    made = [{"messages": [_exact(m) for m in messages[r["lo"]:r["hi"] + 1]],
              "kept": [{"tokens": list(turn.tokens), "start": first - r["lo"], "span": turn.span}
                       for first, turn in r["kept"]],
              "count": r["to"] - r["from"] + 1, "after": len(kept) - r["to"] - 1,
              "digest": _digest_of(portable[r["from"]:r["to"] + 1])} for r in records]
+    return [{**record, "check": _check_of(record)} for record in made]
+
+
+def _check_of(record: dict) -> str:
+    """What tells a record as :func:`generated_turn_records` made it from one changed since: a digest of everything it holds but this."""
+    held = {key: value for key, value in record.items() if key != "check"}
+    return hashlib.sha256(json.dumps(held, sort_keys=True, ensure_ascii=False).encode(
+        "utf-8", "surrogatepass")).hexdigest()
+
+
+def intact_records(turns: list[dict]) -> list[dict]:
+    """The records of ``turns`` that hold what :func:`generated_turn_records` made them with, tokens included; one changed since is left out."""
+    return [record for record in turns if record["check"] == _check_of(record)]
 
 
 def _exact(message: dict) -> dict:
@@ -501,7 +514,7 @@ def ensure_generated_turns(given) -> None:
     if given is None:
         return
     if not isinstance(given, dict):
-        raise TypeError(f"generated_turns must be what conversation() gives, a dict or None, "
+        raise ArgumentTypeError(f"generated_turns must be what conversation() gives, a dict or None, "
                         f"not {type(given).__name__}")
     turns = given.get("turns")
     if not isinstance(given.get("model"), str) or not isinstance(turns, list) \
@@ -514,7 +527,7 @@ def ensure_generated_turns(given) -> None:
 def _is_generated_turn_record(record) -> bool:
     """Whether ``record`` is one record as :func:`generated_turn_records` gives it."""
     if not isinstance(record, dict) \
-            or set(record) != {"messages", "kept", "count", "after", "digest"}:
+            or set(record) != {"messages", "kept", "count", "after", "digest", "check"}:
         return False
     held, kept = record["messages"], record["kept"]
     return (isinstance(held, list) and all(_is_held(m) for m in held)
@@ -527,7 +540,7 @@ def _is_generated_turn_record(record) -> bool:
                 and turn["start"] + turn["span"] <= len(held) for turn in kept)
             and type(record["count"]) is int and record["count"] > 0
             and type(record["after"]) is int and record["after"] >= 0
-            and isinstance(record["digest"], str))
+            and isinstance(record["digest"], str) and isinstance(record["check"], str))
 
 
 def _is_held(message) -> bool:

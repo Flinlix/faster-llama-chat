@@ -117,8 +117,10 @@ class Report:
             their results, no generated turn holding them.
         n_turns_restored: Turns ``begin`` restored as generated, from the
             generated turns it was given.
-        generated_turns_ignored: Whether the generated turns ``begin`` was
-            given were another model's, and so went unused.
+        generated_turns_ignored: Whether generated turns ``begin`` was given
+            went unused: another model's, or ones changed since
+            :meth:`~llama_chat.wrapper.ChatWrapper.conversation` gave them
+            out, whose turns are written as the template writes them.
         tool_results_cut: The calls whose result was cut to fit, with a note
             telling the model how much was kept.
         turn_closed: Whether the action closed the open turn: a result that

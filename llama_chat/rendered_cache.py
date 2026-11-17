@@ -29,7 +29,7 @@ from .cache_sync import CacheSync, Cancelled, Interrupt
 from .config import Config
 from .conversation_state import (Ahead, Anchor, Changes, ConversationState, MadeFor, Published,
                                  RenderChecks, Snapshot, goes_on_from)
-from .history_forms import (answer_in_order, completions_messages, joined_question,
+from .history_forms import (answer_in_order, completions_messages, intact_records, joined_question,
                             read_messages, with_generated_turns, with_questions_joined,
                             without_unreadable)
 from .messages import (GENERATED_TURN, QUESTION_CUT_MARK, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
@@ -440,7 +440,11 @@ class RenderedCache:
         if generated_turns["model"] != self._context.model_fingerprint():
             self._state.changes.generated_turns_ignored = True
             return []
-        return generated_turns["turns"]
+        intact = intact_records(generated_turns["turns"])
+        if len(intact) < len(generated_turns["turns"]):
+            # Tokens changed since they were given out are no tokens this model generated.
+            self._state.changes.generated_turns_ignored = True
+        return intact
 
     def _held_indexes(self) -> set[int]:
         """Where the messages a generated turn's tokens stand for are."""
