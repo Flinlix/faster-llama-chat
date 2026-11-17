@@ -14,7 +14,7 @@ from .call_parsing import parse_calls
 from .errors import UnsupportedError
 from .messages import with_thought_as
 from .model_template import ModelTemplate
-from .reply_text import reply_header
+from .reply_text import begins_in_thought, reply_header
 from .template import CallBoundary, shared_tags_length
 from .template_reading import TemplateProperties, TemplateReader
 from .tools import ToolCall
@@ -61,6 +61,7 @@ class ResolvedTemplate:
         self.properties: TemplateProperties = TemplateReader(
             context, model, self._model_render, addon_call, reasoning_on).properties
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
+        self.n_shortest_answer_tokens = self._shortest_answer_tokens(context)
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -111,6 +112,22 @@ class ResolvedTemplate:
         self.ensure_can_reason()
         assert self.properties.reasoning is not None, "a template that can reason says how"
         return self.properties.reasoning.generation_prompt
+
+    def _shortest_answer_tokens(self, context) -> int:
+        """Tokens the shortest reply that holds an answer takes, in the reasoning mode that needs most: what the model writes before its answer, one token of answer, and the closing after it."""
+        def tokens(text: str) -> int:
+            return len(context.tokenize(text, add_special=False, parse_special=True))
+        reasoning = self.properties.reasoning
+        before_answer = []
+        for mode in (False, True) if self.properties.can_reason else (False,):
+            written = tokens(self.answer_opening(mode))
+            if reasoning is not None:
+                # A thought the model opens is closed before the answer, as the answer guard closes one.
+                opens = not begins_in_thought(reasoning, self.generation_prompt(mode))
+                written += tokens(reasoning.thought_close) + (
+                    tokens(reasoning.thought_open) if opens else 0)
+            before_answer.append(written)
+        return max(before_answer) + 1 + self.properties.n_closing_tokens
 
     def reply_header(self, reasoning: bool = False) -> tuple[str, str] | None:
         """The start and end of a header naming a reply's reader, as :func:`~llama_chat.reply_text.reply_header` reads them, worked out once for each reasoning mode."""

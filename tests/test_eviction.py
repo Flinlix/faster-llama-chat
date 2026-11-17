@@ -306,3 +306,14 @@ def test_a_message_refused_after_the_evictions_it_made_leaves_the_cache_as_it_wa
     assert w.conversation() == before
     assert_consistent(w, fake)
     assert w.reply().finish().text
+
+
+def test_a_long_question_is_cut_to_the_room_under_the_threshold_not_to_the_whole_context():
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.5, min_reply_tokens=32),
+                    context=fake)
+    w.begin(opened("s"))
+    assert w.reply("x" * 2000 + " Frage?").finish().text
+    asked = [m for m in after_system(w.conversation()["messages"]) if m["role"] == "user"][-1]
+    beside = len(fake.tokenize(fake.stated_render(opened("s", [asked]), generation_prompt=True)))
+    assert w.config.evict_above_tokens - 8 <= beside <= w.config.evict_above_tokens

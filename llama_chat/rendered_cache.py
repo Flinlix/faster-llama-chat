@@ -538,7 +538,8 @@ class RenderedCache:
         with self._action():
             _ensure_begun(self, "generate into")
             room = self._max_prompt_tokens
-            question = self._cut_to_fit({"role": "user", "content": text}, room, "the request")
+            question = self._cut_to_fit({"role": "user", "content": text}, self._question_room,
+                                        "the request")
             text = question["content"]
             joined = self._make_way_for(question, room, generation_prompt=True)
             if joined is None:
@@ -788,7 +789,7 @@ class RenderedCache:
             limit = self._config.evict_above_tokens
             # A question is answered: it needs the room its reply leaves too.
             asks = role == "user"
-            bound = min(limit, self._max_prompt_tokens) if asks else limit
+            bound = self._question_room if asks else limit
             if asks:
                 message = self._cut_to_fit(message, bound, "the injected question")
                 text = message["content"]
@@ -830,8 +831,9 @@ class RenderedCache:
         if not fits(len(text)):
             alone = self._length_alone(question, room, generation_prompt=True)
             raise ContextOverflowError(
-                f"{what} needs {alone} tokens but {room} fit beside room for the reply, and the "
-                f"system prompt leaves no room for any of it; shorten the system prompt, or "
+                f"{what} needs {alone} tokens with the system prompt but {room} fit under the "
+                f"eviction threshold beside the reply's room, and the system prompt leaves no "
+                f"room for any of it; shorten the system prompt, or "
                 f"{RAISE_THE_ROOM}", alone, room)
         low, high = 1, len(text)        # the least start that fits lies in [low, high]
         search_variant = LoopVariant("cutting a question to fit")
@@ -842,8 +844,8 @@ class RenderedCache:
                 high = middle
             else:
                 low = middle + 1
-        _log.warning("%s is longer than the %d tokens beside the system prompt and the reply's "
-                     "room; its first %d of %d characters were cut", what, room, low, len(text))
+        _log.warning("%s is longer than the %d tokens a question may take beside the system "
+                     "prompt; its first %d of %d characters were cut", what, room, low, len(text))
         return {**question, "content": QUESTION_CUT_MARK + text[low:]}
 
     def _length_alone(self, message: dict, limit: int, generation_prompt: bool) -> int:
@@ -1610,7 +1612,7 @@ class RenderedCache:
         return f"this model's template does not write a {role} message here"
 
     def _ensure_room_for_a_question(self, remedy: str) -> None:
-        """Refuse a system turn and declarations that leave no room for a short question, under ``evict_above_tokens`` and with ``min_reply_tokens`` free for its reply.
+        """Refuse a system turn and declarations that leave no room for a short question, under ``evict_above_tokens`` and with the room a reply keeps free.
 
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
@@ -1927,8 +1929,14 @@ class RenderedCache:
     # ----- limits -------------------------------------------------------------------
     @property
     def _max_prompt_tokens(self) -> int:
-        """The most tokens the cache may hold when a reply starts, ``min_reply_tokens`` left free."""
-        return self._config.context_size - self._config.min_reply_tokens
+        """The most tokens the cache may hold when a reply starts: ``min_reply_tokens`` left free, and never less than the shortest reply that holds an answer."""
+        return self._config.context_size - max(self._config.min_reply_tokens,
+                                               self.template.n_shortest_answer_tokens)
+
+    @property
+    def _question_room(self) -> int:
+        """The most tokens the system turn and a question alone may take: under the eviction threshold, with the reply's room left."""
+        return min(self._config.evict_above_tokens, self._max_prompt_tokens)
 
     def _drop_while_over(self, limit: int, generation_prompt: bool, **options) -> bool:
         """Drop the oldest exchanges once the conversation is over ``limit`` or holds too many, as :meth:`Eviction.drop_while_over` does, in windows of the oldest exchanges first where they stand for the render; whether any went."""

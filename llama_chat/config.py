@@ -62,9 +62,10 @@ class Config:
             generation never crosses ``context_size`` either way.
         min_reply_tokens: Refuse a request with
             :class:`~llama_chat.errors.ContextOverflowError` when fewer than
-            this many tokens would be left for the reply. ``0`` disables it,
-            and it must stay below ``context_size``, which no request can leave
-            entirely free.
+            this many tokens would be left for the reply. Never fewer are kept
+            than the shortest reply that holds an answer takes, so ``0`` keeps
+            only those. It must stay below ``context_size``, which no request
+            can leave entirely free.
         min_answer_tokens: The end of the turn is not drawn until a reply
             holds this many tokens of answer, a thought left out, or a call,
             so that a model that would end at once answers. ``None`` lets it

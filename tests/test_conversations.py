@@ -236,7 +236,7 @@ def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts
     # The threshold half way into the question, the room for the reply past it.
     run = _Run(stem)
     run.chat.close()
-    size = held + length + 80
+    size = held + length + 120
     run.chat = ChatWrapper(Config(context_size=size, min_reply_tokens=8,
                                   evict_above_fraction=(held + length // 2) / size),
                            context=run.context)
@@ -2090,6 +2090,47 @@ def test_unreadable_calls_in_a_row_are_one_reply_and_the_messages_alone_begin_ag
 
 
 # ----- nothing blocks a question --------------------------------------------------
+_SYSTEM_TEMPLATES = [stem for stem in _EVERY if _fixture(stem).get("can_take_system_prompt", True)]
+# A context the longest system turn a test template writes of its own fits in.
+_ROOM_TOKENS = 2048
+
+
+def _written_before_the_answer(chat, reasoning) -> str:
+    """What a model writes before its answer, as the template marks it: a thought it opens and closes, or the opening the generation prompt leaves to it."""
+    template = internals.template(chat)
+    tags = template.properties.reasoning
+    if reasoning:
+        opened_already = begins_in_thought(tags, template.generation_prompt(True))
+        return ("" if opened_already else tags.thought_open) + "hm" + tags.thought_close
+    return template.answer_opening(False)
+
+
+@pytest.mark.parametrize("writes", ["the answer alone", "what the template marks"])
+@pytest.mark.parametrize("stem, reasoning", _each_mode(_SYSTEM_TEMPLATES))
+def test_a_question_that_fills_all_the_room_a_system_prompt_leaves_still_gets_an_answer(
+        stem, reasoning, writes):
+    """With ``min_reply_tokens`` at 0, a question is cut to leave the shortest reply that holds an answer, whatever the model writes before it."""
+    def begun(system_length):
+        context = FakeContext(_fixture(stem), merges=_TOKENIZER["merges"], writes_tags=True)
+        chat = ChatWrapper(Config(context_size=_ROOM_TOKENS, min_reply_tokens=0,
+                                  evict_above_fraction=1.0), context=context)
+        if writes != "the answer alone":
+            context.replies = [_written_before_the_answer(chat, reasoning) + "Antwort"]
+        try:
+            chat.begin(opened("s" * system_length), reasoning=reasoning)
+        except ContextOverflowError:
+            return None
+        return chat
+    low, high = 1, _ROOM_TOKENS         # the longest system prompt a begin takes lies in [low, high]
+    assert begun(low)
+    while low < high:
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if begun(middle) else (low, middle - 1)
+    for system_length in range(low - 3, low + 1):
+        reply = begun(system_length).reply("x" * _ROOM_TOKENS + " Frage?").finish()
+        assert reply.text or reply.tool_calls, (system_length, reply.stop_reason)
+
+
 @pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
@@ -2430,6 +2471,11 @@ def test_a_request_taken_back_for_a_result_with_no_room_says_so_in_the_report():
     _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
     for length in range(560, 900, 4):
         run = _Run(stem, context_size=900)
+        run.chat.close()
+        # A threshold at the whole context, so that a question can fill all but the reply's room.
+        run.chat = ChatWrapper(Config(context_size=900, min_reply_tokens=8, evict_above_fraction=1.0,
+                                      min_answer_tokens=None, answer_room_tokens=None),
+                               context=run.context)
         run.context.replies = [ScriptedCall(body)]
         try:
             run.begin(tools=[WEATHER])

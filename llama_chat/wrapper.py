@@ -431,8 +431,9 @@ class ChatWrapper:
         taken out), and a question no reply follows is joined to it where the
         template writes no two in a row, or, where the two joined would not
         fit beside the system prompt, replaced by it, the unanswered one
-        counted as evicted. A question too long for the room beside the system
-        prompt keeps its end, :data:`~llama_chat.messages.QUESTION_CUT_MARK`
+        counted as evicted. A question too long for the room the system prompt
+        leaves under the eviction threshold keeps as much of its end as fits,
+        possibly none of it, :data:`~llama_chat.messages.QUESTION_CUT_MARK`
         in place of its beginning, and a warning is logged. It is refused only
         where the template does not write that question as its text, such as
         an empty one on some templates, which leaves the next question free.

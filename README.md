@@ -349,11 +349,13 @@ again. Either is a fault to report.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
 or reply that does not), whether the model calls a tool that exists, and what
-the tool does. A question never fails to fit: one too long for the room beside
-the system prompt keeps its end, `QUESTION_CUT_MARK` in place of its
-beginning, and a warning is logged. `begin` refuses a system prompt and
-declarations that would leave no room for a short question and
-`min_reply_tokens`, so no conversation it accepts is one that cannot answer.
+the tool does. A question never fails to fit: one too long for the room the
+system prompt leaves under the eviction threshold keeps as much of its end as
+fits, possibly none of it, `QUESTION_CUT_MARK` in place of its beginning, and
+a warning is logged. `begin` refuses a system prompt and
+declarations that would leave no room for a short question and the room a
+reply keeps (`min_reply_tokens`, at least the shortest reply that holds an
+answer), so no conversation it accepts is one that cannot answer.
 
 ## Tool calling
 
@@ -494,7 +496,7 @@ not run.
 
 **A turn grows towards `context_size`** as it calls, since an eviction would
 cut into the turn being written. A result too long for what is left, with
-`min_reply_tokens` free, first evicts the oldest exchanges, as a question
+the room a reply keeps free, first evicts the oldest exchanges, as a question
 does, the open turn kept whole: its question, its calls and its results; on a
 cache that cannot shift it evicts well below that, as every eviction there
 does. `inject_tool_result` returns a `Report` of the history messages that went, and under a
@@ -674,7 +676,7 @@ value `Config` refuses.
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
 | `max_history_exchanges` | `None` | a second eviction trigger: the most exchanges kept, at least `1`. An exchange is one user message and everything after it up to the next, the unit an eviction drops; what a history holds before its first user message counts as one more. The question of a `reply` may open one exchange more while its reply runs, and the oldest is dropped once the reply ends, so that no eviction for this limit delays a reply |
 | `max_reply_tokens` | `None` | cap on the tokens of one reply, every generation of it together, a thought included; `None` sets none, so a reply may run until the context is full |
-| `min_reply_tokens` | `32` | the room a reply keeps: a `begin` that leaves less beside a short question is refused with `ContextOverflowError`, and a longer question is cut to leave it; `0` disables |
+| `min_reply_tokens` | `32` | the room a reply keeps: a `begin` that leaves less beside a short question is refused with `ContextOverflowError`, and a longer question is cut to leave it; never less than the shortest reply that holds an answer takes, which is all `0` keeps |
 
 **Replies**
 
