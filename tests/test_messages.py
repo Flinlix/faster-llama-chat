@@ -12,6 +12,7 @@ from llama_chat.messages import (UNREADABLE_CALL, call_id, exchange_count, excha
 from llama_chat.tools import ToolCall
 from tests.chat_messages import Result, opened, tool_turn
 from llama_chat.errors import InvalidArgumentError, ArgumentTypeError
+from tests.wrappers import tool_wrapper
 
 
 def test_kept_history_opens_on_each_user_turn():
@@ -284,3 +285,36 @@ def test_a_call_that_could_not_be_read_is_said_once_at_info(function, caplog):
     said = [r for r in caplog.records if r.name == "llama_chat.history_forms"]
     assert len(said) == 1 and said[0].levelno == logging.INFO
     assert "could not be read" in said[0].getMessage()
+
+
+_RESULTS_NOT_TAKEN = [
+    ({"role": "tool", "content": "r"}, "'tool_call_id'"),
+    ({"role": "tool", "tool_call_id": "", "content": "r"}, "'tool_call_id'"),
+    ({"role": "tool", "tool_call_id": 7, "content": "r"}, "'tool_call_id'"),
+    ({"role": "tool", "tool_call_id": ["call00000"], "content": "r"}, "'tool_call_id'"),
+    ({"role": "tool", "tool_call_id": "call00000", "content": 18}, "result of 'call00000'"),
+    ({"role": "tool", "tool_call_id": "call00000", "content": None}, "result of 'call00000'"),
+]
+
+
+@pytest.mark.parametrize("result, cause", _RESULTS_NOT_TAKEN, ids=[
+    "no id", "empty id", "id a number", "id a list", "content a number", "content null"])
+def test_a_result_in_a_form_not_taken_is_refused_as_messages_naming_where_it_stands_and_why(
+        result, cause):
+    wrapper, _ = tool_wrapper()
+    before = wrapper.conversation()
+    with pytest.raises(InvalidArgumentError) as refused:
+        wrapper.begin([*_call("{}"), result])
+    assert refused.value.field == "messages"
+    assert "messages[2]" in str(refused.value) and cause in str(refused.value)
+    assert wrapper.conversation() == before
+
+
+@pytest.mark.parametrize("history", [
+    [*_call("{}"), {"role": "tool", "tool_call_id": "other", "content": "r"}],
+    [_QUESTION, {"role": "tool", "tool_call_id": "c", "content": "r"}],
+], ids=["another call's id", "no call owed"])
+def test_a_result_out_of_the_order_of_its_calls_is_refused_as_messages(history):
+    with pytest.raises(InvalidArgumentError) as refused:
+        _read(history)
+    assert refused.value.field == "messages"
