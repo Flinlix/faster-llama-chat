@@ -5939,3 +5939,126 @@ as many rules as a machine can. What was built, and why each is shaped so:
     five were caught; the sixth only made the drop search need 13 measures
     instead of 5, and a test now bounds them.
 
+
+## 2026-11-16: Every question gets a reply
+
+The rule, as the owner stated it: after load, every question gets a reply;
+every error is a library error that names the argument and the cause, and it
+changes nothing; no state is reachable in which the model is ready but cannot
+answer. Two independent review agents probed the earlier claim that this held
+and both found it did not: raw Python errors without a cause (a lone
+surrogate in a text, a tool description JSON cannot write, a history call
+nested 600 levels, a tool result whose own methods fail), a `begin` that left
+no room for any question, a repeated question refused on one template, a
+reply asked of one conversation answered in the next, edited saved turns
+accepted silently, and replies that ended empty. Rule 11 of the contract now
+states the rule, and these are the measures.
+
+- **One entry point.** `raising_library_errors_only` wraps every public
+  method and property of `ChatWrapper`; `ReplyStream` wraps its own steps.
+  An exception that is not in `LIBRARY_ERRORS` is raised as an
+  `InternalError` naming the action and the cause, and arguments a
+  signature does not take are an `ArgumentTypeError` naming the call. The
+  library's own type refusals are `ArgumentTypeError`, a `TypeError`, so that
+  any other `TypeError` is a fault. A closed wrapper and an action a tool
+  asks for are now `OutOfOrderError`, a refusal, not `RuntimeError`.
+  `tests/test_public_errors.py` checks that every public member goes through
+  the entry point.
+- **Checked where it enters.** A text with a lone surrogate is refused by
+  name (`ensure_readable`); a tool result with one is told as
+  `unwritable_result`, and writing a result catches whatever the value's own
+  methods raise. `ToolSpec` checks itself where it is built: text keys,
+  finite numbers, JSON values, at most `MAX_ARGUMENT_DEPTH` levels, counted
+  without recursion. A history call past that depth is unreadable and left
+  out, as a call the model writes so is; the depth limit and its count moved
+  to `tools.py` so that the spec can use them. `top_k` past the vocabulary
+  and a penalty window past the context are clamped where the engine is
+  named, because a value past the engine's integer type silently turned top-k
+  off.
+- **No ready state that cannot answer.** `begin` refuses a system prompt and
+  declarations that leave no room for a short question and
+  `min_reply_tokens`, not only none under the eviction threshold. A refusal
+  at load of a model whose own system prompt is too large for the context was
+  built and taken out again: it refused models that work with a system
+  prompt of the caller's, and the `begin` check already refuses every setup
+  that could not answer.
+- **A question too long is cut, not refused.** It keeps its end, where the
+  actual question likely is, `QUESTION_CUT_MARK` in place of what was cut,
+  and a warning is logged. The cut is found by a binary search on the start,
+  each step measured beside the system prompt as a question is.
+- **A reply holds an answer.** `min_answer_tokens` (default 1): until the
+  answer, as the reply's own reader reads it, holds text or a call, a drawn
+  token that ends the turn is drawn again from a second sampler chain that
+  withholds every ending token. The second chain sees only those draws, so
+  the repetition penalties of the two chains differ by the few tokens drawn
+  from it; withholding from the first chain throughout would have cost an
+  engine call per token. The answer is read from the reply's reader, not
+  counted in the generation, because the letters of a thought's opening tag
+  count as answer until the tag is complete. A stop string matching before
+  the answer holds text is skipped.
+- **A thought is closed in time.** `answer_room_tokens` (default 1024): once
+  the generation, counted from its first token, reaches its room less the
+  answer's share (at most half the room) and the closing's length, the
+  closing the template writes is fed in place of draws. It ends nothing and
+  opens no call, although a tag of it may otherwise end a turn or open a call
+  (as on templates whose closing switches channels). The closing comes from
+  the template read at load, so no add-on file is needed for it. Counting the
+  thought's own tokens instead missed openings the model writes as letters.
+- **A reply nobody reads is ended.** `unread_reply_timeout_s` (default 60):
+  an action that waits for the wrapper arms a timer; where the reply holding
+  it has waited for its reader that long, the timer closes the stream, as
+  its reader closing it would: what it generated is recorded, a text step
+  as `"interrupted"`, and a call already handed over stays owed until a
+  question closes its turn. The timer re-arms itself
+  while an action waits, so no loop waits on the lock. An action on the
+  reading thread ends its own unread reply at once instead of being refused.
+  `wait_idle` arms the timer but does not make the work after a reply give
+  way, so waiting for that work does not interrupt it.
+- **A tool that hangs is answered.** Registry tools run on a thread of their
+  own; one that has not returned within `tool_timeout_s` (default 60) is told
+  as `tool_timeout`. Python cannot stop a thread, so the tool runs on, and
+  what it returns is dropped; its thread may not act on the wrapper.
+- **Calls end.** `max_calls` (default 10) applies where a request sets none;
+  the last round withholds the call token, as before, so the model answers.
+- **A reply belongs to its conversation.** A `begin` after `reply()` and
+  before the reply is read makes reading it an `OutOfOrderError`, instead of
+  asking the old question in the new conversation.
+- **Saved turns carry a check value.** Each record of `generated_turns`
+  holds a digest of everything else in it, tokens included; a record changed
+  since is ignored, its turns written as the template writes them, and
+  `generated_turns_ignored` says so. The server already begins anew where
+  saved turns are refused, so records saved before this are written anew.
+- **Equal texts the template compares.** A template that compares message
+  texts for equality (one writes its declarations before every user message
+  equal to the newest) wrote two equal questions alike only where their
+  markers were equal, so the split of 316.5 refused them. Where the split
+  with a marker per text fails and texts repeat, the split is tried once more
+  with one marker per kind, role and text, each written occurrence given to
+  the next value in message order, and only where every such text is written
+  once per value. Two equal texts of one role written out of message order
+  would swap their spans, which changes nothing they hold. The tests' own
+  split has the same fallback.
+- **Found on the way.** The thought tracker of the generation loop dropped
+  part of a tag that arrived letter by letter (a negative slice), which the
+  call-in-a-thought detection shared. The tests' cache check closed a reply
+  with the default template where the conversation used the tool template.
+  The random runs with hostile input found two more, both kept as replays:
+  shortening to nothing a reply kept as generated whose turn holds no call
+  any more looked for that call and raised (now the reply is written as the
+  template writes it), and a message refused after the evictions it made on
+  a cache that shifts left the shift in place while the conversation was put
+  back. The undo of a refused action now brings the cache back at once where
+  it was current when the action began; after a failure, and where an
+  interrupted decode had left part of the cache to the next action, that
+  part stays the next action's, as before.
+- **The stand-in model ships.** `FakeContext` and the invented templates
+  moved to `llama_chat.testing`, so that the server's suite can run random
+  sequences of its language model's actions on them, with `check_cache` on;
+  the server's sequences use seeded draws, since its test extras hold no
+  property-testing library. The trace tests of what a reply costs leave the
+  stand-in's own frames out.
+- **Tests that script answerless replies.** The conversation tests' harness
+  and the tests about empty or all-thought replies run with
+  `min_answer_tokens` and `answer_room_tokens` off (`tests.wrappers.UNGUARDED`),
+  since the guard would not let those replies end; the guard has its own
+  tests on every template, and the random sequences run with it on.
