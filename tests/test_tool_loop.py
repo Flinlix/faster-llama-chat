@@ -19,7 +19,7 @@ from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall, written_call
 from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
                                       NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN, TOOLS,
-                                      TOOLS_DECLARED_IN_THE_NEWEST_TURN,
+                                      TOOLS_CLOSING_OPEN_TURNS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
 from tests.internals import held_tokens
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
@@ -2313,3 +2313,16 @@ def test_a_call_past_the_ceiling_is_answered_as_a_failure_telling_the_model_not_
     told = [m["content"] for m in wrapper.conversation()["messages"] if m["role"] == "tool"]
     refused = json.loads(told[1])
     assert refused["error"] == "tool_limit_reached" and "do not call again" in refused["message"]
+
+
+@pytest.mark.parametrize("template", [TOOLS, TOOLS_CLOSING_OPEN_TURNS],
+                         ids=["results_written", "closes_open_turns"])
+def test_a_question_injected_on_an_open_turn_reports_the_turn_closed(template):
+    fake = FakeContext(template)
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    w = ChatWrapper(Config(context_size=1024), context=fake)
+    w.begin(opened("s"), tools=weather_registry().specs())
+    w.reply("Wetter?", tool_call_policy="yield").finish()
+    assert w.turn_open
+    report = w.inject("Doch nicht.")
+    assert report.turn_closed is True and not w.turn_open

@@ -961,3 +961,34 @@ def test_a_failure_while_a_stream_closed_early_records_its_reply_reaches_the_cal
         stream.close()
     assert "".join(w.reply("noch einmal")) == "Eine lan"
     assert_cache_reads_as_rendered(w, fake)
+
+
+_SAYS_VERBOTEN = ("{% if messages[-1].content == 'verboten' %}"
+                  "{{ raise_exception('this word is not written') }}{% endif %}")
+
+
+def test_a_history_the_template_refuses_names_messages_as_its_field():
+    says = dict(PLAIN, chat_template=_SAYS_VERBOTEN + PLAIN["chat_template"])
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(says))
+    with pytest.raises(TemplateRefusedError) as refused:
+        w.begin(opened("s", [{"role": "user", "content": "verboten"}]))
+    assert refused.value.field == "messages"
+
+
+def test_a_history_ending_on_a_result_is_refused_with_what_the_template_says_before_its_reply():
+    # The template refuses only the render a reply follows, which a history ending on a result needs.
+    says = dict(TOOLS, chat_template="{% if add_generation_prompt and messages[-1].role == 'tool' "
+                                     "and 'verboten' in messages[-1].content %}"
+                                     "{{ raise_exception('no reply after this result') }}{% endif %}"
+                + TOOLS["chat_template"])
+    w = ChatWrapper(Config(context_size=1024), context=FakeContext(says))
+    history = opened("s", [{"role": "user", "content": "Wetter?"},
+                           *tool_turn(ToolCall("weather", {"city": "Bonn"}),
+                                      Result("weather", "verboten"))])
+    # The result is the last message, and neither the first after the system turn nor the one before.
+    assert history[-1]["role"] == "tool" and history[1]["role"] != "tool" \
+        and history[-2]["role"] != "tool"
+    with pytest.raises(TemplateRefusedError,
+                       match="the template says: no reply after this result") as refused:
+        w.begin(history, tools=weather_registry().specs())
+    assert refused.value.field == "messages"
