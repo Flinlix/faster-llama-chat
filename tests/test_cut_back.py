@@ -465,3 +465,28 @@ def test_a_reply_cut_to_nothing_keeps_its_turn_as_generated_up_to_the_closing_of
     closing = b"</call>"
     end = whole.rfind(closing, 0, len(whole) - len(answer.encode())) + len(closing)
     assert on_call and after == before[:len(after)] and _spelled(fake, after) == whole[:end]
+
+
+def _states_saved(stem: str, n_exchanges: int, ends_on_question: bool) -> list[int]:
+    """How many states a cache that saves states has saved after a begin from ``n_exchanges`` exchanges, and after the reply that follows."""
+    fake = FakeContext(fixture(stem), ANSWERS, can_shift=False)
+    chat = ChatWrapper(Config(context_size=16384, min_reply_tokens=8), context=fake)
+    system = "Be brief." if chat.capabilities(tools=False).can_take_system_prompt else ""
+    history = [message for n in range(n_exchanges) for message in (
+        {"role": "user", "content": f"Old question {n}?"},
+        {"role": "assistant", "content": f"Old answer {n}."})]
+    if ends_on_question:
+        history.append({"role": "user", "content": "A note."})
+    chat.begin(opened(system, history))
+    saved = [fake.saved_states]
+    chat.reply(None if ends_on_question else "Question?").finish()
+    return saved + [fake.saved_states]
+
+
+@pytest.mark.parametrize("ends_on_question", [False, True], ids=["answered", "asked"])
+@pytest.mark.parametrize("stem", STEMS)
+def test_a_cache_that_saves_states_saves_no_more_of_them_as_the_history_grows(stem, ends_on_question):
+    """The states kept where the newest exchanges begin are two, not one per exchange: a begin and its reply save as many for a long history as for a short one."""
+    short = _states_saved(stem, 4, ends_on_question)
+    long = _states_saved(stem, 24, ends_on_question)
+    assert all(n_long <= n_short for n_short, n_long in zip(short, long)), (short, long)
