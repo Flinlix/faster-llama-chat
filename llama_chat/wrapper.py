@@ -284,7 +284,8 @@ class ChatWrapper:
                                      _explain_failure(_UNREADABLE, may_call_again=False))
             # A turn the history leaves open was started by no reply.
             self._conversation.turn_policy = None
-            self._conversation.turn_budget = _CallBudget(None)
+            self._conversation.turn_budget = _CallBudget(self._config.max_calls)
+            self._begins += 1
             return self._conversation.report()
 
     # ----- adding context ------------------------------------------------------
@@ -400,8 +401,9 @@ class ChatWrapper:
                   token that opens a call is never drawn, as under
                   ``"withhold"``, so the turn always closes.
             max_calls: Where a registry is given, how many calls one turn may
-                use, each call handed over counted. ``None`` sets no ceiling, or,
-                going on with a turn, keeps what is left of the turn's; a call
+                use, each call handed over counted. ``None`` takes the
+                config's ``max_calls``, or, going on with a turn, keeps what
+                is left of the turn's; a call
                 past one is answered with an error result rather than run. Only
                 with a registry.
             max_reply_tokens: This request's cap on the tokens of the reply,
@@ -578,7 +580,7 @@ class ChatWrapper:
             policy = self._policy_for(given, goes_on)
             _ensure_max_calls_runs(policy, max_calls)
             budget = (self._conversation.turn_budget if goes_on and max_calls is None
-                      else _CallBudget(max_calls))
+                      else _CallBudget(self._config.max_calls if max_calls is None else max_calls))
             options["on_started"] = lambda: self._keep_turn(given, policy, budget)
             if policy not in ("yield", "withhold"):
                 return (yield from self._generate_until_answered(
