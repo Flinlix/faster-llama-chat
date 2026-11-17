@@ -14,7 +14,7 @@ from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import token_id_range
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
-                            reasoning_wrapper, rendered_reply, rows)
+                            reasoning_wrapper, rendered_reply, rows, ask_through_a_tool_call)
 from llama_chat import OutOfOrderError, ContextOverflowError, TemplateRefusedError
 from llama_chat.errors import InvalidArgumentError
 from llama_chat.tool_registry import ToolRegistry
@@ -490,3 +490,46 @@ def test_a_cache_that_saves_states_saves_no_more_of_them_as_the_history_grows(st
     short = _states_saved(stem, 4, ends_on_question)
     long = _states_saved(stem, 24, ends_on_question)
     assert all(n_long <= n_short for n_short, n_long in zip(short, long)), (short, long)
+
+
+class _SplitsACharacter(FakeContext):
+    """A context whose model generates each ``ä`` in two tokens, the second holding its last byte and the character after it, as a byte level tokenizer may."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, tokens_spell_text=False, **kwargs)
+        self._split_bytes: dict[int, bytes] = {}
+
+    def _generated_run(self, text: str) -> list[int]:
+        tokens = super()._generated_run(text)
+        for at in range(len(text) - 1):
+            if text[at] == "ä":
+                first, second = tokens[at], tokens[at + 1]
+                self._split_bytes[first] = "ä".encode()[:1]
+                self._split_bytes[second] = "ä".encode()[1:] + text[at + 1].encode()
+                self._generated_chars[first] = ""
+                self._generated_chars[second] = "ä" + text[at + 1]
+        return tokens
+
+    def token_bytes(self, token: int) -> bytes:
+        return self._split_bytes.get(token, super().token_bytes(token))
+
+
+@pytest.mark.parametrize("split", [False, True], ids=["one token per character", "a character split"])
+def test_a_reply_kept_as_generated_keeps_its_generated_tokens_up_to_each_cut(split):
+    answer = "Es ist wärmer."
+    for cut in range(1, len(answer)):
+        fake = _SplitsACharacter(TOOLS) if split else FakeContext(TOOLS, tokens_spell_text=False)
+        wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9), context=fake)
+        ask_through_a_tool_call(wrapper, fake, answer)
+        (generated, text, _), = internals.generated_turns_held(wrapper)
+        assert text == answer
+        wrapper.truncate_last_reply(answer[:cut])
+        assert wrapper.conversation()["messages"][-1]["content"] == answer[:cut]
+        (kept, _, _), = internals.generated_turns_held(wrapper)
+        spelled = lambda tokens, fake=fake: b"".join(fake.token_bytes(t) for t in tokens)  # noqa: E731
+        assert spelled(generated).endswith(answer.encode())
+        assert spelled(kept).decode().endswith(answer[:cut]), cut
+        # All but the token the cut falls in, and the one before where it splits a character.
+        same = len(generated) - (len(answer) - cut) - 1
+        assert kept[:same] == generated[:same], cut
+        wrapper.reply("und?").finish()

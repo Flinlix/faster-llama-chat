@@ -17,7 +17,7 @@ from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_K
                                       TOOLS_CLOSING_OPEN_TURNS, JSON_TOOLS, REFUSES_A_TEXT)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
-                            weather_registry, rows)
+                            weather_registry, rows, ask_through_a_tool_call)
 from tests.chat_templates import STEMS, WEATHER, fixture
 
 
@@ -672,3 +672,57 @@ def test_a_history_the_template_refuses_is_refused_naming_messages_and_the_templ
                              {"role": "assistant", "content": "refused"}]))
     assert refused.value.field == "messages"
     assert "this text is refused" in str(refused.value)
+
+
+def test_a_begin_with_the_same_messages_kept_as_other_generated_tokens_keeps_the_given_tokens():
+    given, given_fake = tool_wrapper(tokens_spell_text=False)
+    ask_through_a_tool_call(given, given_fake)
+    conversation = given.conversation()
+    other, other_fake = tool_wrapper(tokens_spell_text=False)
+    other.begin(opened("persona"))
+    other.reply("hallo").finish()           # the model generates other tokens from here on
+    ask_through_a_tool_call(other, other_fake)
+    held = other.conversation()
+    assert held["messages"] == conversation["messages"]
+    assert held["generated_turns"] != conversation["generated_turns"]
+    other.begin(**conversation)
+    assert other.conversation() == conversation
+    other.reply("und?").finish()
+
+
+def _long_conversation(fake):
+    wrapper = ChatWrapper(Config(context_size=2000, evict_above_fraction=0.9), context=fake)
+    wrapper.begin(opened("s"))
+    for n in range(30):
+        wrapper.reply(f"Frage {n} " + "x" * 20).finish()
+    assert wrapper.total_tokens > 1000              # more than half the context
+    return wrapper
+
+
+@pytest.mark.parametrize("goes_on", [True, False], ids=["goes on with the cache", "another history"])
+def test_a_begin_past_the_eviction_limit_keeps_up_to_it_only_where_it_goes_on_with_the_cache(goes_on):
+    wrapper = _long_conversation(FakeContext(TOOLS))
+    saved = wrapper.conversation()
+    if goes_on:
+        newer = [message for n in range(12) for message in (
+            {"role": "user", "content": f"Neu {n} " + "y" * 20},
+            {"role": "assistant", "content": "reply"})]
+        history = saved["messages"] + newer
+    else:
+        history = _long_conversation(FakeContext(TOOLS)).conversation()["messages"]
+        history = [history[0]] + [{**m, "content": m["content"].replace("Frage", "Andere")}
+                                  for m in history[1:]] * 2
+    fresh = ChatWrapper(Config(context_size=2000, evict_above_fraction=0.9), context=FakeContext(TOOLS))
+    assert fresh.begin(history).evicted_for == "half_context"
+    report = wrapper.begin(history)
+    kept = wrapper.conversation()["messages"]
+    assert report.n_evicted_messages > 0 and kept[-1] == history[-1]
+    if goes_on:
+        # Its oldest part is what the cache holds already: it keeps up to the eviction limit.
+        assert report.evicted_for == "room"
+        assert len(kept) > len(fresh.conversation()["messages"])
+        assert 1000 < wrapper.total_tokens <= 1800
+    else:
+        assert report.evicted_for == "half_context"
+        assert kept == fresh.conversation()["messages"]
+    wrapper.reply("und?").finish()

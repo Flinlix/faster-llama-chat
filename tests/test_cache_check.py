@@ -6,10 +6,11 @@ from llama_chat import ChatWrapper, Config, InternalError
 from llama_chat.tools import ToolCall
 from tests.chat_messages import tool_turn, opened, after_system
 from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
+from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
-                            tool_wrapper)
+                            tool_wrapper, ask_through_a_tool_call)
+from tests import internals
 
 _MARK = ord("#")        # a token that spells a character no render here holds
 
@@ -253,3 +254,14 @@ def test_check_cache_stops_a_reply_whose_cache_lacks_the_end_of_its_generation_p
     with pytest.raises(InternalError, match="where the model reads it"):
         wrapper.reply("Und dir?").finish()
     wrapper.close()                             # its cache lacks a token on purpose
+
+
+def test_check_cache_finds_nothing_in_a_conversation_that_keeps_a_turn_as_generated():
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=0.9, check_cache=True),
+                          context=fake)
+    ask_through_a_tool_call(wrapper, fake)
+    assert internals.generated_turns_held(wrapper)
+    wrapper.reply("und?").finish()
+    wrapper.reply("noch?").finish()
+    assert wrapper._conversation._found_fault is None

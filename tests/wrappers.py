@@ -534,3 +534,15 @@ def two_owed_calls(wrapper):
     assert len(calls) == 2
     return calls
 
+
+def ask_through_a_tool_call(wrapper, fake, answer=None):
+    """Have ``wrapper`` ask, call a tool, take its result and answer, so that the turn is kept as generated."""
+    wrapper.begin(opened("persona"))
+    fake.call_script = ["fn:clock{}"]
+    if answer is not None:
+        fake.replies = [answer]
+    call, = [step for step in wrapper.reply("wie spät?", tool_call_policy="yield")
+             if isinstance(step, ToolCall)]
+    wrapper.inject_tool_result(call.id, "12:00")
+    wrapper.reply(tool_call_policy="yield").finish()
+
