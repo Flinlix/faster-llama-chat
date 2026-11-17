@@ -6,8 +6,8 @@ import copy
 import itertools
 import re
 
-from .errors import InvalidArgumentError
-from .tools import ToolCall
+from .errors import ArgumentTypeError, InvalidArgumentError
+from .tools import ToolCall, ensure_readable
 from .loop_variant import LoopVariant
 
 
@@ -25,14 +25,19 @@ GENERATED_TURN = "generated_turn"
 UNREADABLE_CALL = "unreadable"
 
 
-def ensure_text(text, what: str) -> None:
-    """Refuse a message's text that is not a ``str``, naming the message as ``what``.
+# What a question cut to fit the room begins with, in place of what was cut.
+QUESTION_CUT_MARK = "[…] "
+
+def ensure_text(text, what: str, field: str = "text") -> None:
+    """Refuse a message's text that is not a ``str``, or that no model can read, naming the message as ``what``.
 
     Raises:
-        TypeError: If ``text`` is not a ``str``.
+        ArgumentTypeError: If ``text`` is not a ``str``.
+        InvalidArgumentError: Naming ``field``, if it holds a lone surrogate.
     """
     if not isinstance(text, str):
-        raise TypeError(f"{what} must be a str, not {type(text).__name__}")
+        raise ArgumentTypeError(f"{what} must be a str, not {type(text).__name__}")
+    ensure_readable(text, field, what)
 
 
 def ensure_role(role) -> None:

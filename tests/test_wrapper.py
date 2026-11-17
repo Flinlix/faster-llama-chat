@@ -7,6 +7,7 @@ including across evictions.
 """
 
 import dataclasses
+import functools
 import json
 import threading
 import typing
@@ -907,8 +908,7 @@ def test_the_readmes_quick_start_runs_on_every_template(stem):
 
 
 # ----- what does not have the shape asked for is refused where it enters ----------
-@pytest.mark.parametrize("tools", [[{"name": "clock"}], ["clock"], [ToolSpec(1, None, None)], 5],
-                         ids=["dict", "str", "fields", "no-list"])
+@pytest.mark.parametrize("tools", [[{"name": "clock"}], ["clock"], 5], ids=["dict", "str", "no-list"])
 def test_tools_of_another_shape_are_refused_before_anything_changes(tools):
     w, fake = tool_wrapper()
     w.begin(opened("s"))
@@ -916,6 +916,23 @@ def test_tools_of_another_shape_are_refused_before_anything_changes(tools):
     with pytest.raises(TypeError):
         w.begin(opened("t"), tools=tools)
     assert fake.cache == before
+
+
+@pytest.mark.parametrize("fields, refused", [
+    ((1, "d", {}), ArgumentTypeError), (("f", None, {}), ArgumentTypeError),
+    (("f", "d", None), ArgumentTypeError), (("f", "d", {1: "x"}), InvalidArgumentError),
+    (("f", "d", {"default": object()}), InvalidArgumentError),
+    (("f", "d", {"minimum": float("nan")}), InvalidArgumentError),
+    (("f", "d", {"enum": ("a", "b")}), InvalidArgumentError),
+    (("f\ud800", "d", {}), InvalidArgumentError),
+    (("f", "d", {"x": ["\udfff"]}), InvalidArgumentError),
+    (("f", "d", functools.reduce(lambda inner, _: {"a": inner}, range(120), {})),
+     InvalidArgumentError),
+], ids=["name", "description", "parameters", "key", "object", "nan", "tuple", "surrogate-name",
+        "surrogate-value", "deep"])
+def test_a_tool_spec_no_template_could_declare_is_refused_where_it_is_built(fields, refused):
+    with pytest.raises(refused):
+        ToolSpec(*fields)
 
 
 def test_a_history_given_as_a_generator_is_read_once():
@@ -1344,6 +1361,10 @@ _PLAIN_REPLY_CODE = {
         "Windows._remove_dropped.<locals>.<genexpr>.<genexpr>",
         "Windows.ahead",
         "Windows.drop_in",
+    },
+    "tools.py": {
+        "ensure_readable",
+        "lone_surrogate_at",
     },
     "wrapper.py": {
         "ChatWrapper._ensure_not_holding",

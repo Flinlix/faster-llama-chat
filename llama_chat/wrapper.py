@@ -238,6 +238,7 @@ class ChatWrapper:
             The previous conversation is left intact on every refusal here.
         """
         ensure_generated_turns(generated_turns)
+        _ensure_bool(reasoning, "reasoning")
         if messages is not None and (isinstance(messages, (str, bytes, dict))
                                      or not isinstance(messages, Iterable)):
             raise ArgumentTypeError(f"messages must be a list of chat message dictionaries, the system "
@@ -299,8 +300,9 @@ class ChatWrapper:
             closed or a question it joined.
 
         Raises:
-            TypeError: If ``text`` is not a ``str``.
-            InvalidArgumentError: If ``role`` is another one.
+            ArgumentTypeError: If ``text`` is not a ``str``.
+            InvalidArgumentError: If ``role`` is another one, or ``text``
+                holds a lone surrogate, which no model can read.
             OutOfOrderError: If no conversation has been begun, or an
                 assistant message is given while a tool call has left a reply
                 open.
@@ -670,7 +672,7 @@ class ChatWrapper:
             OutOfOrderError: If the wrapper is closed, or a tool the reply
                 that holds the wrapper runs asks for it.
         """
-        ensure_text(keep_text, "keep_text")
+        ensure_text(keep_text, "keep_text", "keep_text")
         with self._held():
             self._ensure_open()
             messages = self._conversation.messages
@@ -786,6 +788,7 @@ class ChatWrapper:
         ``tools=False`` for the default, each settled when the model loaded
         and the same before and after any :meth:`begin`. Safe from any thread.
         """
+        _ensure_bool(tools, "tools")
         return self._templates.capabilities(tools)
 
     @property
@@ -1277,6 +1280,23 @@ _AFTER_REPLY_WAIT_S = 1.0
 _AFTER_REPLY_PAUSE_S = 0.005
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
+
+
+@dataclass(frozen=True)
+class _Raised:
+    """What a tool's thread raised, to be raised again on the reply's thread."""
+
+    error: BaseException
+
+
+def _ensure_bool(value, name: str) -> None:
+    """Refuse a switch that is not ``True`` or ``False``.
+
+    Raises:
+        ArgumentTypeError: Naming ``name``.
+    """
+    if not isinstance(value, bool):
+        raise ArgumentTypeError(f"{name} must be True or False, not {value!r}")
 
 
 def _explain_failure(result, may_call_again: bool):

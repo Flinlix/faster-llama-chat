@@ -329,7 +329,9 @@ class KVContext:
                 backend.add_withheld(chain, self._vocab, withheld)
             if sampling.repetition_penalty != 1.0 \
                     or sampling.presence_penalty or sampling.frequency_penalty:
-                backend.add_penalties(chain, self._vocab, sampling.penalty_window_tokens,
+                # A window longer than the context reads the same tokens as one as long as it.
+                backend.add_penalties(chain, self._vocab,
+                                      min(sampling.penalty_window_tokens, self.context_size),
                                       sampling.repetition_penalty,
                                       sampling.frequency_penalty,
                                       sampling.presence_penalty)
@@ -337,7 +339,8 @@ class KVContext:
                 backend.add_greedy(chain)
                 return chain
             if sampling.top_k > 0:
-                backend.add_top_k(chain, sampling.top_k)
+                # More than the vocabulary keeps every token, as the whole vocabulary does.
+                backend.add_top_k(chain, min(sampling.top_k, backend.vocabulary_size(self._vocab)))
             backend.add_top_p(chain, sampling.top_p)
             if sampling.min_p > 0.0:
                 backend.add_min_p(chain, sampling.min_p)

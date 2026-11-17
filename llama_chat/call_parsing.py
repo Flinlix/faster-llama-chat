@@ -15,13 +15,9 @@ from dataclasses import replace
 from typing import Any
 
 from .template import CallBody, json_arguments
-from .tools import ToolCall
+from .tools import MAX_ARGUMENT_DEPTH, ToolCall, nesting_depth
 from .loop_variant import LoopVariant
 
-# How many levels of lists and objects a call's arguments may nest, the arguments'
-# own object counted. Well inside the interpreter's recursion limit, so that every
-# later step that walks the arguments, copying and rendering them, completes.
-MAX_ARGUMENT_DEPTH = 100
 
 
 def parse_calls(body: str, call_body: CallBody | None,
@@ -61,7 +57,7 @@ def parse_calls(body: str, call_body: CallBody | None,
     except RecursionError as e:
         raise ValueError("the call's arguments nest deeper than can be read") from e
     for call in calls:
-        if _nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
+        if nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
             raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
     schemas = parameters or {}
     return [replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
@@ -88,18 +84,6 @@ def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
     if call_body is None:
         raise ValueError(f"no call_body to read this call with: {body!r}")
     return [_as_delimited_call(text, call_body)]
-
-
-def _nesting_depth(value) -> int:
-    """How many levels of lists and objects ``value`` nests, counted without recursion; past :data:`MAX_ARGUMENT_DEPTH` it stops counting."""
-    deepest, pending = 0, [(value, 0)]
-    while pending and deepest <= MAX_ARGUMENT_DEPTH:
-        item, depth = pending.pop()
-        if isinstance(item, (dict, list)):
-            deepest = max(deepest, depth + 1)
-            pending += [(child, depth + 1) for child in
-                        (item.values() if isinstance(item, dict) else item)]
-    return deepest
 
 
 def _as_json_calls(text: str, keys: tuple[str, ...], id_key: str | None) -> list[ToolCall]:

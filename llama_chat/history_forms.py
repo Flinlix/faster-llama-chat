@@ -19,6 +19,7 @@ import logging
 
 from .errors import ArgumentTypeError, InvalidArgumentError
 from .messages import GENERATED_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
+from .tools import ensure_readable, json_value_fault
 from .rendering import GeneratedTurn, generated_turns_in
 from .loop_variant import LoopVariant
 
@@ -92,7 +93,8 @@ def _text(value, where: str) -> str:
         raise InvalidArgumentError("messages", f"{where} is a list of parts, which is not taken "
                                                "here; give its text as one string")
     if not isinstance(value, str):
-        raise TypeError(f"{where} must be a str, not {type(value).__name__}")
+        raise ArgumentTypeError(f"{where} must be a str, not {type(value).__name__}")
+    ensure_readable(value, "messages", where)
     return value
 
 
@@ -153,9 +155,10 @@ def _arguments(given: str) -> dict | None:
         return {}
     try:
         arguments = json.loads(given)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
-    return arguments if isinstance(arguments, dict) else None
+    # As a call the model writes: one past the depth limit, or holding what no model reads, is unreadable.
+    return arguments if isinstance(arguments, dict) and json_value_fault(arguments) is None else None
 
 
 def unreadable_call(given_id: str) -> dict:

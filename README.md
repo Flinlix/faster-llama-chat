@@ -323,7 +323,13 @@ the argument or setting it is about, where it is about one:
 | `OutOfOrderError` | the action needs another one first, which the message names |
 | `ContextOverflowError` | it does not fit; `needed_tokens` and `available_tokens` say by how much |
 
-A wrong type is a `TypeError` that names the argument. An `EngineError`, a
+A wrong type, or an argument an action does not take, is an
+`ArgumentTypeError`, a `TypeError` that names the argument. A text holding a
+lone surrogate (half of a UTF-16 pair, which no model can read) is refused with
+an `InvalidArgumentError` naming its argument; a tool result holding one is
+told to the model as an `unwritable_result` failure. A `ToolSpec` is checked
+where it is built: text keys only, a JSON value every model can be given, no
+`NaN`, nested at most 100 levels. An `EngineError`, a
 `RuntimeError`, says the engine failed while it decoded, edited or generated;
 the next action brings the cache back first. An `InternalError`, a
 `RuntimeError` too, is a fault of this library, found before it could spoil the

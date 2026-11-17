@@ -243,7 +243,8 @@ def ensure_reply_cap(max_reply_tokens: int | None) -> None:
     if max_reply_tokens is not None and (not _is_of_kind(max_reply_tokens, "int")
                                          or max_reply_tokens <= 0):
         raise InvalidSettingError(
-            "max_reply_tokens", "max_reply_tokens must be None or positive (use None for no cap)")
+            "max_reply_tokens", f"max_reply_tokens must be None or a whole number of at least 1 "
+                                f"(None sets no cap), not {max_reply_tokens!r}")
 
 
 @dataclass(frozen=True)

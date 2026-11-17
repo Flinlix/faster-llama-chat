@@ -288,6 +288,10 @@ class Backend:
         """The end-of-sequence token id, negative where the model has none."""
         return self._token_eos(vocab)
 
+    def vocabulary_size(self, vocab) -> int:
+        """How many tokens the vocabulary holds."""
+        return self._vocab_n_tokens(vocab)
+
     def vocabulary_pieces(self, vocab):
         """Each token's text, in token order, as the engine spells it."""
         return (self.token_to_piece_bytes(vocab, token)
