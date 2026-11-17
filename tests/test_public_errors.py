@@ -3,6 +3,7 @@
 The cases below include every input found to break this rule once.
 """
 
+import re
 import threading
 import time
 
@@ -17,7 +18,6 @@ from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry
-import re
 
 _LONE = "a\ud800b"
 
