@@ -1207,10 +1207,13 @@ def _within_seconds(action, seconds=10):
     return outcome["returned"]
 
 
+@pytest.mark.parametrize("tool_timeout_s", [60.0, None], ids=["own thread", "reply's thread"])
 @pytest.mark.parametrize("action", [lambda w: w.inject("Notiz"), lambda w: w.close()],
                          ids=["inject", "close"])
-def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(action):
-    wrapper, fake = tool_wrapper()
+def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(action, tool_timeout_s):
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=512, evict_above_fraction=0.9,
+                                 tool_timeout_s=tool_timeout_s), context=fake)
     registry = ToolRegistry()
 
     @registry.tool("Notiert etwas.")

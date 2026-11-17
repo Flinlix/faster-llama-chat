@@ -132,11 +132,11 @@ thread waits for the reply, and where nobody reads the reply on for
 `unread_reply_timeout_s`, it ends that reply as closing its stream does (a call
 already handed over stays owed, and a question then closes its turn) and goes
 on.
-A tool the reply runs runs on a thread of its own and may not act on the
-wrapper: such an action is refused with an `OutOfOrderError`, which the model
-is told as the tool's failure. A tool that has not returned within
+A tool the reply runs may not act on the wrapper: such an action is refused
+with an `OutOfOrderError`, which the model is told as the tool's failure. A
+tool runs on a thread of its own, and one that has not returned within
 `tool_timeout_s` is answered with a `tool_timeout` failure, and what it returns
-later is dropped.
+later is dropped; with `tool_timeout_s=None` it runs on the reply's thread.
 
 ## What to call, by task
 
