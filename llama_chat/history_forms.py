@@ -17,7 +17,7 @@ import hashlib
 import json
 import logging
 
-from .errors import InvalidArgumentError
+from .errors import ArgumentTypeError, InvalidArgumentError
 from .messages import GENERATED_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
 from .rendering import GeneratedTurn, generated_turns_in
 from .loop_variant import LoopVariant
@@ -54,7 +54,7 @@ def read_messages(messages: list) -> list[dict]:
     for i, item in enumerate(messages):
         where = f"messages[{i}]"
         if not isinstance(item, dict):
-            raise TypeError(f"{where} is a chat message dictionary, such as "
+            raise ArgumentTypeError(f"{where} is a chat message dictionary, such as "
                             f"{{'role': 'user', 'content': text}}, not the "
                             f"{type(item).__name__} {item!r}")
         role = item.get("role")
@@ -100,7 +100,7 @@ def _reply(item: dict, where: str) -> dict:
     """The assistant message ``item`` as a template is given it."""
     calls = item.get("tool_calls") or []
     if not isinstance(calls, list):
-        raise TypeError(f"{where}.tool_calls must be a list, not {type(calls).__name__}")
+        raise ArgumentTypeError(f"{where}.tool_calls must be a list, not {type(calls).__name__}")
     content = item["content"]
     if content is None and not calls:
         raise InvalidArgumentError("messages", f"{where}.content is null, which only a reply "
@@ -119,7 +119,7 @@ def _reply(item: dict, where: str) -> dict:
 def _call(call, where: str) -> dict:
     """One call of a reply's ``tool_calls`` as a template is given it, marked as one that could not be read where its arguments are no JSON object."""
     if not isinstance(call, dict):
-        raise TypeError(f"{where} must be a dictionary, not {type(call).__name__}")
+        raise ArgumentTypeError(f"{where} must be a dictionary, not {type(call).__name__}")
     extra = sorted(set(call) - _CALL_KEYS)
     if extra:
         raise InvalidArgumentError("messages", f"{where} holds {extra[0]!r}, which a call does "
@@ -135,9 +135,9 @@ def _call(call, where: str) -> dict:
                                                f"not {function!r}")
     name, given = function.get("name"), function.get("arguments", "")
     if not isinstance(name, str):
-        raise TypeError(f"{where}.function.name must be a str, not {type(name).__name__}")
+        raise ArgumentTypeError(f"{where}.function.name must be a str, not {type(name).__name__}")
     if not isinstance(given, str):
-        raise TypeError(f"{where}.function.arguments must be the arguments as a JSON string, "
+        raise ArgumentTypeError(f"{where}.function.arguments must be the arguments as a JSON string, "
                         f"not {type(given).__name__}")
     arguments = _arguments(given)
     if arguments is None or not name:

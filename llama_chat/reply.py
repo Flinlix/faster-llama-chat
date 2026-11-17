@@ -6,6 +6,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from typing import Generic, Literal, TypeVar, get_args
 
+from .errors import LIBRARY_ERRORS, OutOfOrderError, internal_error
 from .tools import ToolCall
 
 
@@ -151,7 +152,9 @@ class ReplyStream(Generic[_Delta]):
     then holds the summary of the generation it was closed in, what that
     generation evicted and cut included; a call already handed over stays
     owed, its turn open for the result. Closing is what an abandoned stream
-    needs, so it is also a context manager.
+    needs, so it is also a context manager. Like the wrapper's actions, it
+    raises only the library's own errors. One thread steps it at a time; a
+    stream another thread steps waits for that step.
 
     Attributes:
         reply: The summary, ``None`` until the stream has ended or was

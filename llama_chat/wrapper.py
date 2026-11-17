@@ -26,8 +26,9 @@ from .context import KVContext
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_generated_turns
 from .rendered_cache import RenderedCache
-from .errors import (ContextOverflowError, InvalidArgumentError, InvalidSettingError,
-                     UnsupportedError)
+from .errors import (ArgumentTypeError, ContextOverflowError, InvalidArgumentError,
+                     InvalidSettingError, OutOfOrderError, UnsupportedError,
+                     raising_library_errors_only)
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tool_registry import ToolRegistry
@@ -37,8 +38,15 @@ from .loop_variant import LoopVariant
 _log = logging.getLogger(__name__)
 
 
+@raising_library_errors_only
 class ChatWrapper:
-    """Stateful single-conversation chat over a cache context, with KV reuse."""
+    """Stateful single-conversation chat over a cache context, with KV reuse.
+
+    Once built, every public action raises only the library's own errors
+    (:data:`~llama_chat.errors.LIBRARY_ERRORS`), each naming the argument and
+    the cause; a refused action changes nothing, and a failed reply keeps only
+    what it had produced.
+    """
 
     # ----- setting up ----------------------------------------------------------
     def __init__(
@@ -64,7 +72,7 @@ class ChatWrapper:
                 supplied.
 
         Raises:
-            TypeError: If ``context`` does not answer everything the wrapper
+            ArgumentTypeError: If ``context`` does not answer everything the wrapper
                 calls on it.
             InvalidSettingError: If ``model_path`` is unset or names no
                 file, where the wrapper loads the model itself.
@@ -204,7 +212,7 @@ class ChatWrapper:
                 results cut to nothing (one that ends on a reply or a call
                 may fill the context, as it did when it was generated), or ``messages`` hold no user message and cannot fit
                 beside them either.
-            TypeError: If ``messages`` is no list, a message or a call is no
+            ArgumentTypeError: If ``messages`` is no list, a message or a call is no
                 dictionary, a text, a function's name or a call's arguments is
                 of another type than stated above, or ``tools`` holds anything
                 but tool specs.
@@ -225,17 +233,17 @@ class ChatWrapper:
                 ``generated_turns``.
             TemplateRefusedError: If the template refuses to write the
                 conversation.
-            RuntimeError: If the wrapper is closed, or this thread is still
-                reading a reply.
+            OutOfOrderError: If the wrapper is closed, or a tool the reply
+                that holds the wrapper runs asks for it.
             The previous conversation is left intact on every refusal here.
         """
         ensure_generated_turns(generated_turns)
         if messages is not None and (isinstance(messages, (str, bytes, dict))
                                      or not isinstance(messages, Iterable)):
-            raise TypeError(f"messages must be a list of chat message dictionaries, the system "
+            raise ArgumentTypeError(f"messages must be a list of chat message dictionaries, the system "
                             f"message first where there is one, not {messages!r}")
         if tools is not None and not isinstance(tools, Iterable):
-            raise TypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
+            raise ArgumentTypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
         messages = list(messages or [])         # read once, a generator included
         with self._held():
@@ -427,7 +435,7 @@ class ChatWrapper:
             TemplateRefusedError: At the first iteration, if the template does
                 not write the question as its text, such as one asked twice or
                 an empty one on some templates, naming ``text``.
-            TypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
+            ArgumentTypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
                 ``tool_call_policy`` is neither a text nor a registry,
                 ``max_calls`` is no whole number, ``stop`` is neither a
                 ``str`` nor an iterable of ``str``, ``cancel`` has no
@@ -452,7 +460,7 @@ class ChatWrapper:
                        sampling=generation_sampling(self._config, sampling),
                        on_reply=lambda reply: newest.update(reply=reply))
         if tool_call_policy is not None and not isinstance(tool_call_policy, (str, ToolRegistry)):
-            raise TypeError(f"tool_call_policy must be one of "
+            raise ArgumentTypeError(f"tool_call_policy must be one of "
                             f"{', '.join(map(repr, TOOL_CALL_POLICIES))} or a ToolRegistry, "
                             f"not {tool_call_policy!r}")
         if isinstance(tool_call_policy, str) and tool_call_policy not in TOOL_CALL_POLICIES:
@@ -460,7 +468,7 @@ class ChatWrapper:
                 "tool_call_policy", f"tool_call_policy must be one of "
                 f"{', '.join(map(repr, TOOL_CALL_POLICIES))}, not {tool_call_policy!r}")
         if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)):
-            raise TypeError(f"max_calls must be None or a whole number, not {max_calls!r}")
+            raise ArgumentTypeError(f"max_calls must be None or a whole number, not {max_calls!r}")
         if max_calls is not None and max_calls < 0:
             raise InvalidArgumentError("max_calls", f"max_calls must be at least 0, not {max_calls}")
         # Read from what the newest change published, so it never waits for the lock; the
@@ -596,18 +604,18 @@ class ChatWrapper:
             want of room instead, its result dropped.
 
         Raises:
-            TypeError: If ``call_id`` is no ``str``.
+            ArgumentTypeError: If ``call_id`` is no ``str``.
             OutOfOrderError: If no conversation has been begun; or, its
                 ``field`` then ``call_id``, if no call is waiting, ``call_id``
                 is not the one owed, or it names a call :meth:`begin` left out
                 as one that could not be read. The call stays owed.
             UnsupportedError: If this model's template writes no result,
                 naming ``result``.
-            RuntimeError: If the wrapper is closed, or this thread is still
-                reading a reply.
+            OutOfOrderError: If the wrapper is closed, or a tool the reply
+                that holds the wrapper runs asks for it.
         """
         if not isinstance(call_id, str):
-            raise TypeError(f"call_id must be the id of the call being answered, a str, "
+            raise ArgumentTypeError(f"call_id must be the id of the call being answered, a str, "
                             f"not {call_id!r}")
         failure = unwritable_failure(result)
         with self._held():
@@ -649,7 +657,7 @@ class ChatWrapper:
                 nothing.
 
         Raises:
-            TypeError: If ``keep_text`` is not a ``str``.
+            ArgumentTypeError: If ``keep_text`` is not a ``str``.
             OutOfOrderError: If no conversation has been begun, if a reply is
                 open, or if the newest message is not the assistant's or holds
                 a tool call, one that could not be read included.
@@ -659,8 +667,8 @@ class ChatWrapper:
                 write it shortened to ``""``; or, for the reply that ends a
                 turn that called tools, if its tokens as generated hold more
                 than its text, such as a call that went for want of room.
-            RuntimeError: If the wrapper is closed, or this thread is still
-                reading a reply.
+            OutOfOrderError: If the wrapper is closed, or a tool the reply
+                that holds the wrapper runs asks for it.
         """
         ensure_text(keep_text, "keep_text")
         with self._held():
@@ -707,15 +715,15 @@ class ChatWrapper:
             ``True`` if the wrapper went idle, ``False`` on timeout.
 
         Raises:
-            TypeError: If ``timeout_s`` is neither ``None`` nor a number.
+            ArgumentTypeError: If ``timeout_s`` is neither ``None`` nor a number.
             InvalidArgumentError: If it is negative or not a number at all
                 (``NaN``).
-            RuntimeError: If this thread is reading a reply, which would never
-                end while it waits.
+            OutOfOrderError: If a tool the reply that holds the wrapper runs
+                asks for it.
         """
         if timeout_s is not None and (isinstance(timeout_s, bool)
                                       or not isinstance(timeout_s, (int, float))):
-            raise TypeError(f"timeout_s must be None or a number of seconds, not {timeout_s!r}")
+            raise ArgumentTypeError(f"timeout_s must be None or a number of seconds, not {timeout_s!r}")
         if timeout_s is not None and (timeout_s != timeout_s or timeout_s < 0):    # NaN is unequal
             raise InvalidArgumentError(
                 "timeout_s", f"timeout_s must be a number of seconds of at least 0, not {timeout_s}")
@@ -819,7 +827,8 @@ class ChatWrapper:
         unfinished reply, ends that reply first, as closing its stream does,
         and from a tool that reply runs, is refused as any action is.
         Closes a context passed to the constructor as well. Every action after
-        close raises ``RuntimeError`` once its arguments are checked;
+        close raises :class:`~llama_chat.errors.OutOfOrderError` once its
+        arguments are checked;
         :meth:`conversation` and the properties that say where it stands still
         answer.
         """
@@ -1113,7 +1122,8 @@ class ChatWrapper:
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RuntimeError("ChatWrapper is closed")
+            raise OutOfOrderError(None, "this ChatWrapper is closed, and takes no action; "
+                                        "build a new one")
 
     @contextlib.contextmanager
     def _held(self, settles: bool = True):
@@ -1200,7 +1210,7 @@ def _stop_texts(stop) -> tuple[str, ...]:
     texts = (stop,) if isinstance(stop, str) else tuple(stop) if isinstance(stop, Iterable) else stop
     if texts is not None and (not isinstance(texts, tuple)
                               or not all(isinstance(text, str) for text in texts)):
-        raise TypeError(f"stop must be a str or an iterable of str, not {stop!r}")
+        raise ArgumentTypeError(f"stop must be a str or an iterable of str, not {stop!r}")
     return texts or ()
 
 
@@ -1211,9 +1221,9 @@ def _ensure_cancel_and_sampling(cancel, sampling) -> None:
         TypeError: Naming the option and what it must be.
     """
     if cancel is not None and not callable(getattr(cancel, "is_set", None)):
-        raise TypeError(f"cancel must be a threading.Event, not {cancel!r}")
+        raise ArgumentTypeError(f"cancel must be a threading.Event, not {cancel!r}")
     if sampling is not None and not isinstance(sampling, Sampling):
-        raise TypeError(f"sampling must be a Sampling, not {sampling!r}")
+        raise ArgumentTypeError(f"sampling must be a Sampling, not {sampling!r}")
 
 
 def _ensure_max_calls_runs(policy: ToolCallPolicy | ToolRegistry, max_calls: int | None) -> None:

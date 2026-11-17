@@ -4,6 +4,8 @@ import threading
 
 import pytest
 
+from llama_chat.errors import OutOfOrderError
+
 from llama_chat.config import Config, generation_sampling
 from llama_chat import ChatWrapper, InvalidArgumentError
 from llama_chat.generation import generate
@@ -88,13 +90,13 @@ def test_close_is_idempotent_and_blocks_actions():
     w.begin(opened("s"))
     w.close()
     w.close()  # second close is a no-op
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         w.begin(opened("s"))
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         w.inject("ctx")
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         w.reply("hi").finish()
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         add_tools(w, [])     # even with nothing to declare
 
 
@@ -103,7 +105,7 @@ def test_context_manager_closes_on_exit():
     with ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake) as w:
         w.begin(opened("s"))
         w.reply("hi").finish()
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         w.reply("again").finish()
 
 

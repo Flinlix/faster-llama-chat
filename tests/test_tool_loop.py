@@ -11,7 +11,8 @@ from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
-from llama_chat import ChatWrapper, ContextOverflowError, OutOfOrderError, UnsupportedError
+from llama_chat import (ChatWrapper, ContextOverflowError, InternalError, OutOfOrderError,
+                        UnsupportedError)
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
@@ -745,7 +746,7 @@ def test_a_refusal_while_an_unreadable_call_is_answered_is_raised_not_taken_for_
         return fitting_prompt(self)
 
     monkeypatch.setattr(RenderedCache, "_fitting_prompt", refused)
-    with pytest.raises(ValueError, match="cannot be placed"):
+    with pytest.raises(InternalError, match="cannot be placed"):
         wrapper.reply("los").finish()
     monkeypatch.undo()
     assert wrapper.reply("noch einmal?").finish().text == "reply"
@@ -1937,7 +1938,7 @@ def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whol
         raise TypeError("a fault in the library")
 
     monkeypatch.setattr("llama_chat.resolved_template.parse_calls", faulty)
-    with pytest.raises(TypeError):
+    with pytest.raises(InternalError, match="a fault in the library"):
         wrapper.reply("wie spät?", tool_call_policy="yield").finish()
     monkeypatch.undo()
     assert wrapper.reply("noch einmal?").finish().text

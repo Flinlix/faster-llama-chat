@@ -13,6 +13,7 @@ from collections.abc import Generator, Mapping
 from typing import Protocol
 
 from .config import DrawnSampling
+from .errors import ArgumentTypeError
 
 # The name of the further chat template a GGUF may ship for a conversation that
 # declares tools, beside its default one.
@@ -134,13 +135,13 @@ def ensure_answers(context, members: tuple[str, ...]) -> None:
     """
     missing = [name for name in members if not hasattr(context, name)]
     if missing:
-        raise TypeError(f"{type(context).__name__} does not answer {missing}, "
+        raise ArgumentTypeError(f"{type(context).__name__} does not answer {missing}, "
                         "which this library calls on a cache context")
     other = [name for name in members if not _takes_arguments_of(getattr(CacheContext, name),
                                                                   getattr(context, name))]
     if other:
         given = "; ".join(f"{name}{_arguments(getattr(CacheContext, name))}" for name in other)
-        raise TypeError(f"{type(context).__name__} takes other arguments than this library "
+        raise ArgumentTypeError(f"{type(context).__name__} takes other arguments than this library "
                         f"gives a cache context: {given}")
 
 

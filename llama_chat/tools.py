@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from .errors import InvalidArgumentError
+from .errors import ArgumentTypeError, InvalidArgumentError
 
 __all__ = ["ToolCall", "ToolCallStatus", "ToolSpec"]
 
@@ -91,11 +91,11 @@ def ensure_declarable(specs: list[ToolSpec]) -> None:
     seen = set()
     for spec in specs:
         if not isinstance(spec, ToolSpec):
-            raise TypeError(f"a declaration holds ToolSpecs, such as ToolRegistry.specs() "
+            raise ArgumentTypeError(f"a declaration holds ToolSpecs, such as ToolRegistry.specs() "
                             f"gives, not {spec!r}")
         if not isinstance(spec.name, str) or not isinstance(spec.description, str) \
                 or not isinstance(spec.parameters, dict):
-            raise TypeError(f"a ToolSpec holds a str name, a str description and a dict of "
+            raise ArgumentTypeError(f"a ToolSpec holds a str name, a str description and a dict of "
                             f"parameters, not {spec!r}")
         if not spec.name:
             raise InvalidArgumentError("tools", "a declared tool needs a name to be called by")

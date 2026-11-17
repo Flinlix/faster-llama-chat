@@ -8,7 +8,7 @@ import threading
 import pytest
 
 from llama_chat.config import generation_sampling
-from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
+from llama_chat import (EngineError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.rendering import ConversationRendering
@@ -43,48 +43,48 @@ class _Flaky(FakeContext):
     def prefill(self, token_ids, start_pos, want_logits):
         if self._fails("decode"):
             self.cache.extend(token_ids[:len(token_ids) // 2])
-            raise RuntimeError("decode failed")
+            raise EngineError("decode failed")
         super().prefill(token_ids, start_pos, want_logits)
 
     def decode_generated(self, token_ids, start_pos):
         if self._fails():
             self.cache.extend(token_ids)
-            raise RuntimeError("decode failed")
+            raise EngineError("decode failed")
         super().decode_generated(token_ids, start_pos)
 
     def remove_from(self, pos):
         if self._fails("cut"):
-            raise RuntimeError("the cache refused to remove its tokens")
+            raise EngineError("the cache refused to remove its tokens")
         super().remove_from(pos)
 
     def apply_eviction(self, start, end):
         if self._fails():
-            raise RuntimeError("the cache refused to shift")
+            raise EngineError("the cache refused to shift")
         super().apply_eviction(start, end)
 
     def reset(self):
         if self._fails():
-            raise RuntimeError("the cache refused to empty")
+            raise EngineError("the cache refused to empty")
         super().reset()
 
     def save_state(self):
         if self._fails():
-            raise RuntimeError("the cache refused to save its state")
+            raise EngineError("the cache refused to save its state")
         return super().save_state()
 
     def restore_state(self, state, pos):
         if self._fails():
-            raise RuntimeError("the cache refused the saved state")
+            raise EngineError("the cache refused the saved state")
         super().restore_state(state, pos)
 
     def sampled_tokens(self, *args, **kwargs):
         if self.fail == "generate":
             self.fail = None
             self.cache.append(ord("x"))
-            raise RuntimeError("generation failed")
+            raise EngineError("generation failed")
         for token in super().sampled_tokens(*args, **kwargs):
             if self._fails():
-                raise RuntimeError("generation failed")
+                raise EngineError("generation failed")
             yield token
 
 

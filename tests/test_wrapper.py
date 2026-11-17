@@ -13,6 +13,8 @@ import typing
 
 import pytest
 
+from llama_chat.errors import ArgumentTypeError, OutOfOrderError
+
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
@@ -68,7 +70,7 @@ def test_a_reply_the_conversation_cannot_take_is_refused_when_it_is_asked_for():
     wrapper.reply("etwas anderes").finish()     # a question closes the open turn itself
     assert not wrapper.turn_open and not wrapper.pending_calls
     wrapper.close()
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(OutOfOrderError, match="closed"):
         wrapper.reply("hallo")
 
 
@@ -1123,6 +1125,9 @@ _PLAIN_REPLY_CODE = {
         "Eviction.record",
         "Eviction.too_many",
         "Eviction.with_a_short_question",
+    },
+    "errors.py": {
+        "_raising_library_errors.<locals>.guarded",
     },
     "generation.py": {
         "_TextBuffer.__init__",

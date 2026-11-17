@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .tools import ToolCall, ToolSpec, unwritable_failure
+from .errors import ArgumentTypeError
 
 __all__ = ["ToolRegistry"]
 
@@ -75,10 +76,10 @@ class ToolRegistry:
             return function_or_description
         if function_or_description is not None:
             if not isinstance(function_or_description, str):
-                raise TypeError(f"a tool is given a function or its description, not "
+                raise ArgumentTypeError(f"a tool is given a function or its description, not "
                                 f"{function_or_description!r}")
             if description is not None:
-                raise TypeError("the description is given twice; give it once")
+                raise ArgumentTypeError("the description is given twice; give it once")
             description = function_or_description
 
         def attach(function: Callable) -> Callable:
@@ -92,12 +93,12 @@ class ToolRegistry:
         name = name or _callable_name(function)
         if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function) \
                 or inspect.iscoroutinefunction(getattr(function, "__call__", None)):  # noqa: B004 (reads the method)
-            raise TypeError(f"the tool {name!r} is asynchronous, and a tool is called and its "
+            raise ArgumentTypeError(f"the tool {name!r} is asynchronous, and a tool is called and its "
                             "result read at once; register a function that returns the result")
         if description is None:
             description = _docstring(function)
             if not description:
-                raise TypeError(f"the tool {name!r} has no description; give the function a "
+                raise ArgumentTypeError(f"the tool {name!r} has no description; give the function a "
                                 "docstring or pass description=")
         if parameters is None:
             parameters, readers = _parameters_of(function, name)
@@ -152,7 +153,7 @@ def _read_arguments(entry: _RegisteredTool, arguments) -> dict:
         TypeError: Saying what does not fit the signature or a parameter's type.
     """
     if not isinstance(arguments, dict):
-        raise TypeError(f"the arguments must be an object of named values, not {arguments!r}")
+        raise ArgumentTypeError(f"the arguments must be an object of named values, not {arguments!r}")
     try:
         inspect.signature(entry.function).bind(**arguments)
     except ValueError:
@@ -170,7 +171,7 @@ def _callable_name(function) -> str:
     """
     name = getattr(function, "__name__", "")
     if not name.isidentifier():
-        raise TypeError(
+        raise ArgumentTypeError(
             f"{function!r} carries no name the model could call it by; "
             f"pass name= to register it under one")
     return name
@@ -194,19 +195,19 @@ def _parameters_of(function, name: str) -> tuple[dict, dict[str, _Reader]]:
         # read as the types they name.
         signature = inspect.signature(function, eval_str=True)
     except (ValueError, NameError) as e:
-        raise TypeError(f"the tool {name!r} has no signature this can read ({e}); "
+        raise ArgumentTypeError(f"the tool {name!r} has no signature this can read ({e}); "
                         f"pass parameters=") from e
     properties, required, readers = {}, [], {}
     for key, parameter in signature.parameters.items():
         if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
             continue
         if parameter.kind is parameter.POSITIONAL_ONLY:
-            raise TypeError(f"{name}({key}): a model passes every argument by name, so a "
+            raise ArgumentTypeError(f"{name}({key}): a model passes every argument by name, so a "
                             "parameter taken only by position could never be given")
         try:
             schema, readers[key] = _described(parameter.annotation)
         except TypeError as e:
-            raise TypeError(f"{name}({key}): {e}; pass parameters= to describe it") from e
+            raise ArgumentTypeError(f"{name}({key}): {e}; pass parameters= to describe it") from e
         if parameter.default is parameter.empty:
             required.append(key)
         else:
@@ -251,7 +252,7 @@ def _described(annotation) -> tuple[dict, _Reader]:
     if annotation in _SCALARS:
         return {"type": _SCALARS[annotation]}, _scalar_reader(annotation)
     shown = "no annotation" if annotation is inspect.Parameter.empty else repr(annotation)
-    raise TypeError(f"{shown} is not a type this can describe; annotate it as text, a number, "
+    raise ArgumentTypeError(f"{shown} is not a type this can describe; annotate it as text, a number, "
                     "a truth value, a list, a dict, an optional value, a Literal or an Enum")
 
 
@@ -259,7 +260,7 @@ def _nullable(arguments: tuple) -> tuple[dict, _Reader]:
     """An optional value: one type or ``None``."""
     given = [argument for argument in arguments if argument is not type(None)]
     if len(given) != 1 or len(arguments) != 2:
-        raise TypeError(f"a union of {', '.join(map(repr, given))} is not a type this can "
+        raise ArgumentTypeError(f"a union of {', '.join(map(repr, given))} is not a type this can "
                         "describe; only one type or None is")
     schema, read = _described(given[0])
     if isinstance(schema.get("type"), str):
@@ -272,7 +273,7 @@ def _nullable(arguments: tuple) -> tuple[dict, _Reader]:
 def _choices(values: list, chosen: Callable) -> tuple[dict, _Reader]:
     """One of ``values``, each a JSON scalar; the function is handed ``chosen(value)``."""
     if not values or not all(isinstance(v, (str, int, float, bool)) or v is None for v in values):
-        raise TypeError(f"the choices {values!r} are not all text, numbers, truth values or None")
+        raise ArgumentTypeError(f"the choices {values!r} are not all text, numbers, truth values or None")
     kinds = {_json_type(v) for v in values}
     schema = {"type": kinds.pop(), "enum": values} if len(kinds) == 1 else {"enum": values}
 
@@ -280,7 +281,7 @@ def _choices(values: list, chosen: Callable) -> tuple[dict, _Reader]:
         for allowed in values:
             if value == allowed and isinstance(value, bool) == isinstance(allowed, bool):
                 return chosen(allowed)
-        raise TypeError(f"{where} must be one of {values!r}, not {value!r}")
+        raise ArgumentTypeError(f"{where} must be one of {values!r}, not {value!r}")
     return schema, read
 
 
@@ -292,7 +293,7 @@ def _array(arguments: tuple) -> tuple[dict, _Reader]:
 
     def read(value, where):
         if not isinstance(value, list):
-            raise TypeError(f"{where} must be a list, not {value!r}")
+            raise ArgumentTypeError(f"{where} must be a list, not {value!r}")
         return [read_item(item, f"{where}[{i}]") for i, item in enumerate(value)]
     return {"type": "array", "items": schema}, read
 
@@ -302,13 +303,13 @@ def _mapping(arguments: tuple) -> tuple[dict, _Reader]:
     if not arguments:
         return {"type": "object"}, _scalar_reader(dict)
     if arguments[0] is not str:
-        raise TypeError(f"a dict whose keys are {arguments[0]!r} is not a type this can "
+        raise ArgumentTypeError(f"a dict whose keys are {arguments[0]!r} is not a type this can "
                         "describe; a JSON object's keys are text")
     schema, read_value = _described(arguments[1])
 
     def read(value, where):
         if not isinstance(value, dict):
-            raise TypeError(f"{where} must be an object, not {value!r}")
+            raise ArgumentTypeError(f"{where} must be an object, not {value!r}")
         return {key: read_value(item, f"{where}[{key!r}]") for key, item in value.items()}
     return {"type": "object", "additionalProperties": schema}, read
 
@@ -318,7 +319,7 @@ def _scalar_reader(kind: type) -> _Reader:
     def read(value, where):
         fits = (isinstance(value, (int, float)) if kind is float else isinstance(value, kind))
         if not fits or isinstance(value, bool) and kind is not bool:
-            raise TypeError(f"{where} must be {_ARGUMENT_KIND_NAMES[kind]}, not {value!r}")
+            raise ArgumentTypeError(f"{where} must be {_ARGUMENT_KIND_NAMES[kind]}, not {value!r}")
         return value
     return read
 

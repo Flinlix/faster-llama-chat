@@ -306,8 +306,12 @@ What the model cannot do (call tools, reason, keep a system prompt in place)
 is refused where it is asked for with an `UnsupportedError`, a `ValueError`
 whose `field` names the parameter that asked for it.
 
-**What a refusal tells you.** Every refusal is raised before the action
-changes anything. Each is a `RefusalError`, a `ValueError` whose `field` names
+**What an error tells you.** Once the wrapper is built, every public action
+raises only the library's own errors, each naming the argument and the cause:
+a refusal, an `ArgumentTypeError`, an `EngineError` or an `InternalError`
+(`LIBRARY_ERRORS` in `llama_chat.errors`). Anything else raised inside an
+action is raised as an `InternalError` that names the action and the cause.
+Every refusal is raised before the action changes anything. Each is a `RefusalError`, a `ValueError` whose `field` names
 the argument or setting it is about, where it is about one:
 
 | Refusal | What it means |
