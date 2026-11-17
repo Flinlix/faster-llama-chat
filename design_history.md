@@ -6062,3 +6062,39 @@ states the rule, and these are the measures.
   `min_answer_tokens` and `answer_room_tokens` off (`tests.wrappers.UNGUARDED`),
   since the guard would not let those replies end; the guard has its own
   tests on every template, and the random sequences run with it on.
+
+## 2026-11-16: A mutation run that tests again what changed tests reach
+
+The mutation tool keeps each mutant's result and tests a mutant again only
+where the library function it sits in changed. A test edited, added or
+removed since leaves the results it would change in place: a mutant that
+survived stays a survivor although a new test now kills it, and one an
+edited test no longer kills stays killed. `tests/mutation_run.py` runs the
+tool in a way that closes this.
+
+- **What counts as changed.** Each test function has a digest of its own
+  syntax tree, of its module's other code and of the test code the tests
+  share (every file in `tests/` but a test module, and `llama_chat/testing`).
+  A syntax tree leaves comments and layout out, so editing a comment changes
+  nothing; an edit to shared test code counts for every test, and then the
+  next run tests everything again. Rejected: following which helper each test
+  calls, which would need the tests traced and still miss data a helper
+  reads. The digests are kept in `mutants/` with the tool's own results.
+- **Two passes.** The tool records which functions a test reaches only for a
+  test it has not seen. So the script first clears the results of every
+  mutant in a function the changed tests reached, drops those tests from the
+  tool's record, and runs the tool on one mutant, which records what they
+  reach now. It then clears the results in those functions as well and runs
+  the tool in full. The results are cleared before the record is dropped, so
+  a run stopped between the passes loses nothing.
+- **The first run records the tests as they are.** For the run that was going
+  when the script was written, the digests were taken from the copy of the
+  tests that run uses.
+- **The model-name check skips the run's own files.** The tests run in the
+  copy inside `mutants/`, where the tool's results lie beside the copied
+  project. They hold the names of the tests on real model files, so the
+  check that no file names a model now leaves out the files whose name
+  begins with `mutmut-` at the project's root.
+- **485.10 stays.** The answer guard's second sampler keeps counting only
+  its own draws for the repetition penalties, as recorded above; the user
+  chose to keep it.

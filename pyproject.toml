@@ -49,13 +49,21 @@ packages = ["llama_chat"]
 ignore_missing_imports = true
 
 [tool.mutmut]
-# A run now and then, for hours: mutmut run, then mutmut results.
+# A run now and then, for hours: python -m tests.mutation_run, then mutmut results.
 source_paths = ["llama_chat/"]
 # The protocol a cache context answers, which the library reads by its method names, and the
 # engine's own modules, which only a real model runs.
-do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py", "llama_chat/context.py"]
+do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py", "llama_chat/context.py",
+                 "llama_chat/testing/*"]
 # What the tests read besides the code.
 also_copy = ["README.md", "design_history.md", "CLAUDE.md", "pyproject.toml", "install.sh",
              "LICENSE", "NOTICE", "examples", "hooks"]
-# A test that bounds its processor time runs slower under mutation than it allows.
-pytest_add_cli_args = ["-p", "no:cacheprovider", "-x", "-q", "-m", "not slow and not gpu and not timed"]
+# A test that bounds its processor time runs slower under mutation than it allows; one that
+# reads the source, or traces its functions by name, reads the mutation tool's rewritten copy.
+pytest_add_cli_args = [
+    "-p", "no:cacheprovider", "-x", "-q", "-m", "not slow and not gpu and not timed",
+    "--ignore=tests/test_static.py",
+    "--deselect=tests/test_loops.py::test_every_loop_makes_progress_on_each_pass_or_ends_by_construction",
+    "--deselect=tests/test_wrapper.py::test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_their_code",
+    "--deselect=tests/test_public_errors.py::test_every_public_method_and_property_of_the_wrapper_goes_through_the_one_entry_point",
+]

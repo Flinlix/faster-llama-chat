@@ -25,6 +25,8 @@ _ADDONS = sorted((_PACKAGE / "addons").glob("*.json"))
 # files that install the engine, which name the build for a GPU's maker.
 _MODEL_FOLDERS = (Path(__file__).parent / "templates", _PACKAGE / "addons")
 _EXEMPT = {_ROOT / "design_history.md", _ROOT / "install.sh", _ROOT / "pyproject.toml"}
+# The files a mutation run writes beside the copy of the project it runs the tests in.
+_MUTATION_RESULTS_PREFIX = "mutmut-"
 # The README's install section, which names what gets installed, up to the next section.
 _INSTALL_SECTION = re.compile(r"(?ms)^## Install$.*?(?=^## )")
 
@@ -43,7 +45,8 @@ def _checked_files() -> list[Path]:
         parts = path.relative_to(_ROOT).parts
         return (any(part.startswith(".") or part in ("__pycache__", "mutants")
                     or part.endswith(".egg-info") for part in parts)
-                or path in _EXEMPT or any(folder in path.parents for folder in _MODEL_FOLDERS))
+                or path in _EXEMPT or any(folder in path.parents for folder in _MODEL_FOLDERS)
+                or (path.parent == _ROOT and path.name.startswith(_MUTATION_RESULTS_PREFIX)))
     return [path for path in sorted(_ROOT.rglob("*")) if path.is_file() and not skipped(path)]
 
 

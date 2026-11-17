@@ -882,9 +882,14 @@ command that prints the MiB the process `{pid}` holds on the GPU, bounds GPU
 memory too; the design history, "Faults that show themselves", holds one.
 
 `./install.sh --dev` switches on `hooks/pre-push`, which refuses a push the
-suite and a shorter slow run do not pass. Mutation testing, `mutmut run` and then
-`mutmut results`, changes the code on purpose and lists each change no test
-noticed; it runs for hours, and writes its copies to `mutants/`.
+suite and a shorter slow run do not pass. Mutation testing,
+`python -m tests.mutation_run` and then `mutmut results`, changes the code on
+purpose and lists each change no test noticed; it runs for hours, and writes its
+copies and results to `mutants/`. A later run tests again what changed since: a
+changed library function, and whatever a test edited, added or removed since
+reaches, all of it where code the tests share changed. The tests that
+read the source text or trace functions by name are left out of it, since they
+would read the tool's rewritten copy (`[tool.mutmut]` in `pyproject.toml`).
 
 The tests run every chat template in `tests/templates/` with a stand-in
 tokenizer, one token per character and one per tag, and again with one that
