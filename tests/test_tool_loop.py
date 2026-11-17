@@ -2476,3 +2476,117 @@ def test_a_template_with_no_result_block_refuses_the_result_where_its_call_turn_
     assert refused.value.field == "result"
     assert bool(wrapper.pending_calls) and rows(wrapper) == before
     assert fake.cache == held_tokens(wrapper)
+
+
+def _refused(wrapper, call_id, result="ok"):
+    """The refusal of a result for ``call_id``, after checking that it changed nothing."""
+    before, held = wrapper.conversation(), list(wrapper.pending_calls)
+    with pytest.raises((OutOfOrderError, UnsupportedError)) as refused:
+        wrapper.inject_tool_result(call_id, result)
+    assert wrapper.conversation() == before and wrapper.pending_calls == held
+    return refused.value
+
+
+def test_every_refused_result_names_the_argument_it_is_about_as_the_call_spells_it():
+    """No call waiting, a later call's id or an unknown one name ``call_id``; a template that writes no result names ``result``."""
+    wrapper, _ = tool_wrapper(context_size=400, template=JSON_TOOLS)
+    wrapper.begin(opened("persona"))
+    assert _refused(wrapper, "call00000").field == "call_id"
+
+    wrapper, fake = tool_wrapper(context_size=400, template=JSON_TOOLS)
+    wrapper.begin(opened("persona"))
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    first, second = [e for e in wrapper.reply("los", tool_call_policy="yield")
+                     if isinstance(e, ToolCall)]
+    later = _refused(wrapper, second.id)
+    unknown = _refused(wrapper, "nirgends")
+    assert "order" in str(later).lower() and "no call 'nirgends'" in str(unknown)
+    assert later.field == unknown.field == "call_id"
+
+    fake = FakeContext(NO_RESULT_BLOCK)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    wrapper.begin(opened("persona"))
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    refused = _refused(wrapper, wrapper.pending_calls[0].id)
+    assert isinstance(refused, UnsupportedError) and refused.field == "result"
+
+
+def _round_after_history(can_shift, names):
+    """A conversation of two short exchanges whose model then calls the tools ``names`` at once."""
+    fake = FakeContext(JSON_TOOLS, can_shift=can_shift)
+    wrapper = ChatWrapper(Config(context_size=300, evict_above_fraction=0.9), context=fake)
+    wrapper.begin(opened("persona"))
+    for k in range(2):
+        wrapper.reply(f"frage {k}").finish()
+    fake.call_script = ["[" + ",".join('{"name":"%s","arguments":{}}' % name for name in names) + "]"]
+    calls = [e for e in wrapper.reply("los", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert [call.name for call in calls] == list(names)
+    return wrapper, fake, calls
+
+
+@pytest.mark.parametrize("names", [("clock",), ("clock", "other")], ids=["last result", "one still owed"])
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
+def test_a_result_that_evicts_history_decodes_only_itself_on_a_cache_that_can_shift(can_shift, names):
+    """The history goes and any later call stays owed; a cache that can shift moves the rest instead of decoding it again."""
+    wrapper, fake, (first, *later) = _round_after_history(can_shift, names)
+    held_before, decoded_before, edits_before = len(fake.cache), fake.total_prefilled(), len(fake.edits)
+
+    report = wrapper.inject_tool_result(first.id, "x" * 200)
+
+    assert report.n_evicted_messages > 0 and wrapper.pending_calls == later
+    assert fake.cache == held_tokens(wrapper)
+    if can_shift:
+        edits = fake.edits[edits_before:]
+        shifted = sum(edit[2] for edit in edits if edit[0] == "shift")
+        assert [edit[0] for edit in edits] == ["shift"] * len(edits)
+        assert fake.total_prefilled() - decoded_before == len(fake.cache) - held_before + shifted
+    for call in later:
+        wrapper.inject_tool_result(call.id, "y")
+    fake.call_script = []
+    assert wrapper.reply().finish().text
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
+def test_a_result_evicts_for_room_alone_whatever_max_history_exchanges_says(can_shift):
+    """Under ``max_history_exchanges``, every eviction a result makes is reported as made for room."""
+    evictions = 0
+    for length in range(150, 300, 7):
+        fake = FakeContext(JSON_TOOLS, can_shift=can_shift)
+        wrapper = ChatWrapper(Config(context_size=400, evict_above_fraction=0.9,
+                                     max_history_exchanges=4), context=fake)
+        wrapper.begin(opened("persona"))
+        for k in range(6):
+            wrapper.reply(f"f{k}").finish()
+        fake.call_script = ['[{"name":"clock","arguments":{}}]']
+        call, = [e for e in wrapper.reply("los", tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        report = wrapper.inject_tool_result(call.id, "x" * length)
+        assert report.evicted_for == ("room" if report.n_evicted_messages else None), length
+        evictions += report.n_evicted_messages > 0
+    assert evictions
+
+
+assert _CALL_TURN_OPEN in JSON_TOOLS["chat_template"]
+_JSON_CALL_TURN_CLOSED = {**JSON_TOOLS, "chat_template": JSON_TOOLS["chat_template"]
+                          .replace(_CALL_TURN_OPEN, "{{- '<turn]>\\n' -}}")}
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
+def test_a_result_is_cut_only_once_no_exchange_before_its_own_is_left_to_evict(can_shift):
+    """The room a result is measured in holds the generation prompt, so eviction goes as far as it can before any cut."""
+    cuts = 0
+    for length in range(100, 300, 3):
+        fake = FakeContext(_JSON_CALL_TURN_CLOSED, can_shift=can_shift)
+        wrapper = ChatWrapper(Config(context_size=300, evict_above_fraction=0.9), context=fake)
+        wrapper.begin(opened("persona"))
+        for k in range(3):
+            wrapper.reply(f"frage {k}").finish()
+        fake.call_script = ['[{"name":"clock","arguments":{}}]']
+        call, = [e for e in wrapper.reply("los", tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        report = wrapper.inject_tool_result(call.id, "x" * length)
+        if report.tool_results_cut:
+            cuts += 1
+            assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool"], length
+    assert cuts
