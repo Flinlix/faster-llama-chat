@@ -1,5 +1,6 @@
 """A conversation begun from a history, tool turns included."""
 
+import copy
 import json
 
 import pytest
@@ -918,3 +919,53 @@ def test_each_generated_turn_stays_kept_when_begin_is_given_the_history_up_to_it
         assert internals.generated_turns_held(w) == [
             turn for turn, (_first, last) in zip(kept, spans) if last < length], \
             f"a turn is lost from the history cut to {length} messages"
+
+
+def _a_turn_kept_as_generated():
+    """A wrapper whose conversation keeps one turn that called a tool as generated."""
+    registry = weather_registry()
+    wrapper, fake = tool_wrapper(context_size=2048)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    wrapper.reply("wetter?", tool_call_policy=registry).finish()
+    return wrapper
+
+
+def _changed_inside(value) -> None:
+    """Change every list and dict nested in ``value`` in place."""
+    if isinstance(value, dict):
+        for item in list(value.values()):
+            _changed_inside(item)
+        value["changed"] = True
+    elif isinstance(value, list):
+        for item in list(value):
+            _changed_inside(item)
+        value.append("changed")
+
+
+def test_changing_what_conversation_gives_inside_a_kept_turns_messages_changes_nothing_held():
+    """The kept turns ``conversation()`` gives are the caller's to change, down to a call's arguments."""
+    wrapper = _a_turn_kept_as_generated()
+    given = wrapper.conversation()
+    before = copy.deepcopy(given)
+    assert any(m.get("tool_calls") for r in given["generated_turns"]["turns"] for m in r["messages"])
+    for record in given["generated_turns"]["turns"]:
+        for message in record["messages"]:
+            for value in message.values():
+                _changed_inside(value)
+    assert wrapper.conversation() == before
+
+
+def test_a_kept_turn_given_back_with_a_lone_surrogate_in_any_of_its_messages_is_left_out():
+    """Such a record is one changed since it was given out; the messages alone begin the conversation."""
+    wrapper = _a_turn_kept_as_generated()
+    saved = wrapper.conversation()
+    (record,) = saved["generated_turns"]["turns"]
+    for at in range(len(record["messages"])):
+        stored = {**saved, "generated_turns": json.loads(json.dumps(saved["generated_turns"]))}
+        held = stored["generated_turns"]["turns"][0]["messages"][at]
+        held["content"] += "\ud800"
+        again, _ = tool_wrapper(context_size=2048)
+        report = again.begin(**stored)
+        assert report.generated_turns_ignored and report.n_turns_restored == 0
+        assert again.conversation()["messages"] == saved["messages"]
