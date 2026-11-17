@@ -10,6 +10,7 @@ renders fail the checks the shortcuts rest on, so that the paths an unknown
 template takes are driven too.
 """
 
+import itertools
 import datetime as real_datetime
 import json
 import math
@@ -2690,3 +2691,82 @@ def test_a_reply_whose_unreadable_call_fails_to_be_answered_is_taken_back(stem, 
     assert run.chat.conversation()["messages"] == before["messages"]
     run.context.replies = ["Sunny."]
     assert run.chat.reply("And now?").finish().text == "Sunny."
+
+
+_ANSWERS = [f"Answer number {i}, a little longer." for i in range(10)]
+
+
+def _settled_after(run, questions):
+    """``run`` begun on a cache that saves states, each of ``questions`` asked and answered, and the work after each reply done."""
+    run.begin()
+    for question in questions:
+        run.chat.reply(question).finish()
+        run.chat.wait_idle()
+
+
+def _text_end(context, tokens, text):
+    """Where in ``tokens`` the last occurrence of ``text`` ends."""
+    target = "".join(context.token_text(t) for t in tokens).rindex(text) + len(text)
+    ends = itertools.accumulate(len(context.token_text(t)) for t in tokens)
+    return next(i + 1 for i, end in enumerate(ends) if end >= target)
+
+
+@pytest.mark.counts_work
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_reply_settled_on_a_cache_that_saves_states_decodes_nothing_of_its_question_again(stem):
+    """Where the template writes the reply's opening otherwise once it closes, the cache goes back to where the opening begins, not to before the question."""
+    run = _Run(stem, context_size=16384, replies=_ANSWERS, **_COST_CACHES["saves states"])
+    _settled_after(run, ["First question?", "Second question?"])
+    first = len(run.context.prefill_calls)
+    run.chat.reply("Third question?").finish()
+    run.chat.wait_idle()
+    question_end = _text_end(run.context, run.context.cache, "Third question?")
+    # The first decode is the question's own; none after it starts inside the question.
+    assert [call for call in run.context.prefill_calls[first + 1:] if call[0] < question_end] == []
+
+
+@pytest.mark.counts_work
+@pytest.mark.parametrize("stem", _EVERY)
+def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_its_generation_began(stem):
+    run = _Run(stem, context_size=16384, replies=_ANSWERS, **_COST_CACHES["saves states"])
+    _settled_after(run, ["First question?", "Second question?", "Third question?"])
+    prompted = run.seen_tokens[-1]          # the cache as the newest reply's generation began
+    text = run.chat.conversation()["messages"][-1]["content"]
+    decoded = run.context.total_prefilled()
+    run.chat.truncate_last_reply(text[:len(text) // 2])
+    run.chat.wait_idle()
+    decoded = run.context.total_prefilled() - decoded
+    after = run.context.cache
+    if after[:len(prompted)] != prompted:
+        return      # the template writes the past reply after other text than its generation prompt
+    assert decoded <= len(after) - len(prompted)
+
+
+def _refusing(fixture, guard):
+    """``fixture`` with its template refusing, through ``raise_exception``, every render where ``guard`` holds."""
+    refusal = "{%- if " + guard + " %}{{ raise_exception('refused by the test') }}{%- endif %}"
+    return {**fixture, "chat_template": refusal + fixture["chat_template"]}
+
+
+_CALLING = "messages[-1].tool_calls is defined and messages[-1].tool_calls"
+
+
+@pytest.mark.parametrize("guard", [
+    pytest.param(_CALLING + " and messages[-1].content is none", id="no-text-as-none"),
+    pytest.param(_CALLING + " and messages[-1].content", id="text-beside-a-call"),
+    pytest.param(_CALLING + " and add_generation_prompt", id="prompt-after-a-call"),
+])
+@pytest.mark.parametrize("stem", _WRITES_CALL_IDS)
+def test_a_call_keeps_the_id_the_model_wrote_on_a_template_that_refuses_only_what_the_conversation_never_holds(stem, guard, monkeypatch):
+    """The id is tried in the call as the conversation will hold it: without text, as an empty one, and with no generation prompt after it."""
+    monkeypatch.setitem(_FIXTURES, stem, _refusing(_FIXTURES[stem], guard))
+    probe = _Run(stem)
+    _opener, body, _closer = _call_body(probe, {"city": "Bonn"})
+    assert WRITTEN_ID in body
+    run = _Run(stem, context_size=16384)
+    run.context.replies = [ScriptedCall(body), "Sunny."]
+    run.begin(tools=[WEATHER])
+    call, = [e for e in run.chat.reply("Weather?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert call.id == WRITTEN_ID
+    run.chat.inject_tool_result(call.id, "sunny")
+    assert run.chat.reply(tool_call_policy="yield").finish().text == "Sunny."
