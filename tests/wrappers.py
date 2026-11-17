@@ -119,13 +119,29 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
     The caller's own texts are a message's content and thought, a call's name
     and its string arguments, and each description of a declaration. With
     ``owned``, each piece also names the indexes of the messages its own texts
-    come from, empty for the template's text and the declarations.
+    come from, empty for the template's text and the declarations. Where the
+    template writes equal texts otherwise than their unequal markers, as one
+    that compares texts does, equal texts are marked alike, and each is placed
+    in the order of the messages it comes from.
     """
-    texts, owner_of = {}, {}
+    try:
+        return _rendered_pieces(context, messages, declarations, generation_prompt, reasoning,
+                                for_tools, owned, shares_equal_texts=False)
+    except AssertionError:
+        return _rendered_pieces(context, messages, declarations, generation_prompt, reasoning,
+                                for_tools, owned, shares_equal_texts=True)
+
+
+def _rendered_pieces(context, messages, declarations, generation_prompt, reasoning, for_tools,
+                     owned, shares_equal_texts):
+    """:func:`rendered_pieces`, equal texts marked alike where ``shares_equal_texts``."""
+    texts, owner_of, by_text = {}, {}, {}
 
     def mark(text, owner=None):
-        marker = f"ZQ{len(texts)}QZ"
-        texts[marker], owner_of[marker] = text, owner
+        marker = by_text.setdefault(text, f"ZQ{len(texts)}QZ") if shares_equal_texts \
+            else f"ZQ{len(texts)}QZ"
+        texts[marker] = text
+        owner_of.setdefault(marker, []).append(owner)
         return marker
 
     def marked(value, key=None, owner=None):
@@ -160,8 +176,10 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
             pieces.append((part, False, frozenset()))
             at += len(part)
         else:
-            if owner_of[part] is not None:
-                run.add(owner_of[part])
+            owners = owner_of[part]
+            owner = owners.pop(0) if len(owners) > 1 else owners[0]
+            if owner is not None:
+                run.add(owner)
             if k + 1 < len(parts) and parts[k + 1].startswith("ZQ"):
                 continue                # own texts with no template text between them are one
             following = parts[k + 1] if k + 1 < len(parts) else ""

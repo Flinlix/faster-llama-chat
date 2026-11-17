@@ -86,6 +86,10 @@ def split_render(render: Callable[[list[dict], list[dict] | None], str | None],
                  if marked is not None else None)
         if split is not None:
             return split
+        # A template that compares texts writes equal ones alike only where their markers are.
+        split = _placed_with_shared_markers(render, rendered, messages, declarations, written)
+        if split is not None:
+            return split
         # Once more, for a render that read the clock as it moved on between the two.
     raise TemplateRefusedError("messages", "this model's template writes a message's text otherwise than as "
                      "text in its place, so it could not be kept apart from the "
@@ -149,15 +153,59 @@ def _marked(messages: list[dict], declarations: list[dict] | None
     return marked, mark_descriptions(declarations), values
 
 
+def _placed_with_shared_markers(render, rendered: str, messages: list[dict],
+                                declarations: list[dict] | None, written) -> SplitRender | None:
+    """:func:`split_render`'s split, equal texts of one kind and role marked alike, each text written once placed in the order of its values; ``None`` where no texts are equal or it does not match."""
+    marked_messages, marked_declarations, values = _marked(messages, declarations)
+    groups: dict[tuple, list[str]] = {}
+    for marker, value in values.items():
+        role = messages[value.message]["role"] if value.message >= 0 else None
+        groups.setdefault((value.kind, role, value.text), []).append(marker)
+    if all(len(markers) == 1 for markers in groups.values()):
+        return None
+    first = {marker: markers[0] for markers in groups.values() for marker in markers}
+
+    def shared(item):
+        if isinstance(item, str):
+            return _MARKER.sub(lambda found: first[found.group(1)], item)
+        if isinstance(item, dict):
+            return {key: shared(inner) for key, inner in item.items()}
+        if isinstance(item, list):
+            return [shared(inner) for inner in item]
+        return item
+    marked = render(shared(marked_messages), shared(marked_declarations))
+    if marked is None:
+        return None
+    parts = _MARKER.split(marked)
+    written_markers = parts[1::2]
+    if any(written_markers.count(markers[0]) != len(markers) for markers in groups.values()
+           if len(markers) > 1):
+        return None                     # equal texts written other than once for each of them
+    placed = _walk(rendered, parts, {markers[0]: values[markers[0]] for markers in groups.values()},
+                   written)
+    if placed is None:
+        return None
+    waiting = {id(values[markers[0]]): [values[marker] for marker in markers]
+               for markers in groups.values()}
+    in_order = tuple((queue.pop(0) if len(queue := waiting[id(value)]) > 1 else queue[0], span, own)
+                     for value, span, own in placed)
+    return _split_of(rendered, in_order, list(values.values()), len(messages))
+
+
 def _placed(rendered: str, marked: str, values: dict[str, _Value], n_messages: int,
             written) -> SplitRender | None:
     """Where each marker's text sits in ``rendered``; ``None`` where it is not the marked render with the texts in place."""
     placed = _walk(rendered, _MARKER.split(marked), values, written)
     if placed is None:
         return None
+    return _split_of(rendered, placed, list(values.values()), n_messages)
+
+
+def _split_of(rendered: str, placed: tuple, values: list[_Value], n_messages: int) -> SplitRender:
+    """The split that ``placed``, each value with where its text and its own text sit, makes of ``rendered``."""
     own, contents = [], [None] * n_messages
     last_call: dict[int, int] = {}
-    for value in values.values():
+    for value in values:
         last_call[value.message] = max(last_call.get(value.message, -1), value.call)
     # A template may write a call's name again elsewhere, in its result say; its
     # arguments, and the name where first written, are the call's own.
