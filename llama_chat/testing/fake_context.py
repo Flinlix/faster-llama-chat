@@ -166,8 +166,11 @@ class FakeContext:
     A generation is the library's own loop drawing, in this order: the next of
     ``call_script`` where a call's opening may be drawn, else the next of
     ``replies``, else ``gen_text`` cut or padded to ``gen_tokens``; then the
-    end of generation. The fixture's end-of-sequence tag, and each tag its
-    ``ends_generation`` lists, end a generation too, as the engine reads them. It first hands ``before_reply`` the cache's text, so a
+    first tag of the closing after a reply, the fixture's ``turn_end_token``
+    or else its end-of-sequence tag, as the model writes it, unless that tag
+    may not be drawn; then the end of generation. The fixture's
+    end-of-sequence tag, and each tag its ``ends_generation`` lists, end a
+    generation too, as the engine reads them. It first hands ``before_reply`` the cache's text, so a
     test can compare it with the template's render at that moment.
 
     Every decode lands at the cache's end, and each cache edit asserts the
@@ -435,6 +438,9 @@ class FakeContext:
         else:
             for i in range(self.gen_tokens):
                 yield self._generated(self.gen_text[i] if i < len(self.gen_text) else "x")
+        closing = self._tag_token(self._fixture.get("turn_end_token") or self._fixture["eos_token"])
+        if closing not in withheld_tokens:
+            yield closing
         while True:
             yield END_OF_GENERATION
 
