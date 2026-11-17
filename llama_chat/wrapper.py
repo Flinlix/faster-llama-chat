@@ -519,10 +519,12 @@ class ChatWrapper:
         holds = False
         try:
             while True:
-                if self._reply_waiting_for_reader is stream_ref[0]:
-                    self._reply_waiting_for_reader = None
+                # Held first, so that the thread that read before never finds itself holding
+                # with no reply waiting for it.
                 if holds:
                     self._holder = threading.current_thread()
+                if self._reply_waiting_for_reader is stream_ref[0]:
+                    self._reply_waiting_for_reader = None
                 try:
                     step = next(steps)
                 except StopIteration as ended:
@@ -533,11 +535,11 @@ class ChatWrapper:
                     self._reply_waiting_for_reader = stream_ref[0]
                 yield step
         except GeneratorExit:
-            if self._reply_waiting_for_reader is stream_ref[0]:
-                self._reply_waiting_for_reader = None
             # Closed at a step: ``steps`` still waits there, and is closed on this thread.
             if holds:
                 self._holder = threading.current_thread()
+            if self._reply_waiting_for_reader is stream_ref[0]:
+                self._reply_waiting_for_reader = None
             try:
                 steps.close()
             finally:
@@ -878,7 +880,10 @@ class ChatWrapper:
         answer.
         """
         try:
-            if self._holder is threading.current_thread():
+            # Through its stream, as the next action ends it, so that the stream keeps its
+            # summary; one another thread has begun to step is waited for below instead.
+            if self._holder is threading.current_thread() \
+                    and self._end_reply_waiting_for_reader() is not False:
                 # From a tool the reply runs, that reply is running, and close() is refused below.
                 for steps in [s for s in self._replies
                               if inspect.getgeneratorstate(s) != inspect.GEN_RUNNING]:
@@ -1276,12 +1281,17 @@ class ChatWrapper:
                 "wait for that reply while the reply waits for the tool; call nothing on the "
                 "wrapper from a tool it runs")
         if self._holder is current:
-            named = self._reply_waiting_for_reader
-            stream = named() if named is not None else None
-            if stream is not None:
+            # A stream another thread has begun to step is that thread's from then on: the
+            # action waits for it instead.
+            if self._end_reply_waiting_for_reader():
                 _log.warning("a reply this thread had not read to its end was ended by its "
                              "next action")
-                stream.close()
+
+    def _end_reply_waiting_for_reader(self) -> bool | None:
+        """End the reply that holds the wrapper waiting for its reader, through its stream, unless a step of it runs; whether it did, ``None`` where no stream waits."""
+        named = self._reply_waiting_for_reader
+        stream = named() if named is not None else None
+        return None if stream is None else stream.end_if_unread(0.0)
 
 
 class _Waiting:

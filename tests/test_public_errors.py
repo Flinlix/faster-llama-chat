@@ -298,3 +298,30 @@ def test_a_begin_after_a_fault_the_cache_check_found_writes_the_cache_anew(monke
     wrapper._conversation._found_fault = InternalError("a fault found after the reply")
     wrapper.begin(opened("s"))              # the remedy, not refused for what it remedies
     assert wrapper.reply("zwei").finish().text
+
+
+@pytest.mark.parametrize("action", ["inject", "close"])
+def test_an_action_on_the_thread_that_read_a_reply_another_thread_has_begun_to_step_waits_for_it(action):
+    fake = FakeContext(PLAIN, gen_tokens=20)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    wrapper.begin(opened("s"))
+    stream = wrapper.reply("eins")
+    next(stream)                            # this thread holds the wrapper, waiting to read on
+    stepping, finished = threading.Event(), []
+
+    def read_on():
+        with stream._stepping:              # a step of the other thread has begun
+            stepping.set()
+            time.sleep(0.2)
+        finished.append(stream.finish())
+    other = threading.Thread(target=read_on, daemon=True)
+    other.start()
+    assert stepping.wait(10)
+    if action == "inject":
+        wrapper.inject("Notiz")             # waits for the other thread's reply, not refused
+    else:
+        wrapper.close()
+    other.join(10)
+    assert finished and finished[0] is not None and finished[0].stop_reason != "interrupted"
+    if action == "inject":
+        assert after_system(wrapper.conversation()["messages"])[-1]["content"] == "Notiz"

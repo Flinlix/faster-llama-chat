@@ -1053,11 +1053,14 @@ def test_a_result_that_cannot_fit_reports_the_turn_closed_not_a_success():
     pytest.fail("no context size left the call room but its result none")
 
 
-def test_a_stream_closed_early_still_reports_its_generation():
+@pytest.mark.parametrize("ends", ["stream.close", "wrapper.close", "next action"])
+def test_a_stream_ended_early_still_reports_its_generation(ends):
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
     stream = w.reply("hallo")
     next(stream)
-    stream.close()
+    {"stream.close": stream.close, "wrapper.close": w.close,
+     "next action": lambda: w.inject("Notiz")}[ends]()
+    assert list(stream) == []
     assert stream.reply is not None and stream.reply.n_generated_tokens >= 1
 
 
