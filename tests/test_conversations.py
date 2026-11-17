@@ -2921,3 +2921,68 @@ def test_a_result_that_evicts_while_another_call_is_owed_leaves_the_cache_as_the
         assert fake.total_prefilled() - before <= len(fake.tokenize(result)) + 20
     wrapper.inject_tool_result(second.id, "z")
     assert wrapper.reply().finish().n_generated_tokens
+
+
+def _without_empty_reply():
+    """A tool template that writes no empty reply, its calls read from the template itself."""
+    return next(stem for stem in _TOOL_TEMPLATES if _Run(stem).context.stated_render(
+        [{"role": "user", "content": "Weather?"}, {"role": "assistant", "content": ""}]) is None
+        and not shipped_addon_call(_FIXTURES[stem]["chat_template"]))
+
+
+def _filling_run(stem):
+    """A conversation on ``stem`` whose threshold is the whole context, so that a message can fill all but the reply's room."""
+    run = _Run(stem, context_size=900)
+    run.chat.close()
+    run.chat = ChatWrapper(Config(context_size=900, min_reply_tokens=8, evict_above_fraction=1.0,
+                                  min_answer_tokens=None, answer_room_tokens=None),
+                           context=run.context)
+    return run
+
+
+def test_a_request_taken_back_for_a_result_with_no_room_leaves_the_exchanges_before_it():
+    """A call alone whose result cannot fit takes back only its own exchange: what came before stays as it was."""
+    stem = _without_empty_reply()
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+    earlier = [{"role": "user", "content": "Hi?"}, {"role": "assistant", "content": "Hello."}]
+    for length in range(400, 900, 4):
+        run = _filling_run(stem)
+        run.context.replies = [ScriptedCall(body)]
+        try:
+            run.begin(earlier, tools=[WEATHER])
+            call = next(e for e in run.chat.reply("Weather? " + "x" * length,
+                                                  tool_call_policy="yield")
+                        if isinstance(e, ToolCall))
+        except (ContextOverflowError, StopIteration):
+            continue
+        before = run.chat.conversation()["messages"]
+        if not any(m["role"] == "user" for m in before[:-2]):
+            continue                    # the earlier exchange went to make room for the question
+        report = run.chat.inject_tool_result(call.id, "x" * 50_000)
+        if report.turn_closed:
+            assert report.taken_back and not run.chat.turn_open
+            newest = max(i for i, m in enumerate(before) if m["role"] == "user")
+            assert run.chat.conversation()["messages"] == before[:newest]
+            return
+    pytest.fail("no question length left an earlier exchange, the call room, and its result none")
+
+
+def test_a_call_begun_without_a_question_is_taken_back_where_its_result_has_no_room():
+    """A history of a call alone, no question before it, whose result cannot fit: the call goes and the next question is answered."""
+    stem = _without_empty_reply()
+    for length in range(300, 900, 4):
+        run = _filling_run(stem)
+        call = {"id": "call00000", "type": "function",
+                "function": {"name": WEATHER.name, "arguments": '{"city": "%s"}' % ("x" * length)}}
+        try:
+            run.begin([{"role": "assistant", "content": "", "tool_calls": [call]}], tools=[WEATHER])
+        except ContextOverflowError:
+            break
+        report = run.chat.inject_tool_result("call00000", "x" * 50_000)
+        if report.turn_closed:
+            assert report.taken_back and not run.chat.turn_open
+            assert [m["role"] for m in run.chat.conversation()["messages"]] == (
+                ["system"] if run.system else [])
+            assert run.chat.reply("Weather?").finish().text
+            return
+    pytest.fail("no call length left the call room but its result none")

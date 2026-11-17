@@ -24,7 +24,7 @@ from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS
 from tests.internals import held_tokens
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, system_turn, tool_wrapper, weather_registry,
-                            without_ids, rows, numbered_exchanges, two_owed_calls)
+                            without_ids, rows, numbered_exchanges, two_owed_calls, unbegun_tool_wrapper)
 from tests import internals
 
 
@@ -2435,3 +2435,44 @@ def test_a_result_that_evicts_while_another_call_is_owed_decodes_no_more_than_th
     wrapper.inject_tool_result(second.id, "z")
     fake.call_script = []
     assert wrapper.reply().finish().n_generated_tokens
+
+
+def test_a_result_with_nothing_to_answer_is_refused_naming_its_cause_and_argument():
+    """Before a begin the refusal says what comes first; with no call waiting it names ``call_id``."""
+    unbegun, _ = unbegun_tool_wrapper()
+    with pytest.raises(OutOfOrderError, match="(?i)begin") as refused:
+        unbegun.inject_tool_result("call00000", "ok")
+    assert refused.value.field is None
+
+    wrapper, fake = tool_wrapper()
+    wrapper.begin(opened("persona"))
+    before, held = wrapper.conversation(), list(fake.cache)
+    with pytest.raises(OutOfOrderError, match="waiting") as refused:
+        wrapper.inject_tool_result("call00000", "ok")
+    assert refused.value.field == "call_id"
+    assert wrapper.conversation() == before and fake.cache == held
+
+
+# A template that calls tools and writes no result, whose call turn closes, so that the
+# generation prompt follows a past call.
+_CALL_TURN_OPEN = "{%- if calls -%}{%- set ns.open = true -%}{%- else -%}{{- '<turn]>\\n' -}}{%- endif -%}"
+assert _CALL_TURN_OPEN in NO_RESULT_BLOCK["chat_template"]
+_NO_RESULT_CALL_TURN_CLOSED = {**NO_RESULT_BLOCK, "chat_template": NO_RESULT_BLOCK["chat_template"]
+                               .replace(_CALL_TURN_OPEN, "{{- '<turn]>\\n' -}}")}
+
+
+def test_a_template_with_no_result_block_refuses_the_result_where_its_call_turn_closes():
+    """The result is refused naming ``result`` though the generation prompt follows the call, and the call stays owed."""
+    fake = FakeContext(_NO_RESULT_CALL_TURN_CLOSED)
+    wrapper = ChatWrapper(Config(context_size=512), context=fake)
+    wrapper.begin(opened("persona"))
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    before = rows(wrapper)
+
+    with pytest.raises(UnsupportedError, match="renders no tool result") as refused:
+        wrapper.inject_tool_result(wrapper.pending_calls[0].id, "ok")
+
+    assert refused.value.field == "result"
+    assert bool(wrapper.pending_calls) and rows(wrapper) == before
+    assert fake.cache == held_tokens(wrapper)
