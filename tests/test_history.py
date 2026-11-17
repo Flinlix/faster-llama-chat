@@ -14,10 +14,11 @@ from tests.chat_messages import Result, tool_turn, opened, after_system
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
 from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_KEEPING_THOUGHTS, TOOLS,
-                                      TOOLS_CLOSING_OPEN_TURNS)
+                                      TOOLS_CLOSING_OPEN_TURNS, JSON_TOOLS, REFUSES_A_TEXT)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows)
+from tests.chat_templates import STEMS, WEATHER, fixture
 
 
 # ----- beginning again from conversation() ---------------------------------
@@ -593,3 +594,81 @@ def test_saved_turns_stored_with_their_keys_sorted_are_restored():
                                                                 sort_keys=True))}
     again, _ = tool_wrapper(context_size=2048)
     assert again.begin(**stored).n_turns_restored == 1
+
+
+def test_a_begin_cuts_every_result_no_kept_turn_stands_for_and_none_a_kept_turn_stands_for():
+    """A result written by the caller before the kept turn, one inside it and one after it, begun again in a smaller context."""
+    clock = ToolSpec("clock", "time", {"type": "object", "properties": {}})
+    fake = FakeContext(JSON_TOOLS)
+    live = ChatWrapper(Config(context_size=3000), context=fake)
+    written = [{"role": "user", "content": "wie spät?"},
+               {"role": "assistant", "content": None, "tool_calls": [
+                   {"id": "a", "type": "function", "function": {"name": "clock", "arguments": "{}"}}]},
+               {"role": "tool", "tool_call_id": "a", "content": "A" * 300}]
+    live.begin(opened("persona", written), tools=[clock])
+    fake.call_script = ['[{"name": "clock", "arguments": {}}]'] * 2
+    for text in ("B" * 300, "C" * 300):
+        list(live.reply(tool_call_policy="yield"))
+        live.inject_tool_result(live.pending_calls[0].id, text)
+    saved = live.conversation()
+    (first, last), = internals.generated_turn_spans(live)
+    inside = {saved["messages"][i]["tool_call_id"] for i in range(first, last + 1)
+              if saved["messages"][i]["role"] == "tool"}
+    outside = {m["tool_call_id"] for m in saved["messages"] if m["role"] == "tool"} - inside
+    assert inside and len(outside) == 2
+
+    again = ChatWrapper(Config(context_size=800), context=FakeContext(JSON_TOOLS))
+    report = again.begin(**saved)
+    assert report.n_turns_restored == 1
+    assert {call.id for call in report.tool_results_cut} == outside
+    kept = again.conversation()["messages"]
+    assert kept[first:last + 1] == saved["messages"][first:last + 1]
+    assert again.reply().finish().n_generated_tokens
+
+
+def _owed_call(name: str, arguments: dict) -> list[dict]:
+    """A question and a reply calling ``name``, its result still owed."""
+    return [{"role": "user", "content": "Weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c0abcdefg", "type": "function",
+                 "function": {"name": name, "arguments": json.dumps(arguments)}}]}]
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS if fixture(stem).get("calls_tools")])
+def test_a_begin_with_a_call_owed_holds_nothing_past_the_conversation_as_it_stands(stem):
+    """The cache holds no token of what follows the owed call, such as the opening of the next turn, which a question may write otherwise than a result."""
+    fake = FakeContext(fixture(stem))
+    w = ChatWrapper(Config(context_size=4096), context=fake)
+    try:
+        w.begin(opened("s", _owed_call(WEATHER.name, {"city": "Bonn"})), tools=[WEATHER])
+    except ValueError:
+        pytest.skip("the template does not take this history")
+    assert w.pending_calls
+    standing = fake.stated_render(internals.rendered_messages(w), internals.declarations(w),
+                                  generation_prompt=False, reasoning=internals.reasons(w),
+                                  for_tools=internals.uses_tool_template(w))
+    assert standing.startswith(fake.text_of(fake.cache))
+
+
+def test_a_begin_with_a_call_owed_is_taken_where_the_template_refuses_a_result_that_names_no_call():
+    """The results the cache is settled against name their calls, as every result the library writes does."""
+    names_its_call = {**TOOLS, "chat_template": TOOLS["chat_template"].replace(
+        "{%- if role == 'tool' -%}",
+        "{%- if role == 'tool' -%}{%- if m.name is not string -%}"
+        "{{- raise_exception('a result names its call') -}}{%- endif -%}", 1)}
+    assert names_its_call != TOOLS
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(names_its_call, gen_tokens=3))
+    w.begin(opened("s", _owed_call("weather", {"city": "Bonn"})),
+            tools=weather_registry().specs())
+    assert [call.id for call in w.pending_calls] == ["c0abcdefg"]
+    w.inject_tool_result("c0abcdefg", "sonnig")
+    assert w.reply().finish().n_generated_tokens
+
+
+def test_a_history_the_template_refuses_is_refused_naming_messages_and_the_templates_reason():
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(REFUSES_A_TEXT, gen_tokens=3))
+    with pytest.raises(ValueError) as refused:
+        w.begin(opened("s", [{"role": "user", "content": "a"},
+                             {"role": "assistant", "content": "refused"}]))
+    assert refused.value.field == "messages"
+    assert "this text is refused" in str(refused.value)
