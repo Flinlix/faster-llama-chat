@@ -35,7 +35,7 @@ from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
-from llama_chat.testing.invented_templates import NUMBERED
+from llama_chat.testing.invented_templates import NUMBERED, TOOLS
 from .wrappers import (add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
                        rendered_pieces, rows, two_owed_calls)
 
@@ -3019,3 +3019,28 @@ def test_a_reply_after_a_call_whose_tokens_end_past_its_text_is_refused_a_cut_to
             refused_on.append(stem)
             assert run.chat.reply("And tomorrow?").finish().text
     assert refused_on, "no template left tokens as generated past the reply's text"
+
+
+def test_a_reply_after_a_call_whose_tokens_as_generated_hold_a_call_that_went_is_not_cut_to_nothing():
+    """The turn's tokens end on the call that went, not on the reply's text, so where its newest call closes cannot be told."""
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    for size in range(200, 900, 2):
+        context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
+        context.call_script = ["fn:clock{}"]
+        chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
+                                  min_reply_tokens=120), context=context)
+        try:
+            chat.begin(opened("Be brief."), tools=registry.specs())
+            stream = chat.reply("Wie spät?", tool_call_policy=registry)
+            shown = "".join(step for step in stream if isinstance(step, str))
+        except ContextOverflowError:
+            continue
+        if stream.reply.stop_reason == "unreadable_tool_call" and not chat.turn_open:
+            newest = chat.conversation()["messages"][-1]["content"]
+            held = internals.generated_turns_held(chat)
+            with pytest.raises(TemplateRefusedError, match="cannot be cut after its turn's newest call"):
+                chat.truncate_last_reply(shown[:len(shown) - len(newest)])
+            assert internals.generated_turns_held(chat) == held
+            return
+    pytest.fail("no context size left the error result without room")

@@ -17,6 +17,7 @@ from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_
                             reasoning_wrapper, rendered_reply, rows)
 from llama_chat import OutOfOrderError, ContextOverflowError, TemplateRefusedError
 from llama_chat.errors import InvalidArgumentError
+from llama_chat.tool_registry import ToolRegistry
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -411,3 +412,56 @@ def test_a_reply_cut_to_nothing_after_a_call_that_went_leaves_an_older_turns_cal
     assert chat.conversation()["messages"][-1] == {"role": "assistant", "content": ""}
     assert not internals.generated_turns_held(chat)
     assert chat.reply("weiter").finish().text
+
+
+def _turn_after_calls(calls: int, answer: str, **fake_kw):
+    """A wrapper whose newest turn ran ``calls`` calls and then answered ``answer``, the shown text and the turn's tokens as generated."""
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    wrapper, fake = tool_wrapper(context_size=4096, **fake_kw)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:clock{}"] * calls
+    fake.replies = [answer]
+    shown = "".join(step for step in wrapper.reply("wie spät?", tool_call_policy=registry)
+                    if isinstance(step, str))
+    generated, = internals.generated_turns_held(wrapper)
+    return wrapper, fake, shown, generated[0]
+
+
+def _spelled(fake, tokens) -> bytes:
+    return b"".join(fake.token_bytes(token) for token in tokens)
+
+
+@pytest.mark.parametrize("fake_kw", [{"tokens_spell_text": False}, {"merges": True}],
+                         ids=["generated-ids", "merging"])
+def test_a_reply_cut_in_its_answer_keeps_every_whole_generated_token_before_the_cut_and_tokenizes_only_the_rest(fake_kw):
+    answer = "Es ist zwölf Uhr."
+    for keep_chars in range(1, len(answer)):
+        wrapper, fake, shown, before = _turn_after_calls(1, answer, **fake_kw)
+        newest = wrapper.conversation()["messages"][-1]["content"]
+        assert newest == answer
+        wrapper.truncate_last_reply(shown[:len(shown) - len(answer) + keep_chars])
+        (after, _text, _on_call), = internals.generated_turns_held(wrapper)
+        whole = _spelled(fake, before)
+        target = whole[:len(whole) - len(answer.encode()) + len(answer[:keep_chars].encode())]
+        assert _spelled(fake, after) == target, keep_chars
+        kept = max(n for n in range(len(before) + 1) if target.startswith(_spelled(fake, before[:n])))
+        assert after[:kept] == before[:kept], keep_chars
+        rest = target[len(_spelled(fake, before[:kept])):].decode()
+        assert after[kept:] == fake.tokenize(rest, parse_special=False), keep_chars
+
+
+@pytest.mark.parametrize("calls", [1, 2])
+def test_a_reply_cut_to_nothing_keeps_its_turn_as_generated_up_to_the_closing_of_its_newest_call(calls):
+    """The answer spells a call's closing as text, which the cut does not take for the call's."""
+    answer = "Es ist </call> zwölf."
+    wrapper, fake, shown, before = _turn_after_calls(calls, answer, tokens_spell_text=False)
+    try:
+        wrapper.truncate_last_reply(shown[:len(shown) - len(answer)])
+    except TemplateRefusedError:
+        pytest.fail("the invented template writes an empty reply after a call")
+    (after, _text, on_call), = internals.generated_turns_held(wrapper)
+    whole = _spelled(fake, before)
+    closing = b"</call>"
+    end = whole.rfind(closing, 0, len(whole) - len(answer.encode())) + len(closing)
+    assert on_call and after == before[:len(after)] and _spelled(fake, after) == whole[:end]
