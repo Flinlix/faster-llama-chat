@@ -8,7 +8,7 @@ from llama_chat import ChatWrapper, ContextOverflowError
 from llama_chat.messages import QUESTION_CUT_MARK
 from tests.chat_messages import opened, after_system
 from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
+from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import assert_consistent, held_text, rows
 
 
@@ -360,3 +360,22 @@ def test_a_long_question_is_cut_to_the_room_under_the_threshold_not_to_the_whole
     asked = [m for m in after_system(w.conversation()["messages"]) if m["role"] == "user"][-1]
     beside = len(fake.tokenize(fake.stated_render(opened("s", [asked]), generation_prompt=True)))
     assert w.config.evict_above_tokens - 8 <= beside <= w.config.evict_above_tokens
+
+
+@pytest.mark.parametrize("template", [PLAIN, TOOLS], ids=["plain", "tools"])
+@pytest.mark.parametrize("length", [40, 60, 80, 100])
+def test_an_injected_message_that_evicts_decodes_no_more_than_one_that_does_not(template, length):
+    """On a cache that can shift, the exchanges kept are moved, not decoded again."""
+    fake = FakeContext(template)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.3), context=fake)
+    w.begin(opened("s"))
+    evicting, keeping = [], []
+    for i in range(20):
+        for role in ("user", "assistant"):
+            before = fake.total_prefilled()
+            report = w.inject(f"{i:03d}" + "x" * length, role=role)
+            decoded = fake.total_prefilled() - before
+            (evicting if report.n_evicted_messages else keeping).append(decoded)
+    assert evicting and keeping
+    assert max(evicting) <= max(keeping), (evicting, keeping)
+    assert_consistent(w, fake)

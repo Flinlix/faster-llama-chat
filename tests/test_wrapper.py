@@ -1575,3 +1575,20 @@ def test_a_reply_read_after_an_injected_reply_answered_its_question_is_refused_a
     assert refused.value.field == "text"
     assert rows(chat) == before
     chat.reply("Weiter?").finish()
+
+
+@pytest.mark.parametrize("history", [[], [{"role": "user", "content": "q" * 100},
+                                          {"role": "assistant", "content": "a" * 50}]],
+                         ids=["no older exchange", "an older exchange"])
+def test_an_injected_reply_that_cannot_fit_beside_its_question_is_refused_saying_what_to_do(history):
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.5), context=fake)
+    w.begin(opened("s", history))
+    w.inject("q" * 100)
+    before, held = w.conversation(), list(fake.cache)
+    with pytest.raises(ContextOverflowError) as refused:
+        w.inject("a" * 150, role="assistant")
+    message = str(refused.value)
+    assert "shorten the message or inject a user message first" in message
+    assert "None" not in message.split()
+    assert w.conversation() == before and fake.cache == held
