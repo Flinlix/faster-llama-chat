@@ -139,6 +139,8 @@ class ChatWrapper:
         self._unread_watch_lock = threading.Lock()
         # The threads tools run on, which may not act on the wrapper the reply that runs them holds.
         self._tool_threads: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
+        # Those of them past ``tool_timeout_s``, whose calls were answered as failed meanwhile.
+        self._late_tool_threads: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -1142,6 +1144,7 @@ class ChatWrapper:
         runner.start()
         runner.join(min(self._config.tool_timeout_s, threading.TIMEOUT_MAX))
         if not returned:
+            self._late_tool_threads.add(runner)
             _log.warning("the tool %s did not return within %s s; the model is told it failed",
                          call.name, self._config.tool_timeout_s)
             return {"error": "tool_timeout",
@@ -1271,9 +1274,14 @@ class ChatWrapper:
 
         Raises:
             OutOfOrderError: Where a tool of the reply that holds the wrapper
-                asks for an action.
+                asks for an action, or a tool past ``tool_timeout_s`` does.
         """
         current = threading.current_thread()
+        if current in self._late_tool_threads:
+            raise OutOfOrderError(
+                None, "a tool that did not return within tool_timeout_s asked for an action on "
+                "the wrapper; its call was answered as failed and what it returns is dropped, "
+                "so call nothing on the wrapper from a tool")
         if current in self._tool_threads or self._holder is current \
                 and self._reply_waiting_for_reader is None:
             raise OutOfOrderError(

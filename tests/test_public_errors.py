@@ -202,10 +202,19 @@ def test_a_reply_nobody_reads_on_is_ended_for_an_action_from_another_thread():
 def test_a_tool_that_does_not_return_in_time_is_told_as_failed_and_the_reply_ends():
     fake = FakeContext(TOOLS)
     wrapper = ChatWrapper(Config(context_size=512, tool_timeout_s=0.2), context=fake)
-    release = threading.Event()
+    release, acted = threading.Event(), threading.Event()
+    refusals = []
+
+    def hangs():
+        release.wait(30)
+        try:
+            wrapper.inject("spät")
+        except OutOfOrderError as refused:
+            refusals.append(str(refused))
+        acted.set()
+        return "spät"
     registry = ToolRegistry()
-    registry.tool(lambda: release.wait(30) and "spät", description="Hängt.", name="haengt",
-                  parameters={})
+    registry.tool(hangs, description="Hängt.", name="haengt", parameters={})
     wrapper.begin(opened("s"), tools=registry.specs())
     fake.call_script = ["fn:haengt{}"]
     started = time.monotonic()
@@ -213,6 +222,9 @@ def test_a_tool_that_does_not_return_in_time_is_told_as_failed_and_the_reply_end
     release.set()
     assert time.monotonic() - started < 10 and reply.text and not wrapper.turn_open
     assert "tool_timeout" in fake.text_of(fake.cache)
+    # Acting on the wrapper once past its time, it is told why, not that the reply waits for it.
+    assert acted.wait(10)
+    assert len(refusals) == 1 and "did not return within tool_timeout_s" in refusals[0]
 
 
 def test_a_model_that_calls_without_end_is_stopped_by_the_default_ceiling_and_answers():
