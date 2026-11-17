@@ -326,6 +326,19 @@ def test_a_begin_after_a_fault_the_cache_check_found_writes_the_cache_anew(monke
     assert wrapper.reply("zwei").finish().text
 
 
+def test_a_refused_begin_leaves_the_fault_the_cache_check_found_to_be_reported():
+    fake = FakeContext(PLAIN)
+    wrapper = ChatWrapper(Config(context_size=512, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    wrapper.reply("eins").finish()
+    wrapper.wait_idle()
+    wrapper._conversation._found_fault = InternalError("a fault found after the reply")
+    with pytest.raises(ContextOverflowError):
+        wrapper.begin(opened("s" * 600))
+    with pytest.raises(InternalError, match="a fault found after the reply"):
+        wrapper.reply("zwei").finish()
+
+
 @pytest.mark.parametrize("action", ["inject", "close"])
 def test_an_action_on_the_thread_that_read_a_reply_another_thread_has_begun_to_step_waits_for_it(action):
     fake = FakeContext(PLAIN, gen_tokens=20)
@@ -351,3 +364,22 @@ def test_an_action_on_the_thread_that_read_a_reply_another_thread_has_begun_to_s
     assert finished and finished[0] is not None and finished[0].stop_reason != "interrupted"
     if action == "inject":
         assert after_system(wrapper.conversation()["messages"])[-1]["content"] == "Notiz"
+
+
+def test_a_begin_that_fails_before_it_starts_leaves_the_fault_the_cache_check_found(monkeypatch):
+    fake = FakeContext(PLAIN)
+    wrapper = ChatWrapper(Config(context_size=512, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    wrapper.reply("eins").finish()
+    wrapper.wait_idle()
+    wrapper._conversation._found_fault = InternalError("a fault found after the reply")
+    memory = wrapper._conversation._memory
+
+    def failing():
+        raise RuntimeError("the cache could not be brought up")
+    monkeypatch.setattr(memory, "repair", failing)
+    with pytest.raises(Exception, match="could not be brought up"):
+        wrapper.begin(opened("s"))
+    monkeypatch.undo()
+    with pytest.raises(InternalError, match="a fault found after the reply"):
+        wrapper.reply("zwei").finish()

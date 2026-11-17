@@ -2017,12 +2017,25 @@ class RenderedCache:
                 left undecoded is decoded first; a begin, which may hold
                 another conversation, decodes only what it holds.
         """
+        remedied = None
         if self._found_fault is not None:
             # What the check found after the newest reply, on a thread no caller reads; a
-            # begin, which writes the cache anew, is its remedy, so it is only logged then.
+            # begin, which writes the cache anew, is its remedy, so it is kept only where that fails.
             fault, self._found_fault = self._found_fault, None
             if finishes_what_was_left:
                 raise fault
+            remedied = fault
+        try:
+            with self._acting(finishes_what_was_left):
+                yield
+        except BaseException:
+            if remedied is not None and self._found_fault is None:
+                self._found_fault = remedied
+            raise
+
+    @contextlib.contextmanager
+    def _acting(self, finishes_what_was_left: bool):
+        """:meth:`_action`'s work once a fault the check found is dealt with."""
         if not self._depth:
             self._rendering.forget_renders()    # an action inside another keeps its renders
         # Put back whole where the action fails, the part an interrupt left undecoded included.

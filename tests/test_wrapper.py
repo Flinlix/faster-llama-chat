@@ -1188,6 +1188,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.generation.<locals>.<lambda>",
         "RenderedCache.__init__.<locals>.<lambda>",
         "RenderedCache._action",
+        "RenderedCache._acting",
         "RenderedCache._after_reply",
         "RenderedCache._append_reply",
         "RenderedCache._ask",
