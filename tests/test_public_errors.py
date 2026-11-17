@@ -16,7 +16,8 @@ from llama_chat.rendered_cache import RenderedCache
 from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
-from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper
+from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry
+import re
 
 _LONE = "a\ud800b"
 
@@ -383,3 +384,33 @@ def test_a_begin_that_fails_before_it_starts_leaves_the_fault_the_cache_check_fo
     monkeypatch.undo()
     with pytest.raises(InternalError, match="a fault found after the reply"):
         wrapper.reply("zwei").finish()
+
+
+def _before_begin():
+    return ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
+
+
+def _on_an_open_turn():
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened("s"), tools=weather_registry().specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    wrapper.reply("Wetter?", tool_call_policy="yield").finish()
+    return wrapper
+
+
+@pytest.mark.parametrize("situation, role, first", [
+    (_before_begin, "user", r"begin\(\)"),
+    (_before_begin, "assistant", r"begin\(\)"),
+    (_on_an_open_turn, "assistant", r"inject_tool_result\(\)"),
+], ids=["question-before-begin", "assistant-before-begin", "assistant-on-an-open-turn"])
+def test_an_injection_refused_for_its_order_names_the_injection_and_what_comes_first(
+        situation, role, first):
+    wrapper = situation()
+    before = wrapper.conversation()
+    with pytest.raises(OutOfOrderError) as refused:
+        wrapper.inject("Notiz", role=role)
+    message = str(refused.value)
+    assert re.search(r"\binject", message, re.IGNORECASE) and re.search(first, message)
+    assert "None" not in message
+    assert wrapper.conversation() == before

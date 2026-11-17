@@ -992,3 +992,54 @@ def test_a_history_ending_on_a_result_is_refused_with_what_the_template_says_bef
                        match="the template says: no reply after this result") as refused:
         w.begin(history, tools=weather_registry().specs())
     assert refused.value.field == "messages"
+
+
+class _FailingAfterADecode(FakeContext):
+    """A fake cache that sets :attr:`cancel` as a decode of :attr:`cancel_after` ends, and fails every operation after it until :attr:`fails` is cleared."""
+
+    cancel = None
+    cancel_after = None
+    fails = False
+
+    def _refuse(self):
+        if self.fails:
+            raise EngineError("the cache fails")
+
+    def prefill(self, *args, **kwargs):
+        self._refuse()
+        super().prefill(*args, **kwargs)
+        if self.cancel is not None and self.cancel_after in self.text_of(args[0]):
+            self.cancel.set()
+            self.cancel, self.fails = None, True
+
+    def remove_from(self, pos):
+        self._refuse()
+        super().remove_from(pos)
+
+    def apply_eviction(self, start, end):
+        self._refuse()
+        super().apply_eviction(start, end)
+
+    def reset(self):
+        self._refuse()
+        super().reset()
+
+    def restore_state(self, state, pos):
+        self._refuse()
+        super().restore_state(state, pos)
+
+
+@pytest.mark.parametrize("cache", _CACHES)
+def test_a_question_cancelled_where_the_cache_cannot_be_brought_back_is_taken_back_and_the_next_is_answered(cache):
+    fake = _FailingAfterADecode(PLAIN, **_CACHES[cache])
+    wrapper = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    wrapper.begin(opened("persona"))
+    wrapper.reply("eins").finish()
+    before = wrapper.conversation()
+    cancel = threading.Event()
+    fake.cancel, fake.cancel_after = cancel, "zwei"
+    reply = wrapper.reply("zwei", cancel=cancel).finish()
+    assert (reply.text, reply.stop_reason) == ("", "interrupted")
+    assert wrapper.conversation() == before
+    fake.fails = False
+    assert wrapper.reply("drei").finish().text

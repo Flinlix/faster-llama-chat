@@ -2326,3 +2326,24 @@ def test_a_question_injected_on_an_open_turn_reports_the_turn_closed(template):
     assert w.turn_open
     report = w.inject("Doch nicht.")
     assert report.turn_closed is True and not w.turn_open
+
+
+_NO_ANSWER_RIGHT_AFTER_A_RESULT = (
+    "{% if add_generation_prompt and messages|length > 1 and messages[-2].role == 'tool' %}"
+    "{{ raise_exception('a question right after a result is not answered') }}{% endif %}")
+
+
+@pytest.mark.parametrize("answered", [False, True], ids=["call-owed", "results-in"])
+def test_a_question_closing_a_turn_is_checked_as_it_is_asked_with_the_reply_after_it(answered):
+    """The template answers no question right after a result, though it writes one there: the turn closes with an empty reply instead."""
+    template = dict(TOOLS, chat_template=_NO_ANSWER_RIGHT_AFTER_A_RESULT + TOOLS["chat_template"])
+    fake = FakeContext(template)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened("s"), tools=weather_registry().specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    wrapper.reply("Wetter?", tool_call_policy="yield").finish()
+    if answered:
+        wrapper.inject_tool_result(wrapper.pending_calls[0].id, "sonnig")
+    assert wrapper.reply("Neu?").finish().text
+    roles = [m["role"] for m in wrapper.conversation()["messages"]]
+    assert roles[-4:] == ["tool", "assistant", "user", "assistant"]
