@@ -287,3 +287,22 @@ def test_the_search_for_how_many_exchanges_to_drop_measures_a_few_times(can_shif
     finally:
         eviction.Eviction._drop_oldest_exchanges = search
     assert measures and max(measures) <= 7
+
+
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_a_message_refused_after_the_evictions_it_made_leaves_the_cache_as_it_was(cache):
+    """Rule 6: an eviction a refused message made on the cache itself is undone at once."""
+    fake = FakeContext(PLAIN, **cache)
+    w = ChatWrapper(Config(context_size=1024, min_reply_tokens=16, evict_above_fraction=0.5),
+                    context=fake)
+    w.begin(opened("s", [m for n in range(5) for m in (
+        {"role": "user", "content": f"q{n} " * 10}, {"role": "assistant", "content": f"a{n} " * 10})]))
+    w.inject("y" * 5000)                        # cut to fill the room
+    w.wait_idle()
+    before = w.conversation()
+    with pytest.raises(ContextOverflowError):
+        w.inject(" " * 30, role="assistant")
+    assert w.conversation() == before
+    assert_consistent(w, fake)
+    assert w.reply().finish().text

@@ -452,7 +452,7 @@ class _ThoughtState:
             self._tail = self._tail[at + len(self._closing if self._inside else self._opening):]
             self._inside = not self._inside
         keep = max(len(self._opening), len(self._closing)) - 1
-        self._tail = self._tail[len(self._tail) - keep:] if keep else ""
+        self._tail = self._tail[max(0, len(self._tail) - keep):] if keep else ""
         return self._inside
 
 

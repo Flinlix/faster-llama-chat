@@ -44,6 +44,7 @@ from .result_cutting import ResultCutting
 from .windows import WHOLE, Windows
 from .publishing import conversation_of, generated_turns_of, published
 from .errors import (RAISE_THE_ROOM, ContextOverflowError, InternalError, InvalidArgumentError,
+                     RefusalError,
                      OutOfOrderError, TemplateRefusedError, UnsupportedError,
                      with_template_reason)
 from .resolved_template import ResolvedTemplate, ResolvedTemplates
@@ -1479,13 +1480,17 @@ class RenderedCache:
                 # to its newest call, as one whose reply said nothing is, the rest the template's.
                 del shortened[GENERATED_TURN]
                 first = len(messages) - turn.span
-                calling = max(i for i in range(first, len(messages)) if messages[i].get("tool_calls"))
-                cut = self._generated_to_its_call(turn, newest["content"], calling - first + 1)
-                if cut is None:
-                    raise TemplateRefusedError(
-                        "keep_text", "the newest reply's tokens as generated cannot be cut "
-                        "after its turn's newest call; keep some of its text")
-                messages[calling] = with_generated_turn(messages[calling], cut)
+                calling = max((i for i in range(first, len(messages))
+                               if messages[i].get("tool_calls")), default=None)
+                # Without a call left in it, nothing of the turn is kept as generated.
+                if calling is not None:
+                    cut = self._generated_to_its_call(turn, newest["content"],
+                                                      calling - first + 1)
+                    if cut is None:
+                        raise TemplateRefusedError(
+                            "keep_text", "the newest reply's tokens as generated cannot be cut "
+                            "after its turn's newest call; keep some of its text")
+                    messages[calling] = with_generated_turn(messages[calling], cut)
             elif turn is not None:
                 cut = self._generated_up_to(turn, newest["content"], keep_text)
                 if cut is None:
@@ -1985,9 +1990,11 @@ class RenderedCache:
                 another conversation, decodes only what it holds.
         """
         if self._found_fault is not None:
-            # What the check found after the newest reply, on a thread no caller reads.
+            # What the check found after the newest reply, on a thread no caller reads; a
+            # begin, which writes the cache anew, is its remedy, so it is only logged then.
             fault, self._found_fault = self._found_fault, None
-            raise fault
+            if finishes_what_was_left:
+                raise fault
         if not self._depth:
             self._rendering.forget_renders()    # an action inside another keeps its renders
         # Put back whole where the action fails, the part an interrupt left undecoded included.
@@ -2004,12 +2011,19 @@ class RenderedCache:
                 self._pin_opening()
         saved = self._state.copied()
         held = whole if len(whole) > len(self._memory.tokens) else list(self._memory.tokens)
+        # Whether the cache held everything it is to hold as the action began.
+        was_current = self._memory.is_current and held == list(self._memory.tokens)
         with self._publishing():
             try:
                 yield
-            except BaseException:
+            except BaseException as error:
                 self._state.put_back(saved)
                 self._memory.replace(held)
+                if isinstance(error, RefusalError) and was_current and self._memory.is_known:
+                    # An edit a refused action made, such as a shift for an eviction, is undone
+                    # now (rule 6); a failed one leaves the cache to the next action.
+                    with contextlib.suppress(Exception):
+                        self._memory.repair()
                 raise
 
     @contextlib.contextmanager

@@ -266,7 +266,7 @@ def assert_cache_reads_as_rendered(wrapper, fake):
                        if owed and asked is not None else [])
     renders = standing + (completed + generated_after if owed else [])
     text_of = fake.text_of
-    closing = _reply_closing(fake, internals.reasons(wrapper))
+    closing = _reply_closing(fake, internals.reasons(wrapper), internals.uses_tool_template(wrapper))
     turns = internals.generated_turns_held(wrapper)
     kept = [(typed_text(fake, tokens), text_of(tokens[:1]), text_of(tokens[-1:]), text,
              closing if not text and not on_call else "")
@@ -298,11 +298,11 @@ def _shared_whole_tokens(one: str, other: str) -> str:
     return shared[:shared.rfind(_TAG_MARK)] if shared.count(_TAG_MARK) % 2 else shared
 
 
-def _reply_closing(fake, reasoning: bool) -> str:
-    """What the template writes after a reply's text to close its turn, from its first character that is no space."""
+def _reply_closing(fake, reasoning: bool, for_tools: bool) -> str:
+    """What the template the conversation is written with writes after a reply's text to close its turn, from its first character that is no space."""
     marker = "QZQ7"
     reply = fake.stated_render(_QUESTION + [{"role": "assistant", "content": marker}],
-                               reasoning=reasoning)
+                               reasoning=reasoning, for_tools=for_tools)
     return reply.split(marker, 1)[1].lstrip()
 
 

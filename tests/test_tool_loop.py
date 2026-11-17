@@ -2262,3 +2262,18 @@ def test_a_call_reported_as_cut_is_the_callers_to_change():
     cut[0].arguments["zone"] = "Rom"
     calls = [c for m in wrapper.conversation()["messages"] for c in m.get("tool_calls") or ()]
     assert calls[-1]["function"]["arguments"] == '{"zone":"Berlin"}'
+
+
+@pytest.mark.parametrize("after", ["\n", "  "])
+def test_an_unreadable_call_followed_by_only_whitespace_on_a_template_of_its_own_reads_as_its_render(
+        after):
+    """The tests' own check closes a reply as the template the conversation is written with does."""
+    fake = FakeContext(TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, gen_tokens=9, can_shift=False,
+                       can_cut_tail=True)
+    wrapper = ChatWrapper(Config(context_size=384, min_reply_tokens=1, max_reply_tokens=50,
+                                 **UNGUARDED), context=fake)
+    wrapper.begin(opened("sys"), tools=[WEATHER])
+    fake.replies = [ScriptedCall("garbage("), after]
+    wrapper.reply("are you there?").finish()
+    wrapper.wait_idle()
+    assert_cache_reads_as_rendered(wrapper, fake)

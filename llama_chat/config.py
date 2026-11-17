@@ -116,7 +116,7 @@ class Config:
             of its conversation holds. A fault found before a generation
             raises :class:`~llama_chat.errors.InternalError` and the reply is
             put back; one found after a reply is logged and raised by the next
-            action. A fault the cache keeps is raised again by every reply
+            action but a begin, which writes the cache anew. A fault the cache keeps is raised again by every reply
             until the conversation begins again. For finding faults: each
             check renders and tokenizes the whole conversation.
     """
