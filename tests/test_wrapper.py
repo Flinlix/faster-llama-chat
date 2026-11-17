@@ -1207,6 +1207,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._make_way_for",
         "RenderedCache._max_prompt_tokens",
         "RenderedCache._question_room",
+        "RenderedCache._generation_room",
         "RenderedCache._moves_declarations",
         "RenderedCache._newest_exchange",
         "RenderedCache._newest_exchanges_at",

@@ -918,9 +918,20 @@ class RenderedCache:
         self._state.results_cut = []
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.turn_open)
+        return self._memory.generate(self._generation_room(max_generated_tokens), generated,
+                                     **options)
+
+    def _generation_room(self, max_generated_tokens: int) -> int:
+        """The most tokens a generation from the cache's end may take: at most ``max_generated_tokens``, and the closing after the reply left room."""
         room = (self._config.context_size - len(self._memory.tokens)
                 - self.template.properties.n_closing_tokens)
-        return self._memory.generate(max(0, min(max_generated_tokens, room)), generated, **options)
+        return max(0, min(max_generated_tokens, room))
+
+    def _shortest_call_tokens(self) -> int:
+        """Tokens the shortest call to a declared tool takes at least: the marks around it, the shortest name and one token of arguments."""
+        return self.template.n_call_mark_tokens + 1 + min(
+            len(self._context.tokenize(spec.name, add_special=False, parse_special=False))
+            for spec in self._state.tools)
 
     def generation(self, text: str | None, *, recognizes_calls: bool, withhold: bool,
                    max_generated_tokens: int, stop: tuple[str, ...],
@@ -980,6 +991,10 @@ class RenderedCache:
         generated = GenerationAccumulator()
         results_cut = self.results_cut
         template = self.template
+        if recognizes_calls and self._state.tools \
+                and self._generation_room(max_generated_tokens) < self._shortest_call_tokens():
+            # No call could close in the room left: the model answers in text instead.
+            recognizes_calls, withhold = False, True
         try:
             goes_on = text is None and self.turn_open
             reply_text = ReplyText(template.properties.reasoning,

@@ -6185,3 +6185,26 @@ tool in a way that closes this.
   A larger micro-batch reads a long question about 13 to 15 percent faster,
   0.1 to 0.15 s on 5,000 tokens, and takes 564 or 1,692 MiB more on the card.
   The library is unchanged; whether to set it is the user's decision.
+
+## 2026-11-17: A setting for the micro-batch, and no call where none can close
+
+- **`micro_batch_tokens` sets the engine's micro-batch** (498.15C, the user's
+  choice). `None`, the default, leaves the engine's own, as the entry "The
+  engine keeps its own micro-batch" decided; a caller who wants a long
+  prefill read faster sets it, at most `max_batch_tokens`, and pays the
+  device memory measured in the entry above. This replaces that entry's
+  "Rejected: a setting of its own for the micro-batch, which no caller asked
+  for": the user asked for it. Rejected: setting it to the batch always,
+  which would cost every caller the memory.
+- **A call that cannot close is not opened** (499.7A, the user's choice). In
+  the room the answer floor leaves, a model that opened a call was cut off,
+  and the reply held an unfinished call and no text. Where the room left is
+  smaller than the shortest call to a declared tool can take (the marks
+  around a call, the shortest name, one token of arguments), the call's
+  opening token is withheld for that generation, as on the last round of
+  calls, so the model answers in text. Only a conversation with declared
+  tools measures this. A call that opens with no token of its own, plain
+  text or a tag that also opens other parts of a reply, cannot be withheld
+  that way; on those templates the reply still ends without an answer in
+  that room (the test skips them).
+

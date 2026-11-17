@@ -62,6 +62,11 @@ class ResolvedTemplate:
             context, model, self._model_render, addon_call, reasoning_on).properties
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
         self.n_shortest_answer_tokens = self._shortest_answer_tokens(context)
+        boundary = self.properties.boundary
+        # The tokens around a call, which every call the model writes takes besides its name.
+        self.n_call_mark_tokens = (2 if boundary.tool_tokens else sum(
+            len(context.tokenize(text, add_special=False, parse_special=True))
+            for text in boundary.call_texts) if boundary.call_texts else 0)
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:

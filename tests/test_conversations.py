@@ -2131,6 +2131,33 @@ def test_a_question_that_fills_all_the_room_a_system_prompt_leaves_still_gets_an
         assert reply.text or reply.tool_calls, (system_length, reply.stop_reason)
 
 
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if stem in _SYSTEM_TEMPLATES])
+def test_a_model_that_would_call_in_a_room_no_call_fits_answers_instead(stem):
+    """A call's opening is kept from the model where not even the shortest call could close, so that the reply answers."""
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+
+    def begun(system_length):
+        context = FakeContext(_fixture(stem), merges=_TOKENIZER["merges"])
+        chat = ChatWrapper(Config(context_size=_ROOM_TOKENS, min_reply_tokens=0,
+                                  evict_above_fraction=1.0), context=context)
+        context.replies = [ScriptedCall(body), "Antwort"]
+        try:
+            chat.begin(opened("s" * system_length), tools=[WEATHER])
+        except ContextOverflowError:
+            return None
+        return chat
+    low, high = 1, _ROOM_TOKENS         # the longest system prompt a begin takes lies in [low, high]
+    assert begun(low)
+    while low < high:
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if begun(middle) else (low, middle - 1)
+    chat = begun(low)
+    if internals.template(chat).properties.boundary.tool_tokens is None:
+        pytest.skip("a call that opens with no token of its own cannot be kept from the model")
+    reply = chat.reply("x" * _ROOM_TOKENS + " Wetter?", tool_call_policy="yield").finish()
+    assert reply.text and not reply.tool_calls, reply
+
+
 @pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_a_question_on_an_open_turn_closes_it_and_is_answered(stem, owed):
