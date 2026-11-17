@@ -334,6 +334,23 @@ def test_a_message_refused_after_the_evictions_it_made_leaves_the_cache_as_it_wa
     assert w.reply().finish().text
 
 
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_a_reply_injected_where_it_cannot_fit_once_the_older_exchanges_go_is_refused_before_any_goes(cache):
+    fake = FakeContext(PLAIN, **cache)
+    w = ChatWrapper(Config(context_size=1024, min_reply_tokens=16, evict_above_fraction=0.5),
+                    context=fake)
+    w.begin(opened("s", [m for n in range(5) for m in (
+        {"role": "user", "content": f"q{n} " * 10}, {"role": "assistant", "content": f"a{n} " * 10})]))
+    w.inject("y" * 5000)                        # cut to fill the room
+    w.wait_idle()
+    before, decoded, edits = w.conversation(), fake.total_prefilled(), len(fake.edits)
+    with pytest.raises(ContextOverflowError, match="no user message follows"):
+        w.inject(" " * 30, role="assistant")
+    assert w.conversation() == before
+    assert (fake.total_prefilled(), len(fake.edits)) == (decoded, edits)
+
+
 def test_a_long_question_is_cut_to_the_room_under_the_threshold_not_to_the_whole_context():
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.5, min_reply_tokens=32),

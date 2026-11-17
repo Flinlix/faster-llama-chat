@@ -329,7 +329,7 @@ class ChatWrapper:
                 anything is evicted (a question is cut to fit as
                 :meth:`reply` cuts one); or if the conversation with it cannot fit once every
                 exchange that can go is evicted, since no user message follows
-                the rest.
+                the rest, which is also raised before anything is evicted.
         """
         ensure_role(role)
         ensure_text(text, "an injected message's text")

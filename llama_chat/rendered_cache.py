@@ -778,7 +778,9 @@ class RenderedCache:
                 given while a reply is open, or the template does not write it
                 after this conversation.
             ContextOverflowError: If it cannot fit beside the system prompt
-                alone, checked before anything is dropped.
+                alone, or an assistant message beside the system prompt and the
+                newest exchange, which no eviction drops; checked before
+                anything is dropped.
         """
         with _refused_as_the_text(), self._action():
             if role == "user":
@@ -799,6 +801,8 @@ class RenderedCache:
                     f"the injected message needs {alone} tokens but {bound} fit beside the "
                     f"system prompt; shorten the message or the system prompt, or {RAISE_THE_ROOM}",
                     alone, bound)
+            if not asks:
+                self._ensure_fits_once_dropped(message, bound)
             joined = (self._make_way_for(message, bound, generation_prompt=True)
                       if role == "user" else None)
             if joined is None:
@@ -810,7 +814,7 @@ class RenderedCache:
                 self._state.messages.append(joined or message)
                 # A question keeps the room its reply needs, as a begin of it does.
                 dropped = self._drop_while_over(bound, generation_prompt=asks)
-                self._ensure_within(bound, "shorten the message or inject a user message first",
+                self._ensure_within(bound, _INJECT_A_QUESTION_FIRST,
                                     generation_prompt=asks)
                 self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
@@ -1634,10 +1638,26 @@ class RenderedCache:
         """
         needed = self._length(self._state.messages, generation_prompt=generation_prompt)
         if needed > limit:
-            raise ContextOverflowError(
-                f"the conversation needs {needed} tokens but {limit} fit, and the messages no "
-                f"user message follows cannot be evicted; {remedy}, or {RAISE_THE_ROOM}",
-                needed, limit)
+            raise _no_room_once_dropped(needed, limit, remedy)
+
+    def _ensure_fits_once_dropped(self, message: dict, limit: int) -> None:
+        """Refuse ``message``, which joins the newest exchange, where the conversation with it renders longer than ``limit`` once every older exchange is dropped, before any is.
+
+        Raises:
+            ContextOverflowError: Naming what to do instead.
+        """
+        messages = self._state.messages
+        starts = exchange_starts(messages)
+        system = system_part(messages)
+        newest = starts[-1] if starts else len(system)
+        if newest == len(system):
+            return          # nothing can go, so the check after the drops costs no undo
+        if (len(self._memory.tokens) + self._rendering.count_tokens(message["content"])
+                + _NEAR_THE_ROOM_TOKENS <= limit):
+            return          # nothing goes for it
+        needed = self._rendering.length(system + messages[newest:] + [message], False)
+        if needed > limit:
+            raise _no_room_once_dropped(needed, limit, _INJECT_A_QUESTION_FIRST)
 
     def _remove_from(self, first: int) -> None:
         """Take the messages from ``first`` on out again, then drop what is over the limits."""
@@ -2114,6 +2134,16 @@ def _ensure_can_reply(conversation, asks_question: bool) -> None:
     elif conversation.pending_calls:
         raise OutOfOrderError(None, f"{len(conversation.pending_calls)} call(s) still owe a "
                                     "result; answer each with inject_tool_result()")
+
+
+_INJECT_A_QUESTION_FIRST = "shorten the message or inject a user message first"
+
+
+def _no_room_once_dropped(needed: int, limit: int, remedy: str) -> ContextOverflowError:
+    """The refusal of a conversation that renders ``needed`` tokens, over ``limit``, once every exchange that can go is dropped."""
+    return ContextOverflowError(
+        f"the conversation needs {needed} tokens but {limit} fit, and the messages no user "
+        f"message follows cannot be evicted; {remedy}, or {RAISE_THE_ROOM}", needed, limit)
 
 
 # What the states a cache that cannot be cut keeps where the newest exchanges begin are kept for.
