@@ -14,7 +14,7 @@ import typing
 
 import pytest
 
-from llama_chat.errors import ArgumentTypeError, OutOfOrderError
+from llama_chat.errors import ArgumentTypeError, OutOfOrderError, TemplateRefusedError
 
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tool_registry import ToolRegistry
@@ -1592,3 +1592,74 @@ def test_an_injected_reply_that_cannot_fit_beside_its_question_is_refused_saying
     assert "shorten the message or inject a user message first" in message
     assert "None" not in message.split()
     assert w.conversation() == before and fake.cache == held
+
+
+def _refused_text_attempts():
+    """Each way to hand the template a text it refuses, as a question or an injected message, on a conversation with no message, after an unanswered question, and after a reply."""
+    def empty(chat):
+        chat.begin(opened(""))
+
+    def unanswered(chat):
+        chat.begin(opened("s"))
+        chat.inject("eins")
+
+    def replied(chat):
+        chat.begin(opened("s"))
+        chat.reply("eins").finish()
+
+    def asked(chat):
+        chat.reply("refused").finish()
+
+    def injected_question(chat):
+        chat.inject("refused")
+
+    def injected_reply(chat):
+        chat.inject("refused", role="assistant")
+
+    # A question after an unanswered one is joined to it, not refused, where the template writes no two in a row.
+    return [pytest.param(before, attempt, role, id=f"{before.__name__}-{attempt.__name__}")
+            for before in (empty, unanswered, replied)
+            for attempt, role in ((asked, "user"), (injected_question, "user"),
+                                  (injected_reply, "assistant"))
+            if not (before is unanswered and role == "user")]
+
+
+@pytest.mark.parametrize("before, attempt, role", _refused_text_attempts())
+def test_a_text_the_template_refuses_is_refused_naming_its_role_and_the_template_s_cause(
+        before, attempt, role):
+    """The refusal names the role of the message refused, gives the template's own cause, and claims no two user turns in a row where the template writes them or none stand there."""
+    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                       context=FakeContext(REFUSES_A_TEXT))
+    before(chat)
+    held = chat.conversation()
+    with pytest.raises(TemplateRefusedError) as refused:
+        attempt(chat)
+    message = str(refused.value)
+    assert f"{role} message" in message
+    assert "this text is refused" in message
+    assert "two user turns" not in message
+    assert chat.conversation() == held
+
+
+def test_a_reply_that_produced_nothing_keeps_the_older_exchanges_exactly_where_they_fit_under_the_threshold():
+    """The question stays unanswered, and the older exchanges go exactly where the conversation with it renders over the eviction threshold without a generation prompt."""
+    config = Config(context_size=500, evict_above_fraction=0.5, **UNGUARDED)
+    history = [{"role": "user", "content": "a" * 30}, {"role": "assistant", "content": "b" * 30},
+               {"role": "user", "content": "c" * 40}, {"role": "assistant", "content": "d" * 40}]
+    outcomes = set()
+    for length in range(40, 75):
+        fake = FakeContext(JOINS_USER_TURNS, gen_tokens=5)
+        chat = ChatWrapper(config, context=fake)
+        chat.begin(opened("s", history))
+        before = chat.conversation()["messages"]
+        question = {"role": "user", "content": "q" * length}
+        fake.gen_tokens = 0
+        chat.reply(question["content"]).finish()
+        after = chat.conversation()["messages"]
+        rendered = len(fake.tokenize(fake.stated_render(before + [question], generation_prompt=False),
+                                     add_special=True))
+        fits = rendered <= config.evict_above_tokens
+        assert after[-1] == question
+        assert (after == before + [question]) is fits, (length, rendered, after)
+        outcomes.add(fits)
+    assert outcomes == {True, False}

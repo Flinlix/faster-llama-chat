@@ -36,7 +36,7 @@ from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixtur
 from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
 from llama_chat.testing.invented_templates import NUMBERED, TOOLS
-from .wrappers import (add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
+from .wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
                        rendered_pieces, rows, two_owed_calls)
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
@@ -3044,3 +3044,27 @@ def test_a_reply_after_a_call_whose_tokens_as_generated_hold_a_call_that_went_is
             assert internals.generated_turns_held(chat) == held
             return
     pytest.fail("no context size left the error result without room")
+
+
+@pytest.mark.parametrize("stem", [stem for stem in STEMS
+                                  if expected(fixture(stem), "writes_two_user_turns")
+                                  and expected(fixture(stem), "writes_empty_reply")])
+def test_a_reply_that_produced_nothing_and_evicts_decodes_its_question_only_once(stem):
+    """The exchanges that go are removed from the cache and the rest shifted, so the question left unanswered is not decoded again."""
+    config = Config(context_size=4000, evict_above_fraction=0.5, **UNGUARDED)
+    history = [{"role": "user", "content": "a" * 30}, {"role": "assistant", "content": "b" * 30},
+               {"role": "user", "content": "c" * 40}, {"role": "assistant", "content": "d" * 40}]
+    fake = FakeContext(fixture(stem), gen_tokens=5)
+    chat = ChatWrapper(config, context=fake)
+    chat.begin(opened("s", history))
+    before = chat.conversation()["messages"]
+    # Long enough that the conversation with it is over the threshold, short enough to fit beside the system prompt.
+    text = "q" * (config.evict_above_tokens - len(fake.cache) + 40)
+    fake.gen_tokens = 0
+    decoded = fake.total_prefilled()
+    chat.reply(text).finish()
+    after = chat.conversation()["messages"]
+    assert after[-1] == {"role": "user", "content": text}
+    assert len(after) < len(before) + 1, "nothing was evicted"
+    question_tokens = len(fake.tokenize(text))
+    assert fake.total_prefilled() - decoded < question_tokens + question_tokens // 2
