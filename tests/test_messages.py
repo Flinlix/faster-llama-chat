@@ -10,6 +10,7 @@ from llama_chat.messages import (UNREADABLE_CALL, call_id, exchange_count, excha
                                  history_count, next_call_number)
 from llama_chat.tools import ToolCall
 from tests.chat_messages import Result, opened, tool_turn
+from llama_chat.errors import InvalidArgumentError
 
 
 def test_kept_history_opens_on_each_user_turn():
@@ -227,3 +228,33 @@ def test_a_call_name_of_the_wrong_type_is_refused_naming_where_it_stands():
     with pytest.raises(ArgumentTypeError, match=r"function\.name must be a str"):
         wrapper.begin([{"role": "user", "content": "a"},
                        {"role": "assistant", "content": "", "tool_calls": [called]}])
+
+
+_FUNCTION = {"name": "f", "arguments": "{}"}
+
+
+def _calling(call) -> list[dict]:
+    return [_QUESTION, {"role": "assistant", "content": None, "tool_calls": [call]}]
+
+
+@pytest.mark.parametrize("call, cause", [
+    ({"id": "c", "type": "function", "function": _FUNCTION, "index": 0}, "'index'"),
+    ({"id": "c", "type": "custom", "function": _FUNCTION}, "'custom'"),
+    ({"type": "function", "function": _FUNCTION}, "'id'"),
+    ({"id": "", "type": "function", "function": _FUNCTION}, "'id'"),
+    ({"id": "c", "type": "function", "function": {**_FUNCTION, "strict": True}}, "'strict'"),
+    ({"id": "c", "type": "function"}, "function holds 'name' and 'arguments'"),
+    ({"id": "c", "type": "function", "function": "f"}, "function holds 'name' and 'arguments'"),
+])
+def test_a_call_in_a_form_not_taken_is_refused_as_messages_naming_where_it_stands_and_why(call, cause):
+    with pytest.raises(InvalidArgumentError) as refused:
+        read_messages(_calling(call))
+    assert refused.value.field == "messages"
+    assert "messages[1].tool_calls[0]" in str(refused.value)
+    assert cause in str(refused.value)
+
+
+def test_a_call_without_its_type_is_read_as_a_function_call():
+    typed = {"id": "c", "type": "function", "function": _FUNCTION}
+    untyped = {"id": "c", "function": _FUNCTION}
+    assert read_messages(_calling(untyped)) == read_messages(_calling(typed))
