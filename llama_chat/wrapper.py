@@ -309,11 +309,12 @@ class ChatWrapper:
             TemplateRefusedError: If the template does not write the message
                 here as its text, a question asked twice or an empty one on
                 some templates included, naming ``text``.
-            RuntimeError: If the wrapper is closed, or this thread is still
-                reading a reply.
-            ContextOverflowError: If the message cannot fit even after
-                evicting every non-system message, raised before anything is
-                evicted; or if the conversation with it cannot fit once every
+            OutOfOrderError: If the wrapper is closed, or a tool the reply
+                that holds the wrapper runs asks for it.
+            ContextOverflowError: If an assistant message cannot fit even
+                after evicting every non-system message, raised before
+                anything is evicted (a question is cut to fit as
+                :meth:`reply` cuts one); or if the conversation with it cannot fit once every
                 exchange that can go is evicted, since no user message follows
                 the rest.
         """
@@ -416,11 +417,15 @@ class ChatWrapper:
         taken out), and a question no reply follows is joined to it where the
         template writes no two in a row, or, where the two joined would not
         fit beside the system prompt, replaced by it, the unanswered one
-        counted as evicted. It is refused only where it cannot
-        fit beside the system prompt alone, or where the template does not
-        write that question as its text, such as one asked twice or an empty
-        one on some templates; either refusal leaves the next question free.
-        See design_history.md, "Nothing blocks a question".
+        counted as evicted. A question too long for the room beside the system
+        prompt keeps its end, :data:`~llama_chat.messages.QUESTION_CUT_MARK`
+        in place of its beginning, and a warning is logged. It is refused only
+        where the template does not write that question as its text, such as
+        an empty one on some templates, which leaves the next question free.
+        The reply holds at least ``min_answer_tokens`` of answer, and a
+        thought is closed in time to leave the answer ``answer_room_tokens``.
+        See design_history.md, "Nothing blocks a question" and "Every
+        question gets a reply".
 
         Raises:
             OutOfOrderError: At once, if no conversation has been begun; or,
@@ -444,10 +449,13 @@ class ChatWrapper:
                 ``is_set``, or ``sampling`` is neither ``None`` nor a
                 :class:`~llama_chat.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
-            RuntimeError: At once, if the wrapper is closed; at the first
-                iteration, if this thread is still reading another reply.
-            ContextOverflowError: If too little room remains for the reply. A
-                result or the error answering a call that no longer fits
+            OutOfOrderError: At once, if the wrapper is closed; when it is
+                read, if a begin has replaced the conversation it was asked
+                of since, or a tool the reply that holds the wrapper runs
+                asked for it.
+            ContextOverflowError: Only where too little room remains for the
+                reply to go on with an open turn; a question is cut to fit
+                instead. A result or the error answering a call that no longer fits
                 raises nothing: the turn closes on what the model wrote, and
                 the reply ends with ``"token_limit"``.
         """

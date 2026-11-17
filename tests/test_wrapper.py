@@ -854,9 +854,7 @@ def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_inc
                     context=fake)
     w.begin(opened("s"))
     with pytest.raises(ContextOverflowError):
-        w.inject("x" * 200)                      # refused: never recorded
-    with pytest.raises(ContextOverflowError):
-        w.reply("y" * 200).finish()
+        w.inject("x" * 200, role="assistant")    # refused: never recorded
     stream = w.reply("hi")
     next(stream)
     stream.close()                               # closed early: recorded

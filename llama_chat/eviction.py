@@ -15,7 +15,8 @@ from collections.abc import Callable
 from .config import Config
 from .conversation_state import ConversationState
 from .reply import EvictionCause
-from .messages import THOUGHT_KEY, exchange_count, exchange_starts, history_count, system_part
+from .messages import (QUESTION_CUT_MARK, THOUGHT_KEY, exchange_count, exchange_starts,
+                       history_count, system_part)
 from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
@@ -38,9 +39,10 @@ class Eviction:
         self._measure = measure or rendering.length
 
     def with_a_short_question(self) -> int:
-        """How many tokens the conversation takes with no history and a short question: what no eviction makes smaller."""
+        """How many tokens the conversation takes with no history and the shortest question a cut leaves: what no eviction makes smaller."""
         return self._rendering.length(system_part(self._state.messages)
-                                      + [{"role": "user", "content": "?"}], generation_prompt=True)
+                                      + [{"role": "user", "content": QUESTION_CUT_MARK + "?"}],
+                                      generation_prompt=True)
 
     def keep_newest_history(self, bound: int,
                             refused: Callable[[list[dict]], Exception]) -> None:

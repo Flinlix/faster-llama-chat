@@ -32,7 +32,7 @@ from .conversation_state import (Ahead, Anchor, Changes, ConversationState, Made
 from .history_forms import (answer_in_order, completions_messages, joined_question,
                             read_messages, with_generated_turns, with_questions_joined,
                             without_unreadable)
-from .messages import (GENERATED_TURN, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
+from .messages import (GENERATED_TURN, QUESTION_CUT_MARK, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
 from .render_checks import (STAND_IN, ensure_history_stays_written, question_splices,
@@ -513,9 +513,9 @@ class RenderedCache:
         Raises:
             ValueError: If no conversation was begun, or the template does not
                 write the question here; a turn a call left open is closed first.
-            ContextOverflowError: If the question cannot fit beside room for
-                its reply, checked against the system prompt alone before
-                anything is dropped.
+            ContextOverflowError: If the room the system prompt leaves is too
+                small for any question; one too long for it keeps its end, its
+                beginning cut, and a warning is logged.
             Cancelled: If ``cancel`` was set before the question was decoded
                 whole, which leaves everything as it was.
         """
@@ -531,13 +531,8 @@ class RenderedCache:
         with self._action():
             _ensure_begun(self, "generate into")
             room = self._max_prompt_tokens
-            question = {"role": "user", "content": text}
-            alone = self._length_alone(question, room, generation_prompt=True)
-            if alone > room:
-                raise ContextOverflowError(
-                    f"the request needs {alone} tokens but {room} fit beside room for the "
-                    f"reply; shorten the request or the system prompt, or {RAISE_THE_ROOM}",
-                    alone, room)
+            question = self._cut_to_fit({"role": "user", "content": text}, room, "the request")
+            text = question["content"]
             joined = self._make_way_for(question, room, generation_prompt=True)
             if joined is None:
                 self._ensure_writes("user", text, generation_prompt=True)
@@ -787,6 +782,9 @@ class RenderedCache:
             # A question is answered: it needs the room its reply leaves too.
             asks = role == "user"
             bound = min(limit, self._max_prompt_tokens) if asks else limit
+            if asks:
+                message = self._cut_to_fit(message, bound, "the injected question")
+                text = message["content"]
             alone = self._length_alone(message, bound, generation_prompt=asks)
             if alone > bound:
                 raise ContextOverflowError(
@@ -809,6 +807,37 @@ class RenderedCache:
                 self._sync(self._target_of(self._state.messages, generation_prompt=False),
                            logits=False, dropped=dropped)
             self._memory.rest()
+
+    def _cut_to_fit(self, question: dict, room: int, what: str) -> dict:
+        """``question``, or, where it does not fit ``room`` beside the system turn, its end, :data:`QUESTION_CUT_MARK` before it, a warning logged.
+
+        Raises:
+            ContextOverflowError: If not even the mark fits, naming ``what``.
+        """
+        text = question["content"]
+        def fits(start: int) -> bool:
+            kept = {**question, "content": QUESTION_CUT_MARK + text[start:] if start else text}
+            return self._length_alone(kept, room, generation_prompt=True) <= room
+        if fits(0):
+            return question
+        if not fits(len(text)):
+            alone = self._length_alone(question, room, generation_prompt=True)
+            raise ContextOverflowError(
+                f"{what} needs {alone} tokens but {room} fit beside room for the reply, and the "
+                f"system prompt leaves no room for any of it; shorten the system prompt, or "
+                f"{RAISE_THE_ROOM}", alone, room)
+        low, high = 1, len(text)        # the least start that fits lies in [low, high]
+        search_variant = LoopVariant("cutting a question to fit")
+        while low < high:
+            search_variant.passes(high - low)
+            middle = (low + high) // 2
+            if fits(middle):
+                high = middle
+            else:
+                low = middle + 1
+        _log.warning("%s is longer than the %d tokens beside the system prompt and the reply's "
+                     "room; its first %d of %d characters were cut", what, room, low, len(text))
+        return {**question, "content": QUESTION_CUT_MARK + text[low:]}
 
     def _length_alone(self, message: dict, limit: int, generation_prompt: bool) -> int:
         """How many tokens ``message`` takes beside the system turn alone, measured in their render only where its count comes within :data:`_NEAR_THE_ROOM_TOKENS` of ``limit``."""
@@ -1546,17 +1575,19 @@ class RenderedCache:
         return f"this model's template does not write a {role} message here"
 
     def _ensure_room_for_a_question(self, remedy: str) -> None:
-        """Refuse a system turn and declarations that leave no room under ``evict_above_tokens`` for a short question.
+        """Refuse a system turn and declarations that leave no room for a short question, under ``evict_above_tokens`` and with ``min_reply_tokens`` free for its reply.
 
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
-        limit, needed = self._config.evict_above_tokens, self._eviction.with_a_short_question()
-        if needed > limit:
-            raise ContextOverflowError(
-                f"the system prompt and its declarations need {needed} tokens with a short "
-                f"question but the eviction threshold is {limit}; {remedy}, or {RAISE_THE_ROOM}",
-                needed, limit)
+        needed = self._eviction.with_a_short_question()
+        for limit, bound in ((self._config.evict_above_tokens, "the eviction threshold is"),
+                             (self._max_prompt_tokens, "the room beside the reply's is")):
+            if needed > limit:
+                raise ContextOverflowError(
+                    f"the system prompt and its declarations need {needed} tokens with a short "
+                    f"question but {bound} {limit}; {remedy}, or {RAISE_THE_ROOM}",
+                    needed, limit)
 
     def _ensure_within(self, limit: int, remedy: str, generation_prompt: bool = False) -> None:
         """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped, measured with the generation prompt where ``generation_prompt``.

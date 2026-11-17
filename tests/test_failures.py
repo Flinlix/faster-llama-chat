@@ -454,14 +454,17 @@ def test_an_action_whose_render_cannot_place_a_generated_turn_is_refused_and_cha
 
 
 # ----- questions --------------------------------------------------------------------
-def test_a_question_without_room_for_its_reply_is_not_recorded():
+def test_a_begin_that_would_leave_no_question_room_for_its_reply_is_refused_and_changes_nothing():
     fake = FakeContext(PLAIN, gen_tokens=2)
-    w = ChatWrapper(Config(context_size=80, evict_above_fraction=1.0, min_reply_tokens=60),
+    w = ChatWrapper(Config(context_size=86, evict_above_fraction=1.0, min_reply_tokens=60),
                     context=fake)
-    w.begin(opened("s"))
-    with pytest.raises(ContextOverflowError):
-        w.reply("hello").finish()
-    assert after_system(w.conversation()["messages"]) == []
+    w.begin(opened(""))
+    w.reply("hi").finish()
+    before = w.conversation()
+    with pytest.raises(ContextOverflowError, match="room beside the reply's"):
+        w.begin(opened("ein System, das zu lang ist"))
+    assert w.conversation() == before
+    assert w.reply("hello").finish().text
 
 
 # ----- a cache that cannot shift ----------------------------------------------------
@@ -627,7 +630,7 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
     w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
     w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}] * 10 + [{"role": "user", "content": "q"}]))
     with pytest.raises(ContextOverflowError):
-        w.inject("x" * 3000)                    # refused before anything is dropped
+        w.inject("x" * 3000, role="assistant")  # refused before anything is dropped
     resets, decoded = fake.resets, fake.total_prefilled()
     w.reply().finish()
     assert fake.resets == resets and fake.total_prefilled() - decoded < 100

@@ -341,7 +341,11 @@ again. Either is a fault to report.
 What is left is what only a conversation can know: whether a request fits
 (`ContextOverflowError`, a `ValueError`, for every message, history, declaration
 or reply that does not), whether the model calls a tool that exists, and what
-the tool does.
+the tool does. A question never fails to fit: one too long for the room beside
+the system prompt keeps its end, `QUESTION_CUT_MARK` in place of its
+beginning, and a warning is logged. `begin` refuses a system prompt and
+declarations that would leave no room for a short question and
+`min_reply_tokens`, so no conversation it accepts is one that cannot answer.
 
 ## Tool calling
 

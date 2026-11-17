@@ -5,6 +5,7 @@ import pytest
 
 from llama_chat.config import Config
 from llama_chat import ChatWrapper, ContextOverflowError
+from llama_chat.messages import QUESTION_CUT_MARK
 from tests.chat_messages import opened, after_system
 from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import PLAIN
@@ -180,7 +181,7 @@ def test_a_message_that_cannot_fit_is_refused_before_anything_is_evicted():
     w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
     before = rows(w)
     with pytest.raises(ValueError):
-        w.inject("x" * 500)
+        w.inject("x" * 500, role="assistant")
     assert rows(w) == before
 
 
@@ -189,15 +190,29 @@ def test_every_refusal_for_want_of_room_says_what_to_change():
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=32),
                     context=fake)
     w.begin(opened("s"))
-    with pytest.raises(ContextOverflowError, match="shorten the request.*min_reply_tokens"):
-        w.reply("x" * 600).finish()
     with pytest.raises(ContextOverflowError, match="shorten the message.*evict_above_fraction"):
-        w.inject("x" * 600)
-    # Under the threshold, not under room for a reply: a question that could never be answered.
-    with pytest.raises(ContextOverflowError,
-                       match="raise context_size or evict_above_fraction, or lower min_reply_tokens"):
-        w.inject("x" * 470)
+        w.inject("x" * 600, role="assistant")
     w.inject("x" * 470, role="assistant")       # what is answered by none needs no such room
+
+
+@pytest.mark.parametrize("asks", ["reply", "inject"])
+def test_a_question_longer_than_the_room_keeps_its_end_and_is_answered(asks, caplog):
+    fake = FakeContext(PLAIN, gen_tokens=2)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0, min_reply_tokens=32),
+                    context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
+    question = "Anfang " + "x" * 2000 + " und die eigentliche Frage?"
+    with caplog.at_level("WARNING", logger="llama_chat"):
+        if asks == "reply":
+            assert w.reply(question).finish().text
+        else:
+            w.inject(question)
+            assert w.reply().finish().text
+    asked = [m for m in after_system(w.conversation()["messages"]) if m["role"] == "user"][-1]
+    assert asked["content"].startswith(QUESTION_CUT_MARK)
+    assert asked["content"].endswith(" und die eigentliche Frage?") and "Anfang" not in asked["content"]
+    assert any("characters were cut" in record.message for record in caplog.records)
+    assert w.total_tokens <= w.config.context_size
 
 
 def test_a_history_no_question_follows_is_refused_where_it_cannot_fit():
