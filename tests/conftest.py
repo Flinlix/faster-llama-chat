@@ -1,4 +1,6 @@
-"""Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it; and with a conversation that is its two history forms, which begin takes back.
+"""Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it, spelling no result written after it; and with a conversation that is its two history forms, which begin takes back. Every error the library makes during a test says what went wrong.
+
+A test that shows a fault of the library the user has yet to decide on is marked ``known_library_flaw``; the check must then still find that fault.
 
 A test that asks for ``clock`` sets the time a template that reads the clock is rendered at.
 Every test ends within its time limit, or the process stops and prints where

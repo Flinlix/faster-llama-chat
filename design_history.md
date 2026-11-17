@@ -6208,3 +6208,29 @@ tool in a way that closes this.
   that way; on those templates the reply still ends without an answer in
   that room (the test skips them).
 
+## 2026-11-17: Checks after every test that mutation testing showed were missing
+
+A sample of 30 of the 1,823 changes that survived the mutation run (6,546 of
+16,855 tested, 72% caught) held 12 real test gaps. Two kinds are checked after
+every test now, as the rule 1 check of the cache is:
+
+- **Every error the library makes says what went wrong** (rule 11). Each
+  library error made during a test, by a module of the library and not by a
+  test's own stand-in, must carry a message of at least three words that is
+  not a placeholder such as `None`. A test that checked only the error's type
+  let a message replaced by nothing pass.
+- **No turn kept as generated spells a later result** (rule 1). The check of
+  the cache places each kept turn's tokens where the template writes the
+  turn and trusts what they spell, so a kept turn that also held a later
+  tool result passed. A result of at least four characters that a later
+  tool message holds, and that the turn's own messages do not, may not
+  appear in the turn's text. Shorter results are left out, since the turn's
+  own text may spell them by chance.
+- **A known fault stays visible.** The second check found a fault of the
+  library on one test template: a reply cut to nothing after a tool turn
+  leaves the turn's result twice in the cache. The user decides on such
+  faults later, so the template's file lists it under
+  `known_library_flaws`, the test that shows it is marked with it, and the
+  check after the test must still find it there; a fix makes that test fail
+  until the mark goes.
+
