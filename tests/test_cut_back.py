@@ -15,6 +15,7 @@ from tests.internals import token_id_range
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
                             reasoning_wrapper, rendered_reply, rows)
+from llama_chat import OutOfOrderError
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -334,3 +335,23 @@ def test_on_a_cache_that_cannot_be_cut_a_reply_written_again_goes_back_no_furthe
                   if held[at:at + len(written)] == written]
         question_end = starts[-1] + len(written)
         assert all(edit[1] >= question_end for edit in fake.edits[edits:] if edit[0] == "restore")
+
+
+def test_a_conversation_begun_without_a_message_has_no_reply_to_cut():
+    wrapper = ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
+    wrapper.begin(opened(""))
+    assert wrapper.conversation()["messages"] == []
+    with pytest.raises(OutOfOrderError, match="not an assistant reply") as refused:
+        wrapper.truncate_last_reply("")
+    assert refused.value.field is None
+    assert wrapper.conversation()["messages"] == []
+
+
+def test_a_cut_refused_while_a_call_waits_names_the_cut_as_the_action_refused():
+    wrapper, fake = begun_wrapper(TOOLS)
+    fake.call_script.append("fn:uhr{}")
+    wrapper.begin(opened("s"), tools=[ToolSpec("uhr", "", {})])
+    for _event in wrapper.reply("wie spät?", tool_call_policy="yield"):
+        pass
+    with pytest.raises(OutOfOrderError, match="^cannot truncate a reply while a reply is open"):
+        wrapper.truncate_last_reply("")

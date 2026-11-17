@@ -36,8 +36,8 @@ from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixtur
 from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
 from llama_chat.testing.invented_templates import NUMBERED
-from .wrappers import add_tools, assert_cache_reads_as_rendered, rendered_pieces
-from tests.wrappers import rows
+from .wrappers import (add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
+                       rendered_pieces, rows, two_owed_calls)
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -2874,3 +2874,50 @@ def test_calls_of_one_batch_written_under_one_id_are_each_given_an_id_of_their_o
     saved = run.chat.conversation()
     run.chat.begin(**saved)
     assert run.chat.conversation() == saved
+
+
+def _two_calls_in_one_body(stem):
+    """The body of one call block that holds two calls, where ``stem`` writes its calls as a JSON array; else ``None``."""
+    known = fixture(stem)
+    reader = FakeContext(known)
+    text = known["chat_template"]
+    template = ResolvedTemplate(reader, shipped_addon_call(text),
+                                reasoning_on=shipped_addon_reasoning_on(text))
+    if not template.properties.can_call_tools or shipped_addon_call(text):
+        return None
+    _opener, body, _closer = written_call(template, reader, WEATHER.name, {"city": "Bonn"})
+    try:
+        calls = json.loads(body)
+    except ValueError:
+        return None
+    return json.dumps(calls * 2) if isinstance(calls, list) else None
+
+
+_ARRAY_CALL_STEMS = [stem for stem in STEMS if _two_calls_in_one_body(stem) is not None]
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("stem", _ARRAY_CALL_STEMS)
+def test_a_result_that_evicts_while_another_call_is_owed_leaves_the_cache_as_the_render_with_it(stem, can_shift):
+    """Neither the generation prompt nor the open turn decoded again: the reply is not next, the second result is."""
+    assert _ARRAY_CALL_STEMS
+    fake = FakeContext(fixture(stem), can_shift=can_shift)
+    wrapper = ChatWrapper(Config(context_size=1500, evict_above_fraction=1.0, min_reply_tokens=8),
+                          context=fake)
+    wrapper.begin(opened("", numbered_exchanges(4)), tools=[WEATHER])
+    fake.replies = [ScriptedCall(_two_calls_in_one_body(stem))]
+    first, second = two_owed_calls(wrapper)
+    room = wrapper.config.context_size - wrapper.config.min_reply_tokens
+    result = "y" * (room - wrapper.total_tokens + 40)
+    before = fake.total_prefilled()
+    assert wrapper.inject_tool_result(first.id, result).n_evicted_messages > 0
+    assert [call.id for call in wrapper.pending_calls] == [second.id]
+    assert_cache_reads_as_rendered(wrapper, fake)
+    messages, declared = wrapper.conversation()["messages"], [WEATHER.as_declaration()]
+    standing = fake.stated_render(messages, declared, for_tools=True)
+    prompt = fake.stated_render(messages, declared, generation_prompt=True, for_tools=True)[len(standing):]
+    assert not prompt or not fake.text_of(fake.cache).endswith(prompt)
+    if can_shift:
+        assert fake.total_prefilled() - before <= len(fake.tokenize(result)) + 20
+    wrapper.inject_tool_result(second.id, "z")
+    assert wrapper.reply().finish().n_generated_tokens

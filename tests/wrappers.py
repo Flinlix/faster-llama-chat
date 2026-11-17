@@ -12,6 +12,7 @@ from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL, result_message
 from llama_chat.rendering import generated_turns_in
 from llama_chat.tokenizing import split_at_tags
 from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall
 from tests.chat_messages import opened
 from llama_chat.wrapper import ChatWrapper
 from tests import internals
@@ -519,3 +520,17 @@ def _comparable(message: dict) -> dict:
     """``message`` with the turn it may end as its tokens and span, to compare by value."""
     turn = message.get(GENERATED_TURN)
     return {**message, GENERATED_TURN: (turn.tokens, turn.span, turn.on_call)} if turn else message
+
+
+def numbered_exchanges(n):
+    """``n`` question and answer pairs, each numbered."""
+    return [message for i in range(n) for message in
+            ({"role": "user", "content": f"Frage {i}?"}, {"role": "assistant", "content": f"Antwort {i}."})]
+
+
+def two_owed_calls(wrapper):
+    """The two calls of one reply the scripted model writes, both owed a result."""
+    calls = [step for step in wrapper.reply("los", tool_call_policy="yield") if isinstance(step, ToolCall)]
+    assert len(calls) == 2
+    return calls
+

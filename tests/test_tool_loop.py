@@ -24,7 +24,7 @@ from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS
 from tests.internals import held_tokens
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, system_turn, tool_wrapper, weather_registry,
-                            without_ids, rows)
+                            without_ids, rows, numbered_exchanges, two_owed_calls)
 from tests import internals
 
 
@@ -2415,3 +2415,23 @@ def test_a_turn_that_called_tools_is_held_whole_from_its_call_to_its_answer(syst
     assert internals.generated_turn_spans(wrapper) == [(calling, len(messages) - 1)]
     assert [(text, on_call) for _, text, on_call in internals.generated_turns_held(wrapper)] \
         == [(answer, False)]
+
+
+@pytest.mark.parametrize("over", [5, 300])
+def test_a_result_that_evicts_while_another_call_is_owed_decodes_no_more_than_the_result(over):
+    """The exchanges that go are shifted out; the question and the calls that stay are not decoded again."""
+    wrapper, fake = tool_wrapper(context_size=600, template=JSON_TOOLS)
+    wrapper.begin(opened("persona", numbered_exchanges(2)))
+    fake.call_script = ['[{"name":"clock","arguments":{}},{"name":"other","arguments":{}}]']
+    first, second = two_owed_calls(wrapper)
+    room = wrapper.config.context_size - wrapper.config.min_reply_tokens
+    result = "y" * (room - wrapper.total_tokens + over)
+    before = fake.total_prefilled()
+    report = wrapper.inject_tool_result(first.id, result)
+    assert report.n_evicted_messages > 0
+    assert [call.id for call in wrapper.pending_calls] == [second.id]
+    assert fake.total_prefilled() - before <= len(fake.tokenize(result)) + 20
+    assert_cache_reads_as_rendered(wrapper, fake)
+    wrapper.inject_tool_result(second.id, "z")
+    fake.call_script = []
+    assert wrapper.reply().finish().n_generated_tokens
