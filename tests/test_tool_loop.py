@@ -1222,7 +1222,7 @@ def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(
     fake.call_script = ["fn:note{}"]
     reply = _within_seconds(lambda: wrapper.reply("los", tool_call_policy=registry).finish())
     told = _result_of(fake)
-    assert "tool_raised" in told and "the reply this thread is reading" in told
+    assert "tool_raised" in told and "call nothing on the wrapper from a tool it runs" in told
     assert reply.text == "reply" and not wrapper.turn_open
 
 
@@ -1234,26 +1234,26 @@ def test_a_tool_that_calls_back_into_the_wrapper_is_refused_rather_than_hanging(
     lambda w: w.truncate_last_reply(""),
     lambda w: w.wait_idle(),
 ], ids=["inject", "reply", "begin", "declare_tools", "truncate_last_reply", "wait_idle"])
-def test_an_action_on_the_thread_reading_a_reply_is_refused_and_names_the_reply(action):
+def test_an_action_on_the_thread_reading_a_reply_ends_that_reply_and_goes_on(action):
     wrapper, fake = tool_wrapper()
     wrapper.begin(opened("persona"))
+    fake.replies = ["eine lange Antwort"]
 
     def read_and_act():
         stream = wrapper.reply("hallo")
         next(stream)
-        try:
-            action(wrapper)
-        finally:
-            stream.close()
+        action(wrapper)
+        return stream
 
-    with pytest.raises(RuntimeError, match="the reply this thread is reading"):
-        _within_seconds(read_and_act)
+    stream = _within_seconds(read_and_act)
+    assert list(stream) == [] and stream.reply.stop_reason == "interrupted"
     assert wrapper.reply("weiter").finish().text == "reply"
 
 
-def test_an_action_on_the_thread_a_reply_was_handed_to_is_refused_rather_than_hanging():
+def test_an_action_on_the_thread_a_reply_was_handed_to_ends_that_reply_rather_than_hanging():
     wrapper, fake = tool_wrapper()
     wrapper.begin(opened("persona"))
+    fake.replies = ["eine lange Antwort"]
     stream = wrapper.reply("hallo")
     first_read, release = threading.Event(), threading.Event()
 
@@ -1268,17 +1268,14 @@ def test_an_action_on_the_thread_a_reply_was_handed_to_is_refused_rather_than_ha
 
     def read_on_and_act():
         next(stream)
-        try:
-            wrapper.inject("Notiz")
-        finally:
-            stream.close()
+        wrapper.inject("Notiz")
 
     try:
-        with pytest.raises(RuntimeError, match="the reply this thread is reading"):
-            _within_seconds(read_on_and_act)
+        _within_seconds(read_on_and_act)
     finally:
         release.set()
         first.join(10)
+    assert stream.reply.stop_reason == "interrupted"
     assert wrapper.reply("weiter").finish().text == "reply"
 
 

@@ -81,7 +81,7 @@ def test_a_conversation_changed_between_the_call_and_the_first_read_is_checked_a
     wrapper.inject("frage")
     stream = wrapper.reply()                    # a question waits: taken
     wrapper.begin(opened("persona"))                    # as another thread might, before it is read
-    with pytest.raises(ValueError, match="nothing to answer"):
+    with pytest.raises(OutOfOrderError, match=r"begin\(\) has replaced"):
         next(stream)
 
 
@@ -1375,6 +1375,8 @@ _PLAIN_REPLY_CODE = {
         "lone_surrogate_at",
     },
     "wrapper.py": {
+        "ChatWrapper._acquire",
+        "ChatWrapper._watch_unread_reply",
         "ChatWrapper._ensure_not_holding",
         "ChatWrapper._ensure_open",
         "ChatWrapper._generate",

@@ -127,6 +127,18 @@ class ChatWrapper:
         self._replies: weakref.WeakSet[Generator[Any, Any, Any]] = weakref.WeakSet()
         # The actions that wait for the wrapper, which the work after a reply gives way to.
         self._waiting = _Waiting()
+        # Every wait for the wrapper, a wait for it to go idle included, which an unread reply
+        # is ended for.
+        self._blocked = _Waiting()
+        # How many begins have run: a reply belongs to the conversation it was asked of.
+        self._begins = 0
+        # The reply that holds the wrapper while it waits for its reader to take the next step.
+        self._reply_waiting_for_reader: Callable[[], ReplyStream | None] | None = None
+        # The timer that ends a reply nobody reads, while an action waits for it.
+        self._unread_watch: threading.Timer | None = None
+        self._unread_watch_lock = threading.Lock()
+        # The threads tools run on, which may not act on the wrapper the reply that runs them holds.
+        self._tool_threads: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -487,16 +499,25 @@ class ChatWrapper:
             tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
         self._ensure_open()
         self._conversation.ensure_can_reply(asks_question=text is not None)
-        steps = self._noting_each_reader(self._replying(text, tool_call_policy, max_calls, **options))
+        # Weak, so that an abandoned stream is collected, and its hold on the wrapper ends.
+        stream_ref: list[Callable[[], ReplyStream | None]] = []
+        steps = self._noting_each_reader(
+            self._replying(text, tool_call_policy, max_calls, begun=self._begins, **options),
+            stream_ref)
         self._replies.add(steps)
-        return ReplyStream(steps, on_close=lambda: newest.get("reply"))
+        stream = ReplyStream(steps, on_close=lambda: newest.get("reply"))
+        stream_ref.append(weakref.ref(stream))
+        return stream
 
-    def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply]
+    def _noting_each_reader(self, steps: Generator[str | ToolCall, None, Reply],
+                            stream_ref: list[Callable[[], ReplyStream | None]]
                             ) -> Generator[str | ToolCall, None, Reply]:
-        """``steps``, the thread that takes each step noted as the one holding the wrapper, while the reply holds it."""
+        """``steps``, the thread that takes each step noted as the one holding the wrapper, while the reply holds it; the stream ``stream_ref`` names noted as waiting for its reader while it does."""
         holds = False
         try:
             while True:
+                if self._reply_waiting_for_reader is stream_ref[0]:
+                    self._reply_waiting_for_reader = None
                 if holds:
                     self._holder = threading.current_thread()
                 try:
@@ -505,8 +526,12 @@ class ChatWrapper:
                     self._start_settling()
                     return ended.value
                 holds = self._holder is threading.current_thread()
+                if holds:
+                    self._reply_waiting_for_reader = stream_ref[0]
                 yield step
         except GeneratorExit:
+            if self._reply_waiting_for_reader is stream_ref[0]:
+                self._reply_waiting_for_reader = None
             # Closed at a step: ``steps`` still waits there, and is closed on this thread.
             if holds:
                 self._holder = threading.current_thread()
@@ -540,9 +565,14 @@ class ChatWrapper:
             self._lock.release()
 
     def _replying(self, text: str | None, given: ToolCallPolicy | ToolRegistry | None,
-                  max_calls: int | None, **options) -> Generator[str | ToolCall, None, Reply]:
-        """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's."""
+                  max_calls: int | None, begun: int, **options
+                  ) -> Generator[str | ToolCall, None, Reply]:
+        """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's; refused where a begin has replaced the conversation it was asked of, ``begun`` begins in."""
         with self._held():
+            if self._begins != begun:
+                raise OutOfOrderError(
+                    None, "this reply was asked of a conversation that begin() has replaced "
+                    "since; ask it again of the conversation begun now")
             self._conversation.forget_told()    # changes of earlier actions are told already
             goes_on = text is None and self._conversation.turn_open
             policy = self._policy_for(given, goes_on)
@@ -740,7 +770,8 @@ class ChatWrapper:
         self._ensure_not_holding()
         # Longer than the lock can wait is waiting indefinitely, infinity included.
         waits = timeout_s is None or timeout_s > threading.TIMEOUT_MAX
-        if not self._lock.acquire(timeout=-1 if waits or timeout_s is None else timeout_s):
+        # The work after a reply goes on, as waiting for it to end asks.
+        if not self._acquire(-1 if waits or timeout_s is None else timeout_s, gives_way=False):
             return False
         try:
             self._settle_due_work()
@@ -1068,7 +1099,7 @@ class ChatWrapper:
                 budget.calls_left -= 1
                 try:
                     yield call
-                    result = registry.call(call)
+                    result = self._run_tool(registry, call)
                 except BaseException:
                     # Closed at the call, or stopped while it ran (Ctrl+C): the calls that ran
                     # keep their results. Where no room is left, they stay owed, as the
@@ -1082,6 +1113,34 @@ class ChatWrapper:
                                      f"the limit is {budget.max_calls}"}
             settled.append((call, result))
         return settled
+
+    def _run_tool(self, registry: ToolRegistry, call: ToolCall):
+        """What ``registry`` returns for ``call``, run on a thread of its own; a failure where it does not return within ``tool_timeout_s``.
+
+        A tool past its time keeps running, and what it returns is dropped.
+        Without a time limit, it runs on the reply's own thread.
+        """
+        if self._config.tool_timeout_s is None:
+            return registry.call(call)
+        returned: list = []
+
+        def run() -> None:
+            try:
+                returned.append(registry.call(call))
+            except BaseException as error:      # raised again on the reply's thread
+                returned.append(_Raised(error))
+        runner = threading.Thread(target=run, name=f"llama_chat tool {call.name}", daemon=True)
+        self._tool_threads.add(runner)
+        runner.start()
+        runner.join(min(self._config.tool_timeout_s, threading.TIMEOUT_MAX))
+        if not returned:
+            _log.warning("the tool %s did not return within %s s; the model is told it failed",
+                         call.name, self._config.tool_timeout_s)
+            return {"error": "tool_timeout",
+                    "message": f"the tool did not return within {self._config.tool_timeout_s} s"}
+        if isinstance(returned[0], _Raised):
+            raise returned[0].error
+        return returned[0]
 
     def _write_results(self, settled: Sequence[tuple[ToolCall, object]], may_call_again: bool) -> int:
         """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
@@ -1138,10 +1197,9 @@ class ChatWrapper:
 
     @contextlib.contextmanager
     def _held(self, settles: bool = True):
-        """Hold the wrapper for one action, refusing one the thread that already holds it asks for; the work a reply left is done first, where ``settles``."""
+        """Hold the wrapper for one action, refusing one a tool the holding reply runs asks for; the work a reply left is done first, where ``settles``."""
         self._ensure_not_holding()
-        with self._waiting:
-            self._lock.acquire()
+        self._acquire()
         try:
             self._holder = threading.current_thread()
             if settles:
@@ -1161,17 +1219,66 @@ class ChatWrapper:
             _log.warning("the work after a reply failed; the cache is decoded again",
                          exc_info=True)
 
+    def _acquire(self, timeout_s: float = -1, gives_way: bool = True) -> bool:
+        """Take the wrapper's lock, waiting at most ``timeout_s`` (``-1`` for no limit); a reply that holds it unread for ``unread_reply_timeout_s`` is ended meanwhile, and the work after a reply gives way where ``gives_way``."""
+        if self._lock.acquire(blocking=False):
+            return True
+        with self._blocked, self._waiting if gives_way else contextlib.nullcontext():
+            self._watch_unread_reply()
+            return self._lock.acquire(timeout=timeout_s)
+
+    def _watch_unread_reply(self, after_s: float | None = None) -> None:
+        """Have a reply that holds the wrapper unread ended once ``unread_reply_timeout_s`` has passed, while an action waits for it."""
+        limit = self._config.unread_reply_timeout_s
+        if limit is None:
+            return
+        with self._unread_watch_lock:
+            if self._unread_watch is not None:
+                return
+            self._unread_watch = threading.Timer(
+                min(limit if after_s is None else after_s, threading.TIMEOUT_MAX),
+                self._end_unread_reply)
+            self._unread_watch.daemon = True
+            self._unread_watch.start()
+
+    def _end_unread_reply(self) -> None:
+        """End the reply that holds the wrapper unread for ``unread_reply_timeout_s``, while an action waits; look again later where none has yet."""
+        with self._unread_watch_lock:
+            self._unread_watch = None
+        if not self._blocked.is_set():
+            return
+        limit = self._config.unread_reply_timeout_s
+        assert limit is not None, "only a limit arms the watch"
+        named = self._reply_waiting_for_reader
+        stream = named() if named is not None else None
+        if stream is not None and stream.end_if_unread(limit):
+            _log.warning("a reply that nobody read for %s s was ended, so that the action "
+                         "waiting for the wrapper goes on", limit)
+            return
+        unread_s = stream.unread_s() if stream is not None else 0.0
+        self._watch_unread_reply(max(limit - unread_s, _UNREAD_WATCH_MIN_S))
+
     def _ensure_not_holding(self) -> None:
-        """Refuse an action on the thread whose reply still holds the wrapper, which would wait for itself.
+        """End this thread's own reply where it holds the wrapper waiting for this thread to read on, and refuse an action a tool the holding reply runs asks for, which would wait for itself.
 
         Raises:
-            RuntimeError: Naming the reply this thread is reading.
+            OutOfOrderError: Where a tool of the reply that holds the wrapper
+                asks for an action.
         """
-        if self._holder is threading.current_thread():
-            raise RuntimeError(
-                "the reply this thread is reading still holds this conversation, and an "
-                "action now would wait for that reply for ever; read the reply to its end "
-                "or close it first, and call nothing on the wrapper from a tool it runs")
+        current = threading.current_thread()
+        if current in self._tool_threads or self._holder is current \
+                and self._reply_waiting_for_reader is None:
+            raise OutOfOrderError(
+                None, "a tool a reply runs asked for an action on the wrapper, which would "
+                "wait for that reply while the reply waits for the tool; call nothing on the "
+                "wrapper from a tool it runs")
+        if self._holder is current:
+            named = self._reply_waiting_for_reader
+            stream = named() if named is not None else None
+            if stream is not None:
+                _log.warning("a reply this thread had not read to its end was ended by its "
+                             "next action")
+                stream.close()
 
 
 class _Waiting:
@@ -1286,6 +1393,8 @@ _AFTER_REPLY_WAIT_S = 1.0
 # How long the work after a reply waits before it starts, so that the reader of the stream
 # takes in its end without sharing the interpreter with it; at least 0.
 _AFTER_REPLY_PAUSE_S = 0.005
+# The least time between two looks for a reply that nobody reads.
+_UNREAD_WATCH_MIN_S = 0.05
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from typing import Generic, Literal, TypeVar, get_args
@@ -166,6 +168,9 @@ class ReplyStream(Generic[_Delta]):
         self._deltas = deltas
         self._on_close = on_close
         self.reply: Reply | None = None
+        self._stepping = threading.Lock()
+        # When the reader last took a step; None before the first and while one runs.
+        self._read_at: float | None = None
 
     def __iter__(self) -> ReplyStream[_Delta]:
         return self
@@ -176,17 +181,68 @@ class ReplyStream(Generic[_Delta]):
         # generator returns.
         if self.reply is not None:
             raise StopIteration
-        try:
-            return next(self._deltas)
-        except StopIteration as ended:
-            self.reply = ended.value
-            raise
+        with self._stepping:
+            self._read_at = None
+            try:
+                return next(self._deltas)
+            except StopIteration as ended:
+                if self.reply is None:
+                    self.reply = ended.value
+                raise
+            except LIBRARY_ERRORS:
+                raise
+            except Exception as error:
+                raise internal_error("ReplyStream.__next__", error) from error
+            finally:
+                self._read_at = time.monotonic()
 
     def close(self) -> None:
-        """Stop reading, recording what was generated. Idempotent, as a generator's is."""
-        self._deltas.close()
-        if self.reply is None and self._on_close is not None:
-            self.reply = self._on_close()
+        """Stop reading, recording what was generated. Idempotent, as a generator's is.
+
+        Raises:
+            OutOfOrderError: Where a step of the stream runs meanwhile, on
+                another thread or in a tool the step runs; stop it with the
+                reply's ``cancel`` instead.
+        """
+        if not self._stepping.acquire(blocking=False):
+            raise OutOfOrderError(None, "the reply is being read meanwhile, so it cannot be "
+                                        "closed now; set the cancel it was given, or close it "
+                                        "where it is read")
+        try:
+            self._close()
+        finally:
+            self._stepping.release()
+
+    def unread_s(self) -> float:
+        """How long the stream has waited for its reader's next step; ``0`` before the first and while one runs."""
+        read_at = self._read_at
+        return 0.0 if read_at is None else time.monotonic() - read_at
+
+    def end_if_unread(self, unread_s: float) -> bool:
+        """Close the stream, as :meth:`close` does, where its reader has taken no step for ``unread_s`` seconds; whether it did.
+
+        Its reader then finds it ended, :attr:`reply` as closing it leaves
+        it.
+        """
+        if not self._stepping.acquire(blocking=False):
+            return False                # a step runs: it is being read
+        try:
+            if self._read_at is None or self.unread_s() < unread_s:
+                return False
+            self._close()
+            return True
+        finally:
+            self._stepping.release()
+
+    def _close(self) -> None:
+        try:
+            self._deltas.close()
+            if self.reply is None and self._on_close is not None:
+                self.reply = self._on_close()
+        except LIBRARY_ERRORS:
+            raise
+        except Exception as error:
+            raise internal_error("ReplyStream.close", error) from error
 
     def finish(self) -> Reply | None:
         """Read the stream to its end, and return its :class:`Reply`; ``None`` where it was closed before it started."""

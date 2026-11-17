@@ -124,11 +124,19 @@ open with its results, for `reply()` to go on with.
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
 model and makes later actions raise, while `conversation()` and what says
-where it stands still answer. A reply holds the lock while it is read,
-so an action on the thread that reads it, a tool the reply runs included,
-would wait for itself; it is refused instead with a `RuntimeError` that names
-the reply. A reply handed to another thread is read by that thread from then
-on, so the refusal follows it there.
+where it stands still answer. A reply holds the lock while it is read.
+An action on the thread that reads it ends that reply first, as closing its
+stream does, with a warning logged, and then goes on; a reply handed to
+another thread is read by that thread from then on. An action from another
+thread waits for the reply, and where nobody reads the reply on for
+`unread_reply_timeout_s`, it ends that reply as closing its stream does (a call
+already handed over stays owed, and a question then closes its turn) and goes
+on.
+A tool the reply runs runs on a thread of its own and may not act on the
+wrapper: such an action is refused with an `OutOfOrderError`, which the model
+is told as the tool's failure. A tool that has not returned within
+`tool_timeout_s` is answered with a `tool_timeout` failure, and what it returns
+later is dropped.
 
 ## What to call, by task
 
