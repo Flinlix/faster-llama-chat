@@ -1397,8 +1397,11 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
 
 @pytest.mark.parametrize("cut", [0, 3, 9])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut):
+def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut, request):
     """The text kept may hold the blank line the stream showed after the result; the turn keeps its tokens as generated up to the cut."""
+    for flaw in expected(_FIXTURES[stem], "known_library_flaws"):
+        if cut == 0 and flaw.startswith("a reply cut to nothing"):
+            request.node.add_marker(pytest.mark.known_library_flaw(flaw))
     _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
     for before in ("Let me look.", ""):
         run = _Run(stem, context_size=16384)

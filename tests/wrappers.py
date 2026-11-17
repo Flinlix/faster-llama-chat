@@ -476,6 +476,26 @@ def add_tools(wrapper, specs) -> int:
                          ).n_evicted_messages
 
 
+def assert_kept_turns_hold_no_later_result(wrapper, fake):
+    """No turn kept as generated spells a tool result the conversation holds after it, which the template writes in its own place; the check of the render trusts what a kept turn spells."""
+    if not internals.is_begun(wrapper):
+        return
+    messages = internals.rendered_messages(wrapper)
+    for (first, last), (tokens, _text, _on_call) in zip(internals.generated_turn_spans(wrapper),
+                                                       internals.generated_turns_held(wrapper)):
+        said = [m.get("content") or "" for m in messages[first:last + 1]] + [
+            call["function"]["arguments"] for m in messages[first:last + 1]
+            for call in m.get("tool_calls") or ()]
+        kept = fake.text_of(tokens)
+        for later in messages[last + 1:]:
+            result = later.get("content") if later["role"] == "tool" else None
+            # A result of a few characters may be spelled by the turn's own text by chance.
+            if isinstance(result, str) and len(result.strip()) >= 4 \
+                    and not any(result in text for text in said if isinstance(text, str)):
+                assert result not in kept, \
+                    f"the turn kept as generated for messages {first} to {last} spells a later result"
+
+
 def assert_conversation_is_its_forms(wrapper):
     """What ``conversation()`` gives, begin takes, and the conversation the wrapper holds is its Chat Completions messages with each generated turn put back, nothing else needed to go on with it."""
     if not internals.is_begun(wrapper):
