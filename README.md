@@ -352,7 +352,9 @@ or reply that does not), whether the model calls a tool that exists, and what
 the tool does. A question never fails to fit: one too long for the room the
 system prompt leaves under the eviction threshold keeps as much of its end as
 fits, possibly none of it, `QUESTION_CUT_MARK` in place of its beginning, and
-a warning is logged. `begin` refuses a system prompt and
+a warning is logged. A question that waits for its reply is cut again when the
+reply starts where the system prompt has grown since, as a date the template
+writes may overnight; it keeps one mark. `begin` refuses a system prompt and
 declarations that would leave no room for a short question and the room a
 reply keeps (`min_reply_tokens`, at least the shortest reply that holds an
 answer), so no conversation it accepts is one that cannot answer.

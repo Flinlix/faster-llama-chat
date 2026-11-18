@@ -6,7 +6,7 @@ import json
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.errors import ContextOverflowError, InvalidArgumentError
+from llama_chat.errors import ContextOverflowError, InvalidArgumentError, TemplateRefusedError
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
@@ -19,7 +19,7 @@ from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_K
                                       REFUSES_TWO_USER_TURNS)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
-                            weather_registry, rows, ask_through_a_tool_call)
+                            weather_registry, rows, ask_through_a_tool_call, with_check_first)
 from tests.chat_templates import STEMS, WEATHER, fixture
 from llama_chat.history_forms import (completions_messages, generated_turn_records, read_messages,
                                       with_generated_turns)
@@ -1146,3 +1146,28 @@ def test_a_kept_turns_record_holding_a_message_in_a_form_no_record_holds_is_refu
         again.begin(**saved)
     assert refused.value.field == "generated_turns"
     assert again.conversation() == before and again_fake.cache == held
+
+
+def test_a_result_the_template_writes_only_before_its_reply_is_not_named_as_the_refused_message():
+    """A history up to a result counts as written where the template writes it with the generation prompt after it."""
+    says = with_check_first(TOOLS,
+                       "{%- if messages[-1].role == 'tool' and not add_generation_prompt -%}"
+                       "{{ raise_exception('a result is followed by its reply') }}{%- endif -%}"
+                       "{%- for m in messages -%}"
+                       "{%- if m.role == 'user' and loop.previtem is defined "
+                       "and loop.previtem.role == 'tool' -%}"
+                       "{{ raise_exception('a question does not follow a result') }}{%- endif -%}"
+                       "{%- if m.content == 'verboten' -%}"
+                       "{{ raise_exception('this word is not written') }}{%- endif -%}"
+                       "{%- endfor -%}")
+    chat = ChatWrapper(Config(context_size=1024), context=FakeContext(says))
+    history = opened("s", [{"role": "user", "content": "Wetter?"},
+                           *tool_turn(ToolCall("weather", {"city": "Bonn"}), Result("weather", "sonnig")),
+                           {"role": "assistant", "content": "Sonnig."},
+                           {"role": "user", "content": "verboten"}])
+    with pytest.raises(TemplateRefusedError) as refused:
+        chat.begin(history, tools=weather_registry().specs())
+    message = str(refused.value)
+    assert refused.value.field == "messages"
+    assert "the user message 'verboten' where it stands" in message
+    assert "this word is not written" in message and "tool message" not in message

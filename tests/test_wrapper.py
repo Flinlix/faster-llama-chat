@@ -6,6 +6,8 @@ stays exactly what the conversation holds it to be after every action,
 including across evictions.
 """
 
+import ast
+import re
 import time
 import types
 import llama_chat.reply
@@ -31,9 +33,9 @@ from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from llama_chat.testing.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
 from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
-                                      REFUSES_TWO_USER_TURNS)
+                                      REFUSES_TWO_USER_TURNS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT, TOOLS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent,
-                            begun_wrapper, tool_wrapper, rows, weather_registry)
+                            begun_wrapper, tool_wrapper, rows, weather_registry, with_check_first)
 def _n_exchanges(wrapper):
     """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
     history = [row["role"] for row in rows(wrapper) if row["role"] != "system"]
@@ -827,7 +829,7 @@ def test_a_refused_history_is_explained_by_what_would_be_kept_of_it():
     """Two user turns in a row that would be dropped are not why the rest is refused."""
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
                     context=FakeContext(REFUSES_A_TEXT))
-    with pytest.raises(ValueError, match="refuses to write this conversation"):
+    with pytest.raises(ValueError, match="does not write the user message 'refused' where it stands"):
         w.begin(opened("s", [{"role": "user", "content": "eins"}, {"role": "user", "content": "zwei"}, {"role": "assistant", "content": "drei"},
                       {"role": "user", "content": "refused"}, {"role": "assistant", "content": "vier"}]))
 
@@ -1188,6 +1190,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._answer_guard",
         "RenderedCache._cut_to_fit",
         "RenderedCache._cut_to_fit.<locals>.fits",
+        "RenderedCache._cut_to_fit.<locals>.kept",
         "RenderedCache.generation.<locals>.<lambda>",
         "RenderedCache.__init__.<locals>.<lambda>",
         "RenderedCache._action",
@@ -1668,6 +1671,63 @@ def test_a_reply_that_produced_nothing_keeps_the_older_exchanges_exactly_where_t
     assert outcomes == {True, False}
 
 
+@pytest.mark.parametrize("history, refused", [
+    (["user a", "user refused"], "the user message 'refused'"),
+    (["user a", "user b", "assistant refused"], "the assistant message 'refused'"),
+    (["user refused", "assistant b"], "the user message 'refused'"),
+], ids=["second-question", "reply-after-two-questions", "first-question"])
+def test_a_refused_history_names_the_message_the_template_refuses_and_its_cause(history, refused):
+    """On a template that writes two questions in a row, they are not given as the cause."""
+    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                       context=FakeContext(WRITES_TWO_QUESTIONS_REFUSES_A_TEXT))
+    messages = [{"role": role, "content": text} for role, text in (m.split(" ", 1) for m in history)]
+    with pytest.raises(TemplateRefusedError) as error:
+        chat.begin(opened("s", messages))
+    message = str(error.value)
+    assert error.value.field == "messages"
+    assert f"does not write {refused} where it stands" in message
+    assert "this text is refused" in message and "two user turns" not in message
+
+
+@pytest.mark.parametrize("ask", ["inject", "reply"])
+def test_a_question_the_template_refuses_after_an_unanswered_one_is_refused_as_alone_not_joined(ask):
+    """A template that writes two questions in a row takes no question joined to the one before."""
+    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                       context=FakeContext(WRITES_TWO_QUESTIONS_REFUSES_A_TEXT))
+    chat.begin(opened("s"))
+    with pytest.raises(TemplateRefusedError) as alone:
+        chat.inject("refused")
+    chat.inject("eins")
+    held = chat.conversation()
+    with pytest.raises(TemplateRefusedError) as after:
+        if ask == "inject":
+            chat.inject("refused")
+        else:
+            chat.reply("refused").finish()
+    assert str(after.value) == str(alone.value) and after.value.field == alone.value.field
+    assert chat.conversation() == held
+    chat.inject("zwei")
+    assert [m["content"] for m in chat.conversation()["messages"]][-2:] == ["eins", "zwei"]
+    assert chat.reply().finish().n_generated_tokens
+
+
+def test_an_injected_reply_the_template_refuses_names_the_same_cause_however_full_the_conversation_is():
+    """The text is refused before the room an eviction would make is measured."""
+    causes = set()
+    for length in (10, 400):
+        chat = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.5),
+                           context=FakeContext(REFUSES_A_TEXT))
+        chat.begin(opened("s", [{"role": "user", "content": "a" * length},
+                                {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]))
+        held = chat.conversation()
+        with pytest.raises(TemplateRefusedError) as refused:
+            chat.inject("refused", role="assistant")
+        assert refused.value.field == "text" and chat.conversation() == held
+        causes.add(str(refused.value))
+    assert causes == {"this model's template does not write an assistant message here "
+                      "(the template says: this text is refused)"}
+
+
 def _parameters_nesting(levels: int, sibling_placement: str) -> dict:
     """Parameters nesting ``levels`` levels, their object counted, with a flat object beside the deepest branch."""
     deepest: list = []
@@ -1755,3 +1815,148 @@ def test_closing_a_stream_read_to_its_end_keeps_the_summary_of_the_whole_request
     assert stream.reply is finished
     assert (stream.reply.n_generated_tokens, [call.name for call in stream.reply.tool_calls]) \
         == summary == (summary[0], ["weather"])
+
+
+_ASKS_FOR_A_REFUSAL = "refuse the next message"
+
+
+_REFUSAL = "{%- if m.content == refused_content -%}"
+
+
+# The invented template with tools, refusing whatever message follows the text above.
+_REFUSES_THE_MESSAGE_AFTER = {**TOOLS, "chat_template": TOOLS["chat_template"].replace(
+    _REFUSAL, "{%- if loop.previtem is defined and loop.previtem.content == "
+    + repr(_ASKS_FOR_A_REFUSAL) + " -%}{{- raise_exception('this message is refused') -}}"
+    "{%- endif -%}" + _REFUSAL)}
+
+
+def _refused_shown(reply: dict) -> str:
+    """How the refusal of a begin with ``reply`` after the question asking for a refusal names ``reply``."""
+    assert _REFUSAL in TOOLS["chat_template"]
+    chat = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0),
+                       context=FakeContext(_REFUSES_THE_MESSAGE_AFTER))
+    with pytest.raises(TemplateRefusedError) as error:
+        chat.begin(opened("s", [{"role": "user", "content": _ASKS_FOR_A_REFUSAL}, reply]),
+                   tools=[WEATHER])
+    found = re.search(r"does not write the assistant message (.*) where it stands", str(error.value))
+    assert found, str(error.value)
+    return found.group(1)
+
+
+@pytest.mark.parametrize("length", [1, 39, 40, 41, 42, 300])
+def test_a_refused_history_names_the_refused_text_by_its_beginning_marked_as_cut_exactly_where_it_is(length):
+    text = "".join(chr(ord("a") + i % 26) for i in range(length))
+    shown = _refused_shown({"role": "assistant", "content": text})
+    quoted = ast.literal_eval(shown)
+    cut = quoted.endswith("...") and not text.endswith("...")
+    kept = quoted[:-3] if cut else quoted
+    assert kept and text.startswith(kept), shown
+    assert cut is (kept != text), shown
+    assert len(kept) < 100, shown
+
+
+@pytest.mark.parametrize("n_calls", [0, 1, 2])
+def test_a_refused_history_names_a_refused_message_without_text_by_its_calls_or_as_without_text(n_calls):
+    calls = [ToolCall(name=WEATHER.name, arguments={"city": city}) for city in ["Bonn", "Rom"][:n_calls]]
+    reply = tool_turn(*calls)[0] if calls else {"role": "assistant", "content": ""}
+    shown = _refused_shown(reply)
+    assert shown.lower() == (f"with {n_calls} call(s)" if n_calls else "without text"), shown
+
+
+@pytest.mark.parametrize("before", ["unanswered", "replied"])
+def test_an_injected_reply_stands_as_given_on_a_template_that_writes_no_generation_prompt_after_a_reply(before):
+    """An injected reply is checked as written without a generation prompt after it, and is never joined to a question."""
+    says = with_check_first(REFUSES_TWO_USER_TURNS,
+                       "{%- if add_generation_prompt and messages[-1].role == 'assistant' -%}"
+                       "{{ raise_exception('a reply is not followed by another') }}{%- endif -%}")
+    chat = ChatWrapper(Config(context_size=500), context=FakeContext(says))
+    chat.begin(opened("s"))
+    if before == "unanswered":
+        chat.inject("eins")
+    else:
+        chat.reply("eins").finish()
+    held = chat.conversation()["messages"]
+    chat.inject("Antwort", role="assistant")
+    assert chat.conversation()["messages"] == held + [{"role": "assistant", "content": "Antwort"}]
+    chat.reply("zwei").finish()
+
+
+def test_an_injected_question_the_template_refuses_alone_is_joined_to_an_unanswered_one_where_no_two_are_written():
+    """Joined, the two are one text the template writes, so the question the template refuses alone is not refused."""
+    chat = ChatWrapper(Config(context_size=500), context=FakeContext(REFUSES_A_TEXT))
+    chat.begin(opened("s"))
+    with pytest.raises(TemplateRefusedError):
+        chat.inject("refused")
+    chat.inject("eins")
+    report = chat.inject("refused")
+    messages = chat.conversation()["messages"]
+    assert report.question_joined and [m["role"] for m in messages] == ["system", "user"]
+    assert messages[-1]["content"].startswith("eins") and messages[-1]["content"].endswith("refused")
+    chat.reply().finish()
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+def test_an_injected_question_after_an_unanswered_one_is_joined_or_asked_alone_at_every_length(can_shift):
+    """The two joined are measured with the generation prompt after them, so no length between joined and alone is refused for room."""
+    config = Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=150)
+    outcomes = set()
+    for length in range(150, 210):
+        chat = ChatWrapper(config, context=FakeContext(REFUSES_TWO_USER_TURNS, can_shift=can_shift))
+        chat.begin(opened("s"))
+        chat.inject("a" * 250)
+        report = chat.inject("b" * length)
+        newest = chat.conversation()["messages"][-1]["content"]
+        if report.question_joined:
+            assert newest.startswith("a" * 250) and newest.endswith("b" * length), length
+        else:
+            assert report.n_evicted_messages == 1 and newest == "b" * length, length
+        outcomes.add(report.question_joined)
+    assert outcomes == {True, False}
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+def test_an_injected_question_that_overfills_the_room_evicts_until_it_fits_with_the_generation_prompt(can_shift):
+    """At every length up to the room, the oldest exchanges go for an injected question until it fits with the prompt its reply follows."""
+    config = Config(context_size=400, evict_above_fraction=1.0, min_reply_tokens=100)
+    room = config.context_size - config.min_reply_tokens
+    history = [message for i in range(3) for message in (
+        {"role": "user", "content": f"q{i}" + "a" * 30}, {"role": "assistant", "content": "r" * 30})]
+    evicted = set()
+    for length in range(40, 140):
+        fake = FakeContext(PLAIN, can_shift=can_shift)
+        chat = ChatWrapper(config, context=fake)
+        chat.begin(opened("sys", history))
+        report = chat.inject("x" * length)
+        messages = chat.conversation()["messages"]
+        assert messages[-1] == {"role": "user", "content": "x" * length}
+        prompted = len(fake.tokenize(fake.stated_render(messages, generation_prompt=True), add_special=True))
+        assert prompted <= room, length
+        evicted.add(report.n_evicted_messages > 0)
+    assert evicted == {True, False}
+
+
+# A template that writes no generation prompt after a reply, as some refuse to.
+_NO_PROMPT_AFTER_A_REPLY = {
+    **WRITES_TWO_QUESTIONS_REFUSES_A_TEXT,
+    "chat_template": WRITES_TWO_QUESTIONS_REFUSES_A_TEXT["chat_template"].replace(
+        "{%- if add_generation_prompt and not ns.open -%}",
+        "{%- if add_generation_prompt and messages[-1].role == 'assistant' -%}"
+        "{{- raise_exception('no prompt after a reply') -}}{%- endif -%}"
+        "{%- if add_generation_prompt and not ns.open -%}")}
+
+
+@pytest.mark.parametrize("ends_on", ["question", "reply"])
+def test_a_refused_history_names_the_refused_message_where_the_template_writes_no_prompt_after_a_reply(ends_on):
+    """A past reply the template writes is not the refused one for the prompt it refuses after it."""
+    chat = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0),
+                       context=FakeContext(_NO_PROMPT_AFTER_A_REPLY))
+    history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+               {"role": "user", "content": "refused"}]
+    if ends_on == "reply":
+        history.append({"role": "assistant", "content": "c"})
+    with pytest.raises(TemplateRefusedError) as error:
+        chat.begin(opened("s", history))
+    message = str(error.value)
+    assert error.value.field == "messages"
+    assert "does not write the user message 'refused' where it stands" in message
+    assert "this text is refused" in message

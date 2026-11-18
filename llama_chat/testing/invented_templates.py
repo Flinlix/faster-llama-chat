@@ -139,6 +139,8 @@ JOINS_USER_TURNS = _invented(user_join="<sep>")
 REFUSES_TWO_USER_TURNS = _invented(user_join=None)
 # Two user turns in a row are refused, and so is the text "refused".
 REFUSES_A_TEXT = _invented(user_join=None, refused_content="refused")
+# Two user turns in a row are written, and the text "refused" is refused.
+WRITES_TWO_QUESTIONS_REFUSES_A_TEXT = _invented(refused_content="refused")
 TOOLS = _invented(calls_tools=True)
 JSON_TOOLS = _invented(calls_tools=True, calls_json=True)
 TOOLS_REFUSING_TWO_USER_TURNS = _invented(calls_tools=True, user_join=None)

@@ -472,7 +472,8 @@ class ChatWrapper:
                 asked for it.
             ContextOverflowError: Only where too little room remains for the
                 reply to go on with an open turn; a question is cut to fit
-                instead. A result or the error answering a call that no longer fits
+                instead, one injected earlier cut again where the system
+                prompt has grown since. A result or the error answering a call that no longer fits
                 raises nothing: the turn closes on what the model wrote, and
                 the reply ends with ``"token_limit"``.
         """

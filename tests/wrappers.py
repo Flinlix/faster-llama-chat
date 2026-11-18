@@ -546,3 +546,8 @@ def ask_through_a_tool_call(wrapper, fake, answer=None):
     wrapper.inject_tool_result(call.id, "12:00")
     wrapper.reply(tool_call_policy="yield").finish()
 
+
+
+def with_check_first(fixture: dict, check: str) -> dict:
+    """``fixture`` with the Jinja ``check`` run before its own text."""
+    return dict(fixture, chat_template=check + fixture["chat_template"])

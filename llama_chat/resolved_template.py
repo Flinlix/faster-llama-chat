@@ -67,6 +67,8 @@ class ResolvedTemplate:
         self.n_call_mark_tokens = (2 if boundary.tool_tokens else sum(
             len(context.tokenize(text, add_special=False, parse_special=True))
             for text in boundary.call_texts) if boundary.call_texts else 0)
+        # Whether generation can keep a call's opening token from the model.
+        self.can_withhold_calls = bool(boundary.tool_tokens)
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:

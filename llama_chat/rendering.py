@@ -346,10 +346,7 @@ class ConversationRendering:
             return None
         start = self.tag_after_content(split, first - 1)
         if on_call:
-            called = split.call_ends[last]
-            closing = self._template.properties.call_close_text
-            found = split.text.find(closing, called) if called is not None and closing else -1
-            end = found + len(closing) if found >= 0 else None
+            end = self.call_closed_at(split, last)
         elif (content := split.contents[last]) is not None:
             end = content[1]
         else:
@@ -367,6 +364,13 @@ class ConversationRendering:
         if start is None or end is None or end <= start:
             return None
         return start, end
+
+    def call_closed_at(self, split: SplitRender, index: int) -> int | None:
+        """Where the closing after message ``index``'s last call ends in ``split``; ``None`` where the template writes no call of it or no closing."""
+        called = split.call_ends[index]
+        closing = self._template.properties.call_close_text
+        found = split.text.find(closing, called) if called is not None and closing else -1
+        return found + len(closing) if found >= 0 else None
 
     def template_writes(self, messages: list[dict]) -> bool:
         """Whether the template's render alone stands for ``messages`` in the cache: no call, result or turn kept as generated among them."""

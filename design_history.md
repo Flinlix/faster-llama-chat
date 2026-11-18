@@ -6234,3 +6234,84 @@ every test now, as the rule 1 check of the cache is:
   check after the test must still find it there; a fix makes that test fail
   until the mark goes.
 
+
+## 2026-11-17: Faults the survivor loop found, fixed
+
+Writing tests for the changes mutation testing left alive turned up four faults
+of the library. The user chose to fix each.
+
+- **A reply cut to nothing after a tool turn held the result twice** (rule 1).
+  The kept turn was cut back to its call by searching backwards for the
+  call's closing text. On a template whose call and result end with the same
+  end-of-turn tag, that search stopped at the result's end, so the kept tokens
+  held the result while the turn no longer covered it, and the template wrote
+  it once more. The closing is now the one right before the template's own
+  text from it to the end of the first result's content; a template that
+  writes these differently gets the refusal that asks to keep some text. The
+  cause is a property any template can have, so the fix is in the general
+  code; no add-on file states anything for it. The `known_library_flaws`
+  mechanism stays for faults the loop finds later.
+- **A refused history named a cause that was not one** (rule 11). It said
+  "two user turns in a row" whenever two stood anywhere in the history, also
+  on templates that write them, and an injected message refused after one of
+  another role was named by the newest message's role. A history refusal now
+  names the first message whose history up to it the template will not write,
+  by role and its first words (or its calls), with the template's own reason
+  for that part; "two user turns" is said only where the template writes no
+  two in a row. Finding that message renders each part of the history once,
+  which only a refusal pays.
+- **A question that filled the room was refused once the date grew** (the
+  promise of `reply()`). A question injected before midnight was cut to the
+  room beside the system turn as it then was; once the date the template
+  writes grew, the system turn took more and the reply was refused. A reply
+  now cuts the waiting question again where the conversation no longer fits
+  with it, after the exchanges that may go are dropped. The mark of the
+  earlier cut is taken off first, so the question carries one mark; this
+  happens once per growth, and a question asked after it is cut once, as
+  before.
+- **A refused question was joined to an unanswered one** (rule 11). A
+  question the template refused after an unanswered one was joined to it
+  even on a template that writes two questions in a row, which let a text the
+  template refuses in. Joining now needs a template that writes no two in a
+  row; elsewhere the question is refused with the error it gets alone.
+
+Also removed: a property nothing read, the check in `prompt()` the next line
+repeats, and the refusal in `truncate_newest` of a newest reply holding a call,
+which the check for an open reply makes first. The refusal of an assistant
+message now reads "an assistant message".
+
+## 2026-11-17: Fixes from the review of the reply rule's follow-ups and the survivor faults
+
+One review of the changes since the last one (the cut to the threshold, the
+injected reply checked before evictions, the reader and tool thread fixes, the
+fault kept across a failed begin, the stand-in's closing tag, the micro-batch
+setting, the call withheld in a small room) and of the fixes above found:
+
+- **A question cut before was refused after the date grew.** With its mark
+  taken off, the rest was cut again; where the rest fitted without the mark,
+  it came back unchanged and the reply was refused. The cut now keeps the
+  mark for a question cut before, however much of the rest is kept.
+- **A call in a small room went unreported on templates that cannot withhold
+  it.** Switching off call recognition withholds nothing where a call opens
+  with no token of its own, so the call the model still wrote was neither
+  reported nor answered. The switch now applies only where the call's
+  opening token can be withheld; elsewhere the call is reported unfinished,
+  as before. Ending the reply where such a call opens as text gave an empty
+  reply on one test template, so that form is not used either.
+- **An injected reply the template refuses got two different causes.** The
+  room check before evictions rendered it first and refused with the generic
+  text where the conversation was full. The text is now refused first.
+- **Dead refusal text.** "Two user turns in a row" can no longer stand in a
+  conversation on a template that writes no two (a begin and a question join
+  them), so that branch went.
+- **The call's end in a cut reply** is now found by the template's text from
+  the call's closing to the end of the newest result, not of the first, so two
+  results alike cannot be mistaken for each other.
+- The engine's out of memory advice now names `micro_batch_tokens` too, and
+  the stand-in's and the README's texts say what the code does.
+
+Found on the way and recorded as a known fault, not fixed: on five test
+templates whose call opens with no token of its own, a reply in a room too
+small for any call shows part of the call's opening as its answer, or nothing
+(rules 8 and 11). Their template files list it under `known_library_flaws`,
+and a test checks that it still shows there.

@@ -25,6 +25,7 @@ import pytest
 import llama_chat
 from llama_chat import ChatWrapper, Config, ContextOverflowError, TemplateRefusedError
 from llama_chat.history_forms import answer_in_order, read_messages
+from llama_chat.messages import QUESTION_CUT_MARK
 from llama_chat.reply_text import begins_in_thought
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tool_registry import ToolRegistry
@@ -35,9 +36,9 @@ from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
 from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
-from llama_chat.testing.invented_templates import NUMBERED, TOOLS
+from llama_chat.testing.invented_templates import NUMBERED, TOOLS, PLAIN
 from .wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
-                       rendered_pieces, rows, two_owed_calls)
+                       rendered_pieces, two_owed_calls, with_check_first)
 
 _FIXTURES = {stem: fixture(stem) for stem in STEMS}
 # A template of this file's own, with the conversation's length in its generation
@@ -1044,7 +1045,7 @@ def test_a_result_owed_to_a_call_a_history_ends_on_only_adds_to_the_cache(
     try:
         run.begin([{"role": "user", "content": "Weather?"}, *owed], tools=[WEATHER])
     except ValueError as refused:       # a template that writes no call without its result
-        assert "refuses" in str(refused)
+        assert "does not write the assistant message with" in str(refused)
         return
     assert_cache_reads_as_rendered(run.chat, run.context)
     held, edits, decoded = list(run.context.cache), len(run.context.edits), run.context.total_prefilled()
@@ -1400,11 +1401,8 @@ def test_a_live_call_keeps_its_tokens_and_the_conversation_goes_on_as_the_templa
 
 @pytest.mark.parametrize("cut", [0, 3, 9])
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut, request):
+def test_the_reply_that_ends_a_turn_that_called_tools_is_cut_to_what_its_stream_showed(stem, cut):
     """The text kept may hold the blank line the stream showed after the result; the turn keeps its tokens as generated up to the cut."""
-    for flaw in expected(_FIXTURES[stem], "known_library_flaws"):
-        if cut == 0 and flaw.startswith("a reply cut to nothing"):
-            request.node.add_marker(pytest.mark.known_library_flaw(flaw))
     _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
     for before in ("Let me look.", ""):
         run = _Run(stem, context_size=16384)
@@ -2158,10 +2156,45 @@ def test_a_model_that_would_call_in_a_room_no_call_fits_answers_instead(stem):
         middle = (low + high + 1) // 2
         low, high = (middle, high) if begun(middle) else (low, middle - 1)
     chat = begun(low)
-    if internals.template(chat).properties.boundary.tool_tokens is None:
+    if not internals.template(chat).can_withhold_calls:
         pytest.skip("a call that opens with no token of its own cannot be kept from the model")
     reply = chat.reply("x" * _ROOM_TOKENS + " Wetter?", tool_call_policy="yield").finish()
     assert reply.text and not reply.tool_calls, reply
+
+
+_NO_ROOM_FOR_A_CALL_FLAW = "a reply in a room too small for a call shows part of the call's opening"
+
+
+def _can_withhold_calls(stem: str, merges: bool) -> bool:
+    """Whether generation can keep the call's opening token from the model on ``stem``'s template, read by a merging tokenizer or by one of a token per character."""
+    known = _FIXTURES[stem]
+    text = known["chat_template"]
+    return ResolvedTemplate(FakeContext(known, merges=merges), shipped_addon_call(text),
+                            reasoning_on=shipped_addon_reasoning_on(text)).can_withhold_calls
+
+
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if stem in _SYSTEM_TEMPLATES
+                                  and not all(_can_withhold_calls(stem, m) for m in (False, True))])
+def test_a_call_the_room_cannot_hold_on_a_template_that_cannot_withhold_it_is_still_reported(stem):
+    """Where a call's opening cannot be kept from the model, the call it writes is reported, unfinished; a template listed with the known fault still shows it."""
+    _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
+    context = FakeContext(_fixture(stem), merges=_TOKENIZER["merges"])
+    chat = ChatWrapper(Config(context_size=_ROOM_TOKENS, min_reply_tokens=0, evict_above_fraction=1.0),
+                       context=context)
+    context.replies = [ScriptedCall(body), "Antwort"]
+    for system_length in range(_ROOM_TOKENS, 0, -1):
+        try:
+            chat.begin(opened("s" * system_length), tools=[WEATHER])
+            break
+        except ContextOverflowError:
+            continue
+    if internals.template(chat).can_withhold_calls:
+        pytest.skip("this tokenizer reads the call's opening as a token of its own")
+    reply = chat.reply("x" * _ROOM_TOKENS + " Wetter?", tool_call_policy="yield").finish()
+    if _NO_ROOM_FOR_A_CALL_FLAW in expected(_FIXTURES[stem], "known_library_flaws"):
+        assert not reply.tool_calls, "the known fault is gone: take it off the template's list"
+        return
+    assert [call.status for call in reply.tool_calls] == ["unfinished"], reply
 
 
 @pytest.mark.parametrize("owed", [True, False], ids=["call-owed", "results-in"])
@@ -2824,20 +2857,17 @@ def test_an_injected_question_that_fills_the_room_is_answered_after_midnight_len
 
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
 @pytest.mark.parametrize("stem", _GROWING_DATE)
-def test_a_reply_the_lengthened_date_leaves_no_room_is_answered_or_refused_naming_what_it_needs_and_what_fits(
+def test_a_question_the_lengthened_date_leaves_no_room_is_cut_again_once_and_answered(
         stem, can_shift, clock):
-    """With no exchange to drop, the injected question alone is past the room once the date grows."""
-    for short_by in range(_date_growth(stem)):
+    """With no exchange to drop, the injected question alone is past the room once the date grows: its beginning is cut, one mark before the rest, also where it was cut when injected."""
+    for short_by in [*range(_date_growth(stem)), -5, -50, -300]:
         chat = _filled_to_the_room(stem, can_shift, clock, n_exchanges=0, short_by=short_by)
         clock[0] = _AFTER_MIDNIGHT
-        before = rows(chat)
-        try:
-            chat.reply().finish()
-        except ContextOverflowError as refused:
-            needed, available = refused.needed_tokens, refused.available_tokens
-            assert isinstance(needed, int) and isinstance(available, int) and needed > available
-            assert f"{needed} tokens" in str(refused) and f"{available} leave room" in str(refused)
-            assert rows(chat) == before
+        asked = chat.conversation()["messages"][-1]["content"]
+        assert chat.reply().finish().n_generated_tokens
+        question = chat.conversation()["messages"][-2]["content"]
+        assert question.startswith(QUESTION_CUT_MARK) and question.count(QUESTION_CUT_MARK) == 1
+        assert len(question) < len(asked) and asked.endswith(question[len(QUESTION_CUT_MARK):])
         chat.reply("Next?").finish()
 
 
@@ -3154,3 +3184,91 @@ def test_an_exchange_that_called_tools_anywhere_in_the_history_is_dropped_as_the
         for i in range(8, 11):
             run.chat.reply(f"Question {i}?").finish()
             assert_cache_reads_as_rendered(run.chat, run.context)
+
+
+def _filled_before_midnight(stem: str, clock, system: str, question_length: int | None = None):
+    """A conversation begun before midnight with ``system`` and a question of ``question_length`` letters injected, by default one that leaves the reply's room one token from full."""
+    clock[0] = _BEFORE_MIDNIGHT
+    fake = FakeContext(fixture(stem), ANSWERS)
+    chat = ChatWrapper(Config(context_size=_DATE_ROOM_TOKENS + _MIN_REPLY_TOKENS,
+                              evict_above_fraction=1.0, min_reply_tokens=_MIN_REPLY_TOKENS,
+                              min_answer_tokens=None, answer_room_tokens=None), context=fake)
+    chat.begin(opened(system))
+    if question_length is None:
+        one_letter = chat.conversation()["messages"] + [{"role": "user", "content": "x"}]
+        length = len(fake.tokenize(fake.stated_render(one_letter, generation_prompt=True)))
+        question_length = _DATE_ROOM_TOKENS - length + 1
+    chat.inject("x" * question_length)
+    return chat
+
+
+@pytest.mark.parametrize("system", ["", "Be brief."], ids=["no-system-prompt", "system-prompt"])
+@pytest.mark.parametrize("stem", _GROWING_DATE)
+def test_a_question_cut_again_after_midnight_is_its_end_alone_behind_one_mark_with_or_without_a_system_prompt(
+        stem, system, clock):
+    chat = _filled_before_midnight(stem, clock, system)
+    asked = chat.conversation()["messages"][-1]["content"]
+    clock[0] = _AFTER_MIDNIGHT
+    assert chat.reply().finish().n_generated_tokens
+    question = internals.rendered_messages(chat)[-2]
+    assert set(question) == {"role", "content"} and question["role"] == "user", question
+    assert chat.conversation()["messages"][-2] == question
+    kept = question["content"]
+    assert kept.startswith(QUESTION_CUT_MARK) and kept.count(QUESTION_CUT_MARK) == 1, kept
+    assert len(kept) < len(asked) and asked.endswith(kept[len(QUESTION_CUT_MARK):])
+
+
+def test_a_question_injected_after_the_date_grew_past_the_room_is_answered_or_refused_naming_the_injected_question(
+        clock):
+    """Where the grown date leaves the system turn no room for even the cut mark, the refusal says which text did not fit."""
+    dated = with_check_first(PLAIN, "{{- '<[turn>date ' ~ strftime_now('%B') ~ '<turn]>\n' -}}")
+    before, after = datetime.datetime(2026, 8, 31, 23, 59), datetime.datetime(2026, 9, 1, 0, 1)
+    growth = len(after.strftime("%B")) - len(before.strftime("%B"))
+    config = Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=100)
+    room = min(config.evict_above_tokens, config.context_size - config.min_reply_tokens)
+    clock[0] = before
+    fake = FakeContext(dated)
+    alone = [{"role": "user", "content": QUESTION_CUT_MARK + "?"}]
+    # The longest system prompt a short question still fits beside, which the grown date overfills.
+    bare = len(fake.tokenize(fake.stated_render(opened("s") + alone, generation_prompt=True),
+                             add_special=True))
+    system = "s" * (1 + room - bare)
+    assert growth > 1
+    chat = ChatWrapper(config, context=fake)
+    chat.begin(opened(system))
+    clock[0] = after
+    try:
+        chat.inject("hallo")
+    except ContextOverflowError as refused:
+        assert "the injected question" in str(refused)
+        chat.begin(opened("s"))         # the remedy the refusal names: a shorter system prompt
+    else:
+        chat.reply().finish()
+
+
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("max_history_exchanges", [4, 5, 6])
+def test_the_room_a_grown_date_takes_from_an_injected_question_evicts_for_room_alone_within_the_exchange_limit(
+        clock, can_shift, max_history_exchanges):
+    """At the reply, the exchanges go that the room needs, none for an exchange limit the conversation is within."""
+    dated = with_check_first(PLAIN, "{{- '<[turn>date ' ~ strftime_now('%B') ~ '<turn]>\n' -}}")
+    clock[0] = datetime.datetime(2026, 8, 31, 23, 59)
+    config = Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=350,
+                    max_history_exchanges=max_history_exchanges)
+    room = config.context_size - config.min_reply_tokens
+    fake = FakeContext(dated, can_shift=can_shift, gen_tokens=3)
+    chat = ChatWrapper(config, context=fake)
+    # The oldest exchange alone gives the room the grown date takes, and more than a cache that cannot shift drops to.
+    history = [{"role": "user", "content": "a" * 120}, {"role": "assistant", "content": "b" * 5},
+               {"role": "user", "content": "c" * 5}, {"role": "assistant", "content": "d" * 5},
+               {"role": "user", "content": "e" * 5}, {"role": "assistant", "content": "f" * 5}]
+    chat.begin(opened("s", history))
+    one_letter = chat.conversation()["messages"] + [{"role": "user", "content": "x"}]
+    length = len(fake.tokenize(fake.stated_render(one_letter, generation_prompt=True), add_special=True))
+    question = "x" * (room - length + 1)
+    chat.inject(question)
+    assert len(chat.conversation()["messages"]) == 2 + len(history)
+    clock[0] = datetime.datetime(2026, 9, 1, 0, 1)
+    reply = chat.reply().finish()
+    assert reply.n_evicted_messages == 2
+    assert chat.conversation()["messages"][1:-1] == history[2:] + [{"role": "user", "content": question}]

@@ -21,9 +21,9 @@ from llama_chat.testing.fake_context import FakeContext
 from tests import internals
 from tests.internals import generated_turns_held
 from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
-                                      TOOLS_REFUSING_TWO_USER_TURNS, NO_DECLARATIONS)
+                                      TOOLS_REFUSING_TWO_USER_TURNS, NO_DECLARATIONS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
-                            newest_turn, rows, tool_wrapper, weather_registry)
+                            newest_turn, rows, tool_wrapper, weather_registry, with_check_first)
 from llama_chat.cache_sync import CacheSync
 from llama_chat.generation import GenerationAccumulator
 
@@ -1252,3 +1252,22 @@ def test_a_refusal_carries_what_the_template_says_where_it_refuses_only_as_the_c
     w.begin(opened("s"), tools=weather_registry().specs(), reasoning=given == "reasoning")
     with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
         w.inject("verboten")
+
+
+@pytest.mark.parametrize("role_after", ["user", "assistant"])
+def test_a_refused_history_carries_the_template_s_cause_for_the_refused_message_not_for_the_one_after_it(
+        role_after):
+    """The template's own cause is read from the history up to the message it refuses, not one message further."""
+    says = with_check_first(WRITES_TWO_QUESTIONS_REFUSES_A_TEXT,
+                       "{% if messages[-1].content == 'verboten' %}"
+                       "{{ raise_exception('this word is not written last') }}{% endif %}")
+    chat = ChatWrapper(Config(context_size=500), context=FakeContext(says))
+    history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+               {"role": "user", "content": "refused"}, {"role": role_after, "content": "verboten"},
+               {"role": "user", "content": "c"}]
+    with pytest.raises(TemplateRefusedError) as refused:
+        chat.begin(opened("s", history))
+    message = str(refused.value)
+    assert refused.value.field == "messages"
+    assert "the user message 'refused' where it stands" in message
+    assert "this text is refused" in message and "not written last" not in message
