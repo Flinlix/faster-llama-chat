@@ -417,7 +417,7 @@ class FakeContext:
 
     # ----- the model -------------------------------------------------------------
     def sampled_tokens(self, sampling, withheld_tokens):
-        """The next scripted call where its opening may be drawn, else the next scripted reply, else the default one; then the end of generation."""
+        """The next scripted call where its opening may be drawn, else the next scripted reply, else the default one; then the template's closing tag, unless it is withheld, and the end of generation."""
         self.samplings.append(sampling)
         if any(self.ends_generation(token) for token in withheld_tokens):
             # Kept from ending, the model writes on, and never ends here.
