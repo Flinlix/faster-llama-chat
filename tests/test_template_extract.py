@@ -703,3 +703,17 @@ def test_a_thought_written_straight_after_the_replys_tag_opens_with_the_last_of_
     render = _thought_after_reply_tag_render(reply_tag)
     found = extract_reasoning(render, extract_fragments(render, tags), None, tags)
     assert (found and (found.thought_open, found.thought_close)) == thought_tags
+
+
+def test_a_template_drops_a_block_tags_own_line_end_and_the_indentation_before_it():
+    text = ("{% for m in messages %}\n    {% if m.content %}\n{{ m.content }}\n"
+            "    {% endif %}\n{% endfor %}")
+    messages = [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]
+    assert ModelTemplate(text, "").render(messages) == "a\nb\n"
+
+
+def test_a_model_template_keeps_its_text_and_writes_the_end_of_sequence_text_it_was_given():
+    text = "{{ messages[0].content }}{{ eos_token }}"
+    template = ModelTemplate(text, "~end~")
+    assert template.text == text
+    assert template.render([{"role": "user", "content": "hi"}]) == "hi~end~"
