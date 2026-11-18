@@ -793,3 +793,24 @@ def test_a_json_call_holds_its_id_under_a_key_only_where_the_template_writes_the
     assert extract_json_call_id_key(own, keys) == "id"
     assert extract_json_call_id_key(numbered_by_place, keys) is None
     assert extract_json_call_id_key(lambda messages, **_options: None, keys) is None
+
+
+@pytest.mark.parametrize("tags", [("aa",), ("ab", "b"), ("a", "ab"), ("aba",), ("a", "aa", "aab")])
+def test_a_shared_beginning_is_the_longest_that_ends_a_tag_without_cutting_another(tags):
+    from llama_chat.template import shared_tags_length
+
+    def ends_cleanly(text, at):
+        if not text[:at].endswith(tags):
+            return False
+        return not any(start < at < start + len(tag)
+                       for tag in tags for start in range(len(text))
+                       if text.startswith(tag, start))
+
+    for length in range(1, 8):
+        for letters in itertools.product("ab", repeat=length):
+            text = "".join(letters)
+            for common in range(len(text) + 1):
+                other = text[:common] + "x"
+                expected = max((at for at in range(1, common + 1) if ends_cleanly(text, at)),
+                               default=0)
+                assert shared_tags_length(text, other, tags) == expected, (text, common)

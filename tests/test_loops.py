@@ -201,3 +201,17 @@ def test_a_loop_dropping_exchanges_in_windows_that_makes_no_progress_is_named_in
     assert loop != "None" and len(loop.split()) >= 2
     monkeypatch.undo()
     assert w.reply("Und jetzt?").finish().text == "Gern."
+
+
+def test_a_loop_finding_a_tag_before_a_place_that_makes_no_progress_is_named_in_its_error(monkeypatch):
+    class Stalling(LoopVariant):
+        """A variant whose measure never shrinks, as a loop with a fault would give it."""
+
+        def passes(self, measure):
+            super().passes(0)
+
+    monkeypatch.setattr(llama_chat.template, "LoopVariant", Stalling)
+    with pytest.raises(InternalError) as raised:
+        llama_chat.template.shared_tags_length("<a><a>", "<a><a>x", ("<a>",))
+    loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
+    assert loop != "None" and len(loop.split()) >= 2
