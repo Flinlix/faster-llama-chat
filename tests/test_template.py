@@ -57,3 +57,39 @@ def test_a_split_render_takes_time_in_proportion_to_the_messages():
     timed(2000)                                 # warmed up
     # Twice the messages take about twice as long, not four times.
     assert timed(40000) < 3 * timed(20000)
+
+
+def _closed_by_the_next_question(after_reply: str = "", footer: str = "", head: str = "") -> dict:
+    """A template that writes nothing after a reply but ``after_reply``, whose question opens with a tag that ends a generation."""
+    return {"chat_template": head + (
+        "{%- for m in messages -%}"
+        "{%- if m.role == 'user' -%}<|ask|>{{ m.content }}" + footer +
+        "{%- elif m.role == 'system' -%}<|rules|>{{ m.content }}"
+        "{%- elif m.role == 'assistant' -%}<|answer|>{{ m.content }}" + after_reply +
+        "{%- endif -%}{%- endfor -%}"
+        "{%- if add_generation_prompt -%}<|answer|>{%- endif -%}"),
+        "eos_token": "<|stop|>", "ends_generation": ["<|ask|>"],
+        "render_variables": {"off": {}, "on": {}}}
+
+
+@pytest.mark.parametrize("after_reply, footer", [
+    ("{{ '\\n' }}", ""),
+    # Text only where the reasoning switch is left unset or turned on, which a
+    # template that cannot reason is never written with.
+    ("{%- if enable_thinking is not defined or enable_thinking -%}~{%- endif -%}", ""),
+    ("", "{%- if loop.index0 and messages[loop.index0 - 1].role == 'assistant' -%}"
+         "<|quote|>{{ messages[loop.index0 - 1].content }}{%- endif -%}"),
+], ids=["space-before-the-question", "text-in-a-mode-never-written", "reply-quoted-later"])
+def test_a_reply_closed_by_nothing_loads_where_the_question_after_it_opens_with_an_ending_tag(
+        after_reply, footer):
+    template = ResolvedTemplate(FakeContext(_closed_by_the_next_question(after_reply, footer)))
+    assert not template.properties.fragments.assistant_suffix.strip()
+    assert not template.properties.can_reason
+
+
+def test_a_reply_closed_by_nothing_on_a_template_that_refuses_a_second_question_is_refused_at_load():
+    one_question = _closed_by_the_next_question(head=(
+        "{%- if messages | selectattr('role', 'eq', 'user') | list | length > 1 -%}"
+        "{{ raise_exception('one question only') }}{%- endif -%}"))
+    with pytest.raises(ValueError, match="writes nothing after a reply"):
+        ResolvedTemplate(FakeContext(one_question))

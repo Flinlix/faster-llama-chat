@@ -610,3 +610,14 @@ def test_a_dict_whose_keys_are_not_text_is_refused_naming_the_key_type(annotatio
     assert message.startswith(f"broken(when): a dict whose keys are {key!r} is not a type this "
                               "can describe")
     assert "keys are text" in message.lower() and "pass parameters=" in message
+
+
+def test_a_choice_among_values_of_one_kind_is_declared_with_that_kinds_json_type():
+    kinds = {"null": None, "boolean": True, "integer": 3, "number": 1.5, "string": "short"}
+    for kind, value in kinds.items():
+        registry = ToolRegistry()
+
+        def pick(style: Literal[value]):
+            ...
+        registry.tool(pick, description="…")
+        assert registry.specs()[0].parameters["properties"]["style"] == {"type": kind, "enum": [value]}

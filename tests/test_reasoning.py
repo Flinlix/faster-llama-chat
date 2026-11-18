@@ -336,3 +336,24 @@ def test_the_add_on_file_and_the_models_own_sampling_are_refused_by_the_construc
     with pytest.raises(ValueError, match=cause):
         ChatWrapper(Config(model_path=str(tmp_path / "m.gguf"), context_size=500,
                            evict_above_fraction=1.0), context=fake)
+
+
+def test_a_reasoning_on_written_as_off_is_refused_naming_the_setting_its_fault_and_the_remedy():
+    with pytest.raises(ValueError) as refused:
+        ResolvedTemplate(FakeContext(_DEFAULT_WITHOUT_THOUGHT),
+                         reasoning_on={"reasoning_effort": "none"})
+    message = str(refused.value)
+    assert "the add-on file's reasoning_on writes the prompt as reasoning off does" in message
+    assert "name the template variables that turn this model's reasoning on" in message
+
+
+def test_a_template_that_refuses_a_message_it_does_not_know_takes_the_reasoning_on_its_add_on_file_names():
+    checked = {**_DEFAULT_WITHOUT_THOUGHT, "chat_template":
+               "{%- for m in messages if m.role not in ('system', 'user', 'assistant', 'tool')"
+               " or m.content is not defined -%}"
+               "{{ raise_exception('a message this template does not write') }}{%- endfor -%}"
+               + _DEFAULT_WITHOUT_THOUGHT["chat_template"]}
+    template = ResolvedTemplate(FakeContext(checked), reasoning_on={"reasoning_effort": "high"})
+    assert template.properties.can_reason
+    assert template.render([{"role": "user", "content": "hi"}], generation_prompt=True,
+                           reasoning=True).endswith("<|assistant_says|><reason>")
