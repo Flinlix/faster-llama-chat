@@ -384,3 +384,70 @@ def test_check_cache_finds_nothing_in_a_conversation_kept_right_on_every_test_te
         wrapper.reply(question).finish()        # checked where the model reads it
         wrapper.wait_idle()                     # and once the work after the reply has ended
         assert wrapper._conversation._found_fault is None
+
+
+# The fault check_cache reports: where it was found, from which token on, and what each side holds there.
+_CACHE_FAULT_SHAPE = re.compile(
+    r"the cache differs from a fresh render of its conversation (?P<place>.+?), from token (?P<at>\d+) on: "
+    r"it holds (?P<held>'.*?') \((?P<n_held>\d+) tokens\) where the render has (?P<wanted>'.*?') "
+    r"\((?P<n_wanted>\d+) tokens\)")
+
+
+def _cache_fault_parts(message: str) -> dict:
+    found = _CACHE_FAULT_SHAPE.fullmatch(message.removeprefix("check_cache: "))
+    assert found is not None, message
+    return found.groupdict()
+
+
+def test_check_cache_names_a_fault_after_a_reply_as_found_there_and_shows_both_sides_from_the_first_difference(
+        caplog):
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja."])
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    memory = wrapper._conversation._memory
+    hold, replaced = memory.hold, {}
+
+    def holding_one_token_wrong(target, **options):
+        held = hold(target, **options)
+        at = len(memory.tokens) // 2
+        replaced.clear()
+        replaced[at] = memory.tokens[at]
+        memory._tokens[at] = fake.cache[at] = memory.tokens[at - 1]
+        return held
+    memory.hold = holding_one_token_wrong
+    with caplog.at_level("ERROR", logger="llama_chat"):
+        wrapper.reply("Wie geht es?").finish()
+        assert wrapper.wait_idle(timeout_s=5)
+    faults = [r.getMessage() for r in caplog.records if r.getMessage().startswith("check_cache: ")]
+    assert faults
+    parts = _cache_fault_parts(faults[-1])
+    held = list(memory.tokens)
+    at, = replaced
+    wanted = held[:at] + [replaced[at]] + held[at + 1:]
+    assert parts["place"] == "after the work after a reply"
+    assert int(parts["at"]) == at and int(parts["n_held"]) == len(held)
+    assert parts["held"] == repr(fake.text_of(held[at:at + 12]))
+    assert parts["wanted"] == repr(fake.text_of(wanted[at:at + 12]))
+    wrapper.close()                             # its cache holds the wrong token on purpose
+
+
+def test_check_cache_names_a_fault_before_a_reply_as_found_where_the_model_reads_it():
+    fake = FakeContext(PLAIN, replies=["Gut.", "Ja.", "Auch."])
+    wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
+    wrapper.begin(opened("s"))
+    wrapper.reply("Wie geht es?").finish()
+    conversation = wrapper._conversation
+    memory, ask, rendered = conversation._memory, conversation.ask, []
+
+    def asking_one_token_short(text, cancel=None):
+        ask(text, cancel)
+        rendered[:] = memory.tokens
+        memory.hold(list(memory.tokens)[:-1], want_logits=True)
+    conversation.ask = asking_one_token_short
+    with pytest.raises(InternalError) as raised:
+        wrapper.reply("Und dir?").finish()
+    parts = _cache_fault_parts(str(raised.value))
+    assert parts["place"] == "where the model reads it"
+    assert int(parts["at"]) == len(rendered) - 1 and int(parts["n_wanted"]) == len(rendered)
+    assert parts["held"] == repr("") and parts["wanted"] == repr(fake.text_of(rendered[-1:]))
+    wrapper.close()                             # its cache lacks a token on purpose

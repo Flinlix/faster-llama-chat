@@ -18,7 +18,7 @@ from llama_chat.errors import ArgumentTypeError, OutOfOrderError, TemplateRefuse
 
 from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_chat.tools import ToolCall, ToolSpec, MAX_ARGUMENT_DEPTH
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
@@ -1663,3 +1663,47 @@ def test_a_reply_that_produced_nothing_keeps_the_older_exchanges_exactly_where_t
         assert (after == before + [question]) is fits, (length, rendered, after)
         outcomes.add(fits)
     assert outcomes == {True, False}
+
+
+def _parameters_nesting(levels: int, sibling_placement: str) -> dict:
+    """Parameters nesting ``levels`` levels, their object counted, with a flat object beside the deepest branch."""
+    deepest: list = []
+    for _ in range(levels - (3 if sibling_placement == "in-a-list" else 2)):
+        deepest = [deepest]
+    return {"before": {"flat": {}, "deep": deepest}, "after": {"deep": deepest, "flat": {}},
+            "in-a-list": {"deep": [{}, deepest, {}]}}[sibling_placement]
+
+
+@pytest.mark.parametrize("sibling_placement", ["before", "after", "in-a-list"])
+def test_tool_parameters_nesting_as_deep_as_allowed_are_taken_and_one_level_deeper_are_refused_beside_any_sibling(
+        sibling_placement):
+    allowed = _parameters_nesting(MAX_ARGUMENT_DEPTH, sibling_placement)
+    assert ToolSpec("f", "d", allowed).parameters == allowed
+    with pytest.raises(InvalidArgumentError, match="nests deeper") as raised:
+        ToolSpec("f", "d", _parameters_nesting(MAX_ARGUMENT_DEPTH + 1, sibling_placement))
+    assert raised.value.field == "parameters"
+
+
+@pytest.mark.parametrize("unwritable", [float("nan"), object(), "\udfff", ("a",), {1: "x"}],
+                         ids=["nan", "object", "surrogate", "tuple", "key"])
+@pytest.mark.parametrize("sibling_first", [True, False], ids=["sibling-first", "sibling-last"])
+def test_tool_parameters_holding_what_json_cannot_give_a_model_are_refused_beside_any_sibling(
+        unwritable, sibling_first):
+    branches = [("flat", {"type": "object"}), ("bad", {"items": [unwritable]})]
+    parameters = dict(branches if sibling_first else branches[::-1])
+    with pytest.raises(InvalidArgumentError) as raised:
+        ToolSpec("f", "d", parameters)
+    assert raised.value.field == "parameters"
+
+
+@pytest.mark.parametrize("fields, field, text", [
+    (("f\ud800", "d", {}), "name", "the tool's name"),
+    (("f", "d\ud800", {}), "description", "the description of 'f'"),
+], ids=["name", "description"])
+def test_a_tool_spec_text_no_model_can_read_is_refused_naming_its_field_and_the_text(fields, field, text):
+    with pytest.raises(InvalidArgumentError) as raised:
+        ToolSpec(*fields)
+    assert raised.value.field == field
+    assert str(raised.value).startswith(f"{text} holds a lone surrogate")
+    with pytest.raises(ArgumentTypeError, match="^a ToolSpec holds a str name, a str description and a dict"):
+        ToolSpec("f", None, {})
