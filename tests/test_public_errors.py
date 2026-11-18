@@ -20,6 +20,7 @@ from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry, begun_wrapper
 from llama_chat.reply import ReplyStream
+from tests import internals
 
 _LONE = "a\ud800b"
 
@@ -646,3 +647,55 @@ def test_the_watch_for_a_reply_nobody_reads_does_not_keep_the_process_alive():
     acting.join(10)
     assert done
     assert timers and all(t.daemon for t in timers), [(t.name, t.daemon) for t in timers]
+
+
+def _not_begun(wrapper, fake) -> None:
+    pass
+
+
+def _begun(wrapper, fake) -> None:
+    wrapper.begin(opened("persona"))
+
+
+def _in_an_open_turn(wrapper, fake) -> None:
+    wrapper.begin(opened("persona"), tools=[ToolSpec("clock", "", {})])
+    fake.call_script = ["fn:clock{}"]
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    assert wrapper.turn_open
+
+
+_OUT_OF_ORDER = [
+    ("inject an assistant message before begin", _not_begun,
+     lambda w: w.inject("Eine Notiz.", role="assistant"),
+     r"no conversation to inject into; call begin\(\) first"),
+    ("inject a question before begin", _not_begun,
+     lambda w: w.inject("Eine Frage?"),
+     r"no conversation to inject into; call begin\(\) first"),
+    ("cut a reply before begin", _not_begun,
+     lambda w: w.truncate_last_reply(""),
+     r"no conversation to truncate in; call begin\(\) first"),
+    ("inject an assistant message in an open turn", _in_an_open_turn,
+     lambda w: w.inject("Eine Notiz.", role="assistant"),
+     r"cannot inject while a reply is open: .+"),
+    ("cut a reply in an open turn", _in_an_open_turn,
+     lambda w: w.truncate_last_reply(""),
+     r"cannot truncate a reply while a reply is open: .+"),
+    ("cut where no reply is newest", _begun,
+     lambda w: w.truncate_last_reply(""),
+     r"the newest message is not an assistant reply"),
+]
+
+
+@pytest.mark.parametrize("prepare,action,said", [case[1:] for case in _OUT_OF_ORDER],
+                         ids=[case[0] for case in _OUT_OF_ORDER])
+def test_an_action_refused_out_of_order_names_in_its_own_words_the_action_and_the_cause(
+        prepare, action, said):
+    wrapper, fake = tool_wrapper()
+    prepare(wrapper, fake)
+    before = wrapper.conversation() if internals.is_begun(wrapper) else None
+    with pytest.raises(OutOfOrderError) as refused:
+        action(wrapper)
+    assert re.fullmatch(said, str(refused.value), re.DOTALL), str(refused.value)
+    assert refused.value.field is None
+    if before is not None:
+        assert wrapper.conversation() == before
