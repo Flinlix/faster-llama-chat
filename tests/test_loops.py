@@ -1,5 +1,7 @@
 """Every loop of the library ends: each pass makes its variant smaller, or the loop is one of the forms that end by construction."""
 
+import re
+import llama_chat.call_parsing
 import ast
 from pathlib import Path
 
@@ -7,6 +9,9 @@ import pytest
 
 from llama_chat import InternalError
 from llama_chat.loop_variant import LoopVariant
+from llama_chat.call_parsing import parse_calls
+from llama_chat.testing.invented_templates import CALL_BODY
+from tests.test_call_parsing import _ELEMENTS
 
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 
@@ -114,3 +119,21 @@ def test_a_reply_whose_turn_never_closes_stops_instead_of_running_on():
     del wrapper._read_generation
     fake.replies = ["Zwölf."]
     assert wrapper.reply("Und jetzt?").finish().text == "Zwölf."
+
+
+@pytest.mark.parametrize("body, call_body", [("fn:f{a:1}", CALL_BODY),
+                                             ('f">|<a>|<a>1|</a>|</a>|', _ELEMENTS)],
+                         ids=["splitting", "matching-close"])
+def test_a_loop_of_the_call_reader_that_makes_no_progress_is_named_in_its_error(
+        body, call_body, monkeypatch):
+    class Stalling(LoopVariant):
+        """A variant whose measure never shrinks, as a loop with a fault would give it."""
+
+        def passes(self, measure):
+            super().passes(0)
+
+    monkeypatch.setattr(llama_chat.call_parsing, "LoopVariant", Stalling)
+    with pytest.raises(InternalError) as raised:
+        parse_calls(body, call_body, "fn:")
+    loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
+    assert loop != "None" and len(loop.split()) >= 2

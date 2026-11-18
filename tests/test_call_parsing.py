@@ -644,3 +644,43 @@ def test_a_nested_member_with_an_empty_key_is_read_under_that_key_where_nothing_
     keyless_opening = dataclasses.replace(_ELEMENTS, member_open="{key}>")
     call, = parse_calls(f'f">|<a>{written}|</a>|', keyless_opening)
     assert call.arguments == {"a": nested}
+
+
+@pytest.mark.parametrize("body", ['f">|<a>1', 'f">|<a>|<b>1|</b>|'], ids=["flat", "nested-closed"])
+def test_a_member_argument_that_never_closes_is_refused_naming_its_text(body):
+    with pytest.raises(ValueError, match="an argument that never closes"):
+        parse_calls(body, _ELEMENTS)
+
+
+@pytest.mark.parametrize("items, read", [("|<>1|<>", [1]), ("|<>1|<>|<>2|<>", [1, 2]),
+                                         ("|<>x|<>|<>|<>|<>3|<>", ["x", "", 3])],
+                         ids=["one", "two", "three"])
+def test_a_list_whose_items_open_and_close_with_the_same_text_reads_item_by_item(items, read):
+    same_marks = dataclasses.replace(_ELEMENTS, item_open="|<>", item_close="|<>")
+    assert parse_calls(f'f">|<a>{items}|</a>|', same_marks) == [ToolCall("f", {"a": read})]
+
+
+@pytest.mark.parametrize("body, arguments", [("fn:say{text:''}", {"text": ""}),
+                                             ("fn:say{text:'',n:3}", {"text": "", "n": 3}),
+                                             ("fn:say{'':1}", {"": 1})],
+                         ids=["value", "value-then-another", "key"])
+def test_an_empty_quoted_text_reads_as_the_empty_text(body, arguments):
+    assert parse_calls(body, CALL_BODY, "fn:") == [ToolCall("say", arguments)]
+
+
+@pytest.mark.parametrize("after_name", [" ", "\n", " \t\n"])
+def test_a_call_with_only_whitespace_for_arguments_reads_with_none_in_a_format_with_no_pair_separator(
+        after_name):
+    one_pair = dataclasses.replace(CALL_BODY, name_close="(", key_close="=", pair_sep="",
+                                   body_close=")", empty_close=")")
+    assert parse_calls("fn:clock(" + after_name + ")", one_pair, "fn:") == [ToolCall("clock", {})]
+    assert parse_calls("clock[PARAMS]" + after_name, _JSON_OBJECT["named-by-a-file"]) == [
+        ToolCall("clock", {})]
+
+
+@pytest.mark.parametrize("value", ["plain", "XXXX", "say XXXX twice XXXX", "a''b"])
+def test_where_a_format_s_quote_stands_in_its_delimiters_every_separator_splits_whatever_the_values_hold(
+        value):
+    # Not JSON, so the arguments are read by the format's own delimiters.
+    body = f'clock[PARAMS]{{"a": {value}, "b": {value}}}'
+    assert parse_calls(body, _WITH_ID["json"]) == [ToolCall("clock", {"a": value, "b": value})]
