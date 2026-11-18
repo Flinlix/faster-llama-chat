@@ -492,3 +492,23 @@ def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_re
     with pytest.raises(ValueError, match=f"^{re.escape(stated)}$"):
         ResolvedTemplate(FakeContext(known), {**shipped_addon_call(known["chat_template"]),
                                               "closing": "QQNEVERQQ"})
+
+
+# A template that checks each call it writes: a reply holds text or calls, and a call's arguments an object.
+_CHECKING_CALLS = (
+    "{%- for m in messages %}{%- for c in m.tool_calls or [] %}"
+    "{%- if m.content %}{{ raise_exception('a reply holds text or calls, not both') }}{%- endif %}"
+    "{%- if (c.function or c).arguments is not mapping %}"
+    "{{ raise_exception('a call takes its arguments as an object') }}{%- endif %}"
+    "{%- endfor %}{%- endfor %}")
+
+
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_an_add_on_files_call_is_taken_by_a_template_that_writes_a_call_only_as_a_reply_of_its_own_with_its_arguments(stem):
+    """The load checks the add-on file's closing on a call as the library writes one: alone in its reply, its arguments an object."""
+    known = fixture(stem)
+    text = known["chat_template"]
+    checking = FakeContext({**known, "chat_template": _CHECKING_CALLS + text})
+    template = ResolvedTemplate(checking, shipped_addon_call(text),
+                                reasoning_on=shipped_addon_reasoning_on(text))
+    assert template.properties.can_call_tools

@@ -872,3 +872,27 @@ def _call_written_only_with(arguments_given):
 ], ids=["no-call-without-arguments", "refuses-a-call-without-arguments", "refuses-a-call-with-arguments"])
 def test_a_template_that_writes_only_one_of_the_two_call_probes_has_no_closing_text(arguments_given):
     assert extract_call_close_text(_call_written_only_with(arguments_given), "<c>") is None
+
+
+def _removing_render(*, refuses_other_roles: bool):
+    """A render that writes no thought and leaves the thought out of a reply a question follows, refusing a role it does not know where ``refuses_other_roles``."""
+    def render(messages, generation_prompt=False, reasoning=None, **_options):
+        if refuses_other_roles and any(m["role"] not in ("user", "assistant") for m in messages):
+            raise ValueError("only questions and replies are written")
+        questions = [at for at, m in enumerate(messages) if m["role"] == "user"]
+        text = "".join(
+            f"<{m['role'][0]}>" + (m["content"].split("</q>")[-1]
+                                   if m["role"] == "assistant" and questions and at < questions[-1]
+                                   else m["content"])
+            for at, m in enumerate(messages))
+        return text + ("<a>" if generation_prompt else "")
+    return render
+
+
+@pytest.mark.parametrize("refuses_other_roles", [True, False], ids=["refusing-other-roles", "writing-other-roles"])
+def test_a_removed_thought_is_read_from_a_template_that_removes_it_only_from_a_reply_a_question_follows(
+        refuses_other_roles):
+    tags = ("<u>", "<a>", "<q>", "</q>")
+    render = _removing_render(refuses_other_roles=refuses_other_roles)
+    found = extract_removed_thought(render, extract_fragments(render, tags), tags)
+    assert (found and (found.thought_open, found.thought_close)) == ("<q>", "</q>")

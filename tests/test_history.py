@@ -23,7 +23,7 @@ from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool
 from tests.chat_templates import STEMS, WEATHER, fixture
 from llama_chat.history_forms import (completions_messages, generated_turn_records, read_messages,
                                       with_generated_turns)
-from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL
+from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL, THOUGHT_KEY
 from llama_chat.rendering import GeneratedTurn
 from llama_chat.result_cutting import cut_result
 
@@ -1114,3 +1114,35 @@ def test_a_begin_cuts_no_result_of_an_exchange_before_its_newest():
         assert {call.id for call in report.tool_results_cut} <= {"c1"}, (min_reply_tokens, old, new)
         kept = wrapper.conversation()["messages"]
         assert all(m["content"] == "A" * old for m in kept if m.get("tool_call_id") == "c0")
+
+
+def _first_calling(record: dict) -> dict:
+    """The first reply of ``record`` that makes a call."""
+    return next(message for message in record["messages"] if message.get("tool_calls"))
+
+
+_HELD_IN_NO_FORM = {
+    "a question put in a role no turn holds": lambda r: _first_in_role(r, "user").update(role="system"),
+    "a reply with a key no reply holds": lambda r: _first_calling(r).update(name="helper"),
+    "a reply whose thought is not text": lambda r: _first_calling(r).update({THOUGHT_KEY: 7}),
+}
+
+
+@pytest.mark.parametrize("broken", list(_HELD_IN_NO_FORM.values()), ids=list(_HELD_IN_NO_FORM))
+def test_a_kept_turns_record_holding_a_message_in_a_form_no_record_holds_is_refused_naming_generated_turns(broken):
+    """A record holds only questions, replies and results, each with the keys and the types ``conversation()`` gives it."""
+    registry = weather_registry()
+    live, fake = tool_wrapper(context_size=2048)
+    live.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    live.reply("wetter?", tool_call_policy=registry).finish()
+    saved = live.conversation()
+    saved["generated_turns"] = json.loads(json.dumps(saved["generated_turns"]))
+    broken(saved["generated_turns"]["turns"][0])
+    again, again_fake = tool_wrapper(context_size=2048)
+    again.begin(opened("persona"), tools=registry.specs())
+    before, held = again.conversation(), list(again_fake.cache)
+    with pytest.raises(InvalidArgumentError) as refused:
+        again.begin(**saved)
+    assert refused.value.field == "generated_turns"
+    assert again.conversation() == before and again_fake.cache == held
