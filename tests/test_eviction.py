@@ -651,3 +651,35 @@ def test_a_conversation_that_cannot_fit_once_dropped_is_refused_with_the_tokens_
             for _ in range(8):
                 w.inject("y" * 150, role="assistant")
     _assert_counts_what_it_says(refused.value, w.config.evict_above_tokens)
+
+
+_SHORT_HISTORY = [{"role": "user", "content": "a" * 60}, {"role": "assistant", "content": "b" * 60},
+                  {"role": "user", "content": "c" * 60}, {"role": "assistant", "content": "d" * 60},
+                  {"role": "user", "content": "Frage?"}]
+
+
+@pytest.mark.parametrize("merges", [False, True], ids=["one token per character", "merging"])
+def test_an_injected_reply_is_refused_exactly_where_it_and_the_newest_exchange_render_past_the_threshold(merges):
+    """Measured without a generation prompt, as nothing answers it; a refusal changes nothing."""
+    config = Config(context_size=400, evict_above_fraction=1.0, min_reply_tokens=8)
+    outcomes = set()
+    for n in range(330, 400):
+        fake = FakeContext(PLAIN, merges=merges)
+        chat = ChatWrapper(config, context=fake)
+        chat.begin(opened("s", _SHORT_HISTORY))
+        before = chat.conversation()
+        newest = before["messages"][:1] + before["messages"][-1:]
+        text = "r" * n
+        needed = len(fake.tokenize(fake.stated_render(
+            newest + [{"role": "assistant", "content": text}], generation_prompt=False),
+            add_special=True))
+        fits = needed <= config.evict_above_tokens
+        try:
+            chat.inject(text, role="assistant")
+        except ContextOverflowError:
+            assert not fits, (n, needed)
+            assert chat.conversation() == before
+        else:
+            assert fits, (n, needed)
+        outcomes.add(needed - config.evict_above_tokens)
+    assert {-1, 0, 1} <= outcomes

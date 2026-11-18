@@ -533,3 +533,38 @@ def test_a_reply_kept_as_generated_keeps_its_generated_tokens_up_to_each_cut(spl
         same = len(generated) - (len(answer) - cut) - 1
         assert kept[:same] == generated[:same], cut
         wrapper.reply("und?").finish()
+
+
+@pytest.mark.parametrize("calls", [1, 2])
+def test_a_reply_cut_to_nothing_keeps_its_turn_up_to_its_call_where_its_answer_spells_the_result_after_the_call(calls):
+    """The answer spells the call's closing and the result's text after it, which the cut does not take for the call's own."""
+    answer = "Es ist </call><result>clock(12:00) zwölf."
+    wrapper, fake, shown, before = _turn_after_calls(calls, answer, tokens_spell_text=False)
+    wrapper.truncate_last_reply(shown[:len(shown) - len(answer)])
+    (after, _text, on_call), = internals.generated_turns_held(wrapper)
+    whole = _spelled(fake, before)
+    closing = b"</call>"
+    end = whole.rfind(closing, 0, len(whole) - len(answer.encode())) + len(closing)
+    assert on_call and after == before[:len(after)] and _spelled(fake, after) == whole[:end]
+
+
+def _decoded_by_a_begin_changing_the_newest_exchange(n_exchanges: int, newest: str) -> int:
+    """What a begin decodes on a cache that cannot shift, after a begin of the same history whose newest exchange asks otherwise, ending on ``newest``."""
+    def history(question: str) -> list[dict]:
+        older = [m for n in range(n_exchanges) for m in (
+            {"role": "user", "content": f"Frage {n}?"}, {"role": "assistant", "content": f"Antwort {n}."})]
+        ending = tool_turn(ToolCall(WEATHER.name, {"city": "Bonn"})) if newest == "pending call" else []
+        return opened("s", older + [{"role": "user", "content": question}] + ending)
+    fake = FakeContext(TOOLS, can_shift=False)
+    chat = ChatWrapper(Config(context_size=16384), context=fake)
+    chat.begin(history("Wetter?"), tools=[WEATHER])
+    n_before = len(fake.prefill_calls)
+    chat.begin(history("Wetter heute?"), tools=[WEATHER])
+    return sum(n for _, n, _ in fake.prefill_calls[n_before:])
+
+
+@pytest.mark.parametrize("newest", ["question", "pending call"])
+def test_a_begin_that_changes_only_the_newest_exchange_decodes_no_more_for_a_longer_history(newest):
+    """The first begin keeps a state where its newest exchange begins, which the second goes back to."""
+    short, long = (_decoded_by_a_begin_changing_the_newest_exchange(n, newest) for n in (2, 20))
+    assert long <= short, (short, long)
