@@ -3084,3 +3084,73 @@ def test_a_reply_to_a_question_a_begin_ended_on_decodes_nothing_of_that_question
     run.chat.wait_idle()
     question_end = _text_end(run.context, run.context.cache, question)
     assert [call for call in run.context.prefill_calls[first:] if call[0] < question_end] == []
+
+
+@pytest.mark.parametrize("answered", [True, False], ids=["its result given", "no result"])
+def test_dropping_an_exchange_whose_call_a_question_closed_leaves_the_cache_as_the_render(answered):
+    """The invented templates keep a turn open across a question no reply closed, with or without the call's result: once that exchange goes, the cache is the template's render."""
+    fake = FakeContext(TOOLS, ["reply", "ok", "ok", "ok", "ok"])
+    chat = ChatWrapper(Config(context_size=2000, max_history_exchanges=3), context=fake)
+    clock = ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})
+    call = {"role": "assistant", "content": "Ich schaue.", "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "clock", "arguments": "{}"}}]}
+    result = [{"role": "tool", "tool_call_id": "c1", "content": "12"}] if answered else []
+    chat.begin([{"role": "system", "content": "s"}, {"role": "user", "content": "alt"},
+                {"role": "assistant", "content": "älter"}, {"role": "user", "content": "Uhr?"},
+                call, *result, {"role": "user", "content": "Q1"}], tools=[clock])
+    for question in ("Q2", "Q3", "Q4", "Q5"):
+        chat.reply(question).finish()
+        assert_cache_reads_as_rendered(chat, fake)
+
+
+@pytest.mark.counts_work
+@pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_evictions_of_exchanges_that_called_tools_render_only_windows(stem, can_shift):
+    """Where windows hold turns that called tools, an exchange limit that drops such an exchange on every round still renders no more than the newest two exchanges."""
+    run = _Run(stem, can_shift=can_shift)
+    run.chat.close()
+    run.chat = ChatWrapper(Config(context_size=8192, min_reply_tokens=8, max_history_exchanges=3),
+                           context=run.context)
+    body = _call_body(run, {"city": "Bonn"})[1]
+    run.context.replies = [reply for i in range(8) for reply in
+                           [ScriptedCall(body)] + _as_generated(run.template, [f"Sunny {i}."], False)]
+    run.begin(tools=[WEATHER])
+    # The system turn, two exchanges of a question, a call, its result and an answer, the stand-in.
+    window = (1 if run.system else 0) + 2 * 4 + 1
+    largest = []
+    for i in range(8):
+        call = _called(run, f"Weather {i}?")
+        rendered = len(run.context.rendered)
+        run.chat.inject_tool_result(call.id, "sunny")
+        run.chat.reply(tool_call_policy="yield").finish()
+        largest.append(max(run.context.rendered[rendered:], default=0))
+    if internals.renders_tool_turns_in_windows(run.chat):
+        assert max(largest[2:]) <= window, largest
+
+
+def _renders_only_plain_exchanges_in_windows(stem) -> bool:
+    """Whether windows of a conversation on ``stem`` stand for its render, but not where they hold a turn that called tools."""
+    run = _Run(stem)
+    run.begin(tools=[WEATHER])
+    return internals.renders_in_windows(run.chat) and not internals.renders_tool_turns_in_windows(run.chat)
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_an_exchange_that_called_tools_anywhere_in_the_history_is_dropped_as_the_template_renders(stem):
+    """On a template whose windows hold no turn that called tools, an exchange limit that drops the exchanges around such a turn leaves the cache as the render, wherever the turn stands."""
+    if not _renders_only_plain_exchanges_in_windows(stem):
+        return
+    for where in range(8):
+        run = _Run(stem, replies=[f"Answer {i}." for i in range(8, 11)])
+        run.chat.close()
+        run.chat = ChatWrapper(Config(context_size=8192, min_reply_tokens=8, max_history_exchanges=8),
+                               context=run.context)
+        exchanges = [[{"role": "user", "content": f"Question {i}?"},
+                      {"role": "assistant", "content": f"Answer {i}."}] for i in range(8)]
+        exchanges[where] = [{"role": "user", "content": "Weather?"}] + tool_turn(
+            ToolCall(WEATHER.name, {"city": "Bonn"}), Result(WEATHER.name, "sunny"), "Sunny.")
+        run.begin(sum(exchanges, []), tools=[WEATHER])
+        for i in range(8, 11):
+            run.chat.reply(f"Question {i}?").finish()
+            assert_cache_reads_as_rendered(run.chat, run.context)
