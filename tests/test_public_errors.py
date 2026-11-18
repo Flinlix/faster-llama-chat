@@ -455,3 +455,23 @@ def test_a_guarded_property_keeps_its_setter_its_deleter_and_its_own_text():
     assert holder.stored is None
     assert guarded.__dict__["held"].__doc__ == "The property's own text."
     assert guarded.__dict__["held"].fget.raises_library_errors_only
+
+
+# ----- for tests/test_public_errors.py ----------------------------------------------
+def test_a_fault_inside_a_tool_loop_is_an_internal_error_naming_the_step_the_caller_took(monkeypatch):
+    """A method of the wrapper's own, not the caller's, is never named as the action."""
+    wrapper, fake = tool_wrapper(context_size=2048)
+    registry = weather_registry()
+    wrapper.begin(opened("s"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("a fault of the library's own")
+    monkeypatch.setattr(RenderedCache, "add_result", broken)
+    with pytest.raises(InternalError) as failed:
+        wrapper.reply("Wetter?", tool_call_policy=registry).finish()
+    monkeypatch.undo()
+    assert re.match(r"ReplyStream\.__next__ failed inside the library \(KeyError", str(failed.value))
+    assert wrapper.reply("noch einmal").finish().text
+    assert wrapper.wait_idle(timeout_s=10)
+    assert_cache_reads_as_rendered(wrapper, fake)

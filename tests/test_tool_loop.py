@@ -22,7 +22,7 @@ from llama_chat.testing.fake_context import FakeContext, ScriptedCall, written_c
 from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
                                       NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
-                                      TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN)
+                                      TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, CALL_TAGS)
 from tests.internals import held_tokens
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, system_turn, tool_wrapper, weather_registry,
@@ -2944,3 +2944,79 @@ def test_a_result_keeps_room_for_each_result_owed_after_it_as_that_one_is_writte
                                              + _owed_written(cut_result(text, 0)), True) <= room
                       else "alone")
     assert outcomes == {"refused", "whole", "room kept", "alone"}
+
+
+# ----- for tests/test_tool_loop.py --------------------------------------------------
+def _calls_in_plain_text(template: dict, opening: str = "<call>fn:", **replaced) -> dict:
+    """``template`` with its call tags written as plain text, the call opening with ``opening``, and each text of ``replaced`` (old to new) swapped in its code."""
+    code = template["chat_template"].replace("'<call>fn:'", repr(opening))
+    for old, new in replaced.items():
+        assert old in code, old
+        code = code.replace(old, new)
+    return {**template, "chat_template": code,
+            "tags": [tag for tag in template["tags"] if tag not in CALL_TAGS],
+            "call_marks": {"opening": opening, "closing": "</call>", "tags": False}}
+
+
+# The invented format writes a new turn's calls ahead of its text; these write the text first.
+_CALLS_AHEAD = "{{- call_blocks(calls) -}}{{- m.content | trim -}}"
+
+
+_TEXT_AHEAD = "{{- m.content | trim -}}{{- call_blocks(calls) -}}"
+
+
+_TEXT_THEN_PLAIN_CALL = _calls_in_plain_text(TOOLS, **{_CALLS_AHEAD: _TEXT_AHEAD})
+
+
+# The same, the text of a turn that called a tool written once more after its calls.
+_TEXT_AGAIN_AFTER_PLAIN_CALL = _calls_in_plain_text(
+    TOOLS, **{_CALLS_AHEAD: _TEXT_AHEAD,
+              _TEXT_AHEAD: _TEXT_AHEAD + "{%- if calls -%}{{- m.content -}}{%- endif -%}"})
+
+
+# The plain-text call again, on a template that refuses a text beside a call.
+_PLAIN_CALL_WITHOUT_TEXT = _calls_in_plain_text(dict(TOOLS, chat_template=(
+    "{%- for m in messages if m.tool_calls and m.content -%}"
+    "{{- raise_exception('no text beside a call') -}}{%- endfor -%}" + TOOLS["chat_template"])))
+
+
+@pytest.mark.parametrize("template, before", [
+    (_TEXT_THEN_PLAIN_CALL, "Moment. "), (_TEXT_AGAIN_AFTER_PLAIN_CALL, "Moment. "),
+    (_PLAIN_CALL_WITHOUT_TEXT, "")],
+    ids=["after-text", "after-text-written-twice", "at-the-start-where-no-text-is-written-beside"])
+def test_a_call_opened_by_plain_text_is_run_where_the_template_writes_one(template, before):
+    ran = []
+    registry = ToolRegistry()
+    registry.tool(lambda: ran.append(1) or "sonnig", description="Gibt das Wetter.", name="gib",
+                  parameters={})
+    fake = FakeContext(template, replies=[ScriptedCall("gib{}", before=before), "Sonnig."])
+    wrapper = ChatWrapper(Config(context_size=1024, evict_above_fraction=1.0), context=fake)
+    wrapper.begin(opened("s"), tools=registry.specs())
+    reply = wrapper.reply("Wetter?", tool_call_policy=registry).finish()
+    assert ran == [1] and reply.text.endswith("Sonnig.")
+    assert_cache_reads_as_rendered(wrapper, fake)
+
+
+@pytest.mark.parametrize("template", [
+    # No closing after a call.
+    _calls_in_plain_text(TOOLS, **{"{{- '}</call>' -}}": "{{- '}' -}}"}),
+    # The function named twice, and no closing after the call.
+    _calls_in_plain_text(TOOLS, **{"{{- '}</call>' -}}": "{{- '}' -}}",
+                                   "~ call.function.name ~ '{'":
+                                   "~ call.function.name ~ ' fn:' ~ call.function.name ~ '{'"}),
+    # The opening, after a line break, begins with the role name the reply's header ends with.
+    _calls_in_plain_text(TOOLS, "\nmodel fn:"),
+    # The opening begins with the word between the header's first two of one repeated tag.
+    _calls_in_plain_text(TOOLS, "model fn:", **{
+        "{{- '<[turn>' ~ role ~ '\\n' -}}":
+        "{{- ('<[turn>' ~ role ~ '\\n') if role != 'model' else '<[turn>model<sep>final<sep>\\n' -}}",
+        "{{- '<[turn>model\\n' -}}": "{{- '<[turn>model<sep>final<sep>\\n' -}}"}),
+], ids=["no-closing", "named-twice-no-closing", "role-name-after-a-break", "word-between-a-repeated-tag"])
+def test_a_plain_text_call_that_cannot_be_told_from_a_reply_is_refused_with_the_add_on_file_as_remedy(
+        template):
+    wrapper = ChatWrapper(Config(context_size=1024), context=FakeContext(template))
+    assert not wrapper.capabilities(tools=True).can_call_tools
+    with pytest.raises(UnsupportedError, match="add-on file"):
+        wrapper.begin(opened("s"), tools=weather_registry().specs())
+    wrapper.begin(opened("s"))
+    assert wrapper.reply("Hallo?").finish().text

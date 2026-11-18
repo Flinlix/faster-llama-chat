@@ -1043,3 +1043,16 @@ def test_a_question_cancelled_where_the_cache_cannot_be_brought_back_is_taken_ba
     assert wrapper.conversation() == before
     fake.fails = False
     assert wrapper.reply("drei").finish().text
+
+
+# ----- for tests/test_failures.py ---------------------------------------------------
+@pytest.mark.parametrize("refusing", [
+    "{{ raise_exception('') }}", "{{ (1 / 0) }}"], ids=["empty-reason", "fails-otherwise"])
+def test_a_refusal_quotes_no_reason_where_the_template_gives_none(refusing):
+    says = dict(PLAIN, chat_template="{% if messages[-1].content == 'verboten' %}" + refusing
+                + "{% endif %}" + PLAIN["chat_template"])
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(says))
+    w.begin(opened("s"))
+    with pytest.raises(TemplateRefusedError) as refused:
+        w.inject("verboten")
+    assert str(refused.value) == "this model's template does not write a user message here"
