@@ -6,6 +6,9 @@ stays exactly what the conversation holds it to be after every action,
 including across evictions.
 """
 
+import time
+import types
+import llama_chat.reply
 import dataclasses
 import functools
 import json
@@ -30,7 +33,7 @@ from tests.internals import read_fragments_as
 from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent,
-                            begun_wrapper, tool_wrapper, rows)
+                            begun_wrapper, tool_wrapper, rows, weather_registry)
 def _n_exchanges(wrapper):
     """Exchanges the limit counts: each user message opens one, and what comes before the first is one more."""
     history = [row["role"] for row in rows(wrapper) if row["role"] != "system"]
@@ -1707,3 +1710,48 @@ def test_a_tool_spec_text_no_model_can_read_is_refused_naming_its_field_and_the_
     assert str(raised.value).startswith(f"{text} holds a lone surrogate")
     with pytest.raises(ArgumentTypeError, match="^a ToolSpec holds a str name, a str description and a dict"):
         ToolSpec("f", None, {})
+
+
+def test_a_streams_unread_time_is_zero_before_its_first_step_and_counts_from_its_last_step():
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    stream = w.reply("hallo")
+    assert stream.unread_s() == 0.0
+    stepped_before = time.monotonic()
+    next(stream)
+    assert 0.0 <= stream.unread_s() <= time.monotonic() - stepped_before
+    stream.finish()
+
+
+def test_a_stream_is_ended_only_once_its_reader_has_left_it_for_the_time_asked_and_says_whether_it_was():
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    stream = w.reply("hallo")
+    assert stream.end_if_unread(0.0) is False           # not begun: nobody has left it yet
+    next(stream)
+    assert stream.end_if_unread(3600.0) is False
+    assert stream.reply is None
+    next(stream)
+    assert stream.end_if_unread(0.0) is True
+    assert list(stream) == [] and stream.reply is not None
+
+
+def test_a_stream_left_at_the_very_instant_of_its_last_step_is_ended_by_a_limit_of_zero(monkeypatch):
+    """A clock that has not moved on since the step, as a coarse one may not have."""
+    monkeypatch.setattr(llama_chat.reply, "time", types.SimpleNamespace(monotonic=lambda: 1000.0))
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    stream = w.reply("hallo")
+    next(stream)
+    assert stream.end_if_unread(0.0) is True
+    assert list(stream) == [] and stream.reply is not None
+
+
+def test_closing_a_stream_read_to_its_end_keeps_the_summary_of_the_whole_request():
+    w, fake = tool_wrapper(context_size=2048)
+    registry = weather_registry()
+    w.begin(opened("s"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    with w.reply("Wetter?", tool_call_policy=registry) as stream:
+        finished = stream.finish()
+        summary = (finished.n_generated_tokens, [call.name for call in finished.tool_calls])
+    assert stream.reply is finished
+    assert (stream.reply.n_generated_tokens, [call.name for call in stream.reply.tool_calls]) \
+        == summary == (summary[0], ["weather"])

@@ -4,6 +4,7 @@ A real format is read from its template in ``tests/templates/``. A renderer
 written here reproduces no model's format and carries no model's name.
 """
 
+import json
 import ast
 import functools
 import itertools
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import llama_chat
-from llama_chat.call_format import extract_call_body, extract_tool_fragments
+from llama_chat.call_format import extract_call_body, extract_tool_fragments, extract_call_close_text, extract_json_call_id_key, extract_named_twice_opening
 from llama_chat.model_template import ModelTemplate, names_read
 from llama_chat.tokenizing import tag_texts
 from llama_chat.template import CallBody
@@ -23,6 +24,7 @@ from llama_chat.template_extract import (as_probes_read, extract_content_rewrite
 from .chat_templates import STEMS, expected, fixture
 from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import TAGS as INVENTED_TAGS
+from llama_chat.messages import call_id
 
 
 def _tool_fragments(render, tags=INVENTED_TAGS):
@@ -738,3 +740,56 @@ def test_a_templates_refusal_is_read_with_the_tools_reasoning_and_variables_its_
         assert reason == ("declared 1" if tools else "thinking" if reasoning
                           else "word given" if variables else None)
         assert (reason is None) == (template.render([], tools, **options) is not None)
+
+
+def _turns_render(write_call):
+    """A renderer writing each message between tags naming its role, each call of a reply as ``write_call`` gives it from the call and its place."""
+    def render(messages, **_options):
+        out = []
+        for m in messages:
+            calls = "".join(write_call(call, place) for place, call in enumerate(m.get("tool_calls") or ()))
+            out.append(f"<{m['role']}>{m['content']}{calls}</{m['role']}>")
+        return "".join(out)
+    return render
+
+
+def _named_three_times(call, _place):
+    """A call naming its function, then again after an opening that holds ``to=`` once more, then a third time in its closing."""
+    name = call["function"]["name"]
+    return f"to={name}|via to={name}{json.dumps(call['function']['arguments'])}</call {name}>"
+
+
+def test_where_a_call_names_its_function_twice_the_opening_is_all_the_text_between_its_first_two_names():
+    assert extract_named_twice_opening(_turns_render(_named_three_times), "to=") == "|via to="
+
+
+def test_a_call_not_opened_with_the_given_text_or_not_rendered_at_all_has_no_opening_named_twice():
+    assert extract_named_twice_opening(_turns_render(_named_three_times), "@call ") is None
+    assert extract_named_twice_opening(lambda messages, **_options: None, "to=") is None
+
+
+def _call_in_a_turn_of_its_own(call, _place):
+    """Each call in an assistant turn of its own, ``</call></turn>`` ending it."""
+    return f"<turn>to={call['function']['name']}{json.dumps(call['function']['arguments'])}</call></turn>"
+
+
+def test_the_text_that_ends_a_call_is_all_of_the_tags_it_ends_with_whatever_their_order():
+    assert extract_call_close_text(_turns_render(_call_in_a_turn_of_its_own), "to=") == "</call></turn>"
+
+
+def _json_call_with_id(id_of):
+    """A JSON call under ``<call>``, its ``id`` written as ``id_of`` gives it from the call and its place."""
+    def write(call, place):
+        written = {"name": call["function"]["name"], "arguments": call["function"]["arguments"],
+                   "id": id_of(call, place)}
+        return f"<call>{json.dumps(written)}</call>"
+    return write
+
+
+def test_a_json_call_holds_its_id_under_a_key_only_where_the_template_writes_the_calls_own_id():
+    keys = ("name", "arguments", "id")
+    own = _turns_render(_json_call_with_id(lambda call, _place: call["id"]))
+    numbered_by_place = _turns_render(_json_call_with_id(lambda _call, place: call_id(place)))
+    assert extract_json_call_id_key(own, keys) == "id"
+    assert extract_json_call_id_key(numbered_by_place, keys) is None
+    assert extract_json_call_id_key(lambda messages, **_options: None, keys) is None

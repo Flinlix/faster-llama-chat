@@ -17,7 +17,7 @@ from llama_chat.rendered_cache import RenderedCache
 from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
-from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry
+from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry, begun_wrapper
 from llama_chat.reply import ReplyStream
 
 _LONE = "a\ud800b"
@@ -502,3 +502,19 @@ def test_an_injection_with_a_role_no_injected_message_takes_is_refused_naming_th
     assert refused.value.field == "role"
     assert wrapper.conversation() == before
     assert wrapper.reply("zwei").finish().text
+
+
+def test_a_fault_while_a_stream_is_closed_is_an_internal_error_naming_the_close_and_its_cause(monkeypatch):
+    w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
+    stream = w.reply("hallo")
+    next(stream)
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("a fault of the library's own")
+    monkeypatch.setattr(RenderedCache, "record_reply", broken)
+    with pytest.raises(InternalError,
+                       match=r"^ReplyStream\.close failed inside the library \(KeyError: "
+                             r"\"a fault of the library's own\"\)"):
+        stream.close()
+    monkeypatch.undo()
+    assert w.reply("noch einmal").finish().text
