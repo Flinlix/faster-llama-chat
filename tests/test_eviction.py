@@ -12,7 +12,7 @@ from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import assert_consistent, held_text, rows
 from llama_chat.conversation_state import ConversationState
-from llama_chat.eviction import Eviction
+from llama_chat.eviction import Eviction, EVICT_TO_FRACTION_WITHOUT_SHIFT
 from llama_chat.tools import ToolCall
 from tests import internals
 
@@ -444,3 +444,75 @@ def test_injected_messages_that_evict_turns_that_called_tools_render_only_the_ne
     assert largest and len(w.conversation()["messages"]) > 40
     # The system turn, the newest two exchanges of four messages each, and the stand-in.
     assert max(largest) <= 10, largest
+
+
+def _render_length_of(fake, messages, generation_prompt=False):
+    """How many tokens ``fake`` takes for the template's render of ``messages``."""
+    return len(fake.tokenize(fake.stated_render(messages, generation_prompt=generation_prompt)))
+
+
+def test_an_eviction_on_a_cache_that_shifts_drops_the_fewest_oldest_exchanges_that_bring_it_within_the_threshold():
+    for padding in range(0, 40, 3):
+        fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
+        w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.5), context=fake)
+        w.begin(opened("s"))
+        limit = w.config.evict_above_tokens
+        before = w.conversation()["messages"]
+        for i in range(10):
+            w.reply(f"Frage {i}? " + "w" * padding + ".").finish()
+            w.wait_idle()
+            kept = w.conversation()["messages"]
+            whole = before + kept[-2:]
+            assert kept[1:] == whole[len(whole) - len(kept) + 1:]
+            assert _render_length_of(fake, kept) <= limit
+            if len(kept) < len(whole):
+                # The newest exchange that went, put back, would be over the threshold.
+                newest_gone = whole[len(whole) - len(kept) - 1:len(whole) - len(kept) + 1]
+                assert _render_length_of(fake, kept[:1] + newest_gone + kept[1:]) > limit, \
+                    (padding, i)
+            before = kept
+
+
+def test_an_eviction_after_a_reply_on_a_cache_that_cannot_shift_goes_below_the_threshold_as_far_as_the_newest_two_exchanges_allow():
+    rng = random.Random(4)
+    # Exchanges of mixed lengths, and short ones before one far longer than the rest.
+    runs = [[rng.choice([10, 30, 60, 160]) for _ in range(14)] for _ in range(6)]
+    runs.append([10] * 12 + [200, 10, 10, 200])
+    for sizes in runs:
+        fake = FakeContext(PLAIN, can_shift=False)
+        w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.8, min_reply_tokens=8),
+                        context=fake)
+        w.begin(opened("s"))
+        system = w.conversation()["messages"][:1]
+        limit = w.config.evict_above_tokens
+        shortest = _render_length_of(fake, system + [{"role": "user", "content": QUESTION_CUT_MARK + "?"}],
+                                     generation_prompt=True)
+        bound = shortest + int((limit - shortest) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
+        n_before = 1
+        for i, size in enumerate(sizes):
+            fake.gen_tokens, fake.gen_text = size, "r" * size
+            w.reply(f"Frage {i} " + "w" * size).finish()
+            w.wait_idle()
+            kept = w.conversation()["messages"]
+            if len(kept) < n_before + 2:
+                assert _render_length_of(fake, kept) <= bound or len(kept) <= 5, (i, len(kept))
+            n_before = len(kept)
+
+
+def test_a_question_within_the_room_its_reply_needs_is_answered_from_all_history_and_evicts_after_its_reply():
+    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.5, min_reply_tokens=8),
+                    context=fake)
+    w.begin(opened("s"))
+    for i in range(12):
+        w.reply(f"Frage {i}?").finish()
+    w.wait_idle()
+    oldest = rows(w)[1]["text"]
+    seen = []
+    fake.before_reply = seen.append
+    # A question that cannot take the stand-in's place, past the threshold but within the room.
+    reply = w.reply("lang " * 70 + " ").finish()
+    assert w.total_tokens < w.config.context_size - w.config.min_reply_tokens
+    assert reply.n_evicted_messages == 0 and oldest in seen[-1]
+    w.wait_idle()
+    assert w.reply("Und?").finish().n_evicted_messages > 0

@@ -7,14 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from llama_chat import InternalError
+from llama_chat import InternalError, ChatWrapper
 from llama_chat.loop_variant import LoopVariant
 from llama_chat.call_parsing import parse_calls
-from llama_chat.testing.invented_templates import CALL_BODY
+from llama_chat.testing.invented_templates import CALL_BODY, PLAIN
 from tests.test_call_parsing import _ELEMENTS
 from llama_chat.reply_text import ReplyText, reply_header
 from llama_chat.template import Reasoning
 from tests.test_reply_text import _fed_as_tokens
+from llama_chat.config import Config
+from llama_chat.testing.fake_context import FakeContext
+from tests.chat_messages import opened
 
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 
@@ -174,3 +177,27 @@ def test_a_loop_of_the_thought_filter_that_makes_no_progress_is_named_in_its_err
         reply.feed("<thought>x</thought>y")
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
     assert loop != "None" and len(loop.split()) >= 2
+
+
+def test_a_loop_dropping_exchanges_in_windows_that_makes_no_progress_is_named_in_its_error(monkeypatch):
+    class StallingDrop(LoopVariant):
+        """A variant whose measure never shrinks, as a loop with a fault would give it."""
+
+        def passes(self, measure):
+            super().passes(0)
+
+    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Gern.")
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.5, min_reply_tokens=8),
+                    context=fake)
+    w.begin(opened("s"))
+    for i in range(10):
+        w.reply(f"Frage {i}?").finish()
+    w.wait_idle()
+    monkeypatch.setattr(llama_chat.windows, "LoopVariant", StallingDrop)
+    # Long enough that more than one exchange goes at once.
+    with pytest.raises(InternalError) as raised:
+        w.reply("lang " * 80).finish()
+    loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
+    assert loop != "None" and len(loop.split()) >= 2
+    monkeypatch.undo()
+    assert w.reply("Und jetzt?").finish().text == "Gern."

@@ -193,3 +193,37 @@ def test_the_thought_count_is_the_number_of_pieces_that_hold_part_of_a_thought()
         reply.finish("end_of_turn")
         holding = sum(any(i < stop and start < j for start, stop in spans) for i, j in bounds)
         assert reply.thought_pieces == holding, bounds
+
+
+def test_a_place_inside_a_tag_moves_to_the_start_or_end_of_a_tag_around_it_and_any_other_place_stays():
+    from llama_chat.reply_text import _outside_tags
+    rng = random.Random(3)
+    for _ in range(4000):
+        tags = tuple(rng.sample(["<|a|>", "<<", "ab", "|>"], rng.randint(1, 2)))
+        text = "".join(rng.choice(["<|a|>", "<", "a", "b", "|>", "x"]) for _ in range(rng.randint(0, 9)))
+        at = rng.randint(0, len(text))
+        around = [(start, start + len(tag)) for tag in tags for start in range(len(text))
+                  if text.startswith(tag, start) and start < at < start + len(tag)]
+        for backwards in (True, False):
+            moved = _outside_tags(text, at, tags, backwards)
+            if around:
+                assert moved in {start if backwards else end for start, end in around}, \
+                    (text, at, tags, backwards)
+            else:
+                assert moved == at, (text, at, tags, backwards)
+
+
+def test_the_letters_of_a_thoughts_opening_right_after_another_tag_of_the_models_stay_answer_text():
+    tags = Reasoning("<thought>", "</thought>", "", "")
+    spans = []
+    reply = ReplyText(tags, "", None, "", [], spans)
+    shown = _fed_as_tokens(reply, [("Write ", False), ("<|x|>", True),
+                                   ("<thought> to start one.", False)], spans)
+    assert (shown, reply.thought) == ("Write <thought> to start one.", "")
+
+
+def test_a_stop_string_passed_over_before_the_answers_text_is_answer_text_and_hides_a_tag_after_it():
+    spans = []
+    reply = ReplyText(None, "<|text|>", None, "", ["Q:"], spans, stops_after_text=True)
+    shown = _fed_as_tokens(reply, [("Q:", False), ("<|text|>", True), (" hier.", False)], spans)
+    assert shown == reply.answer == "Q: hier."
