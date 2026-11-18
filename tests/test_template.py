@@ -116,7 +116,7 @@ def test_tojson_writes_json_as_json_dumps_does_keeping_letters_beyond_ascii_unle
 def _render_marking_repeated_questions(drops_repeated: bool):
     """A render that tags a question equal to an earlier one, and writes it, or drops its text where ``drops_repeated``."""
     def render(messages, declarations):
-        text = "".join(f"<tool>{d['function']['description']}</tool>" for d in declarations or ())
+        text = "".join(f"<decl>{d['function']['description']}</decl>" for d in declarations or ())
         asked = []
         for m in messages:
             repeated = m["role"] == "user" and m["content"] in asked
