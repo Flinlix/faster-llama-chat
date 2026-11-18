@@ -1,5 +1,6 @@
 """Reading a call back out of what a model generated."""
 
+import dataclasses
 import re
 import json
 import pytest
@@ -602,3 +603,44 @@ def test_json_arguments_are_read_however_spaced_followed_by_nothing_or_what_the_
 def test_json_arguments_that_are_no_object_or_have_text_after_them_are_refused(written):
     with pytest.raises(ValueError):
         parse_calls("clock" + written, _JSON_OBJECT["named-by-a-file"])
+
+
+@pytest.mark.parametrize("written, literal", [("true", True), ("false", False), ("True", True),
+                                              ("False", False), ("null", None), ("None", None)])
+def test_a_value_written_without_a_type_mark_reads_as_the_json_or_python_literal_it_spells(
+        written, literal):
+    call, = parse_calls(f"fn:set{{on:{written}}}", CALL_BODY, "fn:")
+    assert call.arguments == {"on": literal} and type(call.arguments["on"]) is type(literal)
+
+
+@pytest.mark.parametrize("body, call_body, json_keys", [
+    ('{"name": "f", "arguments": {"n": -1' + "0" * 5000 + "}}", None, _JSON_KEYS),
+    ("fn:f{n:-1" + "0" * 5000 + "}", CALL_BODY, None),
+    ("fn:f{n:+1" + "0" * 5000 + "}", CALL_BODY, None),
+], ids=["json-negative", "delimited-negative", "delimited-plus"])
+def test_a_signed_number_too_long_to_read_makes_the_call_unreadable_instead_of_infinite(
+        body, call_body, json_keys):
+    with pytest.raises(ValueError, match="too long"):
+        parse_calls(body, call_body, "fn:", json_keys=json_keys)
+
+
+@pytest.mark.parametrize("written, kind, literal", [
+    ("12", "integer", 12), ("12", "number", 12), ("1.5", "number", 1.5),
+    ("true", "boolean", True), ("null", "null", None)])
+@pytest.mark.parametrize("text_first", [True, False], ids=["text-first", "text-last"])
+def test_a_value_without_a_type_mark_is_its_literal_where_the_schema_allows_text_and_that_literal(
+        written, kind, literal, text_first):
+    types = ["string", kind] if text_first else [kind, "string"]
+    schema = {"set": {"type": "object", "properties": {"v": {"type": types}}}}
+    call, = parse_calls(f"fn:set{{v:{written}}}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"v": literal} and type(call.arguments["v"]) is type(literal)
+
+
+@pytest.mark.parametrize("written, nested", [(">1|</>", {"": 1}),
+                                             (">1|</>b>2|</b>", {"": 1, "b": 2})],
+                         ids=["only", "first-of-two"])
+def test_a_nested_member_with_an_empty_key_is_read_under_that_key_where_nothing_opens_a_member_before_its_key(
+        written, nested):
+    keyless_opening = dataclasses.replace(_ELEMENTS, member_open="{key}>")
+    call, = parse_calls(f'f">|<a>{written}|</a>|', keyless_opening)
+    assert call.arguments == {"a": nested}
