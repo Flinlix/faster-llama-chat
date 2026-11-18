@@ -1,6 +1,7 @@
 """The two eviction limits, the token threshold and the exchange limit: which exchanges go, when, and what a cache that cannot shift does instead."""
 
 
+import math
 import random
 import pytest
 
@@ -516,3 +517,64 @@ def test_a_question_within_the_room_its_reply_needs_is_answered_from_all_history
     assert reply.n_evicted_messages == 0 and oldest in seen[-1]
     w.wait_idle()
     assert w.reply("Und?").finish().n_evicted_messages > 0
+
+
+def test_the_search_for_how_many_exchanges_to_drop_takes_no_more_than_twice_the_measures_of_halving():
+    """However uneven the exchanges, a guess that does not halve the range is followed by one that does."""
+    shapes = random.Random(15)
+    for _ in range(30):
+        n = shapes.randint(2, 64)
+        sizes = [shapes.choice((1, 1, 1, shapes.randint(1, 2000))) for _ in range(n)]
+        messages = [{"role": "system", "content": "s"}] + [
+            message for k, size in enumerate(sizes) for message in (
+                {"role": "user", "content": f"q{k}"}, {"role": "assistant", "content": "y" * size})]
+        state = ConversationState(messages=list(messages))
+        eviction = Eviction(None, Config(), True, state, measure=lambda kept, prompted: 0)
+        measures = [0]
+
+        def length(state=state, measures=measures):
+            measures[0] += 1
+            return sum(len(message["content"]) for message in state.messages)
+
+        after = [sum(len(m["content"]) for m in messages[:1] + messages[1 + 2 * k:])
+                 for k in range(n)]
+        for bound in sorted({at + step for at in after for step in (-1, 0)}):
+            if after[0] <= bound or after[-1] > bound:
+                continue                # nothing over, or every one that can go is not enough
+            for at_least in (0, shapes.randint(0, n - 1)):
+                state.messages[:] = messages
+                measures[0] = 0
+                eviction._drop_oldest_exchanges(length, bound, at_least, False)
+                assert measures[0] <= 2 + 2 * math.ceil(math.log2(n)), (sizes, bound, at_least)
+
+
+def test_beside_an_open_turn_an_eviction_brings_the_conversation_down_to_what_its_docstring_names():
+    """Where the cache cannot shift, the bound is the room under ``limit`` after a short question, or after the open turn where that alone takes more, both measured with the generation prompt the next reply reads."""
+    from types import SimpleNamespace
+    from llama_chat.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
+    from llama_chat.messages import QUESTION_CUT_MARK
+
+    def stub_length(messages, generation_prompt):
+        return sum(len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or ""))
+                   for m in messages) + (5 if generation_prompt else 0)
+
+    stub_rendering = SimpleNamespace(length=stub_length)
+    call = [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
+    shapes = random.Random(16)
+    for _ in range(60):
+        system = [{"role": "system", "content": "s" * shapes.randint(1, 30)}] if shapes.random() < 0.8 else []
+        history = [message for k in range(shapes.randint(0, 3)) for message in (
+            {"role": "user", "content": f"q{k}"}, {"role": "assistant", "content": "y" * shapes.randint(0, 40)})]
+        asked = [{"role": "user", "content": "u" * shapes.randint(1, 40)}] if history or shapes.random() < 0.5 else []
+        open_turn = asked + [{"role": "assistant", "content": "", "tool_calls": call},
+                             {"role": "tool", "tool_call_id": "c1", "content": "r" * shapes.randint(0, 200)}]
+        state = ConversationState(messages=system + history + open_turn)
+        eviction = Eviction(stub_rendering, Config(), False, state)
+        short = stub_length(system + [{"role": "user", "content": QUESTION_CUT_MARK + "?"}], True)
+        for limit in range(1, 3 * stub_length(system + open_turn, True)):
+            under = min(short, limit)
+            bound = under + int((limit - under) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
+            alone = min(stub_length(system + open_turn, True), limit)
+            beside = alone + int((limit - alone) * EVICT_TO_FRACTION_WITHOUT_SHIFT) if alone > bound else bound
+            assert eviction.drop_bound(limit, False) == bound
+            assert eviction.drop_bound(limit, True) == beside, (state.messages, limit)

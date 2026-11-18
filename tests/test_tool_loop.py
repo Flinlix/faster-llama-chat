@@ -3020,3 +3020,13 @@ def test_a_plain_text_call_that_cannot_be_told_from_a_reply_is_refused_with_the_
         wrapper.begin(opened("s"), tools=weather_registry().specs())
     wrapper.begin(opened("s"))
     assert wrapper.reply("Hallo?").finish().text
+
+
+def test_a_long_result_on_a_cache_that_cannot_shift_is_written_where_the_history_holds_no_question():
+    wrapper, fake = tool_wrapper(can_shift=False)
+    wrapper.begin(opened("persona", tool_turn(ToolCall("clock", {}))))
+    call, = wrapper.pending_calls
+    wrapper.inject_tool_result(call.id, "x" * 10_000)
+    assert [row["role"] for row in rows(wrapper)] == ["system", "assistant", "tool"]
+    assert len(fake.cache) <= wrapper.config.context_size
+    assert wrapper.reply().finish().text
