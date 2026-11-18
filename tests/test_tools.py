@@ -13,6 +13,7 @@ from llama_chat.tool_registry import ToolRegistry
 
 from llama_chat.tools import ToolCall
 from tests.wrappers import system_turn, tool_wrapper
+from llama_chat.result_cutting import _most_kept
 
 
 # ----- a call --------------------------------------------------------------
@@ -374,3 +375,23 @@ def test_an_asynchronous_generator_or_a_callable_object_with_an_asynchronous_cal
     for asynchronous in (Clock(), times):
         with pytest.raises(TypeError, match="asynchronous"):
             ToolRegistry().tool(asynchronous, name="clock", description="Sagt die Zeit.")
+
+
+def _kept_by_every_guess(total, most):
+    """What ``_most_kept`` finds for a ``fits`` that holds up to ``most`` characters, from no guess and from every guess."""
+    def fits(n):
+        return min(n, total) <= most      # a count past the text keeps the whole text, as a cut does
+    return {guess: _most_kept(fits, total, guess) for guess in [None, *range(total + 1)]}
+
+
+def test_a_cut_keeps_the_most_characters_that_fit_wherever_the_guess_lies():
+    for total in [*range(1, 90), 300, 1000]:
+        for most in sorted({*range(min(total, 90)), *range(0, total, 37)}):
+            kept = _kept_by_every_guess(total, most)
+            assert all(type(n) is int and n == most for n in kept.values()), (total, most, kept)
+
+
+def test_a_cut_of_a_text_that_fits_whole_keeps_all_of_it_wherever_the_guess_lies():
+    for total in [*range(90), 300, 1000]:
+        kept = _kept_by_every_guess(total, total)
+        assert all(type(n) is int and n == total for n in kept.values()), (total, kept)
