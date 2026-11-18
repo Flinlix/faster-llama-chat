@@ -1,5 +1,6 @@
 """Reading a call back out of what a model generated."""
 
+import string
 import dataclasses
 import re
 import json
@@ -752,3 +753,18 @@ def test_a_reference_to_a_definition_that_is_itself_a_reference_is_followed_to_i
 def test_a_type_written_beside_a_reference_or_a_list_of_branches_still_counts(value_schema):
     definitions = {"$defs": {"Note": {"description": "free text"}}}
     assert _read_with_schema("01234", value_schema, definitions) == "01234"
+
+
+@pytest.mark.parametrize("letter", string.ascii_letters)
+def test_a_letter_in_an_argument_neither_opens_nor_closes_a_nesting_between_separators(letter):
+    body = f"fn:f{{a:{letter},b:[{letter},1],d:2}}"
+    assert parse_calls(body, CALL_BODY, "fn:")[0].arguments == {
+        "a": letter, "b": [letter, 1], "d": 2}
+
+
+@pytest.mark.parametrize("arguments", ["a:1,,b:2", "a:1,", ",a:1"],
+                         ids=["blank-pair", "trailing-separator", "leading-separator"])
+def test_a_blank_argument_between_separators_is_refused_naming_it_and_the_arguments(arguments):
+    with pytest.raises(ValueError, match=re.escape(
+            f"an empty argument between separators: {arguments!r}")):
+        parse_calls("fn:f{" + arguments + "}", CALL_BODY, "fn:")
