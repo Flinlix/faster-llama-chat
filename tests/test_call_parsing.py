@@ -684,3 +684,71 @@ def test_where_a_format_s_quote_stands_in_its_delimiters_every_separator_splits_
     # Not JSON, so the arguments are read by the format's own delimiters.
     body = f'clock[PARAMS]{{"a": {value}, "b": {value}}}'
     assert parse_calls(body, _WITH_ID["json"]) == [ToolCall("clock", {"a": value, "b": value})]
+
+
+def test_a_value_written_as_a_json_string_reads_as_the_text_its_escapes_stand_for():
+    call, = parse_calls(r'fn:say{text:"tab\there \"quoted\" é"}', CALL_BODY, "fn:")
+    assert call.arguments == {"text": 'tab\there "quoted" é'}
+
+
+@pytest.mark.parametrize("written", ["[1", "x]", "a}"])
+def test_a_value_with_only_one_bracket_of_a_pair_is_read_as_written(written):
+    call, = parse_calls(f"fn:say{{text:{written}}}", CALL_BODY, "fn:")
+    assert call.arguments == {"text": written}
+
+
+def test_a_value_under_a_key_the_schema_does_not_list_is_read_by_its_additional_properties():
+    schema = {"f": {"type": "object", "properties": {"n": {"type": "integer"}},
+                    "additionalProperties": {"type": "string"}}}
+    call, = parse_calls("fn:f{n:01234,code:01234}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"n": 1234, "code": "01234"}
+
+
+def _read_with_schema(written: str, value_schema: dict, definitions: dict | None = None):
+    """What ``fn:f{v:<written>}`` reads ``v`` as, where ``v`` has ``value_schema``."""
+    schema = {"f": {"type": "object", "properties": {"v": value_schema}, **(definitions or {})}}
+    call, = parse_calls(f"fn:f{{v:{written}}}", CALL_BODY, "fn:", schema)
+    return call.arguments["v"]
+
+
+@pytest.mark.parametrize("definitions", [
+    {"$defs": {"Loop": {"$ref": "#/$defs/Loop"}}},
+    {"$defs": {"Loop": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/Loop"}]}}},
+    {"$defs": {"Loop": {"oneOf": [{"$ref": "#/$defs/Back"}, {"type": "string"}]},
+               "Back": {"anyOf": [{"$ref": "#/$defs/Loop"}]}}},
+], ids=["self", "through-any-of", "through-two-definitions"])
+def test_a_schema_whose_references_lead_back_to_itself_is_read_to_its_end(definitions):
+    value_schema = {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/Loop"}]}
+    assert _read_with_schema("01234", value_schema, definitions) == "01234"
+
+
+@pytest.mark.parametrize("reference, name", [("#/$defs/a~1b", "a/b"), ("#/$defs/a~0b", "a~b"),
+                                             ("#/$defs/a~01b", "a~1b")])
+def test_a_reference_finds_a_definition_whose_name_holds_a_slash_or_a_tilde(reference, name):
+    definitions = {"$defs": {name: {"type": "string"}}}
+    assert _read_with_schema("01234", {"$ref": reference}, definitions) == "01234"
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/Missing/deeper", "#/$defs/Text/type/deeper",
+                                       "#/$defs/List/0"])
+def test_a_reference_through_something_that_is_no_object_does_not_stop_the_call_being_read(
+        reference):
+    definitions = {"$defs": {"Text": {"type": "string"}, "List": [{"description": "free text"}]}}
+    value_schema = {"anyOf": [{"$ref": reference}, {"type": "string"}]}
+    assert _read_with_schema("01234", value_schema, definitions) == "01234"
+
+
+def test_a_reference_to_a_definition_that_is_itself_a_reference_is_followed_to_its_end():
+    definitions = {"$defs": {"Alias": {"$ref": "#/$defs/Text"}, "Text": {"type": "string"}}}
+    assert _read_with_schema("01234", {"$ref": "#/$defs/Alias"}, definitions) == "01234"
+
+
+@pytest.mark.parametrize("value_schema", [
+    {"type": "string", "$ref": "#/$defs/Note"},
+    {"type": "string", "anyOf": [{"minLength": 1}]},
+    {"type": "string", "oneOf": [{"minLength": 1}]},
+    {"type": "string", "$ref": "#/$defs/Note", "anyOf": [{"minLength": 1}]},
+], ids=["beside-ref", "beside-any-of", "beside-one-of", "beside-both"])
+def test_a_type_written_beside_a_reference_or_a_list_of_branches_still_counts(value_schema):
+    definitions = {"$defs": {"Note": {"description": "free text"}}}
+    assert _read_with_schema("01234", value_schema, definitions) == "01234"
