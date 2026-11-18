@@ -717,3 +717,24 @@ def test_a_model_template_keeps_its_text_and_writes_the_end_of_sequence_text_it_
     template = ModelTemplate(text, "~end~")
     assert template.text == text
     assert template.render([{"role": "user", "content": "hi"}]) == "hi~end~"
+
+
+# A template that refuses by what it is given besides the messages: the tools, the
+# reasoning switch and a further variable, each with a reason of its own.
+_REFUSES_BY_ITS_INPUTS = (
+    "{% if tools %}{{ raise_exception('declared ' ~ (tools | length)) }}{% endif %}"
+    "{% if enable_thinking %}{{ raise_exception('thinking') }}{% endif %}"
+    "{% if word is defined %}{{ raise_exception('word ' ~ word) }}{% endif %}"
+    "{% if enable_thinking is defined %}off{% endif %}written")
+
+
+def test_a_templates_refusal_is_read_with_the_tools_reasoning_and_variables_its_render_is_given():
+    template = ModelTemplate(_REFUSES_BY_ITS_INPUTS, "")
+    declared = [{"type": "function", "function": {"name": "clock", "parameters": {}}}]
+    for tools, reasoning, variables in itertools.product(
+            (None, declared), (None, True, False), (None, {"word": "given"})):
+        options = dict(generation_prompt=True, reasoning=reasoning, variables=variables)
+        reason = template.refusal_reason([], tools, **options)
+        assert reason == ("declared 1" if tools else "thinking" if reasoning
+                          else "word given" if variables else None)
+        assert (reason is None) == (template.render([], tools, **options) is not None)
