@@ -3030,3 +3030,21 @@ def test_a_long_result_on_a_cache_that_cannot_shift_is_written_where_the_history
     assert [row["role"] for row in rows(wrapper)] == ["system", "assistant", "tool"]
     assert len(fake.cache) <= wrapper.config.context_size
     assert wrapper.reply().finish().text
+
+
+@pytest.mark.parametrize("template", [
+    _calls_in_plain_text(TOOLS, **{"{{- '}</call>' -}}": "{{- '}' -}}"}), PLAIN,
+    NO_DECLARATIONS, KEYLESS_CALLS, NO_RESULT_BLOCK],
+    ids=["call-not-told-from-a-reply", "no-call", "no-declarations", "call-format-unreadable",
+         "no-result-block"])
+def test_every_cause_a_model_cannot_call_tools_for_is_refused_naming_the_argument_the_tools_came_in(
+        template):
+    wrapper = ChatWrapper(Config(context_size=1024), context=FakeContext(template))
+    assert not wrapper.capabilities(tools=True).can_call_tools
+    with pytest.raises(UnsupportedError) as refused:
+        wrapper.begin(opened("s"), tools=weather_registry().specs())
+    assert refused.value.field == "tools", refused.value
+    wrapper.begin(opened("s"))
+    with pytest.raises(UnsupportedError) as refused:
+        wrapper.reply("Wetter?", tool_call_policy=weather_registry()).finish()
+    assert refused.value.field == "tool_call_policy", refused.value
