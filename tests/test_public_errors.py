@@ -12,7 +12,7 @@ import pytest
 from llama_chat import (ChatWrapper, Config, ContextOverflowError, InternalError, ToolRegistry,
                         ToolSpec)
 from llama_chat.errors import (LIBRARY_ERRORS, ArgumentTypeError, InvalidArgumentError,
-                               InvalidSettingError, OutOfOrderError)
+                               InvalidSettingError, OutOfOrderError, raising_library_errors_only)
 from llama_chat.rendered_cache import RenderedCache
 from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
@@ -414,3 +414,44 @@ def test_an_injection_refused_for_its_order_names_the_injection_and_what_comes_f
     assert re.search(r"\binject", message, re.IGNORECASE) and re.search(first, message)
     assert "None" not in message
     assert wrapper.conversation() == before
+
+
+def test_a_fault_inside_a_property_is_an_internal_error_naming_the_property(monkeypatch):
+    wrapper, _ = tool_wrapper()
+    wrapper.begin(opened("s"))
+    before = wrapper.conversation()
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("a fault of the library's own")
+    monkeypatch.setattr(RenderedCache, "published_total_tokens", broken)
+    with pytest.raises(InternalError, match=r"ChatWrapper\.total_tokens failed inside the library"):
+        _ = wrapper.total_tokens
+    monkeypatch.undo()
+    assert wrapper.conversation() == before
+
+
+def test_a_guarded_property_keeps_its_setter_its_deleter_and_its_own_text():
+    class Holder:
+        def __init__(self):
+            self.stored = 1
+
+        def _get(self):
+            """The getter's own text."""
+            return self.stored
+
+        def _set(self, value):
+            self.stored = value
+
+        def _delete(self):
+            self.stored = None
+
+        held = property(_get, _set, _delete, "The property's own text.")
+
+    guarded = raising_library_errors_only(Holder)
+    holder = guarded()
+    holder.held = 2
+    assert holder.held == 2
+    del holder.held
+    assert holder.stored is None
+    assert guarded.__dict__["held"].__doc__ == "The property's own text."
+    assert guarded.__dict__["held"].fget.raises_library_errors_only
