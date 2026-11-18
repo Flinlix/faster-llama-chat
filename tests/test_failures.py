@@ -21,7 +21,7 @@ from llama_chat.testing.fake_context import FakeContext
 from tests import internals
 from tests.internals import generated_turns_held
 from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
-                                      TOOLS_REFUSING_TWO_USER_TURNS)
+                                      TOOLS_REFUSING_TWO_USER_TURNS, NO_DECLARATIONS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
 from llama_chat.cache_sync import CacheSync
@@ -1216,3 +1216,39 @@ def test_a_result_that_cannot_be_written_is_told_as_a_failed_call_naming_why(res
     assert told["error"] == "unwritable_result"
     assert told["message"].startswith("the tool call failed: a tool result must be text or what "
                                       "JSON can write: ")
+
+
+# Templates that refuse a text only where the render is given, in turn, the tools, the reasoning
+# switch on, or the variable that puts the declarations into the system turn.
+_REFUSES_ONLY_WITH_TOOLS = ("{% if messages[-1].content == 'verboten' and tools %}"
+                            "{{ raise_exception('this word is not written') }}{% endif %}")
+_REFUSES_ONLY_WITH_REASONING = ("{% if messages[-1].content == 'verboten' and enable_thinking %}"
+                                "{{ raise_exception('this word is not written') }}{% endif %}")
+_DECLARED_BY_A_VARIABLE = "{%- set declares = none -%}"
+assert _DECLARED_BY_A_VARIABLE in NO_DECLARATIONS["chat_template"]
+_REFUSES_ONLY_WITH_THE_VARIABLE = (
+    "{% if messages[-1].content == 'verboten' and tools_in_system %}"
+    "{{ raise_exception('this word is not written') }}{% endif %}")
+
+
+_REFUSING = {
+    "tools": {**REASONING, "chat_template": _REFUSES_ONLY_WITH_TOOLS
+              + REASONING["chat_template"]},
+    "reasoning": {**REASONING, "chat_template": _REFUSES_ONLY_WITH_REASONING
+                  + REASONING["chat_template"]},
+    "variable": {**NO_DECLARATIONS, "render_variables": {"off": {"tools_in_system": True}},
+                 "chat_template": _REFUSES_ONLY_WITH_THE_VARIABLE
+                 + NO_DECLARATIONS["chat_template"].replace(
+                     _DECLARED_BY_A_VARIABLE,
+                     "{%- set declares = 'in the system turn' if tools_in_system else none -%}")},
+}
+
+
+@pytest.mark.parametrize("given", list(_REFUSING))
+def test_a_refusal_carries_what_the_template_says_where_it_refuses_only_as_the_conversation_renders(given):
+    """The template's cause is read with the tools, the reasoning switch and the declaration variable the conversation renders with."""
+    fake = FakeContext(_REFUSING[given])
+    w = ChatWrapper(Config(context_size=1024), context=fake)
+    w.begin(opened("s"), tools=weather_registry().specs(), reasoning=given == "reasoning")
+    with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
+        w.inject("verboten")
