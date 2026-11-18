@@ -18,7 +18,7 @@ from llama_chat.model_template import ModelTemplate, names_read
 from llama_chat.tokenizing import tag_texts
 from llama_chat.template import CallBody
 from llama_chat.template_extract import (as_probes_read, extract_content_rewrites,
-                                         extract_fragments, reasoning_switch)
+                                         extract_fragments, reasoning_switch, extract_reasoning, extract_removed_thought)
 
 from .chat_templates import STEMS, expected, fixture
 from llama_chat.testing.fake_context import FakeContext
@@ -585,3 +585,93 @@ def test_a_template_that_writes_the_question_again_after_the_user_turn_has_no_ef
     assert switch(True) == _SHARED_FLAG[0]
     assert switch(False) == _SHARED_FLAG[1]
     assert switch(None) == {}
+
+
+# The tags of the renders below, a closing tag and one that is its own end among them.
+_PROMPT_TAGS = ("<u>", "<a>", "<r>", "</r>", "r>")
+
+
+def _prompt_ending_render(off, on):
+    """A render that writes no thought in any reply and ends its generation prompt in ``off`` without reasoning and ``on`` with it, raising where one is ``None``."""
+    def render(messages, generation_prompt=False, reasoning=None, **_options):
+        text = "".join(f"<{m['role'][0]}>{m['content']}" for m in messages)
+        if not generation_prompt:
+            return text
+        ending = on if reasoning else off
+        if ending is None:
+            raise ValueError("the template refuses this reasoning setting")
+        return text + "<a>" + ending
+    return render
+
+
+@pytest.mark.parametrize("off, on, thought_tags", [
+    # Ends in an opening and its closing tag, the closing tag being the longest that ends it.
+    ("<r></r>", "<r>", ("<r>", "</r>")),
+    # Ends in no tag at all, whatever the length of the text after the last one.
+    ("WXYZ", "<r>", None),
+    ("W", "<r>", None),
+    # Ends in a closing tag with no opening tag before it.
+    ("x</r>", "<r>", None),
+    # Refuses one of the two settings.
+    ("<r></r>", None, None),
+    (None, "<r>", None),
+])
+def test_an_empty_thought_is_read_only_from_a_prompt_that_ends_in_an_opening_and_a_closing_tag(
+        off, on, thought_tags):
+    render = _prompt_ending_render(off, on)
+    found = extract_reasoning(render, extract_fragments(render, _PROMPT_TAGS), None, _PROMPT_TAGS)
+    assert (found and (found.thought_open, found.thought_close)) == (thought_tags or None)
+
+
+def _thought_removing_render(close, *, removes_only_without_reasoning=False):
+    """A render that writes no thought and leaves out of a past reply all it holds up to ``close``."""
+    def render(messages, generation_prompt=False, reasoning=None, **_options):
+        removes = reasoning is False or not removes_only_without_reasoning
+        text = "".join(
+            f"<{m['role'][0]}>"
+            + (m["content"].split(close)[-1] if removes and m["role"] == "assistant" else m["content"])
+            for m in messages)
+        return text + ("<a>" if generation_prompt else "")
+    return render
+
+
+def _removed_thought_tags(close, tags, **options):
+    """The thought tags ``extract_removed_thought`` reads from :func:`_thought_removing_render`."""
+    render = _thought_removing_render(close, **options)
+    found = extract_removed_thought(render, extract_fragments(render, tags), tags)
+    return found and (found.thought_open, found.thought_close)
+
+
+def test_a_removed_thoughts_opening_tag_is_its_closing_tag_without_the_first_slash():
+    tags = ("<u>", "<a>", "<q/s>", "</q/s>")
+    assert _removed_thought_tags("</q/s>", tags) == ("<q/s>", "</q/s>")
+
+
+@pytest.mark.parametrize("close, tags", [
+    # A closing tag whose opening is none of the model's tags.
+    ("</q>", ("<u>", "<a>", "</q>")),
+    # A tag without a slash, which opens nothing.
+    ("<q>", ("<u>", "<a>", "<q>")),
+])
+def test_a_removed_thought_is_read_only_between_two_of_the_models_tags(close, tags):
+    assert _removed_thought_tags(close, tags) is None
+
+
+def test_a_removed_thought_is_read_from_a_past_reply_written_with_reasoning_off():
+    tags = ("<u>", "<a>", "<q>", "</q>")
+    assert _removed_thought_tags("</q>", tags, removes_only_without_reasoning=True) == ("<q>", "</q>")
+
+
+def _one_exchange_render(messages, generation_prompt=False, reasoning=None, **_options):
+    """A render that writes one question and its reply at most, marking the reply unless reasoning is off."""
+    if len(messages) > 2:
+        raise ValueError("the template writes one exchange at most")
+    mark = "" if reasoning is False else "<r/>"
+    text = "".join(f"<{m['role'][0]}>" + (mark if m["role"] == "assistant" else "") + m["content"]
+                   for m in messages)
+    return text + ("<a>" if generation_prompt else "")
+
+
+def test_the_tags_of_a_template_that_writes_one_exchange_are_read_with_reasoning_off():
+    found = extract_fragments(_one_exchange_render, ("<u>", "<a>", "<r/>"))
+    assert (found.user_prefix, found.assistant_prefix, found.assistant_suffix) == ("<u>", "<a>", "")
