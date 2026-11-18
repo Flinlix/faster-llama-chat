@@ -518,3 +518,35 @@ def test_a_fault_while_a_stream_is_closed_is_an_internal_error_naming_the_close_
         stream.close()
     monkeypatch.undo()
     assert w.reply("noch einmal").finish().text
+
+
+def test_only_a_public_member_is_guarded_and_its_fault_names_the_class_and_the_member():
+    """The decorator is applied here, as a mutation run applies a mutant only after import."""
+    class Holder:
+        def asked(self):
+            return self._helper()
+
+        def _helper(self):
+            raise KeyError("a fault of the library's own")
+
+        def __repr__(self):
+            return "Holder()"
+
+        @property
+        def held(self):
+            raise KeyError("a fault of the library's own")
+
+    guarded = raising_library_errors_only(Holder)
+    members = vars(guarded)
+    assert members["asked"].raises_library_errors_only
+    assert members["held"].fget.raises_library_errors_only
+    assert not hasattr(members["_helper"], "raises_library_errors_only")
+    assert not hasattr(members["__repr__"], "raises_library_errors_only")
+    holder = guarded()
+    for action, name in ((holder.asked, "asked"), (lambda: holder.held, "held")):
+        with pytest.raises(InternalError) as failed:
+            action()
+        assert str(failed.value).startswith(f"Holder.{name} failed inside the library (KeyError"), \
+            failed.value
+    with pytest.raises(KeyError):
+        holder._helper()
