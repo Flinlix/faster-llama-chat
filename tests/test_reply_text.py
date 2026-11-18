@@ -1,8 +1,9 @@
 """Filtering a reply's text: stop strings, thoughts and channel headers."""
 
+import random
 import pytest
 
-from llama_chat.reply_text import ReplyText
+from llama_chat.reply_text import ReplyText, reply_header
 from llama_chat.template import Reasoning
 
 
@@ -108,3 +109,70 @@ def test_a_stop_string_ends_the_answer_before_it_even_where_a_later_piece_holds_
     stops.feed("Hello")
     stops.feed("\n\nmore")
     assert stops.text == "Hello"
+
+
+def _stream_cut_anywhere_but_inside_a_tag(tokens, rng):
+    """``tokens`` joined and cut into pieces at random, never inside a tag, with where each tag stands."""
+    text, spans, cuts, at = "", [], set(), 0
+    for spelled, is_tag in tokens:
+        if is_tag:
+            spans.append((at, at + len(spelled)))
+            cuts |= {at, at + len(spelled)}
+        else:
+            cuts |= {i for i in range(at + 1, at + len(spelled)) if rng.random() < 0.3}
+        text += spelled
+        at += len(spelled)
+    if rng.random() < 0.3:
+        cuts = set(rng.sample(sorted(cuts), len(cuts) // 3))   # a merging cut: tags inside pieces
+    ends = sorted(cuts - {0, len(text)})
+    return [text[i:j] for i, j in zip([0, *ends], [*ends, len(text)])], spans
+
+
+@pytest.mark.parametrize("opening, closing", [("<thought>", "</thought>"), ("¶", "§")])
+@pytest.mark.parametrize("stop_reason", ["end_of_turn", "token_limit"])
+@pytest.mark.parametrize("start", ["", "Hi"])
+def test_the_answer_and_thought_do_not_depend_on_how_the_stream_is_cut_into_pieces(
+        opening, closing, stop_reason, start):
+    """Letters of a tag, a tag right after them, and whitespace before a thought, wherever the cuts fall."""
+    tags = Reasoning(opening, closing, "")
+    tokens = [(start, False), (" ", False), ("\n", False), (opening, True), ("plan", False),
+              (closing, True), ("Write " + opening[:-1], False), (opening, True), ("more", False),
+              (closing, True), (f"Spell {opening} twice: {opening}", False), (opening, True),
+              (f"aside {opening} here", False), (closing, True), ("done", False), (" ", False),
+              (opening, True), ("brief", False), (closing, True), (f"end {opening}", False)]
+    answer = (f"{start} \n" if start else "") \
+        + f"Write {opening[:-1]}Spell {opening} twice: {opening}done end {opening}"
+    rng = random.Random(11)
+    for _ in range(300):
+        pieces, spans = _stream_cut_anywhere_but_inside_a_tag([t for t in tokens if t[0]], rng)
+        known_spans, fed, shown = [], 0, []
+        reply = ReplyText(tags, "", None, "", [], known_spans)
+        for piece in pieces:
+            known_spans.extend(s for s in spans if fed <= s[0] < fed + len(piece))
+            fed += len(piece)
+            shown.append(reply.feed(piece))
+        shown.append(reply.finish(stop_reason))
+        assert "".join(shown) == reply.answer == answer, pieces
+        assert reply.thought == f"planmoreaside {opening} herebrief", pieces
+
+
+@pytest.mark.parametrize("stop_reason, answer", [("end_of_turn", " \n "), ("token_limit", ""),
+                                                 ("interrupted", "")])
+def test_a_reply_of_whitespace_alone_keeps_all_of_it_where_it_ended_of_its_own_accord(
+        stop_reason, answer):
+    tags = Reasoning("<thought>", "</thought>", "")
+    reply = ReplyText(tags, "", None, "", [])
+    assert reply.feed(" ") + reply.feed("\n") + reply.feed(" ") + reply.finish(stop_reason) == answer
+    reply = ReplyText(tags, "", None, "", [])
+    assert reply.feed(" ") + reply.feed("\n") + reply.feed("x") + reply.finish(stop_reason) == " \nx"
+
+
+def test_an_answer_opening_written_in_tags_and_text_after_a_possible_thought_is_not_shown():
+    tags = Reasoning("<|ch|>think<|msg|>", "<|stop_ch|>", "")
+    opening = "<|ch|>final<|msg|>"
+    header = reply_header(opening, tags, ("<|ch|>", "<|msg|>", "<|stop_ch|>"))
+    spans = []
+    reply = ReplyText(tags, opening, header, "", [], spans)
+    shown = _fed_as_tokens(reply, [("<|ch|>", True), ("final", False), ("<|msg|>", True),
+                                   ("Antwort.", False)], spans)
+    assert shown == reply.answer == "Antwort."

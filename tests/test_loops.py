@@ -12,6 +12,9 @@ from llama_chat.loop_variant import LoopVariant
 from llama_chat.call_parsing import parse_calls
 from llama_chat.testing.invented_templates import CALL_BODY
 from tests.test_call_parsing import _ELEMENTS
+from llama_chat.reply_text import ReplyText, reply_header
+from llama_chat.template import Reasoning
+from tests.test_reply_text import _fed_as_tokens
 
 _PACKAGE = Path(__file__).parent.parent / "llama_chat"
 
@@ -135,5 +138,24 @@ def test_a_loop_of_the_call_reader_that_makes_no_progress_is_named_in_its_error(
     monkeypatch.setattr(llama_chat.call_parsing, "LoopVariant", Stalling)
     with pytest.raises(InternalError) as raised:
         parse_calls(body, call_body, "fn:")
+    loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
+    assert loop != "None" and len(loop.split()) >= 2
+
+
+@pytest.mark.parametrize("run", [
+    lambda: _fed_as_tokens(ReplyText(Reasoning("<t>", "</t>", ""), "", None, "", [], []),
+                           [("Hi", False), (" <t> and <t> as text", False)], []),
+    lambda: reply_header("<|a|>user<|a|>", Reasoning("<|a|>self<|a|>", "<|b|>", ""), ("<|a|>",)),
+], ids=["thought-opening", "tag-around-a-place"])
+def test_a_loop_of_the_reply_text_that_makes_no_progress_is_named_in_its_error(run, monkeypatch):
+    class StallingLoop(LoopVariant):
+        """A variant whose measure never shrinks, as a loop with a fault would give it."""
+
+        def passes(self, measure):
+            super().passes(0)
+
+    monkeypatch.setattr(llama_chat.reply_text, "LoopVariant", StallingLoop)
+    with pytest.raises(InternalError) as raised:
+        run()
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
     assert loop != "None" and len(loop.split()) >= 2

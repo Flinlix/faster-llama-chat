@@ -1,5 +1,6 @@
 """Reasoning as the template turns it on: the switch, the thought kept out, stop strings."""
 
+import re
 import json
 import sys
 
@@ -19,6 +20,7 @@ from llama_chat.testing.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONI
 
 from tests.wrappers import (THOUGHTFUL, UNGUARDED, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
+from llama_chat.reply_text import reply_header
 # ----- reasoning, as the template turns it on ------------------------------
 def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     w, _fake = reasoning_wrapper()
@@ -357,3 +359,18 @@ def test_a_template_that_refuses_a_message_it_does_not_know_takes_the_reasoning_
     assert template.properties.can_reason
     assert template.render([{"role": "user", "content": "hi"}], generation_prompt=True,
                            reasoning=True).endswith("<|assistant_says|><reason>")
+
+
+@pytest.mark.parametrize("answer, thought, tags, header", [
+    ("<|a|>user<|b|>", "<|a|>self<|b|>", ("<|a|>", "<|b|>"), ("<|a|>", "<|b|>")),
+    ("<|a|>user<|a|>", "<|a|>self<|a|>", ("<|a|>",), ("<|a|>", "<|a|>")),
+    ("<|ab|>user<|ab|><|z|>", "<|ac|>self<|z|>", ("<|ab|>", "<|ac|>", "<|z|>"), None),
+    ("<|OPEN_TEXT|>", "<|OPEN_THOUGHT|>", ("<|OPEN_TEXT|>", "<|OPEN_THOUGHT|>"), None),
+])
+def test_a_headers_ends_move_only_off_a_tag_they_would_divide(answer, thought, tags, header):
+    found = reply_header(answer, Reasoning(thought, "<|call_ends|>", ""), tags)
+    assert found == header
+    if found:
+        bounds = (len(found[0]), len(answer) - len(found[1]))
+        assert not any(at < bound < at + len(tag) for tag in tags for bound in bounds
+                       for at in (m.start() for m in re.finditer(re.escape(tag), answer)))
