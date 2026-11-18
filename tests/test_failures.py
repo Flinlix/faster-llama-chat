@@ -1,5 +1,6 @@
 """Every action that is refused or fails leaves the conversation and the cache as they were before it, a reply keeping only what it produced, and usable."""
 
+import random
 import dataclasses
 import json
 import datetime as real_datetime
@@ -23,6 +24,8 @@ from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO
                                       TOOLS_REFUSING_TWO_USER_TURNS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             newest_turn, rows, tool_wrapper, weather_registry)
+from llama_chat.cache_sync import CacheSync
+from llama_chat.generation import GenerationAccumulator
 
 
 class _Flaky(FakeContext):
@@ -1056,3 +1059,139 @@ def test_a_refusal_quotes_no_reason_where_the_template_gives_none(refusing):
     with pytest.raises(TemplateRefusedError) as refused:
         w.inject("verboten")
     assert str(refused.value) == "this model's template does not write a user message here"
+
+
+@pytest.mark.parametrize("can_shift, can_cut_tail", [(True, False), (False, True), (False, False)],
+                         ids=["shifts", "cuts", "neither"])
+def test_a_version_of_the_tokens_a_cache_should_hold_never_comes_back_for_other_tokens(can_shift,
+                                                                                     can_cut_tail):
+    fake = _Flaky(PLAIN, gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
+    memory, draw = CacheSync(fake), random.Random(1)
+
+    def some_tokens():
+        return [draw.randrange(1, 5) for _ in range(draw.randrange(4))]
+
+    def generate():
+        list(memory.generate(draw.randrange(3), GenerationAccumulator(),
+                             sampling=generation_sampling(Config(), None)))
+
+    actions = {
+        "decode": lambda: memory.decode(some_tokens(), want_logits=draw.random() < 0.5),
+        "remove": lambda: memory.remove(*sorted(draw.choices(range(len(memory.tokens) + 1), k=2))),
+        "cut_to": lambda: memory.cut_to(draw.randrange(len(memory.tokens) + 1)),
+        "replace": lambda: memory.replace(
+            draw.choice([memory.tokens, memory.tokens[:-1] + some_tokens()])),
+        "generate": lambda: memory.tokens and generate(),
+        "reset": memory.reset, "rest": memory.rest, "repair": memory.repair,
+    }
+    seen = {memory.version: list(memory.tokens)}
+    for _ in range(2000):
+        name = draw.choice(sorted(actions))
+        fake.fail = draw.choice([None] * 8 + ["decode", "cut", "generate"])
+        try:
+            actions[name]()
+        except RuntimeError:
+            pass
+        assert seen.setdefault(memory.version, list(memory.tokens)) == memory.tokens, name
+
+
+@pytest.mark.parametrize("can_shift, can_cut_tail", [(True, False), (False, True), (False, False)],
+                         ids=["shifts", "cuts", "neither"])
+def test_every_draw_follows_a_decode_that_kept_the_logits_of_the_cache_as_it_ends(can_shift,
+                                                                                 can_cut_tail):
+    class _DrawsAfterFreshLogits(_Flaky):
+        """Records whether the newest decode kept logits for the cache's last token, with no edit since."""
+
+        fresh = False
+
+        def prefill(self, token_ids, start_pos, want_logits):
+            self.fresh = False
+            super().prefill(token_ids, start_pos, want_logits)
+            self.fresh = bool(want_logits)
+
+        def decode_generated(self, token_ids, start_pos):
+            self.fresh = False
+            super().decode_generated(token_ids, start_pos)
+            self.fresh = True
+
+        def remove_from(self, pos):
+            self.fresh = False
+            super().remove_from(pos)
+
+        def apply_eviction(self, start, end):
+            self.fresh = False
+            super().apply_eviction(start, end)
+
+        def restore_state(self, state, pos):
+            self.fresh = False
+            super().restore_state(state, pos)
+
+        def reset(self):
+            self.fresh = False
+            super().reset()
+
+        def sampled_tokens(self, sampling, withheld_tokens):
+            assert self.fresh, "a draw from logits no decode kept for the cache as it ends"
+            yield from super().sampled_tokens(sampling, withheld_tokens)
+
+    fake = _DrawsAfterFreshLogits(PLAIN, gen_tokens=2, can_shift=can_shift,
+                                  can_cut_tail=can_cut_tail)
+    memory, draw = CacheSync(fake), random.Random(2)
+
+    def some_tokens():
+        return [draw.randrange(1, 5) for _ in range(draw.randrange(1, 4))]
+
+    def generate():
+        list(memory.generate(draw.randrange(1, 3), GenerationAccumulator(),
+                             sampling=generation_sampling(Config(), None)))
+
+    actions = {
+        "decode": lambda: memory.decode(some_tokens(), want_logits=draw.random() < 0.5),
+        "remove": lambda: memory.remove(*sorted(draw.choices(range(len(memory.tokens) + 1), k=2))),
+        "cut_to": lambda: memory.cut_to(draw.randrange(1, len(memory.tokens) + 1)),
+        "replace": lambda: memory.replace(draw.choice(
+            [memory.tokens[:draw.randrange(1, len(memory.tokens) + 1)],
+             memory.tokens[:-1] + some_tokens()])),
+        "rest": memory.rest, "repair": memory.repair,
+    }
+    memory.decode(some_tokens())
+    for _ in range(1500):
+        actions[draw.choice(sorted(actions))]()
+        if memory.tokens and draw.random() < 0.5:
+            generate()
+        if not memory.tokens:
+            memory.decode(some_tokens())
+
+
+def test_a_cache_whose_saved_states_cannot_be_ordered_goes_back_to_the_newest_that_serves():
+    class _StatesWithoutOrder(FakeContext):
+        """Saves each state as an object that compares by identity alone, as an engine's buffer does."""
+
+        def save_state(self):
+            saved = super().save_state()
+            return lambda: saved
+
+        def restore_state(self, state, pos):
+            super().restore_state(state(), pos)
+
+    fake = _StatesWithoutOrder(PLAIN, can_shift=False, can_cut_tail=False)
+    memory, draw = CacheSync(fake), random.Random(3)
+
+    def some_tokens():
+        return [draw.randrange(1, 5) for _ in range(draw.randrange(1, 4))]
+
+    actions = {
+        "decode": lambda: memory.decode(some_tokens()),
+        "cut_to": lambda: memory.cut_to(draw.randrange(len(memory.tokens) + 1)),
+        "hold": lambda: memory.hold(memory.tokens[:draw.randrange(len(memory.tokens) + 1)]
+                                    + some_tokens(), rest_at_cut=draw.random() < 0.7),
+        "pin": lambda: memory.pin(draw.sample(range(len(memory.tokens) + 2), k=2),
+                                  draw.choice(["opening", "exchanges"])),
+        "rest": memory.rest, "repair": memory.repair,
+    }
+    for _ in range(1500):
+        name = draw.choice(sorted(actions))
+        actions[name]()
+        if memory.is_current:
+            assert fake.cache == memory.tokens, name
+    assert fake.edit_count("restore") > 0

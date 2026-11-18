@@ -16,6 +16,7 @@ from llama_chat.conversation_state import ConversationState
 from llama_chat.eviction import Eviction, EVICT_TO_FRACTION_WITHOUT_SHIFT
 from llama_chat.tools import ToolCall
 from tests import internals
+from llama_chat.cache_sync import CacheSync
 
 
 def _n_kept(wrapper):
@@ -604,3 +605,28 @@ def test_a_target_that_drops_a_stretch_of_the_cache_decodes_only_what_its_longes
             rest and same < len(held)) else 0
         assert fake.cache == target, (held, target)
         assert fake.total_prefilled() - decoded_before == len(rest) - kept, (held, target)
+
+
+@pytest.mark.parametrize("limit", [2, 3, 4])
+def test_on_a_cache_that_cannot_shift_the_exchange_limit_evicts_at_most_every_other_message(limit):
+    fake = FakeContext(PLAIN, gen_tokens=2, can_shift=False)
+    w = ChatWrapper(Config(context_size=4000, max_history_exchanges=limit), context=fake)
+    w.begin(opened("s"))
+    evicted = []
+    for i in range(3 * limit):
+        evicted.append(w.inject(f"context {i}").n_evicted_messages > 0)
+        w.wait_idle()
+        assert _n_exchanges(w) <= limit
+    assert any(evicted)
+    assert not any(a and b for a, b in zip(evicted, evicted[1:])), evicted
+
+
+@pytest.mark.parametrize("run", range(1, 13))
+def test_a_dropped_stretch_is_shifted_out_exactly_where_at_least_eight_tokens_after_it_go_on_as_before(run):
+    fake = FakeContext(PLAIN)
+    memory = CacheSync(fake)
+    dropped, kept = [900, 901, 902, 903], list(range(10, 10 + run))
+    memory.decode([1] + dropped + kept + [500, 501])
+    memory.hold([1] + kept + [600], find_dropped_stretch=True)
+    assert fake.cache == [1] + kept + [600]
+    assert (("shift", 1, len(dropped)) in fake.edits) == (run >= 8), fake.edits
