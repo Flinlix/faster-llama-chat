@@ -6,6 +6,8 @@ import pytest
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import PLAIN
+from llama_chat.errors import TemplateRefusedError
+from llama_chat.split_render import split_render
 
 
 def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_to_it():
@@ -109,3 +111,51 @@ def test_tojson_writes_json_as_json_dumps_does_keeping_letters_beyond_ascii_unle
     value = {"zeta": "café 漢", "alpha": [1, {"b": 2.5, "a": None, "c": True}]}
     rendered = compiled("{{ value | tojson" + arguments + " }}").render(value=value)
     assert rendered == json.dumps(value, **{"ensure_ascii": False, **options})
+
+
+def _render_marking_repeated_questions(drops_repeated: bool):
+    """A render that tags a question equal to an earlier one, and writes it, or drops its text where ``drops_repeated``."""
+    def render(messages, declarations):
+        text = "".join(f"<tool>{d['function']['description']}</tool>" for d in declarations or ())
+        asked = []
+        for m in messages:
+            repeated = m["role"] == "user" and m["content"] in asked
+            asked += [m["content"]] if m["role"] == "user" else []
+            body = "" if repeated and drops_repeated else m["content"]
+            text += ("<again>" if repeated else "") + f"<{m['role']}>{body}</{m['role']}>"
+        return text
+    return render
+
+
+_ASKED_TWICE = [{"role": "user", "content": "Same?"}, {"role": "assistant", "content": "Fine."},
+                {"role": "user", "content": "Same?"}]
+
+
+_ANSWERED_TWICE_ALIKE = _ASKED_TWICE + [{"role": "assistant", "content": "Fine."}]
+
+
+_DECLARED_ALIKE = [{"type": "function", "function": {"name": name, "description": "Looks it up."}}
+                   for name in ("weather", "clock")]
+
+
+@pytest.mark.parametrize("messages", [_ASKED_TWICE, _ANSWERED_TWICE_ALIKE],
+                         ids=["a-question-asked-twice", "a-question-and-its-reply-twice"])
+@pytest.mark.parametrize("declarations", [None, _DECLARED_ALIKE], ids=["undeclared", "declared"])
+def test_a_split_where_the_template_compares_texts_places_each_text_in_its_own_place(
+        messages, declarations):
+    render = _render_marking_repeated_questions(drops_repeated=False)
+    split = split_render(render, messages, lambda text: text, declarations, reads_clock=False)
+    assert split.text == render(messages, declarations)
+    places = [split.contents[i] for i in range(len(messages))]
+    assert all(place is not None for place in places)
+    assert [split.text[start:end] for start, end in places] == [m["content"] for m in messages]
+    assert places == sorted(places)
+    own = [split.text[start:end] for start, end in split.own]
+    descriptions = [d["function"]["description"] for d in declarations or ()]
+    assert own == descriptions + [m["content"] for m in messages]
+
+
+def test_a_split_where_the_template_drops_a_repeated_text_is_refused():
+    render = _render_marking_repeated_questions(drops_repeated=True)
+    with pytest.raises(TemplateRefusedError, match="text in its place"):
+        split_render(render, _ASKED_TWICE, lambda text: text, reads_clock=False)
