@@ -464,3 +464,78 @@ def test_a_union_of_more_than_one_type_is_refused_naming_each_type_in_it(annotat
     assert message.startswith("broken(when): a union of ")
     assert all(repr(a) in message for a in named) and "only one type or none" in message.lower()
     assert "NoneType" not in message
+
+
+def test_a_tool_given_neither_a_function_nor_a_description_is_refused_naming_what_it_was_given():
+    with pytest.raises(TypeError, match="a function or its description, not 42"):
+        ToolRegistry().tool(42)
+
+
+def test_every_failure_of_a_call_is_a_result_carrying_its_kind_and_a_message_that_names_it():
+    registry = ToolRegistry()
+
+    @registry.tool("…")
+    def clock(city: str) -> str:
+        raise ValueError(f"no clock in {city}")
+
+    failures = [(ToolCall("nope", {}), "unknown_tool", "'nope'"),
+                (ToolCall("clock", {"city": 7}), "wrong_arguments", "city must be text"),
+                (ToolCall("clock", ["Bonn"]), "wrong_arguments", "['Bonn']"),
+                (ToolCall("clock", {"city": "Bonn"}), "tool_raised", "ValueError: no clock in Bonn")]
+    for call, kind, named in failures:
+        result = registry.call(call)
+        assert set(result) == {"error", "message"} and result["error"] == kind
+        assert named in result["message"]
+
+
+def test_a_callable_that_carries_no_name_at_all_is_refused_and_asked_for_one():
+    class Clock:
+        def __call__(self) -> str:
+            return "12:00"
+
+    for nameless in (functools.partial(lambda: "12:00"), Clock()):
+        registry = ToolRegistry()
+        with pytest.raises(TypeError, match="no name the model could call it by; pass name="):
+            registry.tool(nameless, description="Die Zeit.")
+        assert len(registry) == 0
+
+
+def test_a_bound_method_is_described_by_its_own_docstring():
+    class Calendar:
+        def add(self, title: str) -> str:
+            """Trägt einen Termin ein."""
+            return title
+
+    registry = ToolRegistry()
+    registry.tool(Calendar().add)
+    spec, = registry.specs()
+    assert (spec.name, spec.description) == ("add", "Trägt einen Termin ein.")
+    assert registry.call(ToolCall("add", {"title": "Zahnarzt"})) == "Zahnarzt"
+
+
+def test_parameters_after_a_variadic_one_are_declared_and_checked():
+    registry = ToolRegistry()
+
+    @registry.tool("Nimmt beliebige Argumente.")
+    def spread(*rest, city: str, days: int = 1):
+        return city
+
+    spec, = registry.specs()
+    assert spec.parameters["properties"] == {"city": {"type": "string"},
+                                             "days": {"type": "integer", "default": 1}}
+    assert spec.parameters["required"] == ["city"]
+    assert registry.call(ToolCall("spread", {"city": 5}))["error"] == "wrong_arguments"
+
+
+def test_a_default_that_json_cannot_write_is_left_out_of_the_declaration():
+    unset = object()
+    registry = ToolRegistry()
+
+    @registry.tool("Sagt das Wetter.")
+    def weather(city: str, hours: float = float("nan"), note: str | None = unset) -> str:
+        return city
+
+    spec, = registry.specs()
+    assert spec.parameters["properties"] == {"city": {"type": "string"},
+                                             "hours": {"type": "number"},
+                                             "note": {"type": ["string", "null"]}}
