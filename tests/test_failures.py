@@ -1195,3 +1195,24 @@ def test_a_cache_whose_saved_states_cannot_be_ordered_goes_back_to_the_newest_th
         if memory.is_current:
             assert fake.cache == memory.tokens, name
     assert fake.edit_count("restore") > 0
+
+
+@pytest.mark.parametrize("handed_over", [True, False], ids=["handed-over", "registered"])
+@pytest.mark.parametrize("result", _UNWRITABLE, ids=["date", "nan", "infinity"])
+def test_a_result_that_cannot_be_written_is_told_as_a_failed_call_naming_why(result, handed_over):
+    registry = ToolRegistry()
+    registry.tool(lambda: result, description="Das Datum.", name="clock",
+                  parameters={"type": "object", "properties": {}})
+    w, fake = tool_wrapper()
+    w.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:clock{}"]
+    if handed_over:
+        call, = [e for e in w.reply("welcher Tag?", tool_call_policy="yield")
+                 if isinstance(e, ToolCall)]
+        w.inject_tool_result(call.id, result)
+    else:
+        w.reply("welcher Tag?", tool_call_policy=registry).finish()
+    told, = [json.loads(m["content"]) for m in w.conversation()["messages"] if m["role"] == "tool"]
+    assert told["error"] == "unwritable_result"
+    assert told["message"].startswith("the tool call failed: a tool result must be text or what "
+                                      "JSON can write: ")

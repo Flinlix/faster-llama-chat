@@ -814,3 +814,61 @@ def test_a_shared_beginning_is_the_longest_that_ends_a_tag_without_cutting_anoth
                 expected = max((at for at in range(1, common + 1) if ends_cleanly(text, at)),
                                default=0)
                 assert shared_tags_length(text, other, tags) == expected, (text, common)
+
+
+def _turns_whose_calls_end_with(closing, writes_two_calls=True):
+    """A render with no whitespace whose every call ends with ``closing``, refusing a turn of two calls unless ``writes_two_calls``."""
+    def render(messages, **_options):
+        out = []
+        for m in messages:
+            calls = m.get("tool_calls") or ()
+            if len(calls) > 1 and not writes_two_calls:
+                raise ValueError("one call per turn")
+            body = "".join(f"<c>{call['function']['name']}"
+                           f"{json.dumps(call['function']['arguments'], separators=(',', ':'))}{closing}"
+                           for call in calls)
+            role = m["role"][0]
+            out.append(f"<{role}>{m['content'] or ''}{body}</{role}>")
+        return "".join(out)
+    return render
+
+
+@pytest.mark.parametrize("closing, writes_two_calls, close_text", [
+    ("<c>", False, "<c></a>"),
+    ("X</c>", False, "</c></a>"),
+    ("X</c>", True, "</c>"),
+    ("</c>EX", True, "</c>"),
+], ids=["opening-again", "letter-before-the-tag", "letter-before-the-tag-two-calls",
+        "letters-after-the-tag-two-calls"])
+def test_a_calls_closing_text_runs_from_where_a_tag_starts_to_where_one_ends_in_what_every_call_ends_with(
+        closing, writes_two_calls, close_text):
+    assert extract_call_close_text(_turns_whose_calls_end_with(closing, writes_two_calls), "<c>") \
+        == close_text
+
+
+def _call_written_only_with(arguments_given):
+    """A render that writes a call only where ``arguments_given(arguments)`` is true, and raises where it is ``"refuse"``."""
+    sound = _turns_whose_calls_end_with("</c>")
+
+    def render(messages, **options):
+        written = []
+        for m in messages:
+            calls = []
+            for call in m.get("tool_calls") or ():
+                kept = arguments_given(call["function"]["arguments"])
+                if kept == "refuse":
+                    raise ValueError("no such call")
+                if kept:
+                    calls.append(call)
+            written.append({**m, "tool_calls": calls})
+        return sound(written, **options)
+    return render
+
+
+@pytest.mark.parametrize("arguments_given", [
+    lambda arguments: bool(arguments),
+    lambda arguments: True if arguments else "refuse",
+    lambda arguments: "refuse" if arguments else True,
+], ids=["no-call-without-arguments", "refuses-a-call-without-arguments", "refuses-a-call-with-arguments"])
+def test_a_template_that_writes_only_one_of_the_two_call_probes_has_no_closing_text(arguments_given):
+    assert extract_call_close_text(_call_written_only_with(arguments_given), "<c>") is None
