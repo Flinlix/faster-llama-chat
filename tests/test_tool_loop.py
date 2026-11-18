@@ -26,6 +26,9 @@ from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered
                             newest_turn, system_turn, tool_wrapper, weather_registry,
                             without_ids, rows, numbered_exchanges, two_owed_calls, unbegun_tool_wrapper)
 from tests import internals
+from llama_chat.conversation_state import ConversationState
+from llama_chat.messages import result_message
+from llama_chat.result_cutting import ResultCutting, cut_result
 
 
 def _result_of(fake):
@@ -2590,3 +2593,58 @@ def test_a_result_is_cut_only_once_no_exchange_before_its_own_is_left_to_evict(c
             cuts += 1
             assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant", "tool"], length
     assert cuts
+
+
+_CALLS = [{"id": call_id, "type": "function", "function": {"name": name, "arguments": {}}}
+          for call_id, name in (("call_first", "clock"), ("call_second", "other"))]
+
+
+_ASKED = [{"role": "system", "content": "persona"}, {"role": "user", "content": "los"},
+          {"role": "assistant", "content": "", "tool_calls": _CALLS}]
+
+
+def _length(messages, generation_prompt):
+    """A measure of one token per character of each message's content and its call id, as a template that writes the id counts."""
+    return sum(len(m.get("content") or "") + len(m.get("tool_call_id") or "")
+               for m in messages) + (3 if generation_prompt else 0)
+
+
+def _written_in(room, text):
+    """The first result of a round of two calls as a write into ``room`` leaves it, ``None`` where it is refused, and whether it was listed as cut."""
+    state = ConversationState(messages=[dict(m) for m in _ASKED])
+    cutting = ResultCutting(_length, state, lambda written, n: min(n, len(written)))
+    later = ToolCall("other", {}, "call_second")
+    try:
+        assert not cutting.write(result_message("clock", "call_first", text),
+                                 [(later, "call_second")], room, lambda: False)
+    except ContextOverflowError:
+        return None, False
+    assert state.messages[:-1] == _ASKED
+    return state.messages[-1]["content"], state.results_cut != []
+
+
+def _expected_in(room, text):
+    """What the first result is written as in ``room``, worked out from what write promises: whole where the later result fits empty, else the most kept with room for the later one's note, else the most kept alone."""
+    asked = _length(_ASKED, True)
+
+    def written(first, second):
+        later = [] if second is None else [result_message("other", "call_second", second)]
+        return asked + _length([result_message("clock", "call_first", first), *later], False)
+
+    if written(text, "") <= room:
+        return text
+    for held in (cut_result(text, 0), None):
+        fitting = [k for k in range(len(text) + 1) if written(cut_result(text, k), held) <= room]
+        if fitting:
+            return cut_result(text, max(fitting))
+    return None
+
+
+@pytest.mark.parametrize("length", [1, 9, 40, 120])
+def test_a_result_owed_before_another_is_kept_whole_or_cut_to_the_most_that_leaves_the_later_one_its_room(length):
+    text = "x" * length
+    for room in range(_length(_ASKED, True), _length(_ASKED, True) + length + 100):
+        expected = _expected_in(room, text)
+        written, listed = _written_in(room, text)
+        assert written == expected, (room, written, expected)
+        assert listed == (expected not in (None, text)), room
