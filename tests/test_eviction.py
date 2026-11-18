@@ -630,3 +630,24 @@ def test_a_dropped_stretch_is_shifted_out_exactly_where_at_least_eight_tokens_af
     memory.hold([1] + kept + [600], find_dropped_stretch=True)
     assert fake.cache == [1] + kept + [600]
     assert (("shift", 1, len(dropped)) in fake.edits) == (run >= 8), fake.edits
+
+
+def _assert_counts_what_it_says(refusal: ContextOverflowError, limit: int) -> None:
+    """``refusal`` carries the tokens needed and the ``limit`` it states, the first over the second."""
+    needed, available = refusal.needed_tokens, refusal.available_tokens
+    assert isinstance(needed, int) and available == limit and needed > limit, (needed, available)
+    assert f"needs {needed} tokens but {available} fit" in str(refusal)
+
+
+@pytest.mark.parametrize("action", ["begin", "inject"])
+def test_a_conversation_that_cannot_fit_once_dropped_is_refused_with_the_tokens_it_needs_and_the_room(action):
+    fake = FakeContext(PLAIN)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=0.8), context=fake)
+    w.begin(opened("s", [{"role": "user", "content": "q"}]))
+    with pytest.raises(ContextOverflowError, match="no user message follows") as refused:
+        if action == "begin":
+            w.begin(opened("s", [{"role": "assistant", "content": "x" * 200}] * 3))
+        else:
+            for _ in range(8):
+                w.inject("y" * 150, role="assistant")
+    _assert_counts_what_it_says(refused.value, w.config.evict_above_tokens)
