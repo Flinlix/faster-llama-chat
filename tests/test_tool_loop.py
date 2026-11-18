@@ -2758,3 +2758,32 @@ def test_every_result_cut_is_logged_at_info_with_how_much_of_it_was_kept(caplog)
     lines = [record.getMessage() for record in caplog.records
              if record.levelno == logging.INFO and record.name.startswith("llama_chat")]
     assert any(" of 3000 characters" in line for line in lines), lines
+
+
+def _tokens_with(wrapper, fake, results: list[dict]) -> int:
+    """How many tokens the cache holds with ``results`` written after what it holds now, and the generation prompt after them."""
+    def render(messages, prompt):
+        return fake.stated_render(messages, internals.declarations(wrapper), generation_prompt=prompt,
+                                  for_tools=internals.uses_tool_template(wrapper))
+
+    messages = internals.rendered_messages(wrapper)
+    held, whole = render(messages, False), render(messages + results, True)
+    assert whole.startswith(held)
+    return len(fake.cache) + len(fake.tokenize(whole[len(held):]))
+
+
+def test_a_result_keeps_its_turn_open_exactly_where_it_fits_cut_to_nothing_with_no_room_kept_for_later_ones():
+    """Room for the notes of the results still owed is kept only where this one fits beside them; where only this one fits, it is written, and where not even it fits, the turn closes."""
+    seen = set()
+    for size in range(160, 240, 2):
+        wrapper, fake, (first, second) = _two_calls_owed(context_size=size)
+        room = wrapper.config.context_size - wrapper.config.min_reply_tokens
+        note = cut_result("x" * 5000, 0)
+        alone = _tokens_with(wrapper, fake, [result_message("clock", first.id, note)])
+        beside = _tokens_with(wrapper, fake, [result_message("clock", first.id, note),
+                                              result_message("other", second.id, note)])
+        wrapper.inject_tool_result(first.id, "x" * 5000)
+        assert wrapper.turn_open == (alone <= room), size
+        assert wrapper.pending_calls == ([second] if alone <= room else [])
+        seen.add("closed" if room < alone else "this one only" if room < beside else "both")
+    assert seen == {"closed", "this one only", "both"}

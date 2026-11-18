@@ -1059,3 +1059,58 @@ def test_a_begin_cuts_an_older_result_only_once_every_newer_one_of_its_exchange_
                 assert held[newer] == cut_result(texts[newer], 0), (context_size, held)
                 older_cut += 1
     assert older_cut, "no context size made an older result be cut"
+
+
+CLOCK = ToolSpec("clock", "time", {"type": "object", "properties": {}})
+
+
+def _calling_clock(*ids: str) -> dict:
+    return {"role": "assistant", "content": None, "tool_calls": [
+        {"id": i, "type": "function", "function": {"name": "clock", "arguments": "{}"}} for i in ids]}
+
+
+def _clock_result(call_id: str, text: str) -> dict:
+    return {"role": "tool", "tool_call_id": call_id, "content": text}
+
+
+@pytest.mark.parametrize("newest", [
+    [_calling_clock("a"), _clock_result("a", "A" * 2000), {"role": "assistant", "content": "fertig"}],
+    [_calling_clock("a", "b"), _clock_result("a", "A" * 2000), _clock_result("b", "")],
+    [_calling_clock("a", "b"), _clock_result("a", "A" * 2000), _clock_result("b", ""), {"role": "assistant", "content": "fertig"}],
+], ids=["answered", "an-empty-result-after-it", "an-empty-result-and-an-answer-after-it"])
+def test_a_begin_cuts_the_long_result_of_its_newest_exchange_wherever_it_stands_and_changes_nothing_else(newest):
+    """An answer or an empty result after the long one is passed over, not taken for the end of the results to cut, and an empty result is not cut."""
+    history = opened("persona", [{"role": "user", "content": "wie spät?"}, *newest])
+    wrapper = ChatWrapper(Config(context_size=400), context=FakeContext(JSON_TOOLS))
+    report = wrapper.begin(history, tools=[CLOCK])
+    assert [call.id for call in report.tool_results_cut] == ["a"]
+    kept = wrapper.conversation()["messages"]
+    assert len(kept) == len(history)
+    for given, held in zip(history, kept):
+        if given.get("tool_call_id") == "a":
+            assert held["content"].endswith(" of 2000 characters kept)")
+            assert "A" * 10 in held["content"]
+        else:
+            assert held.get("content") == given.get("content")
+    wrapper.reply("und?").finish()
+
+
+def test_a_begin_cuts_no_result_of_an_exchange_before_its_newest():
+    """Where the newest exchange's results cut to nothing still leave too little room, an older exchange's result is never cut to make it; the begin keeps less of the history, or refuses."""
+    cases = [(min_reply_tokens, old, new) for min_reply_tokens in (320, 340)
+             for old in range(20, 301, 20) for new in (0, 1, 10, 50)]
+    for min_reply_tokens, old, new in cases:
+        history = opened("persona", [
+            {"role": "user", "content": "q0"}, _calling_clock("c0"), _clock_result("c0", "A" * old),
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "q1"}, _calling_clock("c1"), _clock_result("c1", "B" * new)])
+        # The room beside the reply is below the half of the context a begin keeps history in.
+        wrapper = ChatWrapper(Config(context_size=600, min_reply_tokens=min_reply_tokens),
+                              context=FakeContext(JSON_TOOLS))
+        try:
+            report = wrapper.begin(history, tools=[CLOCK])
+        except ContextOverflowError:
+            continue
+        assert {call.id for call in report.tool_results_cut} <= {"c1"}, (min_reply_tokens, old, new)
+        kept = wrapper.conversation()["messages"]
+        assert all(m["content"] == "A" * old for m in kept if m.get("tool_call_id") == "c0")
