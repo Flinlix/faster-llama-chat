@@ -1,10 +1,11 @@
 """Reading a call back out of what a model generated."""
 
+import json
 import pytest
 
 from llama_chat.call_parsing import parse_calls
 from llama_chat.template import CallBody
-from llama_chat.tools import ToolCall
+from llama_chat.tools import ToolCall, MAX_ARGUMENT_DEPTH
 from llama_chat.testing.invented_templates import CALL_BODY
 
 
@@ -146,7 +147,7 @@ def test_arguments_that_are_no_object_make_the_call_unreadable(raw):
 
 
 _NESTED_TOO_DEEPLY = "[" * 150 + "]" * 150
-_NESTED_PAST_THE_RECURSION_LIMIT = "[" * 3000 + "]" * 3000
+_NESTED_PAST_THE_RECURSION_LIMIT = "[" * 20000 + "]" * 20000
 
 
 @pytest.mark.parametrize("deep", [_NESTED_TOO_DEEPLY, _NESTED_PAST_THE_RECURSION_LIMIT])
@@ -343,3 +344,171 @@ def test_a_json_call_with_a_key_twice_is_unreadable(body):
 @pytest.mark.parametrize("value", ["o'", "it's", "'"])
 def test_a_value_that_holds_the_closing_quote_is_read_as_written(value):
     assert parse_calls("fn:say{text:" + value + "}", CALL_BODY, "fn:")[0].arguments == {"text": value}
+
+
+@pytest.mark.parametrize("lead_in", ["<lead>", "\n<lead>\n", "call "])
+def test_a_json_call_after_a_lead_in_that_is_no_json_is_read_after_that_lead_in(lead_in):
+    body = lead_in + '{"name": "clock", "arguments": {"zone": "CET"}}'
+    assert parse_calls(body, None, lead_in, json_keys=_JSON_KEYS) == [
+        ToolCall("clock", {"zone": "CET"})]
+
+
+@pytest.mark.parametrize("written", ['{"name": "f", "arguments": {"a": %s}}', "fn:f{a:%s}"],
+                         ids=["json", "the-model-s-own"])
+def test_arguments_nested_as_deep_as_allowed_are_read_and_one_level_deeper_are_refused(written):
+    json_keys = _JSON_KEYS if written.startswith("{") else None
+
+    def nested(levels):
+        """Arguments nesting ``levels`` levels: their object, then lists."""
+        return written % ("[" * (levels - 1) + "]" * (levels - 1))
+    call, = parse_calls(nested(MAX_ARGUMENT_DEPTH), CALL_BODY, "fn:", json_keys=json_keys)
+    assert call.name == "f"
+    with pytest.raises(ValueError, match="nest"):
+        parse_calls(nested(MAX_ARGUMENT_DEPTH + 1), CALL_BODY, "fn:", json_keys=json_keys)
+
+
+#   x__as_json_calls__mutmut_25, x__as_json_calls__mutmut_26, x__as_json_calls__mutmut_29
+@pytest.mark.parametrize("entry", [{"no": "call"}, "clock", [], {"name": ""},
+                                   {"name": "clock", "other": True}, True])
+def test_an_entry_of_a_batch_that_is_no_call_is_reported_with_no_name_and_as_it_was_written(entry):
+    good = {"name": "clock", "arguments": {}}
+    calls = parse_calls(json.dumps([good, entry]), None, json_keys=_JSON_KEYS)
+    assert calls[0] == ToolCall("clock", {})
+    unreadable = calls[1]
+    assert (unreadable.name, unreadable.arguments, unreadable.status) == ("", {}, "unreadable")
+    assert unreadable.text and json.loads(unreadable.text) == entry
+
+
+@pytest.mark.parametrize("written, names", [('{"name": "clock"}', ["clock"]),
+                                            ('[{"name": "clock"}, {"name": "uhr"}]', ["clock", "uhr"])])
+def test_a_json_call_that_writes_no_arguments_is_a_call_with_none(written, names):
+    assert parse_calls(written, None, json_keys=_JSON_KEYS) == [ToolCall(name, {}) for name in names]
+
+
+_WITH_ID = {
+    "json": CallBody(name_close="[PARAMS]{", key_open='"', key_close='": ', pair_sep=', "',
+                     body_close="}", empty_close="}", quote_open='"', quote_close='"',
+                     arguments_json=True, id_open="[ID]"),
+    "keyed": CallBody(name_close='">', key_open="<", key_close=">", pair_sep="</{key}><",
+                      body_close="</{key}>", empty_close="", key_in_close=True, id_open="[ID]"),
+    "pairs": CallBody(name_close="(", key_open="", key_close="=", pair_sep=", ",
+                      body_close=")", empty_close=")", quote_open="'", quote_close="'",
+                      id_open="[ID]"),
+}
+
+
+_WRITTEN_WITH_ID = {"json": 'clock[ID]{id}[PARAMS]{{"zone": "CET"}}',
+                    "keyed": 'clock[ID]{id}"><zone>CET</zone>',
+                    "pairs": "clock[ID]{id}(zone='CET')"}
+
+
+@pytest.mark.parametrize("spelling", sorted(_WITH_ID))
+def test_the_id_a_model_writes_after_a_call_s_name_comes_back_in_every_spelling_of_its_arguments(
+        spelling):
+    body = _WRITTEN_WITH_ID[spelling].format(id="a1")
+    assert parse_calls(body, _WITH_ID[spelling]) == [ToolCall("clock", {"zone": "CET"}, "a1")]
+
+
+#   x__as_delimited_call__mutmut_10, x__as_delimited_call__mutmut_13
+@pytest.mark.parametrize("note", ["[ID]", "[PARAMS]{", "[ID]x[PARAMS]{", "[PARAMS]{[ID]", "a[ID]b[PARAMS]{c[ID]"])
+@pytest.mark.parametrize("written_id", ["a1", ""])
+def test_an_argument_holding_the_delimiters_of_a_call_s_id_and_name_is_read_as_text(note, written_id):
+    body = "clock" + (f"[ID]{written_id}" if written_id else "") + "[PARAMS]" + json.dumps({"note": note})
+    assert parse_calls(body, _WITH_ID["json"]) == [ToolCall("clock", {"note": note}, written_id)]
+
+
+_TEXT_QUOTED_NO_JSON = CallBody(name_close="{", key_open="", key_close=":", pair_sep=",",
+                                body_close="}", empty_close="}", quote_open='"', quote_close='"')
+
+
+@pytest.mark.parametrize("literal", ["true", "false", "null"])
+def test_arguments_of_a_format_that_is_no_json_are_read_in_that_format_where_they_also_parse_as_json(
+        literal):
+    schema = {"say": {"type": "object", "properties": {"text": {"type": "string"}}}}
+    body = f'say{{"text":{literal}}}'
+    assert parse_calls(body, _TEXT_QUOTED_NO_JSON, parameters=schema) == [
+        ToolCall("say", {"text": literal})]
+
+
+@pytest.mark.parametrize("arguments, written", [({}, ""), ({"city": "Bonn"}, "city:'Bonn'"),
+                                                ({"city": "Bonn", "days": 2}, "city:'Bonn',days:2")],
+                         ids=["no-arguments", "one", "two"])
+def test_a_delimited_call_keeps_the_id_the_model_wrote_with_or_without_arguments(arguments, written):
+    with_id = CallBody(name_close="{", id_open="[ID]", key_open="", key_close=":", pair_sep=",",
+                       body_close="}", empty_close="}", quote_open="'", quote_close="'")
+    assert parse_calls("clock[ID]call-7{" + written + "}", with_id) == [
+        ToolCall("clock", arguments, id="call-7")]
+
+
+@pytest.mark.parametrize("body", ["fn:say{ text:'hi'}", "fn:say{  text:'hi' }",
+                                  "fn:say{\n text:'hi',\n n:3\n}"])
+def test_whitespace_around_the_arguments_is_not_part_of_a_key_or_a_value(body):
+    call, = parse_calls(body, CALL_BODY, "fn:")
+    assert call.arguments == ({"text": "hi", "n": 3} if "n:3" in body else {"text": "hi"})
+
+
+def _refused_or(body: str, call_body: CallBody, arguments: dict, lead_in: str = "") -> None:
+    """``body`` is refused, or read with exactly ``arguments``: never with a key or a value cut short or made up."""
+    try:
+        calls = parse_calls(body, call_body, lead_in)
+    except ValueError:
+        return
+    assert [call.arguments for call in calls] == [arguments]
+
+
+@pytest.mark.parametrize("body, arguments", [("fn:f{a:1", {"a": 1}),
+                                             ("fn:say{text:'hi'", {"text": "hi"})],
+                         ids=["number", "quoted"])
+def test_a_call_missing_its_closing_is_never_read_with_its_last_value_cut(body, arguments):
+    _refused_or(body, CALL_BODY, arguments, "fn:")
+
+
+_LINES = CallBody(name_close=">\n<", key_open="arg=", key_close=">\n",
+                  pair_sep="\n</arg>\n<arg=", body_close="\n</arg>\n</fn>\n",
+                  empty_close="/fn>\n")
+
+
+@pytest.mark.parametrize("body, call_body, arguments", [
+    ('clock">zone>CET</zone>', _KEYED, {"zone": "CET"}),
+    ('clock">xa>1</a>', _KEYED, {"xa": 1}),
+    ("f>\n<city>\nBonn\n</arg>\n</fn>\n", _LINES, {"city": "Bonn"}),
+], ids=["keyed", "keyed-closed-by-its-tail", "delimited"])
+def test_a_first_key_written_without_its_opening_is_never_read_under_a_name_cut_short(
+        body, call_body, arguments):
+    _refused_or(body, call_body, arguments)
+
+
+@pytest.mark.parametrize("after_name", ["", " ", "\n\n", " \t\n"])
+def test_a_call_with_no_arguments_and_whitespace_after_its_name_reads_with_none(after_name):
+    assert parse_calls('clock">' + after_name, _KEYED) == [ToolCall("clock", {})]
+
+
+def test_text_after_the_last_keyed_argument_is_refused_naming_that_text():
+    with pytest.raises(ValueError, match="text after the last argument: 'unclosed'"):
+        parse_calls('clock"><zone>CET</zone><n>3</n><unclosed', _KEYED)
+
+
+@pytest.mark.parametrize("after_last", ["", "\n", "  \n"])
+def test_a_last_value_closed_by_a_tag_with_whitespace_after_it_is_read_whatever_whitespace_follows(
+        after_last):
+    closed_by_line = CallBody(name_close='">', key_open="<", key_close=">", pair_sep="</{key}>\n<",
+                              body_close="</{key}>\n", empty_close="", key_in_close=True)
+    assert parse_calls('clock"><zone>CET</zone>\n<n>3</n>' + after_last, closed_by_line) == [
+        ToolCall("clock", {"zone": "CET", "n": 3})]
+
+
+@pytest.mark.parametrize("arguments", [
+    {"a": "x</b><y", "b": "z</a><w"},       # each holds the other's separator
+    {"a": "p</a>q", "b": "z"},              # one holds its own closing
+    {"a": "1", "b": "</a><", "c": "</b><</a><"},
+], ids=["others-separator", "own-closing", "three"])
+def test_a_keyed_value_may_hold_the_closing_or_separator_of_any_key(arguments):
+    """Each value runs to the first separator written for its own key, as the template writes it."""
+    body = "clock\">" + "".join(f"<{k}>{v}</{k}>" for k, v in arguments.items())
+    call, = parse_calls(body, _KEYED)
+    assert call.arguments == {k: (int(v) if v.isdigit() else v) for k, v in arguments.items()}
+
+
+@pytest.mark.parametrize("after_last", ["Xb>2|</b>|", "X|<b>2|</b>|"])
+def test_no_argument_is_read_out_of_text_after_the_last_member(after_last):
+    _refused_or('f">|<a>1|</a>|' + after_last, _ELEMENTS, {"a": 1})
