@@ -578,3 +578,29 @@ def test_beside_an_open_turn_an_eviction_brings_the_conversation_down_to_what_it
             beside = alone + int((limit - alone) * EVICT_TO_FRACTION_WITHOUT_SHIFT) if alone > bound else bound
             assert eviction.drop_bound(limit, False) == bound
             assert eviction.drop_bound(limit, True) == beside, (state.messages, limit)
+
+
+def test_a_target_that_drops_a_stretch_of_the_cache_decodes_only_what_its_longest_kept_run_leaves():
+    from llama_chat.cache_sync import CacheSync
+    from llama_chat.sequences import common_prefix_length
+    draw = random.Random(0)
+    for _ in range(1000):
+        # Runs and repeated pieces, so that the stretch kept can be found at several places.
+        held = [token for _ in range(draw.randrange(1, 8))
+                for token in draw.choice(([5], [6], [5, 6], [5, 5, 6])) * draw.randrange(1, 10)]
+        start = draw.randrange(len(held))
+        end = draw.randrange(start + 1, len(held) + 1)
+        target = held[:start] + held[end:] + [draw.choice((5, 6)) for _ in range(draw.randrange(4))]
+        fake = FakeContext(PLAIN)
+        memory = CacheSync(fake)
+        memory.decode(held)
+        decoded_before = fake.total_prefilled()
+        memory.hold(target, find_dropped_stretch=True)
+        same = common_prefix_length(held, target)
+        rest = target[same:]
+        # The longest run of the target's rest held after ``same``, if long enough to be searched for.
+        runs = [common_prefix_length(held[at:], rest) for at in range(same + 1, len(held))]
+        kept = max((run for run in runs if run >= min(8, len(rest))), default=0) if (
+            rest and same < len(held)) else 0
+        assert fake.cache == target, (held, target)
+        assert fake.total_prefilled() - decoded_before == len(rest) - kept, (held, target)

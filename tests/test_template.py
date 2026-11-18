@@ -1,5 +1,6 @@
 """What a template's fragments are read for: a message's text as the template writes it, and the tags around a reply."""
 
+import json
 import pytest
 
 from llama_chat.resolved_template import ResolvedTemplate
@@ -93,3 +94,18 @@ def test_a_reply_closed_by_nothing_on_a_template_that_refuses_a_second_question_
         "{{ raise_exception('one question only') }}{%- endif -%}"))
     with pytest.raises(ValueError, match="writes nothing after a reply"):
         ResolvedTemplate(FakeContext(one_question))
+
+
+@pytest.mark.parametrize("arguments, options", [
+    ("", {}),
+    ("(ensure_ascii=true)", {"ensure_ascii": True}),
+    ("(indent=4)", {"indent": 4}),
+    ("(separators=(',', ':'))", {"separators": (",", ":")}),
+    ("(sort_keys=true)", {"sort_keys": True}),
+])
+def test_tojson_writes_json_as_json_dumps_does_keeping_letters_beyond_ascii_unless_asked(
+        arguments, options):
+    from llama_chat.model_template import compiled
+    value = {"zeta": "café 漢", "alpha": [1, {"b": 2.5, "a": None, "c": True}]}
+    rendered = compiled("{{ value | tojson" + arguments + " }}").render(value=value)
+    assert rendered == json.dumps(value, **{"ensure_ascii": False, **options})
