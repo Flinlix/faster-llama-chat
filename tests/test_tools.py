@@ -539,3 +539,74 @@ def test_a_default_that_json_cannot_write_is_left_out_of_the_declaration():
     assert spec.parameters["properties"] == {"city": {"type": "string"},
                                              "hours": {"type": "number"},
                                              "note": {"type": ["string", "null"]}}
+
+
+def test_every_list_and_dict_that_fits_its_parameter_reaches_the_tool_as_given():
+    registry, given = ToolRegistry(), []
+
+    @registry.tool("…")
+    def store(anything: list, mapping: dict, counts: list[int], hours: dict[str, float],
+              groups: dict[str, list[int]]) -> str:
+        given.append((anything, mapping, counts, hours, groups))
+        return "ok"
+
+    arguments = {"anything": [1, "a", None], "mapping": {"a": [1]}, "counts": [1, 2],
+                 "hours": {"a": 1.5, "b": 2}, "groups": {"x": [3], "y": []}}
+    assert registry.call(ToolCall("store", arguments)) == "ok"
+    assert given == [tuple(arguments.values())]
+
+
+@pytest.mark.parametrize("annotation, value, kind", [
+    (list, "x", "a list"), (list[int], "x", "a list"), (list[int], {"a": 1}, "a list"),
+    (dict, [1], "an object"), (dict[str, int], [1], "an object"), (dict[str, int], "x", "an object")])
+def test_a_value_of_the_wrong_kind_of_container_is_refused_naming_the_argument_and_its_kind(
+        annotation, value, kind):
+    ran = []
+
+    def store(when):
+        ran.append(when)
+    store.__annotations__ = {"when": annotation}
+    registry = ToolRegistry()
+    registry.tool(store, description="…")
+    result = registry.call(ToolCall("store", {"when": value}))
+    assert result == {"error": "wrong_arguments", "message": f"when must be {kind}, not {value!r}"}
+    assert ran == []
+
+
+@pytest.mark.parametrize("annotation, schema", [
+    (Literal["short", "long"], {"type": "string", "enum": ["short", "long"]}),
+    (Literal[1, 2], {"type": "integer", "enum": [1, 2]}),
+    (Literal["short", 3], {"enum": ["short", 3]}),
+    (Literal[1, True], {"enum": [1, True]}),
+    (Literal["short", "long", 3, True, None], {"enum": ["short", "long", 3, True, None]})])
+def test_choices_of_several_kinds_are_declared_by_their_values_alone(annotation, schema):
+    def pick(style):
+        ...
+    pick.__annotations__ = {"style": annotation}
+    registry = ToolRegistry()
+    registry.tool(pick, description="…")
+    assert registry.specs()[0].parameters["properties"]["style"] == schema
+
+
+def test_a_bare_list_and_a_bare_dict_are_declared_as_an_array_and_an_object_of_anything():
+    registry = ToolRegistry()
+
+    @registry.tool("…")
+    def store(anything: list, mapping: dict):
+        ...
+
+    assert registry.specs()[0].parameters["properties"] == {
+        "anything": {"type": "array"}, "mapping": {"type": "object"}}
+
+
+@pytest.mark.parametrize("annotation, key", [(dict[int, str], int), (dict[float, list[str]], float)])
+def test_a_dict_whose_keys_are_not_text_is_refused_naming_the_key_type(annotation, key):
+    def broken(when):
+        ...
+    broken.__annotations__ = {"when": annotation}
+    with pytest.raises(TypeError) as refused:
+        ToolRegistry().tool(broken, description="...")
+    message = str(refused.value)
+    assert message.startswith(f"broken(when): a dict whose keys are {key!r} is not a type this "
+                              "can describe")
+    assert "keys are text" in message.lower() and "pass parameters=" in message
