@@ -395,3 +395,72 @@ def test_a_cut_of_a_text_that_fits_whole_keeps_all_of_it_wherever_the_guess_lies
     for total in [*range(90), 300, 1000]:
         kept = _kept_by_every_guess(total, total)
         assert all(type(n) is int and n == total for n in kept.values()), (total, kept)
+
+
+def test_an_annotation_is_described_by_its_text_notes_alone_joined_by_spaces():
+    registry = ToolRegistry()
+
+    @registry.tool("Das Wetter.")
+    def weather(city: Annotated[str, "the city", "as the post writes it"],
+                days: Annotated[int, 7]):
+        ...
+
+    assert registry.specs()[0].parameters["properties"] == {
+        "city": {"type": "string", "description": "the city as the post writes it"},
+        "days": {"type": "integer"},
+    }
+
+
+def test_every_choice_of_a_literal_reaches_the_tool_as_it_was_written():
+    choices = ["short", "long", 3, True, None]
+    registry, given = ToolRegistry(), []
+
+    @registry.tool("…")
+    def pick(style: Literal["short", "long", 3, True, None]) -> str:
+        given.append(style)
+        return "ok"
+
+    assert [registry.call(ToolCall("pick", {"style": c})) for c in choices] == ["ok"] * len(choices)
+    assert given == choices and [type(g) for g in given] == [type(c) for c in choices]
+
+
+def test_an_optional_choice_admits_null_among_its_choices():
+    registry = ToolRegistry()
+
+    @registry.tool("…")
+    def pick(style: Optional[Literal["short", "long"]], unit: _Unit | None = None):
+        ...
+
+    properties = registry.specs()[0].parameters["properties"]
+    assert properties["style"] == {"type": ["string", "null"], "enum": ["short", "long", None]}
+    assert properties["unit"] == {"type": ["string", "null"],
+                                  "enum": ["celsius", "fahrenheit", None], "default": None}
+
+
+@pytest.mark.parametrize("annotation, shown", [
+    (complex, repr(complex)), (set[int], repr(set[int])), (None, "no annotation")])
+def test_a_parameter_that_cannot_be_described_is_refused_naming_its_annotation(annotation, shown):
+    def broken(when):
+        ...
+    if annotation is not None:
+        broken.__annotations__ = {"when": annotation}
+    with pytest.raises(TypeError) as refused:
+        ToolRegistry().tool(broken, description="...")
+    message = str(refused.value)
+    assert message.startswith("broken(when): ") and "is not a type this can describe" in message
+    assert shown.lower() in message.lower()
+    assert ("no annotation" in message.lower()) == (annotation is None)
+
+
+@pytest.mark.parametrize("annotation", [int | str, Optional[int | str], int | list[str] | None])
+def test_a_union_of_more_than_one_type_is_refused_naming_each_type_in_it(annotation):
+    def broken(when):
+        ...
+    broken.__annotations__ = {"when": annotation}
+    with pytest.raises(TypeError) as refused:
+        ToolRegistry().tool(broken, description="...")
+    message = str(refused.value)
+    named = [a for a in annotation.__args__ if a is not type(None)]
+    assert message.startswith("broken(when): a union of ")
+    assert all(repr(a) in message for a in named) and "only one type or none" in message.lower()
+    assert "NoneType" not in message
