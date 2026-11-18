@@ -159,3 +159,18 @@ def test_a_loop_of_the_reply_text_that_makes_no_progress_is_named_in_its_error(r
         run()
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
     assert loop != "None" and len(loop.split()) >= 2
+
+
+def test_a_loop_of_the_thought_filter_that_makes_no_progress_is_named_in_its_error(monkeypatch):
+    class Stalling(LoopVariant):
+        """A variant whose measure never shrinks, as a loop with a fault would give it."""
+
+        def passes(self, measure):
+            super().passes(0)
+
+    monkeypatch.setattr(llama_chat.reply_text, "LoopVariant", Stalling)
+    reply = ReplyText(Reasoning("<thought>", "</thought>", "", ""), "", None, "", [])
+    with pytest.raises(InternalError) as raised:
+        reply.feed("<thought>x</thought>y")
+    loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
+    assert loop != "None" and len(loop.split()) >= 2

@@ -675,3 +675,31 @@ def _one_exchange_render(messages, generation_prompt=False, reasoning=None, **_o
 def test_the_tags_of_a_template_that_writes_one_exchange_are_read_with_reasoning_off():
     found = extract_fragments(_one_exchange_render, ("<u>", "<a>", "<r/>"))
     assert (found.user_prefix, found.assistant_prefix, found.assistant_suffix) == ("<u>", "<a>", "")
+
+
+def _thought_after_reply_tag_render(reply_tag):
+    """A render that writes a reply's thought straight after ``reply_tag``, with no tag of its own before it, and closes it with ``</r>``."""
+    def written(m):
+        if m["role"] != "assistant":
+            return f"<{m['role'][0]}>{m['content']}"
+        thought = m.get("reasoning_content")
+        return reply_tag + (f"{thought}</r>" if thought else "") + f"{m['content']}"
+
+    def render(messages, generation_prompt=False, reasoning=None, **_options):
+        return "".join(written(m) for m in messages) + (reply_tag if generation_prompt else "")
+    return render
+
+
+@pytest.mark.parametrize("reply_tag, tags, thought_tags", [
+    # The reply's tag is the only tag before the thought, at the turn's very start.
+    ("<a>", ("<u>", "<a>", "</r>"), ("<a>", "</r>")),
+    # A tag written twice before the thought opens it from its last place.
+    ("<n>reply<n>", ("<u>", "<n>", "</r>"), ("<n>", "</r>")),
+    # A model with no tags of its own has no tag to open a thought with.
+    ("<a>\n", (), None),
+])
+def test_a_thought_written_straight_after_the_replys_tag_opens_with_the_last_of_the_models_tags_before_it(
+        reply_tag, tags, thought_tags):
+    render = _thought_after_reply_tag_render(reply_tag)
+    found = extract_reasoning(render, extract_fragments(render, tags), None, tags)
+    assert (found and (found.thought_open, found.thought_close)) == thought_tags

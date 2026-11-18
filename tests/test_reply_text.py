@@ -1,5 +1,6 @@
 """Filtering a reply's text: stop strings, thoughts and channel headers."""
 
+import re
 import random
 import pytest
 
@@ -176,3 +177,19 @@ def test_an_answer_opening_written_in_tags_and_text_after_a_possible_thought_is_
     shown = _fed_as_tokens(reply, [("<|ch|>", True), ("final", False), ("<|msg|>", True),
                                    ("Antwort.", False)], spans)
     assert shown == reply.answer == "Antwort."
+
+
+def test_the_thought_count_is_the_number_of_pieces_that_hold_part_of_a_thought():
+    tags = Reasoning("<thought>", "</thought>", "", "")
+    text = "a<thought>x</thought>b<thought>y</thought>c<tho"
+    spans = [(match.start(), match.end()) for match in re.finditer("<thought>.*?</thought>", text)]
+    rng = random.Random(11)
+    for _ in range(2000):
+        cuts = sorted(rng.sample(range(1, len(text)), rng.randint(1, 12)))
+        bounds = list(zip([0, *cuts], [*cuts, len(text)]))
+        reply = ReplyText(tags, "", None, "", [])
+        for i, j in bounds:
+            reply.feed(text[i:j])
+        reply.finish("end_of_turn")
+        holding = sum(any(i < stop and start < j for start, stop in spans) for i, j in bounds)
+        assert reply.thought_pieces == holding, bounds
