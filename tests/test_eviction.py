@@ -1,6 +1,7 @@
 """The two eviction limits, the token threshold and the exchange limit: which exchanges go, when, and what a cache that cannot shift does instead."""
 
 
+import random
 import pytest
 
 from llama_chat.config import Config
@@ -10,6 +11,10 @@ from tests.chat_messages import opened, after_system
 from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import assert_consistent, held_text, rows
+from llama_chat.conversation_state import ConversationState
+from llama_chat.eviction import Eviction
+from llama_chat.tools import ToolCall
+from tests import internals
 
 
 def _n_kept(wrapper):
@@ -379,3 +384,63 @@ def test_an_injected_message_that_evicts_decodes_no_more_than_one_that_does_not(
     assert evicting and keeping
     assert max(evicting) <= max(keeping), (evicting, keeping)
     assert_consistent(w, fake)
+
+
+def test_an_eviction_drops_the_fewest_oldest_exchanges_that_bring_the_conversation_within_its_bound():
+    """Whatever each exchange takes: at least ``at_least`` go, no more than the bound needs, or every one that can go."""
+    shapes = random.Random(14)
+    for _ in range(100):
+        sizes = [shapes.randint(1, 80) for _ in range(shapes.randint(2, 10))]
+        messages = [{"role": "system", "content": "s"}] + [
+            message for n, size in enumerate(sizes) for message in (
+                {"role": "user", "content": f"q{n}"}, {"role": "assistant", "content": "y" * size})]
+        state = ConversationState(messages=list(messages))
+        eviction = Eviction(None, Config(), True, state, measure=lambda kept, prompted: 0)
+
+        def length(state=state):
+            return sum(len(message["content"]) for message in state.messages)
+
+        for newest_too in (False, True):
+            can_go = len(sizes) - (0 if newest_too else 1)
+            after = [sum(len(m["content"]) for m in messages[:1] + messages[1 + 2 * k:])
+                     for k in range(can_go + 1)]
+            # Each length an eviction can leave, and one below it: every place the fewest changes.
+            for bound in sorted({at + step for at in after for step in (-1, 0)}):
+                for at_least in range(can_go + 2):
+                    if not at_least and after[0] <= bound:
+                        continue            # no caller searches where nothing is over
+                    if after[-1] > bound or can_go <= at_least:
+                        fewest = can_go
+                    else:
+                        fewest = min(k for k in range(at_least, can_go + 1) if after[k] <= bound)
+                    state.messages[:] = messages
+                    went = eviction._drop_oldest_exchanges(length, bound, at_least, newest_too)
+                    assert state.messages == messages[:1] + messages[1 + 2 * fewest:], \
+                        (sizes, newest_too, bound, at_least)
+                    assert went == (fewest > 0)
+
+
+@pytest.mark.counts_work
+def test_injected_messages_that_evict_turns_that_called_tools_render_only_the_newest_exchanges():
+    """Each drop in a window leaves the places of the newest exchanges standing, so the next render is of them alone."""
+    fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Answer.")
+    w = ChatWrapper(Config(context_size=3000, evict_above_fraction=0.5, min_reply_tokens=8),
+                    context=fake)
+    w.begin(opened("s"))
+    largest, evicted = [], 0
+    for i in range(30):
+        fake.call_script = ["fn:clock{}"]
+        call, = [step for step in w.reply(f"Wie spät {i}?", tool_call_policy="yield")
+                 if isinstance(step, ToolCall)]
+        w.inject_tool_result(call.id, "12:00")
+        w.reply(tool_call_policy="yield").finish()
+        before = len(fake.rendered)
+        evicted += w.inject(f"Notiz {i} " + "n" * 20).n_evicted_messages
+        evicted += w.inject(f"Gesagt {i} " + "g" * 20, role="assistant").n_evicted_messages
+        if evicted:
+            largest.append(max(fake.rendered[before:], default=0))
+    assert internals.renders_tool_turns_in_windows(w)
+    assert all(largest), "no render was recorded after an eviction"
+    assert largest and len(w.conversation()["messages"]) > 40
+    # The system turn, the newest two exchanges of four messages each, and the stand-in.
+    assert max(largest) <= 10, largest
