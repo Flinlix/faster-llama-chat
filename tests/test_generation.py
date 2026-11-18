@@ -1,7 +1,8 @@
 """Generating on the engine's cache context: calls found as they are generated, cancelling."""
 
+import pytest
 from llama_chat.config import Config, generation_sampling
-from llama_chat.generation import generate
+from llama_chat.generation import generate, AnswerGuard, GenerationAccumulator
 
 from llama_chat.template import CallBoundary
 from llama_chat.wrapper import ChatWrapper
@@ -207,3 +208,60 @@ def test_a_resumed_reply_gathers_its_text_into_one_message():
     held = fake.text_of(fake.cache)
     assert "clock" in held and "09:00" in held      # yet both reached the cache
     assert after_system(wrapper.conversation()["messages"])[-1]["content"] == resumed   # and that is what is read back
+
+
+# The plain-text call opening the generation tests below look for.
+_PLAIN_OPENING = CallBoundary(call_texts=("{\"n\"", "}"), opens_as_text=True)
+
+
+def _drawn_generation(pieces: dict, order: list, special: set, boundary: CallBoundary,
+                     guard: AnswerGuard | None = None) -> tuple[str, GenerationAccumulator]:
+    """What a generation of ``order`` yields, and its accumulator, the tokens in ``special`` being the model's tags."""
+    ctx = _generating(pieces, order)
+    ctx._backend.is_special = lambda vocab, token: token in special
+    acc = GenerationAccumulator()
+    text = "".join(generate(ctx, 0, len(order), sampling=SAMPLING, out=acc, boundary=boundary,
+                            guard=guard or AnswerGuard()))
+    return text, acc
+
+
+def test_a_plain_text_opening_written_inside_the_reply_text_stays_reply_text():
+    text, acc = _drawn_generation({0: b"a ", 1: b"{\"n\"", 2: b" b"}, [0, 1, 2], set(), _PLAIN_OPENING)
+    assert text == "a {\"n\" b"
+    assert not acc.tool_call and acc.stop_reason == "token_limit"
+
+
+@pytest.mark.parametrize("tag, boundary", [
+    (b"<t>", _PLAIN_OPENING),
+    (b"</thought>", CallBoundary(call_texts=("{\"n\"", "}"), opens_as_text=True,
+                               thought_tags=("<thought>", "</thought>"))),
+], ids=["after-a-tag-held-back", "after-a-thought-tag-shown"])
+def test_a_plain_text_opening_after_a_tag_and_whitespace_opens_a_call_with_all_its_arguments(
+        tag, boundary):
+    _, acc = _drawn_generation({0: tag, 1: b" ", 2: b"{\"n\": 1", 3: b"}"}, [0, 1, 2, 3], {0}, boundary)
+    assert acc.stop_reason == "tool_call"
+    assert acc.tool_call == ": 1"
+
+
+def test_a_tag_without_text_between_shown_text_and_more_text_leaves_the_reply_whole():
+    text, acc = _drawn_generation({0: b"a", 1: b"", 2: b"b"}, [0, 1, 2], {1}, _PLAIN_OPENING)
+    assert text == "ab"
+    assert acc.stop_reason == "token_limit"
+
+
+@pytest.mark.parametrize("tags, pieces, order, open_at_the_limit", [
+    (("<thought>", "</thought>"), {0: b"<thought>", 1: b"a", 2: b"</thought>"},
+     [0, 1, 1, 1, 1, 1, 1, 1], True),
+    (("<thought>", "</thought>"), {0: b"<thought>", 1: b"a", 2: b"</thought>", 3: b"b"},
+     [0, 1, 2, 3, 3, 3, 3, 3], False),
+    (("X", "Y"), {0: b"a", 2: b"Y"}, [0] * 8, False),
+    (("\u00a7", "\u00a7"), {0: "\u00a7a\u00a7".encode(), 1: b"b", 2: "\u00a7".encode()},
+     [0, 1, 1, 1, 1, 1, 1, 1], False),
+], ids=["still-open", "closed-in-its-own-pieces", "one-letter-tags-never-written",
+        "same-tag-twice-in-one-piece"])
+def test_a_thought_is_closed_for_the_answer_exactly_where_it_is_still_open_at_the_limit(
+        tags, pieces, order, open_at_the_limit):
+    # Eight draws with two kept for the answer: the closing, token 2, takes the sixth place.
+    guard = AnswerGuard(thought_tags=tags, thought_closing=(2,), answer_room_tokens=2)
+    _, acc = _drawn_generation(pieces, order, set(), CallBoundary(), guard)
+    assert acc.token_ids == (order[:5] + [2] + order[5:7] if open_at_the_limit else order)

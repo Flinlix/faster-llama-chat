@@ -18,6 +18,7 @@ from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
 from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry
+from llama_chat.reply import ReplyStream
 
 _LONE = "a\ud800b"
 
@@ -475,3 +476,29 @@ def test_a_fault_inside_a_tool_loop_is_an_internal_error_naming_the_step_the_cal
     assert wrapper.reply("noch einmal").finish().text
     assert wrapper.wait_idle(timeout_s=10)
     assert_cache_reads_as_rendered(wrapper, fake)
+
+
+def test_a_fault_while_a_reply_stream_closes_is_an_internal_error_naming_the_close_and_its_cause():
+    def deltas():
+        yield "eins"
+
+    def broken():
+        raise KeyError("a fault of the library's own")
+    stream = ReplyStream(deltas(), on_close=broken)
+    assert next(stream) == "eins"
+    with pytest.raises(InternalError, match=r"ReplyStream\.close failed inside the library "
+                                            r"\(KeyError: .a fault of the library's own.\)"):
+        stream.close()
+
+
+@pytest.mark.parametrize("role", ["system", "tool", "narrator"])
+def test_an_injection_with_a_role_no_injected_message_takes_is_refused_naming_the_role(role):
+    wrapper, _ = tool_wrapper()
+    wrapper.begin(opened("s"))
+    wrapper.reply("eins").finish()
+    before = wrapper.conversation()
+    with pytest.raises(InvalidArgumentError) as refused:
+        wrapper.inject("Notiz", role=role)
+    assert refused.value.field == "role"
+    assert wrapper.conversation() == before
+    assert wrapper.reply("zwei").finish().text
