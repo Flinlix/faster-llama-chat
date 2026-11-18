@@ -25,6 +25,7 @@ from llama_chat.history_forms import (completions_messages, generated_turn_recor
                                       with_generated_turns)
 from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL
 from llama_chat.rendering import GeneratedTurn
+from llama_chat.result_cutting import cut_result
 
 
 # ----- beginning again from conversation() ---------------------------------
@@ -1028,3 +1029,33 @@ def test_a_turn_kept_as_generated_begins_again_in_its_own_place_where_a_later_ex
     again.begin(**saved)
     assert internals.generated_turn_spans(again) == spans
     assert again.conversation() == saved
+
+
+def test_a_begin_cuts_an_older_result_only_once_every_newer_one_of_its_exchange_keeps_nothing():
+    """Three results of one round, begun in contexts from roomy to tight: the newest are cut first, each to nothing before an older one loses a character."""
+    clock = ToolSpec("clock", "time", {"type": "object", "properties": {}})
+    ids = ["a", "b", "c"]
+    texts = {"a": "A" * 300, "b": "B" * 300, "c": "C" * 300}
+    history = [{"role": "user", "content": "wie spät?"},
+               {"role": "assistant", "content": None, "tool_calls": [
+                   {"id": i, "type": "function", "function": {"name": "clock", "arguments": "{}"}}
+                   for i in ids]},
+               *[{"role": "tool", "tool_call_id": i, "content": texts[i]} for i in ids]]
+    older_cut = 0
+    for context_size in range(200, 1400, 10):
+        w = ChatWrapper(Config(context_size=context_size), context=FakeContext(JSON_TOOLS))
+        try:
+            report = w.begin(opened("persona", history), tools=[clock])
+        except ContextOverflowError:
+            continue
+        held = {m["tool_call_id"]: m["content"] for m in w.conversation()["messages"]
+                if m["role"] == "tool"}
+        if set(held) != set(ids):
+            continue
+        cut = [i for i in ids if held[i] != texts[i]]
+        assert {call.id for call in report.tool_results_cut} == set(cut)
+        for older, newer in zip(ids, ids[1:]):
+            if held[older] != texts[older]:
+                assert held[newer] == cut_result(texts[newer], 0), (context_size, held)
+                older_cut += 1
+    assert older_cut, "no context size made an older result be cut"
