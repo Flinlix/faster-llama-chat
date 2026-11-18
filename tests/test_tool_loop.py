@@ -2648,3 +2648,86 @@ def test_a_result_owed_before_another_is_kept_whole_or_cut_to_the_most_that_leav
         written, listed = _written_in(room, text)
         assert written == expected, (room, written, expected)
         assert listed == (expected not in (None, text)), room
+
+
+_ROUND = [("call_first", "clock"), ("call_second", "other"), ("call_third", "third")]
+
+
+_ASKED_THREE = [{"role": "system", "content": "persona"}, {"role": "user", "content": "los"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": call_id, "type": "function", "function": {"name": name, "arguments": {}}}
+                    for call_id, name in _ROUND]}]
+
+
+def _measure(messages, generation_prompt):
+    """One token per character of each message's content and its call id, and three for the generation prompt."""
+    return sum(len(m.get("content") or "") + len(m.get("tool_call_id") or "")
+               for m in messages) + (3 if generation_prompt else 0)
+
+
+def _round_of_three(first: str, second: str) -> list[dict]:
+    """A round of three calls, the first two answered with ``first`` and ``second``."""
+    return [dict(m) for m in _ASKED_THREE] + [result_message("clock", "call_first", first),
+                                              result_message("other", "call_second", second)]
+
+
+def _fits_with(messages, first: str, second: str, third: str, room: int) -> bool:
+    """Whether the round fits in ``room`` with the generation prompt, its three results as given."""
+    written = messages[:len(_ASKED_THREE)] + [
+        result_message("clock", "call_first", first), result_message("other", "call_second", second),
+        result_message("third", "call_third", third)]
+    return _measure(written, True) <= room
+
+
+@pytest.mark.parametrize("second_cut_before", [False, True], ids=["second too short to give room", "second cut before"])
+def test_the_last_result_of_a_round_is_written_wherever_cutting_one_earlier_result_to_nothing_makes_room_for_it(
+        second_cut_before):
+    """An earlier result that gives no room, or was cut before, is passed over for an older one of the round, which is cut to the most that leaves the last one its note."""
+    first, third = "x" * 60, "z" * 80
+    second = cut_result("y" * 90, 5) if second_cut_before else "a"   # "a" is shorter than a cut note
+    attempts = 0
+    for room in range(_measure(_round_of_three(first, second), True), 400):
+        state = ConversationState(messages=_round_of_three(first, second))
+        if second_cut_before:
+            state.results_cut = [ToolCall("other", {}, "call_second")]
+        cutting = ResultCutting(_measure, state, lambda text, n: min(n, len(text)))
+        empty = cut_result(third, 0)
+        makes_room = _fits_with(state.messages, cut_result(first, 0), second, empty, room)
+        needs_it = not _fits_with(state.messages, first, second, empty, room)
+        try:
+            assert not cutting.write(result_message("third", "call_third", third), [], room,
+                                     lambda: False)
+        except ContextOverflowError:
+            assert not makes_room, room
+            continue
+        written = state.messages
+        assert written[:len(_ASKED_THREE)] == _ASKED_THREE and len(written) == len(_ASKED_THREE) + 3
+        assert written[-2] == result_message("other", "call_second", second), room
+        if needs_it and makes_room:
+            attempts += 1
+            kept = max(k for k in range(len(first) + 1)
+                       if _fits_with(written, cut_result(first, k), second, empty, room))
+            assert written[-3] == result_message("clock", "call_first", cut_result(first, kept)), room
+            assert state.results_cut[-2:] == [ToolCall("clock", {}, "call_first"),
+                                              ToolCall("third", {}, "call_third")], room
+    assert attempts
+
+
+def test_an_unreadable_calls_answer_cut_to_make_room_is_listed_as_the_call_the_reply_reports():
+    """Each call listed as cut is one of the calls the reply reported, an unreadable one included, so that a caller can match the two."""
+    unreadable_cut = 0
+    for size in range(200, 420, 10):
+        fake = FakeContext(JSON_TOOLS)
+        wrapper = ChatWrapper(Config(context_size=size, evict_above_fraction=0.9), context=fake)
+        wrapper.begin(opened("persona"))
+        fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"}, '
+                            '{"name": "clock", "arguments": {}}]']
+        reply = wrapper.reply("wie spät?", tool_call_policy="yield").finish()
+        assert [call.status for call in reply.tool_calls] == ["complete", "unreadable", "complete"]
+        cut = []
+        for result in ("12:00", "x" * 5000):
+            if wrapper.pending_calls:
+                cut += wrapper.inject_tool_result(wrapper.pending_calls[0].id, result).tool_results_cut
+        assert all(call in reply.tool_calls for call in cut), size
+        unreadable_cut += reply.tool_calls[1] in cut
+    assert unreadable_cut
