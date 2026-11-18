@@ -3,6 +3,7 @@
 The cases below include every input found to break this rule once.
 """
 
+import json
 import re
 import threading
 import time
@@ -550,3 +551,98 @@ def test_only_a_public_member_is_guarded_and_its_fault_names_the_class_and_the_m
             failed.value
     with pytest.raises(KeyError):
         holder._helper()
+
+
+def test_a_tool_past_its_time_is_told_as_a_tool_timeout_failure_that_names_the_limit():
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=512, tool_timeout_s=0.2), context=fake)
+    release = threading.Event()
+    registry = ToolRegistry()
+    registry.tool(lambda: release.wait(30) and "spät", description="Hängt.", name="haengt",
+                  parameters={})
+    wrapper.begin(opened("s"), tools=registry.specs())
+    fake.call_script = ["fn:haengt{}"]
+    try:
+        wrapper.reply("los", tool_call_policy=registry).finish()
+    finally:
+        release.set()
+    results = [m for m in wrapper.conversation()["messages"] if m["role"] == "tool"]
+    assert len(results) == 1
+    told = json.loads(results[0]["content"])
+    assert set(told) == {"error", "message"}
+    assert told["error"] == "tool_timeout"
+    assert "the tool call failed" in told["message"] and "0.2 s" in told["message"]
+
+
+_LONG_TEXT = "eine lange Antwort, Wort für Wort"
+
+
+def _held_unread(limit_s: float):
+    """A wrapper whose reply was read once and left, holding it, and the stream of that reply."""
+    fake = FakeContext(PLAIN, gen_tokens=20, gen_text=_LONG_TEXT)
+    wrapper = ChatWrapper(Config(context_size=512, unread_reply_timeout_s=limit_s), context=fake)
+    wrapper.begin(opened("s"))
+    stream = wrapper.reply("hallo")
+    next(stream)
+    return wrapper, stream
+
+
+def _waiting_inject(wrapper):
+    """A thread that injects a note, started once it waits for the wrapper, and the list its report lands in."""
+    done = []
+    acting = threading.Thread(target=lambda: done.append(wrapper.inject("Notiz")), daemon=True)
+    acting.start()
+    deadline = time.monotonic() + 30
+    while not wrapper._blocked.is_set() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert wrapper._blocked.is_set(), "the inject never began to wait for the wrapper"
+    return acting, done
+
+
+def test_a_reply_nobody_reads_is_ended_for_a_waiting_action_though_another_wait_gave_up_meanwhile():
+    wrapper, stream = _held_unread(limit_s=1.0)
+    acting, done = _waiting_inject(wrapper)
+    gave_up = []
+    other = threading.Thread(target=lambda: gave_up.append(wrapper.wait_idle(0.01)), daemon=True)
+    other.start()
+    other.join(10)
+    assert gave_up == [False]
+    acting.join(15)
+    try:
+        assert done, "the action still waits for a reply nobody reads"
+    finally:
+        if acting.is_alive():
+            stream.close()
+            acting.join(10)
+    assert list(stream) == [] and stream.reply.stop_reason == "interrupted"
+    assert wrapper.reply("weiter").finish().text
+
+
+def test_a_reply_read_on_while_an_action_waits_is_ended_once_it_has_gone_unread_for_the_limit():
+    limit_s = 2.0
+    wrapper, stream = _held_unread(limit_s)
+    acting, done = _waiting_inject(wrapper)
+    time.sleep(0.2)
+    next(stream)                            # read on, then left again
+    read_at = time.monotonic()
+    acting.join(30)
+    waited_s = time.monotonic() - read_at
+    assert done
+    assert limit_s - 0.25 <= waited_s < limit_s + 0.9, waited_s
+    assert stream.reply is None or stream.reply.stop_reason == "interrupted"
+
+
+def test_the_watch_for_a_reply_nobody_reads_does_not_keep_the_process_alive():
+    before = set(threading.enumerate())
+    wrapper, stream = _held_unread(limit_s=3.0)
+    acting, done = _waiting_inject(wrapper)
+    deadline = time.monotonic() + 30
+    while not (wrapper._unread_watch and wrapper._unread_watch.is_alive()) \
+            and time.monotonic() < deadline:
+        time.sleep(0.005)
+    timers = [t for t in threading.enumerate()
+              if t not in before and isinstance(t, threading.Timer) and t.is_alive()]
+    stream.close()
+    acting.join(10)
+    assert done
+    assert timers and all(t.daemon for t in timers), [(t.name, t.daemon) for t in timers]
