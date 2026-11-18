@@ -370,7 +370,6 @@ def test_arguments_nested_as_deep_as_allowed_are_read_and_one_level_deeper_are_r
         parse_calls(nested(MAX_ARGUMENT_DEPTH + 1), CALL_BODY, "fn:", json_keys=json_keys)
 
 
-#   x__as_json_calls__mutmut_25, x__as_json_calls__mutmut_26, x__as_json_calls__mutmut_29
 @pytest.mark.parametrize("entry", [{"no": "call"}, "clock", [], {"name": ""},
                                    {"name": "clock", "other": True}, True])
 def test_an_entry_of_a_batch_that_is_no_call_is_reported_with_no_name_and_as_it_was_written(entry):
@@ -412,7 +411,6 @@ def test_the_id_a_model_writes_after_a_call_s_name_comes_back_in_every_spelling_
     assert parse_calls(body, _WITH_ID[spelling]) == [ToolCall("clock", {"zone": "CET"}, "a1")]
 
 
-#   x__as_delimited_call__mutmut_10, x__as_delimited_call__mutmut_13
 @pytest.mark.parametrize("note", ["[ID]", "[PARAMS]{", "[ID]x[PARAMS]{", "[PARAMS]{[ID]", "a[ID]b[PARAMS]{c[ID]"])
 @pytest.mark.parametrize("written_id", ["a1", ""])
 def test_an_argument_holding_the_delimiters_of_a_call_s_id_and_name_is_read_as_text(note, written_id):
@@ -586,7 +584,6 @@ _AFTER_OBJECT = {"brace": [""], "brace-then-tag": ["", "[END]", " [END]\n"],
                  "inside-another-object": ["", "}", "}\n"], "named-by-a-file": ["", "\n"]}
 
 
-#   x__as_json_arguments__mutmut_23
 @pytest.mark.parametrize("spelling, after", [(spelling, after) for spelling, afters in _AFTER_OBJECT.items()
                                              for after in afters])
 def test_json_arguments_are_read_however_spaced_followed_by_nothing_or_what_the_template_writes_after_them(
