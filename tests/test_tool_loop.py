@@ -1,5 +1,6 @@
 """Declaring tools to a conversation, the turn a call holds open, and running the tools."""
 
+import logging
 import json
 import threading
 
@@ -2731,3 +2732,29 @@ def test_an_unreadable_calls_answer_cut_to_make_room_is_listed_as_the_call_the_r
         assert all(call in reply.tool_calls for call in cut), size
         unreadable_cut += reply.tool_calls[1] in cut
     assert unreadable_cut
+
+
+def test_a_call_reported_as_cut_shares_no_part_of_its_arguments_with_the_conversation():
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS, context_size=400)
+    wrapper.begin(opened("s"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
+    fake.call_script = ['{"name": "clock", "arguments": {"where": {"zone": "Berlin"}}}']
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    cut = wrapper.inject_tool_result(wrapper.pending_calls[0].id, "x" * 3000).tool_results_cut
+    assert cut
+    before = wrapper.conversation()
+    cut[0].arguments["where"]["zone"] = "Rom"
+    assert wrapper.conversation() == before
+
+
+def test_every_result_cut_is_logged_at_info_with_how_much_of_it_was_kept(caplog):
+    caplog.set_level(logging.INFO, logger="llama_chat")
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS, context_size=400)
+    wrapper.begin(opened("s"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
+    fake.call_script = ['{"name": "clock", "arguments": {}}']
+    list(wrapper.reply("wie spät?", tool_call_policy="yield"))
+    caplog.clear()
+    cut = wrapper.inject_tool_result(wrapper.pending_calls[0].id, "x" * 3000).tool_results_cut
+    assert cut
+    lines = [record.getMessage() for record in caplog.records
+             if record.levelno == logging.INFO and record.name.startswith("llama_chat")]
+    assert any(" of 3000 characters" in line for line in lines), lines
