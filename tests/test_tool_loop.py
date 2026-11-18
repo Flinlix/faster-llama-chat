@@ -1,5 +1,6 @@
 """Declaring tools to a conversation, the turn a call holds open, and running the tools."""
 
+import re
 import logging
 import json
 import threading
@@ -11,7 +12,7 @@ from llama_chat.config import Config
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.resolved_template import ResolvedTemplate
 from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_chat.tools import ToolCall, ToolSpec, result_text
 from llama_chat import (ChatWrapper, ContextOverflowError, InternalError, OutOfOrderError,
                         UnsupportedError)
 from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
@@ -28,7 +29,7 @@ from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered
                             without_ids, rows, numbered_exchanges, two_owed_calls, unbegun_tool_wrapper)
 from tests import internals
 from llama_chat.conversation_state import ConversationState
-from llama_chat.messages import result_message
+from llama_chat.messages import result_message, UNKNOWN_FUNCTION, UNREADABLE_CALL
 from llama_chat.result_cutting import ResultCutting, cut_result
 
 
@@ -2787,3 +2788,159 @@ def test_a_result_keeps_its_turn_open_exactly_where_it_fits_cut_to_nothing_with_
         assert wrapper.pending_calls == ([second] if alone <= room else [])
         seen.add("closed" if room < alone else "this one only" if room < beside else "both")
     assert seen == {"closed", "this one only", "both"}
+
+
+# Merges applied in rank order, so that a text cut inside a merge can spell more characters
+# in as many tokens as its own first tokens spell: "abc" is "a", "bc", but "ab" is one token.
+_MERGE_RANKS = (("b", "c"), ("a", "b"))
+
+
+def _tokens(text: str) -> list[str]:
+    """``text`` as a tokenizer with ranked merges splits it."""
+    tokens = list(text)
+    for left, right in _MERGE_RANKS:
+        merged, i = [], 0
+        while i < len(tokens):
+            if i + 1 < len(tokens) and (tokens[i], tokens[i + 1]) == (left, right):
+                merged.append(left + right)
+                i += 2
+            else:
+                merged.append(tokens[i])
+                i += 1
+        tokens = merged
+    return tokens
+
+
+def _text_within(text: str, n_tokens: int) -> int:
+    """How many characters of ``text`` its own first ``n_tokens`` tokens spell."""
+    return len("".join(_tokens(text)[:n_tokens]))
+
+
+def _merged_length(messages, generation_prompt):
+    """The tokens of each message's content, its name and its call id, as a template that writes them counts, and of the generation prompt."""
+    return sum(len(_tokens(m.get("content") or "")) + len(m.get("name") or "")
+               + len(m.get("tool_call_id") or "") for m in messages) + (3 if generation_prompt else 0)
+
+
+def _calling(*ids: str) -> dict:
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": i, "type": "function", "function": {"name": "clock", "arguments": {}}} for i in ids]}
+
+
+_BEGUN = [{"role": "system", "content": "persona"}, {"role": "user", "content": "los"},
+          _calling("call_a", "call_b")]
+
+
+def _begun_with(texts: list[str]) -> list[dict]:
+    return _BEGUN + [result_message("clock", call_id, text)
+                     for call_id, text in zip(("call_a", "call_b"), texts)]
+
+
+def _expected_cut(texts: list[str], room: int) -> list[str]:
+    """The results as a begin's cut leaves them, from what it promises: the newest first, whole where all fits, else the longest start that fits, else cut to nothing and the next older one cut."""
+    held = list(texts)
+    for at in reversed(range(len(held))):
+        def fits(content):
+            return _merged_length(_begun_with(held[:at] + [content] + held[at + 1:]), True) <= room  # noqa: B023 (called in this pass)
+
+        if fits(texts[at]):
+            return held
+        if not fits(cut_result(texts[at], 0)):
+            held[at] = cut_result(texts[at], 0)
+            continue
+        held[at] = cut_result(texts[at], max(k for k in range(len(texts[at]) + 1)
+                                             if fits(cut_result(texts[at], k))))
+        return held
+    return held
+
+
+_CUT_LOGGED = re.compile(r"cut to (\d+) of (\d+) characters")
+
+
+def _kept(cut: str) -> int:
+    """How many characters a cut result kept, as its note says."""
+    return int(cut.rsplit("(cut: ", 1)[1].split(" of ", 1)[0])
+
+
+def test_a_begin_cuts_the_newest_results_first_each_to_the_longest_start_that_fits_whatever_its_tokens_merge(caplog):
+    """Measured with the generation prompt, newest first, a result that does not fit even cut to nothing passing the cut on to the one before it, and each cut logged with the characters it kept."""
+    texts = ["abc" * 60, "abc" * 50]
+    nothing_kept = [cut_result(text, 0) for text in texts]
+    longest_kept = 0
+    for room in range(_merged_length(_begun_with(nothing_kept), True) - 2, _merged_length(_begun_with(texts), True) + 2):
+        state = ConversationState(messages=_begun_with(texts))
+        cutting = ResultCutting(_merged_length, state, _text_within)
+        with caplog.at_level(logging.INFO, logger="llama_chat"):
+            caplog.clear()
+            cutting.cut_to_fit(room, set())
+        expected = _expected_cut(texts, room)
+        assert [m["content"] for m in state.messages[len(_BEGUN):]] == expected, room
+        assert state.messages[:len(_BEGUN)] == _BEGUN
+        cut = [i for i, text in enumerate(texts) if expected[i] != text]
+        assert [call.id for call in state.results_cut] == [("call_a", "call_b")[i] for i in reversed(cut)]
+        logged = [r.getMessage() for r in caplog.records if r.name == "llama_chat.result_cutting"]
+        assert [_CUT_LOGGED.search(line).groups() for line in logged] == [
+            (str(_kept(expected[i])), str(len(texts[i])))
+            for i in reversed(cut)], room
+        longest_kept = max([longest_kept] + [_kept(expected[i]) for i in cut])
+    assert longest_kept > 0
+
+
+_UNREADABLE_RESULT = {"error": "the call could not be read; write it again"}
+
+
+_OWED_AFTER = [(ToolCall("clock", {}, "call_b"), "call_b"),
+               (ToolCall("", {}, "call_c", "unreadable"), "call_c")]
+
+
+_ASKED_WEATHER_TWICE = [{"role": "system", "content": "persona"}, {"role": "user", "content": "los"},
+          {"role": "assistant", "content": "", "tool_calls": [
+              {"id": "call_a", "type": "function", "function": {"name": "weather", "arguments": {}}},
+              {"id": "call_b", "type": "function", "function": {"name": "clock", "arguments": {}}},
+              {"id": "call_c", "type": "function", "function": {"name": UNKNOWN_FUNCTION, "arguments": {}},
+               UNREADABLE_CALL: True}]}]
+
+
+def _owed_written(this_one: str) -> list[dict]:
+    """The results owed after the first as the room is kept for them: the readable one holding ``this_one``, the unreadable one answered with its failure, never cut."""
+    return [result_message("clock", "call_b", this_one),
+            result_message(UNKNOWN_FUNCTION, "call_c", result_text(_UNREADABLE_RESULT))]
+
+
+def _expected_first(text: str, room: int) -> str | None:
+    """The first result as a write promises it: whole where the owed ones fit empty, else the longest start that leaves them room as notes with nothing kept, else the longest start alone; ``None`` where not even nothing fits."""
+    def fits(first, owed):
+        return _merged_length(_ASKED_WEATHER_TWICE + [result_message("weather", "call_a", first)] + owed, True) <= room
+
+    if fits(text, _owed_written("")):
+        return text
+    for owed in (_owed_written(cut_result(text, 0)), []):
+        fitting = [k for k in range(len(text) + 1) if fits(cut_result(text, k), owed)]
+        if fitting:
+            return cut_result(text, max(fitting))
+    return None
+
+
+def test_a_result_keeps_room_for_each_result_owed_after_it_as_that_one_is_written_the_failure_of_an_unreadable_call_whole():
+    """The room kept for a later readable call counts its name and id, and for a call that could not be read the failure it is answered with, under its own name."""
+    text = "abc" * 40
+    whole = _merged_length(_ASKED_WEATHER_TWICE + [result_message("weather", "call_a", text)] + _owed_written(""), True)
+    outcomes = set()
+    for room in range(whole - len(text) - 120, whole + 2):
+        state = ConversationState(messages=[dict(m) for m in _ASKED_WEATHER_TWICE],
+                                  unreadable_result=_UNREADABLE_RESULT)
+        cutting = ResultCutting(_merged_length, state, _text_within)
+        expected = _expected_first(text, room)
+        try:
+            cutting.write(result_message("weather", "call_a", text), _OWED_AFTER, room, lambda: False)
+        except ContextOverflowError:
+            written = None
+        else:
+            assert state.messages[:-1] == _ASKED_WEATHER_TWICE, room
+            written = state.messages[-1]["content"]
+        assert written == expected, room
+        outcomes.add("refused" if expected is None else "whole" if expected == text else
+                      "room kept" if _merged_length(_ASKED_WEATHER_TWICE + [result_message("weather", "call_a", expected)]
+                                             + _owed_written(cut_result(text, 0)), True) <= room
+                      else "alone")
+    assert outcomes == {"refused", "whole", "room kept", "alone"}
