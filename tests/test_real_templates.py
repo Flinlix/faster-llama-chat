@@ -446,3 +446,49 @@ def test_begin_refuses_exactly_what_capabilities_says_a_conversation_cannot_take
                 assert not accepted and refused.field == field, (uses_tools, asked)
             else:
                 assert accepted, (uses_tools, asked)
+
+
+@pytest.mark.parametrize("stem", _ENDING_TAG_STEMS)
+def test_a_reply_closed_by_nothing_loads_on_a_model_whose_tokenizer_adds_a_start_token(stem):
+    known = {**fixture(stem), "adds_bos": True}
+    template = ResolvedTemplate(FakeContext(known), shipped_addon_call(known["chat_template"]))
+    assert not template.properties.fragments.assistant_suffix.strip()
+
+
+@pytest.mark.parametrize("stem", _ENDING_TAG_STEMS)
+def test_a_reply_closed_by_nothing_is_refused_naming_what_the_next_turn_opens_with(stem):
+    known = fixture(stem)
+    context, template = _load(stem)
+    tag = context.token_text(first_special_token(
+        context, template.properties.fragments.user_prefix.strip()))
+    plain = known["chat_template"].replace(tag, "User: ")
+    refusals = [({**known, "ends_generation": []},
+                 f"the tag {tag!r}, which does not end a generation for this model"),
+                ({**known, "chat_template": plain}, "no tag of the model's own")]
+    for changed, opens_with in refusals:
+        with pytest.raises(ValueError) as refused:
+            ResolvedTemplate(FakeContext(changed), shipped_addon_call(known["chat_template"]))
+        assert str(refused.value) == (
+            "this model's template writes nothing after a reply, and the turn after one opens "
+            f"with {opens_with}, so a reply would never stop; the model cannot be used")
+
+
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_an_add_on_files_call_format_loads_on_a_template_that_refuses_a_message_of_no_known_role(stem):
+    known = fixture(stem)
+    refuses_other_roles = (
+        "{%- for m in messages if m.role not in ['system', 'developer', 'user', 'assistant', "
+        "'tool'] -%}{{- raise_exception('a message of no known role') -}}{%- endfor -%}")
+    call = shipped_addon_call(known["chat_template"])
+    template = ResolvedTemplate(
+        FakeContext({**known, "chat_template": refuses_other_roles + known["chat_template"]}), call)
+    assert template.properties.boundary.call_texts == (call["opening"], call["closing"])
+
+
+@pytest.mark.parametrize("stem", _ADDON_CALL_STEMS)
+def test_an_add_on_file_closing_a_call_with_text_the_template_never_writes_is_refused_saying_so(stem):
+    known = fixture(stem)
+    stated = "the model's add-on file closes a call with text its template never writes after one"
+    with pytest.raises(ValueError, match=f"^{re.escape(stated)}$"):
+        ResolvedTemplate(FakeContext(known), {**shipped_addon_call(known["chat_template"]),
+                                              "closing": "QQNEVERQQ"})
