@@ -6,7 +6,7 @@ import json
 import pytest
 
 from llama_chat.config import Config
-from llama_chat.errors import ContextOverflowError
+from llama_chat.errors import ContextOverflowError, InvalidArgumentError
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec
 from llama_chat.wrapper import ChatWrapper
@@ -969,3 +969,45 @@ def test_a_kept_turn_given_back_with_a_lone_surrogate_in_any_of_its_messages_is_
         report = again.begin(**stored)
         assert report.generated_turns_ignored and report.n_turns_restored == 0
         assert again.conversation()["messages"] == saved["messages"]
+
+
+def _first_in_role(record: dict, role: str) -> dict:
+    """The first message of ``record`` in ``role``."""
+    return next(message for message in record["messages"] if message["role"] == role)
+
+
+def _first_call(record: dict) -> dict:
+    """The first call a reply of ``record`` makes."""
+    return next(message for message in record["messages"] if message.get("tool_calls"))["tool_calls"][0]
+
+
+_BROKEN = {
+    "a turn standing for no message": lambda r: r["kept"][0].update(span=0),
+    "a record found by no message": lambda r: r.update(count=0),
+    "a message that is not an object": lambda r: r["messages"].__setitem__(0, "q"),
+    "a question without text": lambda r: _first_in_role(r, "user").update(content=None),
+    "a result answering a numbered call": lambda r: _first_in_role(r, "tool").update(tool_call_id=7),
+    "a result naming no tool": lambda r: _first_in_role(r, "tool").update(name=None),
+    "a call's arguments as text": lambda r: _first_call(r)["function"].update(arguments="{}"),
+    "a call without an id": lambda r: _first_call(r).update(id=None),
+}
+
+
+@pytest.mark.parametrize("broken", list(_BROKEN.values()), ids=list(_BROKEN))
+def test_a_kept_turns_record_broken_in_one_field_is_refused_by_begin_naming_generated_turns(broken):
+    """A record ``conversation()`` gave, one field put in a form it never gives, is refused, not left out as one changed since."""
+    registry = weather_registry()
+    live, fake = tool_wrapper(context_size=2048)
+    live.begin(opened("persona"), tools=registry.specs())
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    live.reply("wetter?", tool_call_policy=registry).finish()
+    saved = live.conversation()
+    saved["generated_turns"] = json.loads(json.dumps(saved["generated_turns"]))
+    broken(saved["generated_turns"]["turns"][0])
+    again, again_fake = tool_wrapper(context_size=2048)
+    again.begin(opened("persona"), tools=registry.specs())
+    before, held = again.conversation(), list(again_fake.cache)
+    with pytest.raises(InvalidArgumentError) as refused:
+        again.begin(**saved)
+    assert refused.value.field == "generated_turns"
+    assert again.conversation() == before and again_fake.cache == held
