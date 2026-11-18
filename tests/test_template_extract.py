@@ -569,3 +569,19 @@ def test_a_call_id_is_read_between_the_name_and_the_arguments_and_refused_elsewh
     assert body is not None and holds_the_probe_id(body) == (not readable)
     if readable:
         assert body.id_open == "[ID]"
+
+
+def _restating_the_question(render):
+    """``render``, writing the last message's text once more after the generation prompt."""
+    def restating(messages, generation_prompt=False, variables=None):
+        again = f"<again>{messages[-1]['content']}" if generation_prompt else ""
+        return render(messages, generation_prompt, variables) + again
+    return restating
+
+
+def test_a_template_that_writes_the_question_again_after_the_user_turn_has_no_effort_switch_for_it():
+    """What follows the user turn is read from its first end, so the question written again is no change."""
+    switch = reasoning_switch(_restating_the_question(_rendering(lambda v: "")))
+    assert switch(True) == _SHARED_FLAG[0]
+    assert switch(False) == _SHARED_FLAG[1]
+    assert switch(None) == {}
