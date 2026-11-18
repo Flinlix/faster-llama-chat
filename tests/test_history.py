@@ -1011,3 +1011,20 @@ def test_a_kept_turns_record_broken_in_one_field_is_refused_by_begin_naming_gene
         again.begin(**saved)
     assert refused.value.field == "generated_turns"
     assert again.conversation() == before and again_fake.cache == held
+
+
+def test_a_turn_kept_as_generated_begins_again_in_its_own_place_where_a_later_exchange_reads_alike():
+    """A turn whose Chat Completions messages read as a later exchange does is put back where it stood when it was saved, not on the newer exchange."""
+    w, fake = tool_wrapper(context_size=2048)
+    w.begin(opened("persona"))
+    fake.call_script = ["fn:nonsense with no name"]     # an unreadable call, left out of the messages
+    w.reply("los", tool_call_policy="refuse").finish()
+    w.reply("weiter").finish()
+    w.reply("los").finish()                             # reads as the turn kept above
+    spans, saved = internals.generated_turn_spans(w), w.conversation()
+    messages = saved["messages"]
+    assert len(spans) == 1 and messages[1:3] == messages[5:7]
+    again, _ = tool_wrapper(context_size=2048)
+    again.begin(**saved)
+    assert internals.generated_turn_spans(again) == spans
+    assert again.conversation() == saved
