@@ -1,5 +1,6 @@
 """Reading a call back out of what a model generated."""
 
+import re
 import json
 import pytest
 
@@ -512,3 +513,92 @@ def test_a_keyed_value_may_hold_the_closing_or_separator_of_any_key(arguments):
 @pytest.mark.parametrize("after_last", ["Xb>2|</b>|", "X|<b>2|</b>|"])
 def test_no_argument_is_read_out_of_text_after_the_last_member(after_last):
     _refused_or('f">|<a>1|</a>|' + after_last, _ELEMENTS, {"a": 1})
+
+
+@pytest.mark.parametrize("after_last", ["trailing junk</n>", " x </n>\n"])
+def test_text_after_the_last_keyed_argument_is_refused_naming_that_text_even_where_it_repeats_the_closing(
+        after_last):
+    with pytest.raises(ValueError, match=re.escape("text after the last argument: " + repr(after_last))):
+        parse_calls('clock"><zone>CET</zone><n>3</n>' + after_last, _KEYED)
+
+
+def test_a_keyed_argument_that_never_closes_is_refused_naming_its_text():
+    with pytest.raises(ValueError, match="an argument that never closes: 'CET'"):
+        parse_calls('clock"><zone>CET', _KEYED)
+
+
+@pytest.mark.parametrize("body, call_body", [('clock"><zone>CET</zone><zone>UTC</zone>', _KEYED),
+                                             ("fn:f{a:1,a:2}", CALL_BODY)],
+                         ids=["keyed", "delimited"])
+def test_an_argument_written_twice_is_refused_naming_it(body, call_body):
+    with pytest.raises(ValueError, match="the argument '(zone|a)' written twice"):
+        parse_calls(body, call_body, "fn:")
+
+
+_TYPED = CallBody(name_close='"', key_open="<a ", key_close=' type="', pair_sep="</a><a ",
+                  body_close="</a>", empty_close='"', type_close='">', string_type="string")
+
+
+@pytest.mark.parametrize("text", ['say "hi">x', '">', 'a">b">c'])
+def test_a_typed_text_value_may_hold_the_text_that_closes_its_type(text):
+    assert parse_calls(f'say"<a text type="string">{text}</a>', _TYPED) == [
+        ToolCall("say", {"text": text})]
+
+
+def test_a_value_written_without_its_type_is_refused_naming_that_value():
+    with pytest.raises(ValueError, match="a value with no type: '12'"):
+        parse_calls('clock"<a zone type="12</a>', _TYPED)
+
+
+@pytest.mark.parametrize("text", ['say "hi"', "back\\slash", "line\nbreak", "tab\tand ü", "\"", ""])
+def test_a_quoted_value_with_escapes_reads_back_as_the_text_it_was_written_from(text):
+    assert parse_calls("say{text:" + json.dumps(text) + "}", _TEXT_QUOTED_NO_JSON) == [
+        ToolCall("say", {"text": text})]
+
+
+@pytest.mark.parametrize("text", ["[" * 20000 + '"', '"' + "[" * 20000],
+                         ids=["quote-at-its-end", "quote-at-its-start"])
+def test_an_unmarked_value_quoted_on_one_side_only_is_read_as_its_text_however_it_opens(text):
+    assert parse_calls("fn:say{text:" + text + "}", CALL_BODY, "fn:") == [
+        ToolCall("say", {"text": text})]
+
+
+# A format that writes its arguments as one JSON object, closed by a brace and,
+# in some, by more text after it.
+_JSON_OBJECT = {
+    "brace": CallBody(name_close="[PARAMS]{", key_open='"', key_close='": ', pair_sep=', "',
+                      body_close="}", empty_close="}", arguments_json=True),
+    "brace-then-tag": CallBody(name_close="[PARAMS]{", key_open='"', key_close='": ',
+                               pair_sep=', "', body_close="}[END]", empty_close="}[END]",
+                               arguments_json=True),
+    "inside-another-object": CallBody(name_close='[PARAMS]{"args": {', key_open='"',
+                                      key_close='": ', pair_sep=', "', body_close="}}",
+                                      empty_close="}}", arguments_json=True),
+    "named-by-a-file": CallBody(name_close="[PARAMS]", key_open="", key_close="", pair_sep="",
+                                body_close="", empty_close="", arguments_json=True),
+}
+
+
+# What may follow the arguments' object: nothing, or what the template writes after it.
+_AFTER_OBJECT = {"brace": [""], "brace-then-tag": ["", "[END]", " [END]\n"],
+                 "inside-another-object": ["", "}", "}\n"], "named-by-a-file": ["", "\n"]}
+
+
+#   x__as_json_arguments__mutmut_23
+@pytest.mark.parametrize("spelling, after", [(spelling, after) for spelling, afters in _AFTER_OBJECT.items()
+                                             for after in afters])
+def test_json_arguments_are_read_however_spaced_followed_by_nothing_or_what_the_template_writes_after_them(
+        spelling, after):
+    call_body = _JSON_OBJECT[spelling]
+    brace = call_body.name_close.rfind("{")
+    prefix = call_body.name_close[:brace] if brace >= 0 else call_body.name_close
+    for written in ('{"a":1,"b":"x"}', '{ "a" : 1 ,\n "b" : "x" }'):
+        assert parse_calls("clock" + prefix + written + after, call_body) == [
+            ToolCall("clock", {"a": 1, "b": "x"})]
+
+
+@pytest.mark.parametrize("written", ['[PARAMS]{"a": 1}XXXX', '[PARAMS]{"a": 1} junk',
+                                     "[PARAMS][1, 2]", '[PARAMS]"text"', "[PARAMS]7"])
+def test_json_arguments_that_are_no_object_or_have_text_after_them_are_refused(written):
+    with pytest.raises(ValueError):
+        parse_calls("clock" + written, _JSON_OBJECT["named-by-a-file"])
