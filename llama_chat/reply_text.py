@@ -15,6 +15,11 @@ from .loop_variant import LoopVariant
 class ReplyText:
     """A reply's answer as it streams: its thought and any header for another reader taken out, then its stop strings matched.
 
+    Once answer text has passed, a thought opens only at the model's own tag,
+    not at its letters. A tag the model writes is never shown, except, before
+    answer text has passed, one that is part of a thought's tags or of the
+    answer's opening, which the filters read.
+
     Args:
         reasoning: The model's thought tags; ``None`` for a model that has none.
         answer_opening: What a past reply's tag holds that the generation
@@ -31,11 +36,6 @@ class ReplyText:
             before, such as one a call it made inside its thought left open.
         stops_after_text: Whether a stop string ends the answer only once it
             holds text other than whitespace.
-
-    Once answer text has passed, a thought opens only at the model's own tag,
-    not at its letters. A tag the model writes is never shown, except, before
-    answer text has passed, one that is part of a thought's tags or of the
-    answer's opening, which the filters read.
     """
 
     def __init__(self, reasoning: Reasoning | None, answer_opening: str,
@@ -439,12 +439,16 @@ class _AnswerStops:
     @property
     def text(self) -> str:
         """The answer passed on so far."""
-        return "".join(self._passed)
+        # Joined once into one piece, so that reading it after each token costs no more as it grows.
+        if len(self._passed) > 1:
+            self._passed[:] = ["".join(self._passed)]
+        return self._passed[0] if self._passed else ""
 
     def feed(self, piece: str) -> str:
         """The part of ``piece`` that is certainly answer, possibly empty."""
         if not self._stops:
-            self._passed.append(piece)
+            if piece:
+                self._passed.append(piece)
             return piece
         self._held += piece
         hit = earliest(self._held, self._stops)
@@ -469,5 +473,6 @@ class _AnswerStops:
 
     def _pass(self, shown: str, held: str) -> str:
         self._held = held
-        self._passed.append(shown)
+        if shown:
+            self._passed.append(shown)
         return shown
