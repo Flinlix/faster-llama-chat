@@ -27,7 +27,6 @@ _UNSTATED = {
     "date_format": None,                # how the date is written, where the template reads the clock
     "writes_date_beside_system_prompt": False,  # the date is written with a system prompt too
     "lost_arguments": {},               # call arguments that do not read back as made, and why
-    "known_library_flaws": [],          # faults of the library this template shows, until they are fixed
     "card_sampling": None,              # the sampling the model's card recommends
     "card_quote": None,                 # the card's words, which its shipped add-on file quotes
     "fragments": None,                  # the tags around a turn, by the name extraction gives each

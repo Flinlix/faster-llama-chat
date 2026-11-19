@@ -1,7 +1,5 @@
 """Every wrapper a test builds on a model-free cache ends the test with that cache as it holds it, as the template renders the conversation, and with every turn kept as generated in the place of the template's version of it, spelling no result written after it; and with a conversation that is its two history forms, which begin takes back. Every error the library makes during a test says what went wrong.
 
-A test that shows a fault of the library the user has yet to decide on is marked ``known_library_flaw``; the check must then still find that fault.
-
 A test that asks for ``clock`` sets the time a template that reads the clock is rendered at.
 Every test ends within its time limit, or the process stops and prints where
 each thread stood.
@@ -46,8 +44,6 @@ def pytest_configure(config):
             build(self, context, templates, replace(settings, check_cache=checks))
         RenderedCache.__init__ = checking
     config.addinivalue_line("markers", "time_limit_s(seconds): the test may run this long")
-    config.addinivalue_line("markers", "known_library_flaw(what): a fault of the library the "
-                                       "check after the test must still find, until it is fixed")
     config.addinivalue_line("markers", "slow: a long run, left out unless asked for with -m slow")
     config.addinivalue_line("markers", "gpu: runs real model files on the GPU")
     config.addinivalue_line("markers", "counts_work: counts the library's own renders or calls, "
@@ -79,7 +75,7 @@ def _within_its_time_limit(request):
 
 
 @pytest.fixture(autouse=True)
-def _the_cache_reads_as_the_template_renders_the_conversation(request, monkeypatch):
+def _the_cache_reads_as_the_template_renders_the_conversation(monkeypatch):
     built, contexts = [], []
     build = ChatWrapper.__init__
 
@@ -92,23 +88,14 @@ def _the_cache_reads_as_the_template_renders_the_conversation(request, monkeypat
 
     monkeypatch.setattr(ChatWrapper, "__init__", recording)
     yield built
-    # A fault of the library the user has yet to decide on: the check must still find it.
-    flaw, shown = request.node.get_closest_marker("known_library_flaw"), []
     for wrapper, context in zip(built, contexts):
         if not is_closed(wrapper):
             # The work after a reply, on its thread where a test asks.
             assert wrapper.wait_idle(timeout_s=5), "the work after a reply did not end"
             assert wrapper._conversation._found_fault is None, "check_cache found a fault"
             assert_cache_reads_as_rendered(wrapper, context)
-            try:
-                assert_kept_turns_hold_no_later_result(wrapper, context)
-            except AssertionError:
-                if flaw is None:
-                    raise
-                shown.append(wrapper)
+            assert_kept_turns_hold_no_later_result(wrapper, context)
             assert_conversation_is_its_forms(wrapper)
-    if flaw is not None:
-        assert shown, f"the known flaw no longer shows, so its mark can go: {flaw.args[0]}"
 
 
 @pytest.fixture(autouse=True)
