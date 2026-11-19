@@ -5,14 +5,13 @@ from __future__ import annotations
 import copy
 import enum
 import inspect
-import json
 import types
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .tools import ToolCall, ToolSpec, unwritable_failure
+from .tools import ToolCall, ToolSpec, json_value_fault, unwritable_failure
 from .errors import ArgumentTypeError
 
 __all__ = ["ToolRegistry"]
@@ -90,6 +89,8 @@ class ToolRegistry:
     def _add(self, function: Callable, name: str | None, description: str | None,
              parameters: dict | None) -> None:
         """Register ``function``, as :meth:`tool` describes."""
+        if not callable(function):
+            raise ArgumentTypeError(f"a tool is a function a model can call, not {function!r}")
         name = name or _callable_name(function)
         if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function) \
                 or inspect.iscoroutinefunction(getattr(function, "__call__", None)):  # noqa: B004 (reads the method)
@@ -213,7 +214,7 @@ def _parameters_of(function, name: str) -> tuple[dict, dict[str, _Reader]]:
         else:
             default = parameter.default
             default = default.value if isinstance(default, enum.Enum) else default
-            if _is_json(default):
+            if json_value_fault(default) is None:
                 schema = {**schema, "default": default}
         properties[key] = schema
     return {"type": "object", "properties": properties, "required": required}, readers
@@ -333,12 +334,3 @@ def _json_type(value) -> str:
     if value is None:
         return "null"
     return next(_SCALARS[kind] for kind in (bool, int, float, str) if isinstance(value, kind))
-
-
-def _is_json(value) -> bool:
-    """Whether JSON can write ``value`` as it is."""
-    try:
-        json.dumps(value, allow_nan=False)
-    except (TypeError, ValueError):
-        return False
-    return True

@@ -11,7 +11,7 @@ from tests.chat_messages import opened
 
 from llama_chat.tool_registry import ToolRegistry
 
-from llama_chat.tools import ToolCall
+from llama_chat.tools import MAX_ARGUMENT_DEPTH, ToolCall
 from tests.wrappers import system_turn, tool_wrapper
 from llama_chat.result_cutting import _most_kept
 
@@ -539,6 +539,32 @@ def test_a_default_that_json_cannot_write_is_left_out_of_the_declaration():
     assert spec.parameters["properties"] == {"city": {"type": "string"},
                                              "hours": {"type": "number"},
                                              "note": {"type": ["string", "null"]}}
+
+
+@pytest.mark.parametrize("annotation, default", [
+    (list, (1, 2)), (dict, {1: "a"}), (str, "a\ud800"),
+    (list, functools.reduce(lambda inner, _: [inner], range(MAX_ARGUMENT_DEPTH + 1), 1))],
+                         ids=["pair", "number-key", "lone-surrogate", "nested-too-deep"])
+def test_a_default_json_writes_but_no_model_can_be_given_is_left_out_and_the_tool_registers(
+        annotation, default):
+    registry = ToolRegistry()
+
+    def total(a: str, o=default) -> str:
+        return a
+
+    total.__annotations__["o"] = annotation
+    registry.tool(total, description="Rechnet.")
+    spec, = registry.specs()
+    assert "default" not in spec.parameters["properties"]["o"]
+
+
+@pytest.mark.parametrize("parameters", [None, {"type": "object", "properties": {}}],
+                         ids=["described-by-the-function", "described-by-the-caller"])
+def test_the_decorator_applied_to_something_no_model_can_call_is_refused_naming_it(parameters):
+    registry = ToolRegistry()
+    with pytest.raises(TypeError, match="a tool is a function a model can call, not 42"):
+        registry.tool("Die Zeit.", name="clock", parameters=parameters)(42)
+    assert len(registry) == 0
 
 
 def test_every_list_and_dict_that_fits_its_parameter_reaches_the_tool_as_given():
