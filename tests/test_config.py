@@ -230,7 +230,7 @@ def test_each_settings_docstring_lists_its_settings_in_the_order_the_code_declar
 def test_the_settings_that_keep_a_question_answered_are_on_by_default_and_each_can_be_switched_off():
     on = Config()
     assert (on.min_answer_tokens, on.answer_room_tokens, on.max_calls, on.tool_timeout_s,
-            on.unread_reply_timeout_s) == (1, 1024, 10, 60.0, 60.0)
+            on.unread_reply_timeout_s) == (1, 1024, 10, 60.0, 10.0)
     off = Config(min_answer_tokens=None, answer_room_tokens=None, max_calls=None,
                  tool_timeout_s=None, unread_reply_timeout_s=None)
     assert off.max_calls is None and off.tool_timeout_s is None

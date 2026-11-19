@@ -60,12 +60,14 @@ class Config:
         max_reply_tokens: Cap on the tokens of one reply, every generation
             of it together, a thought included. ``None`` sets none, so a reply may run until the context is full;
             generation never crosses ``context_size`` either way.
-        min_reply_tokens: Refuse a request with
-            :class:`~llama_chat.errors.ContextOverflowError` when fewer than
-            this many tokens would be left for the reply. Never fewer are kept
-            than the shortest reply that holds an answer takes, so ``0`` keeps
-            only those. It must stay below ``context_size``, which no request
-            can leave entirely free.
+        min_reply_tokens: The room a reply keeps: a ``begin`` that leaves
+            less beside a short question, and a reply going on with an open
+            turn that would leave less, is refused with
+            :class:`~llama_chat.errors.ContextOverflowError`, and a longer
+            question is cut to leave it. Never fewer are
+            kept than the shortest reply that holds an answer takes, so ``0``
+            keeps only those. It must stay below ``context_size``, which no
+            request can leave entirely free.
         min_answer_tokens: The end of the turn is not drawn until a reply
             holds this many tokens of answer, a thought left out, or a call,
             so that a model that would end at once answers. ``None`` lets it
@@ -89,8 +91,8 @@ class Config:
             stream does and goes on; an action on the thread that reads it
             ends it at once. ``None`` waits until the stream is read on,
             closed or collected; otherwise above ``0``.
-        gpu_layers: Layers to offload to GPU, at least ``0``. ``0`` for a
-            CPU-only build, ``-1`` for all of them.
+        gpu_layers: Layers to offload to GPU: ``-1`` for all of them, else
+            at least ``0``, ``0`` for a CPU-only build.
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
@@ -155,7 +157,7 @@ class Config:
     answer_room_tokens: int | None = 1024
     max_calls: int | None = 10
     tool_timeout_s: float | None = 60.0
-    unread_reply_timeout_s: float | None = 60.0
+    unread_reply_timeout_s: float | None = 10.0
 
     # Backend / hardware
 
