@@ -381,6 +381,13 @@ def test_an_entry_of_a_batch_that_is_no_call_is_reported_with_no_name_and_as_it_
     assert unreadable.text and json.loads(unreadable.text) == entry
 
 
+@pytest.mark.parametrize("entry", ["7", "7.50", '{"name": 7}', '{ "no" :1e3 }', '[ 1,2 ]'])
+def test_an_entry_of_a_batch_that_is_no_call_is_reported_in_the_very_text_the_model_wrote(entry):
+    calls = parse_calls(f'[ {{"name": "clock", "arguments": {{}}}} ,\n {entry} ]', None,
+                        json_keys=_JSON_KEYS)
+    assert calls[1].status == "unreadable" and calls[1].text == entry
+
+
 @pytest.mark.parametrize("written, names", [('{"name": "clock"}', ["clock"]),
                                             ('[{"name": "clock"}, {"name": "uhr"}]', ["clock", "uhr"])])
 def test_a_json_call_that_writes_no_arguments_is_a_call_with_none(written, names):
@@ -727,8 +734,18 @@ def test_a_reference_finds_a_definition_whose_name_holds_a_slash_or_a_tilde(refe
     assert _read_with_schema("01234", {"$ref": reference}, definitions) == "01234"
 
 
+@pytest.mark.parametrize("reference", ["#/properties/v/anyOf/0", "#/$defs/Choices/1/items"])
+def test_a_reference_through_a_list_position_is_followed_to_the_schema_it_names(reference):
+    definitions = {"$defs": {"Choices": [{"type": "number"}, {"items": {"type": "string"}}]}}
+    schema = {"f": {"type": "object", "properties": {
+        "v": {"anyOf": [{"type": "string"}]}, "w": {"$ref": reference}}, **definitions}}
+    call, = parse_calls("fn:f{v:01234,w:01234}", CALL_BODY, "fn:", schema)
+    assert call.arguments == {"v": "01234", "w": "01234"}
+
+
 @pytest.mark.parametrize("reference", ["#/$defs/Missing/deeper", "#/$defs/Text/type/deeper",
-                                       "#/$defs/List/0"])
+                                       "#/$defs/List/0", "#/$defs/List/1", "#/$defs/List/x",
+                                       "#/$defs/List/\u00b2"])
 def test_a_reference_through_something_that_is_no_object_does_not_stop_the_call_being_read(
         reference):
     definitions = {"$defs": {"Text": {"type": "string"}, "List": [{"description": "free text"}]}}
@@ -765,3 +782,26 @@ def test_a_blank_argument_between_separators_is_refused_naming_it_and_the_argume
     with pytest.raises(ValueError, match=re.escape(
             f"an empty argument between separators: {arguments!r}")):
         parse_calls("fn:f{" + arguments + "}", CALL_BODY, "fn:")
+
+
+@pytest.mark.parametrize("after_last", [" and more text", '|<a>1|</a>|', "<", "|<"],
+                         ids=["text", "a second copy", "a separator", "a separator and its bar"])
+def test_anything_but_the_closing_after_the_last_member_makes_the_call_unreadable(after_last):
+    with pytest.raises(ValueError, match="after the last argument"):
+        parse_calls('f">|<a>1|</a>|' + after_last, _ELEMENTS)
+    assert parse_calls('f">|<a>1|</a>| \n', _ELEMENTS)[0].arguments == {"a": 1}
+
+
+@pytest.mark.parametrize("body, call_body", [
+    ("arg=city>\nBo", _LINES), ("fn:f{a:1", CALL_BODY), ("fn:f{a:1,b:", CALL_BODY)],
+    ids=["by-lines", "braced", "braced-second-value"])
+def test_a_call_whose_closing_never_comes_is_refused_and_not_read_as_far_as_it_got(body, call_body):
+    with pytest.raises(ValueError, match="never closes"):
+        parse_calls(body if body.startswith("fn:") else "fn>\n<" + body, call_body,
+                    "fn:" if body.startswith("fn:") else "")
+
+
+@pytest.mark.parametrize("value", ["it's", "x\\'y", "rock'n'roll"])
+def test_a_quote_inside_a_value_written_without_quotes_is_a_character_of_that_value(value):
+    call, = parse_calls(f"fn:f{{a:{value},b:2}}", CALL_BODY, "fn:")
+    assert call.arguments == {"a": value, "b": 2}

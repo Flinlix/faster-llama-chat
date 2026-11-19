@@ -15,7 +15,7 @@ from dataclasses import replace
 from typing import Any
 
 from .template import CallBody, json_arguments
-from .tools import MAX_ARGUMENT_DEPTH, ToolCall, nesting_depth
+from .tools import MAX_ARGUMENT_DEPTH, ToolCall, json_value_fault, nesting_depth
 from .loop_variant import LoopVariant
 
 
@@ -60,9 +60,15 @@ def parse_calls(body: str, call_body: CallBody | None,
         if nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
             raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
     schemas = parameters or {}
-    return [replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
-                                           schemas.get(call.name)))
-            for call in calls]
+    typed = [replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
+                                            schemas.get(call.name)))
+             for call in calls]
+    # Held to what a history's call is held to, so that a conversation begun again keeps it.
+    for call in typed:
+        if (fault := json_value_fault(call.arguments)) is not None:
+            raise ValueError(f"the arguments of the call to {call.name!r} are no JSON every "
+                             f"model can be given: {fault}")
+    return typed
 
 
 def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
@@ -97,8 +103,29 @@ def _as_json_calls(text: str, keys: tuple[str, ...], id_key: str | None) -> list
     if not calls or all(call is None for call in calls):
         return []
     # Each entry of a batch is judged on its own: one that is no call is unreadable alone.
-    return [call or ToolCall("", {}, status="unreadable", text=json.dumps(item))
-            for call, item in zip(calls, batch)]
+    written = _entry_texts(text) if isinstance(decoded, list) else [text.strip(_JSON_SPACE)]
+    return [call or ToolCall("", {}, status="unreadable", text=entry)
+            for call, entry in zip(calls, written)]
+
+
+def _entry_texts(text: str) -> list[str]:
+    """The text of each entry of the JSON list ``text``, as the model wrote it."""
+    at, entries = text.index("[") + 1, list[str]()
+    entries_variant = LoopVariant("finding the entries of a batch")
+    while True:
+        entries_variant.passes(len(text) - at)
+        at = _skip_space(text, at)
+        if text[at] == "]":
+            return entries
+        _value, end = _SPELLED.raw_decode(text, at)
+        entries.append(text[at:end])
+        at = _skip_space(text, end)
+        at += text[at] == ","
+
+
+def _skip_space(text: str, at: int) -> int:
+    """Where the first character from ``at`` on that is no JSON whitespace stands."""
+    return len(text) - len(text[at:].lstrip(_JSON_SPACE))
 
 
 def _one_json_call(decoded, keys: tuple[str, ...], id_key: str | None) -> ToolCall | None:
@@ -150,7 +177,9 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
         return ToolCall(name=name, arguments={}, id=written_id)
     # A model may write whitespace after the last argument's closing tag.
     closing = call_body.body_close.rstrip()
-    if closing and rest.rstrip().endswith(closing):
+    if closing and not rest.rstrip().endswith(closing):
+        raise ValueError(f"an argument that never closes: {rest!r}")
+    if closing:
         rest = rest.rstrip()[:len(rest.rstrip()) - len(closing)]
     if call_body.key_open and rest.startswith(call_body.key_open):
         rest = rest[len(call_body.key_open):]
@@ -171,24 +200,27 @@ def _parse_keyed_pairs(text: str, call_body: CallBody) -> dict:
             break
         key, at = text[at:key_end], key_end + len(call_body.key_close)
         separator = call_body.pair_sep.replace("{key}", key)
+        closing = call_body.body_close.replace("{key}", key).rstrip()
         if call_body.member_open:
             # A nested member may carry this key too, so its closing is matched by depth.
             end = _matching_close(text, at, call_body.member_open.replace("{key}", key),
                                   call_body.member_close.replace("{key}", key))
             following = end if end >= 0 and text.startswith(separator, end) else -1
         else:
-            closing = call_body.body_close.replace("{key}", key).rstrip()
             following = text.find(separator, at)
             end = following if following >= 0 else text.find(closing, at)
-            if following < 0 and end >= 0 and text[end + len(closing):].strip():
-                raise ValueError(f"text after the last argument: {text[end + len(closing):]!r}")
         if end < 0:
             raise ValueError(f"an argument that never closes: {text[at:]!r}")
+        after = end + len(closing) if text.startswith(closing, end) else end
+        if following < 0 and (after == end and closing or text[after:].strip()):
+            raise ValueError(f"text after the last argument: {text[after:]!r}")
         _add_once(parsed, _unquote(key.strip(), call_body),
                   _parse_typed_value(text[at:end], call_body))
         if following < 0:
-            break
+            return parsed
         at = following + len(separator)
+    if parsed:
+        raise ValueError(f"a separator after the last argument: {text[-40:]!r}")
     return parsed
 
 
@@ -295,6 +327,7 @@ def _object_once(pairs: list[tuple[str, Any]]) -> dict:
 # schema afterwards: a number where text is asked is that text, as written.
 _SPELLED = json.JSONDecoder(parse_int=_Unmarked, parse_float=_Unmarked,
                             object_pairs_hook=_object_once)
+_JSON_SPACE = " \t\n\r"
 
 
 def _typed(value, schema, root) -> Any:
@@ -324,7 +357,12 @@ def _branches(schema, root, seen: frozenset[int]) -> list[dict]:
         target = root
         for name in ref[2:].split("/"):
             name = name.replace("~1", "/").replace("~0", "~")
-            target = target.get(name) if isinstance(target, dict) else None
+            if isinstance(target, dict):
+                target = target.get(name)
+            elif isinstance(target, list) and name.isascii() and name.isdigit() and int(name) < len(target):
+                target = target[int(name)]
+            else:
+                target = None
         found += _branches(target, root, seen)
     for key in ("anyOf", "oneOf"):
         if isinstance(schema.get(key), list):
@@ -456,6 +494,12 @@ def _unquote(text: str, call_body: CallBody) -> str:
     return text
 
 
+def _starts_a_value(before: str, call_body: CallBody) -> bool:
+    """Whether a key or a value may start after ``before``, the text of its part so far: a quote anywhere else is a character of the value."""
+    before = before.rstrip()
+    return not before or before.endswith(call_body.key_close) or before[-1] in "[{,:"
+
+
 def _split_on(text: str, separator: str, call_body: CallBody) -> list[str]:
     """Split on ``separator`` where it is not nested inside something.
 
@@ -475,7 +519,8 @@ def _split_on(text: str, separator: str, call_body: CallBody) -> list[str]:
     splits_variant = LoopVariant("splitting on a separator")
     while at < len(text):
         splits_variant.passes(len(text) - at)
-        if opener and not quoted and text.startswith(opener, at):
+        if opener and not quoted and text.startswith(opener, at) \
+                and _starts_a_value(text[start:at], call_body):
             quoted, at = True, at + len(opener)
             continue
         if quoted:
