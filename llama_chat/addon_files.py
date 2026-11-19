@@ -123,13 +123,19 @@ def read_addon_file(path: Path | None) -> dict:
         Config(**sampling)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{path}: {error}") from None
-    if call and (not isinstance(call, dict) or set(call) != set(CALL_FIELDS)
-                 or not all(isinstance(value, str) and value for value in call.values())):
-        raise ValueError(f"{path}: call must give {list(CALL_FIELDS)}, each as text")
+    if not isinstance(call, dict) or "call" in found and (
+            set(call) != set(CALL_FIELDS)
+            or not all(isinstance(value, str) and value for value in call.values())):
+        raise ValueError(f"{path}: call must be an object giving {list(CALL_FIELDS)}, each "
+                         "as text")
     reasoning_on = found.get("reasoning_on", {})
     if not isinstance(reasoning_on, dict) or "reasoning_on" in found and not reasoning_on:
         raise ValueError(f"{path}: reasoning_on must be an object naming the template "
                          "variables that turn reasoning on, with their values")
+    for name, value in reasoning_on.items():
+        if value is None or not isinstance(value, (str, bool, int, float)):
+            raise ValueError(f"{path}: reasoning_on gives {name} as {json.dumps(value)}; give "
+                             "it a text, a number, true or false")
     return {"templates": templates, "sampling": sampling, "call": call,
             "reasoning_on": reasoning_on}
 

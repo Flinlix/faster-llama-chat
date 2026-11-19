@@ -133,7 +133,8 @@ def test_every_shipped_file_names_its_templates_and_says_where_its_values_come_f
 
 
 @pytest.mark.parametrize("call", [{"opening": "x"},
-                                  {"opening": "x", "name_close": "y", "closing": 3}])
+                                  {"opening": "x", "name_close": "y", "closing": 3},
+                                  None, [], {}, "x"])
 def test_an_add_on_file_with_an_incomplete_call_is_refused(tmp_path, call):
     path = tmp_path / "m.json"
     path.write_text(json.dumps({"call": call}))
@@ -251,7 +252,9 @@ def test_an_add_on_file_may_name_the_template_variables_that_turn_reasoning_on(t
     assert addon_file(None, _TEMPLATE)["reasoning_on"] == {}
 
 
-@pytest.mark.parametrize("reasoning_on", [{}, ["reasoning_effort"], "high"])
+@pytest.mark.parametrize("reasoning_on", [{}, ["reasoning_effort"], "high",
+                                          {"enable_thinking": None},
+                                          {"enable_thinking": [True]}])
 def test_a_reasoning_on_that_names_no_variable_is_refused_naming_the_file(tmp_path, reasoning_on):
     model = _own_file(tmp_path, {"templates": [template_fingerprint(_TEMPLATE)],
                                  "reasoning_on": reasoning_on})
