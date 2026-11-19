@@ -1171,3 +1171,17 @@ def test_a_result_the_template_writes_only_before_its_reply_is_not_named_as_the_
     assert refused.value.field == "messages"
     assert "the user message 'verboten' where it stands" in message
     assert "this word is not written" in message and "tool message" not in message
+
+
+def test_a_call_of_the_history_that_writes_a_key_twice_is_left_out_as_one_the_model_wrote_so_would_be():
+    """Read alike, given or generated: the value meant cannot be told."""
+    w, _ = tool_wrapper()
+    history = [{"role": "user", "content": "Zeit?"},
+               {"role": "assistant", "content": None, "tool_calls": [
+                   {"id": "c1", "type": "function",
+                    "function": {"name": "clock", "arguments": '{"zone": "CET", "zone": "UTC"}'}}]},
+               {"role": "tool", "tool_call_id": "c1", "content": "12:00"},
+               {"role": "assistant", "content": "Zwölf."}]
+    report = w.begin(opened("s", history))
+    assert report.n_left_out_calls == 1
+    assert all("tool_calls" not in m for m in w.conversation()["messages"])

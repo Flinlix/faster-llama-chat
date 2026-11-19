@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 
+from .call_parsing import object_once
 from .errors import ArgumentTypeError, InvalidArgumentError
 from .messages import GENERATED_TURN, THOUGHT_KEY, UNKNOWN_FUNCTION, UNREADABLE_CALL, result_message
 from .tools import ensure_readable, json_value_fault
@@ -25,7 +26,7 @@ from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
 
-# The keys each role's message holds in the Chat Completions form this library takes, ``role`` included.
+# The keys each role's message takes in the Chat Completions form this library takes, ``role`` included.
 _COMPLETIONS_KEYS = {"system": {"role", "content"}, "user": {"role", "content"},
                 "assistant": {"role", "content", "tool_calls", THOUGHT_KEY},
                 "tool": {"role", "tool_call_id", "content"}}
@@ -65,7 +66,7 @@ def read_messages(messages: list) -> list[dict]:
         extra = sorted(set(item) - _COMPLETIONS_KEYS[role])
         if extra:
             raise InvalidArgumentError("messages", f"{where}, a {role} message, holds {extra[0]!r}, "
-                                                   f"which it does not take here; it holds "
+                                                   f"which it does not take here; it takes "
                                                    f"{sorted(_COMPLETIONS_KEYS[role])}")
         if "content" not in item:
             raise InvalidArgumentError("messages", f"{where} needs its 'content'")
@@ -125,7 +126,7 @@ def _call(call, where: str) -> dict:
     extra = sorted(set(call) - _CALL_KEYS)
     if extra:
         raise InvalidArgumentError("messages", f"{where} holds {extra[0]!r}, which a call does "
-                                               f"not take; it holds {sorted(_CALL_KEYS)}")
+                                               f"not take; it takes {sorted(_CALL_KEYS)}")
     if call.get("type", "function") != "function":
         raise InvalidArgumentError("messages", f"{where} is of type {call['type']!r}; only "
                                                "'function' calls are taken")
@@ -133,7 +134,7 @@ def _call(call, where: str) -> dict:
     if not isinstance(given_id, str) or not given_id:
         raise InvalidArgumentError("messages", f"{where} needs its 'id', a non-empty string")
     if not isinstance(function, dict) or set(function) - _FUNCTION_KEYS:
-        raise InvalidArgumentError("messages", f"{where}.function holds 'name' and 'arguments', "
+        raise InvalidArgumentError("messages", f"{where}.function takes 'name' and 'arguments', "
                                                f"not {function!r}")
     name, given = function.get("name"), function.get("arguments", "")
     if not isinstance(name, str):
@@ -144,7 +145,8 @@ def _call(call, where: str) -> dict:
     arguments = _arguments(given)
     if arguments is None or not name:
         _log.info("%s could not be read (%s), so it is left out with its result", where,
-                  "it names no function" if not name else "its arguments are no JSON object")
+                  "it names no function" if not name
+                  else "its arguments are no JSON object, each key once")
         return unreadable_call(given_id)
     return {"id": given_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
@@ -154,7 +156,8 @@ def _arguments(given: str) -> dict | None:
     if given == "":
         return {}
     try:
-        arguments = json.loads(given)
+        # A key written twice leaves the value meant untold, as in a call the model writes.
+        arguments = json.loads(given, object_pairs_hook=object_once)
     except (ValueError, RecursionError):
         return None
     # As a call the model writes: one past the depth limit, or holding what no model reads, is unreadable.

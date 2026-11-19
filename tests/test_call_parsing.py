@@ -1,5 +1,6 @@
 """Reading a call back out of what a model generated."""
 
+import time
 import string
 import dataclasses
 import re
@@ -683,12 +684,14 @@ def test_a_call_with_only_whitespace_for_arguments_reads_with_none_in_a_format_w
         ToolCall("clock", {})]
 
 
-@pytest.mark.parametrize("value", ["plain", "XXXX", "say XXXX twice XXXX", "a''b"])
-def test_where_a_format_s_quote_stands_in_its_delimiters_every_separator_splits_whatever_the_values_hold(
-        value):
-    # Not JSON, so the arguments are read by the format's own delimiters.
-    body = f'clock[PARAMS]{{"a": {value}, "b": {value}}}'
-    assert parse_calls(body, _WITH_ID["json"]) == [ToolCall("clock", {"a": value, "b": value})]
+@pytest.mark.parametrize("value", ["plain", "XXXX", '"Munich"}', '"Munich",'])
+@pytest.mark.parametrize("spelling", ["json", "brace", "brace-then-tag"])
+def test_arguments_a_format_writes_as_json_that_are_no_json_object_make_the_call_unreadable(
+        value, spelling):
+    call_body = _WITH_ID[spelling] if spelling == "json" else _JSON_OBJECT[spelling]
+    closing = call_body.body_close[1:]
+    with pytest.raises(ValueError, match="no JSON object"):
+        parse_calls(f'clock[PARAMS]{{"a": {value}, "b": "x"}}{closing}', call_body)
 
 
 def test_a_value_written_as_a_json_string_reads_as_the_text_its_escapes_stand_for():
@@ -805,3 +808,70 @@ def test_a_call_whose_closing_never_comes_is_refused_and_not_read_as_far_as_it_g
 def test_a_quote_inside_a_value_written_without_quotes_is_a_character_of_that_value(value):
     call, = parse_calls(f"fn:f{{a:{value},b:2}}", CALL_BODY, "fn:")
     assert call.arguments == {"a": value, "b": 2}
+
+
+@pytest.mark.parametrize("written", ["f(city='Munich',unit='c')", "f(city='Munich' ,unit='c')",
+                                     "f(city='Munich',  unit='c')"])
+def test_a_separator_written_without_its_spaces_after_a_quoted_value_still_parts_the_arguments(
+        written):
+    assert parse_calls(written, _WITH_ID["pairs"]) == [ToolCall("f", {"city": "Munich", "unit": "c"})]
+
+
+@pytest.mark.parametrize("written", ["f(city='Munich'x, unit='c')", "f(city='Mun'ich', unit='c')"])
+def test_text_after_a_quoted_value_makes_the_call_unreadable_where_the_template_escapes_its_quotes(
+        written):
+    escaping = dataclasses.replace(_WITH_ID["pairs"], escapes_quotes=True)
+    with pytest.raises(ValueError, match="after a quoted value"):
+        parse_calls(written, escaping)
+
+
+@pytest.mark.parametrize("written, read", [("f(city='it's sunny')", {"city": "it's sunny"}),
+                                           ("f(path='C:\\', b='x')", {"path": "C:\\", "b": "x"})])
+def test_a_quote_inside_a_value_is_a_character_where_the_template_writes_it_unescaped(written, read):
+    assert parse_calls(written, _WITH_ID["pairs"]) == [ToolCall("f", read)]
+
+
+def test_a_quote_a_template_escapes_inside_a_value_is_part_of_it():
+    escaping = dataclasses.replace(_WITH_ID["pairs"], escapes_quotes=True)
+    call, = parse_calls("f(city='it\\'s', unit='c')", escaping)
+    assert call.arguments["unit"] == "c" and call.arguments["city"].endswith("s")
+
+
+@pytest.mark.parametrize("bad", ['{"name": "clock", "arguments": [1]}',
+                                 '{"name": "clock", "arguments": {"n": NaN}}'],
+                         ids=["arguments-no-object", "no-json-a-model-takes"])
+def test_one_bad_entry_of_a_json_batch_is_unreadable_alone_and_the_others_are_read(bad):
+    calls = parse_calls(f'[{bad}, {{"name": "weather", "arguments": {{"city": "Bonn"}}}}]', None,
+                        json_keys=("name", "arguments"))
+    assert [(c.status, c.text) for c in calls] == [("unreadable", bad), ("complete", "")]
+    assert calls[1] == ToolCall("weather", {"city": "Bonn"})
+
+
+@pytest.mark.timed
+def test_a_schema_whose_references_each_lead_to_two_others_is_read_in_time_linear_in_its_size():
+    levels = 40
+    defs = {f"L{i}": {"anyOf": [{"$ref": f"#/$defs/L{i + 1}"}, {"$ref": f"#/$defs/L{i + 1}"}]}
+            for i in range(levels)}
+    defs[f"L{levels}"] = {"type": "string"}
+    schema = {"type": "object", "properties": {"v": {"$ref": "#/$defs/L0"}}, "$defs": defs}
+    started = time.thread_time()
+    call, = parse_calls("fn:f{v:7}", CALL_BODY, "fn:", {"f": schema})
+    assert call.arguments == {"v": "7"} and time.thread_time() - started < 1.0
+
+
+@pytest.mark.parametrize("kind, read", [("string", "[1, 2]"), ("array", [1, 2]),
+                                        (["string", "array"], [1, 2])])
+def test_a_value_written_like_a_list_without_a_type_mark_is_text_where_its_schema_asks_for_text_alone(
+        kind, read):
+    schema = {"type": "object", "properties": {"v": {"type": kind}}}
+    call, = parse_calls("f(v=[1, 2])", _WITH_ID["pairs"], parameters={"f": schema})
+    assert call.arguments == {"v": read}
+
+
+@pytest.mark.parametrize("kind, read", [("object", {}), ("array", []), ("string", ""),
+                                        (["string", "array"], "")])
+def test_an_empty_value_between_tags_is_what_its_schema_asks_for_when_it_cannot_be_text(kind, read):
+    keyed = _WITH_ID["keyed"]
+    schema = {"type": "object", "properties": {"v": {"type": kind}}}
+    call, = parse_calls('f"><v></v>', keyed, parameters={"f": schema})
+    assert call.arguments == {"v": read}

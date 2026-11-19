@@ -1,5 +1,6 @@
 """Generating on the engine's cache context: calls found as they are generated, cancelling."""
 
+import dataclasses
 import pytest
 from llama_chat.config import Config, generation_sampling
 from llama_chat.generation import generate, AnswerGuard, GenerationAccumulator
@@ -223,6 +224,20 @@ def _drawn_generation(pieces: dict, order: list, special: set, boundary: CallBou
     text = "".join(generate(ctx, 0, len(order), sampling=SAMPLING, out=acc, boundary=boundary,
                             guard=guard or AnswerGuard()))
     return text, acc
+
+
+@pytest.mark.parametrize("follows_text", [False, True], ids=["after-a-tag-only", "after-text-too"])
+def test_a_reply_cut_after_text_on_part_of_a_plain_opening_keeps_that_part_as_its_answer(follows_text):
+    boundary = dataclasses.replace(_PLAIN_OPENING, follows_text=follows_text)
+    text, acc = _drawn_generation({0: b"a ", 1: b"{"}, [0, 1], set(), boundary)
+    assert text == "a {" and not acc.cut_inside_call and acc.stop_reason == "token_limit"
+
+
+@pytest.mark.parametrize("follows_text", [False, True], ids=["after-a-tag-only", "after-text-too"])
+def test_a_reply_cut_on_part_of_a_plain_opening_where_a_call_opens_ends_inside_that_call(follows_text):
+    boundary = dataclasses.replace(_PLAIN_OPENING, follows_text=follows_text)
+    text, acc = _drawn_generation({0: b"{"}, [0], set(), boundary)
+    assert text == "" and acc.cut_inside_call
 
 
 def test_a_plain_text_opening_written_inside_the_reply_text_stays_reply_text():

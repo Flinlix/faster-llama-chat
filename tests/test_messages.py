@@ -245,8 +245,8 @@ def _calling(call) -> list[dict]:
     ({"type": "function", "function": _FUNCTION}, "'id'"),
     ({"id": "", "type": "function", "function": _FUNCTION}, "'id'"),
     ({"id": "c", "type": "function", "function": {**_FUNCTION, "strict": True}}, "'strict'"),
-    ({"id": "c", "type": "function"}, "function holds 'name' and 'arguments'"),
-    ({"id": "c", "type": "function", "function": "f"}, "function holds 'name' and 'arguments'"),
+    ({"id": "c", "type": "function"}, "function takes 'name' and 'arguments'"),
+    ({"id": "c", "type": "function", "function": "f"}, "function takes 'name' and 'arguments'"),
 ])
 def test_a_call_in_a_form_not_taken_is_refused_as_messages_naming_where_it_stands_and_why(call, cause):
     with pytest.raises(InvalidArgumentError) as refused:

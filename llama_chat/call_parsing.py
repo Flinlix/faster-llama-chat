@@ -53,27 +53,46 @@ def parse_calls(body: str, call_body: CallBody | None,
             :data:`MAX_ARGUMENT_DEPTH`.
     """
     try:
-        calls = _read_calls(body, call_body, lead_in, json_keys, json_id_key)
+        read = _read_calls(body, call_body, lead_in, json_keys, json_id_key)
     except RecursionError as e:
         raise ValueError("the call's arguments nest deeper than can be read") from e
-    for call in calls:
-        if nesting_depth(call.arguments) > MAX_ARGUMENT_DEPTH:
-            raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
-    schemas = parameters or {}
-    typed = [replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
-                                            schemas.get(call.name)))
-             for call in calls]
+    calls = []
+    for call, written in read:
+        # Each entry of a batch is judged on its own: one that cannot be read is unreadable alone.
+        try:
+            calls.append(call if call.status != "complete" else _checked(call, parameters or {}))
+        except ValueError:
+            if len(read) == 1:
+                raise
+            calls.append(ToolCall("", {}, status="unreadable", text=written))
+    return calls
+
+
+def _checked(call: ToolCall, schemas: dict[str, dict]) -> ToolCall:
+    """``call`` with its arguments read against its tool's schema.
+
+    Raises:
+        ValueError: If its arguments nest deeper than :data:`MAX_ARGUMENT_DEPTH`
+            or are no JSON every model can be given.
+    """
+    try:
+        typed = replace(call, arguments=_typed(call.arguments, schemas.get(call.name),
+                                               schemas.get(call.name)))
+    except RecursionError as e:
+        raise ValueError("the call's arguments nest deeper than can be read") from e
+    if nesting_depth(typed.arguments) > MAX_ARGUMENT_DEPTH:
+        raise ValueError(f"the call's arguments nest deeper than {MAX_ARGUMENT_DEPTH} levels")
     # Held to what a history's call is held to, so that a conversation begun again keeps it.
-    for call in typed:
-        if (fault := json_value_fault(call.arguments)) is not None:
-            raise ValueError(f"the arguments of the call to {call.name!r} are no JSON every "
-                             f"model can be given: {fault}")
+    if (fault := json_value_fault(typed.arguments)) is not None:
+        raise ValueError(f"the arguments of the call to {call.name!r} are no JSON every "
+                         f"model can be given: {fault}")
     return typed
 
 
 def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
-                json_keys: tuple[str, ...] | None, json_id_key: str | None) -> list[ToolCall]:
-    """:func:`parse_calls` before the depth of the arguments is checked."""
+                json_keys: tuple[str, ...] | None, json_id_key: str | None
+                ) -> list[tuple[ToolCall, str]]:
+    """:func:`parse_calls` before the arguments are checked, each call with the text the model wrote for it."""
     # Unstripped: the recovered delimiters carry their own whitespace.
     text = body
     if lead_in and text.startswith(lead_in):
@@ -89,22 +108,30 @@ def _read_calls(body: str, call_body: CallBody | None, lead_in: str,
         raise ValueError(f"not a call as this model writes one in JSON: {body!r}")
     if call_body is None:
         raise ValueError(f"no call_body to read this call with: {body!r}")
-    return [_as_delimited_call(text, call_body)]
+    return [(_as_delimited_call(text, call_body), body)]
 
 
-def _as_json_calls(text: str, keys: tuple[str, ...], id_key: str | None) -> list[ToolCall]:
-    """Read the calls of a JSON body by ``keys``, or nothing where any of them is not a call."""
+def _as_json_calls(text: str, keys: tuple[str, ...], id_key: str | None
+                   ) -> list[tuple[ToolCall, str]]:
+    """Read the calls of a JSON body by ``keys``, each with its entry's text, or nothing where none of them is a call."""
     try:
         decoded = _SPELLED.decode(text)
     except ValueError:
         return []
     batch = decoded if isinstance(decoded, list) else [decoded]
-    calls = [_one_json_call(item, keys, id_key) for item in batch]
+    written = _entry_texts(text) if isinstance(decoded, list) else [text.strip(_JSON_SPACE)]
+    calls = []
+    for item, entry in zip(batch, written):
+        try:
+            calls.append(_one_json_call(item, keys, id_key))
+        except ValueError:
+            if len(batch) == 1:
+                raise
+            calls.append(ToolCall("", {}, status="unreadable", text=entry))
     if not calls or all(call is None for call in calls):
         return []
     # Each entry of a batch is judged on its own: one that is no call is unreadable alone.
-    written = _entry_texts(text) if isinstance(decoded, list) else [text.strip(_JSON_SPACE)]
-    return [call or ToolCall("", {}, status="unreadable", text=entry)
+    return [(call or ToolCall("", {}, status="unreadable", text=entry), entry)
             for call, entry in zip(calls, written)]
 
 
@@ -166,8 +193,12 @@ def _as_delimited_call(text: str, call_body: CallBody) -> ToolCall:
     name = name.strip()
     if not found or not name:
         raise ValueError(f"not a call: {text!r}")
-    whole = _as_json_arguments(rest, call_body) if call_body.arguments_json else None
-    if whole is not None:
+    if call_body.arguments_json:
+        if rest.strip() == call_body.empty_close.strip():
+            return ToolCall(name=name, arguments={}, id=written_id)
+        whole = _as_json_arguments(rest, call_body)
+        if whole is None:
+            raise ValueError(f"arguments that are no JSON object: {rest!r}")
         return ToolCall(name=name, arguments=whole, id=written_id)
     if call_body.key_in_close:
         return ToolCall(name=name, arguments=_parse_keyed_pairs(rest, call_body), id=written_id)
@@ -289,34 +320,55 @@ def _parse_value(text: str, call_body: CallBody) -> Any:
     if unquoted is not text:
         return unquoted             # the model marked it as a string
     if text[:1] in ("{", "[") and text[-1:] in ("}", "]"):
-        # Nested values are JSON in some models, the Python literal a template
-        # interpolates in others, and these delimiters in the rest.
-        try:
-            return _SPELLED.decode(text)
-        except ValueError:
-            pass
-        try:
-            found = ast.literal_eval(text)
-        except (ValueError, SyntaxError, MemoryError, RecursionError):
-            found = None
-        if isinstance(found, (dict, list)):
-            return found
-        try:
-            if text[0] == "{":
-                return _parse_pairs(text[1:-1], call_body)
-            return [_parse_value(item, call_body)
-                    for item in _split_on(text[1:-1], call_body.pair_sep, call_body)]
-        except ValueError:
-            return text             # a string a template wrote as it stands
+        nested = _nested_value(text, call_body)
+        return text if nested is None else _Bracketed(text, nested)
     return _Unmarked(text)
+
+
+def _nested_value(text: str, call_body: CallBody) -> Any:
+    """The object or list ``text`` spells, or ``None`` where it spells neither."""
+    # Nested values are JSON in some models, the Python literal a template
+    # interpolates in others, and these delimiters in the rest.
+    try:
+        return _SPELLED.decode(text)
+    except ValueError:
+        pass
+    try:
+        found = ast.literal_eval(text)
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        found = None
+    if isinstance(found, (dict, list)):
+        return found
+    try:
+        if text[0] == "{":
+            return _parse_pairs(text[1:-1], call_body)
+        return [_parse_value(item, call_body)
+                for item in _split_on(text[1:-1], call_body.pair_sep, call_body)]
+    except ValueError:
+        return None                 # a string a template wrote as it stands
 
 
 class _Unmarked(str):
     """A value a call format wrote without marking its type, read by :func:`_typed`."""
 
 
-def _object_once(pairs: list[tuple[str, Any]]) -> dict:
-    """A JSON object from its ``pairs``, none of whose keys the model wrote twice."""
+class _Bracketed(_Unmarked):
+    """An object or a list a call format wrote without marking its type: that value, or its text where the schema asks for text alone."""
+
+    value: Any
+
+    def __new__(cls, text: str, value):
+        found = super().__new__(cls, text)
+        found.value = value
+        return found
+
+
+def object_once(pairs: list[tuple[str, Any]]) -> dict:
+    """A JSON object from its ``pairs``.
+
+    Raises:
+        ValueError: If a key comes twice, so that the value meant cannot be told.
+    """
     found: dict = {}
     for key, value in pairs:
         _add_once(found, key, value)
@@ -326,13 +378,17 @@ def _object_once(pairs: list[tuple[str, Any]]) -> dict:
 # Reads JSON with each number kept as the text the model wrote, read by its tool's
 # schema afterwards: a number where text is asked is that text, as written.
 _SPELLED = json.JSONDecoder(parse_int=_Unmarked, parse_float=_Unmarked,
-                            object_pairs_hook=_object_once)
+                            object_pairs_hook=object_once)
 _JSON_SPACE = " \t\n\r"
 
 
 def _typed(value, schema, root) -> Any:
     """``value`` with each :class:`_Unmarked` text in it read against the part of ``schema`` it fills, ``root`` holding what a ``$ref`` names."""
-    branches = _branches(schema, root, frozenset())
+    branches = _branches(schema, root, set())
+    if isinstance(value, _Bracketed):
+        if _asks_text_alone(branches):
+            return str(value)
+        value = value.value
     if isinstance(value, _Unmarked):
         return _read_unmarked(str(value), branches)
     if isinstance(value, dict):
@@ -346,11 +402,11 @@ def _typed(value, schema, root) -> Any:
     return value
 
 
-def _branches(schema, root, seen: frozenset[int]) -> list[dict]:
-    """``schema`` and every schema its ``anyOf``, ``oneOf`` and ``$ref`` into ``root`` lead to, each once along a path."""
+def _branches(schema, root, seen: set[int]) -> list[dict]:
+    """``schema`` and every schema its ``anyOf``, ``oneOf`` and ``$ref`` into ``root`` lead to, each once; ``seen`` holds those found so far."""
     if not isinstance(schema, dict) or id(schema) in seen:
         return []
-    seen = seen | {id(schema)}
+    seen.add(id(schema))
     found = [schema]
     ref = schema.get("$ref")
     if isinstance(ref, str) and ref.startswith("#/"):
@@ -375,6 +431,15 @@ def _properties(schema: dict) -> dict:
     return properties if isinstance(properties, dict) else {}
 
 
+def _asks_text_alone(branches: list[dict]) -> bool:
+    """Whether ``branches`` ask for text and for no object or list."""
+    allowed = set()
+    for branch in branches:
+        kind = branch.get("type")
+        allowed |= {kind} if isinstance(kind, str) else set(kind) if isinstance(kind, list) else set()
+    return "string" in allowed and not allowed & {"array", "object"}
+
+
 def _read_unmarked(text: str, branches: list[dict]) -> Any:
     """``text`` as the literal it spells, unless one of ``branches`` asks for text and none for that literal."""
     allowed = set()
@@ -384,6 +449,9 @@ def _read_unmarked(text: str, branches: list[dict]) -> Any:
             return text
         kind = branch.get("type")
         allowed |= {kind} if isinstance(kind, str) else set(kind) if isinstance(kind, list) else set()
+    if not text and "string" not in allowed and allowed & {"object", "array"}:
+        # A format that writes a value between tags writes an empty object or list as nothing.
+        return {} if "object" in allowed else []
     literal = _literal(text)
     if "string" in allowed and not allowed & _json_types(literal):
         return text
@@ -526,8 +594,21 @@ def _split_on(text: str, separator: str, call_body: CallBody) -> list[str]:
         if quoted:
             if closer and text.startswith(closer, at):
                 quoted, at = False, at + len(closer)
+                follows = text[at:].lstrip()
+                bare_separator = separator.strip()
+                if depth == 0 and bare_separator and follows.startswith(bare_separator) \
+                        and not text.startswith(separator, at):
+                    # The separator written without its spaces after a quoted value.
+                    parts.append(text[start:at])
+                    at = start = len(text) - len(follows) + len(bare_separator)
+                elif call_body.escapes_quotes and follows and not (
+                        follows.startswith((",", ":", "]", "}")) or not separator.strip()
+                        or follows.startswith(bare_separator)):
+                    # Where the template escapes a quote, an unescaped one ends the value.
+                    raise ValueError(f"text after a quoted value: {follows[:40]!r}")
                 continue
-            at += 1
+            # A quote the template escapes, as JSON and Python write it, is part of the value.
+            at += 2 if call_body.escapes_quotes and text[at] == "\\" else 1
             continue
         if depth == 0 and text.startswith(separator, at):
             parts.append(text[start:at])

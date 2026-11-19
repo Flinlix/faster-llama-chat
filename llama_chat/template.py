@@ -90,6 +90,10 @@ class CallBody:
         arguments_json: Whether the arguments after the name are one JSON
             object, as the template writes them or an add-on file's call says;
             such arguments are read as JSON first, however they are spaced.
+        escapes_quotes: Whether the template writes a one-character quote
+            inside a quoted value with a backslash before it, as JSON and
+            Python do; only then is a quoted value read strictly, a quote
+            followed by anything but a separator making the call unreadable.
     """
 
     name_close: str
@@ -109,6 +113,7 @@ class CallBody:
     item_close: str = ""
     arguments_json: bool = False
     id_open: str = ""
+    escapes_quotes: bool = False
 
     def __post_init__(self) -> None:
         if not self.name_close and not self.key_open:

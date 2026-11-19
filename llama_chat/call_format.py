@@ -186,7 +186,11 @@ def extract_call_body(render: Render, call_open: str,
     key_in_close = _KEY in pair_sep and _KEY in body_close
     if key_in_close:
         pair_sep, body_close = pair_sep.replace(_KEY, "{key}"), body_close.replace(_KEY, "{key}")
+    # A one-character quote inside a value: written with a backslash before it, or as it stands.
+    quoted_quote = (rendered_body({_KEY: _STRING + quote_close + _STRING2})
+                    if len(quote_close) == 1 else None)
     fields = dict(
+        escapes_quotes=quoted_quote is not None and "\\" + quote_close in quoted_quote,
         name_close=name_close,
         key_open=opens_args[len(name_close):],
         key_close=bare_before,

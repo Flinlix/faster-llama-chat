@@ -429,8 +429,12 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
         if generated.stop_reason == "token_limit" and call_open is None and open_text is not None:
             # Where no token of its own opens a call, a reply cut at a call's opening text
             # ends inside that call: the opening is the call's, not the answer's.
+            # Only part of the opening counts where it stands where a call opens: first in
+            # the reply, or after a tag.
             opens_at = visible.partial_match(open_text)
-            if opens_at < len(visible) and visible.since(opens_at).strip():
+            written = visible.since(opens_at).strip()
+            if opens_at < len(visible) and written and (written == open_text or _after_tag(
+                    context, starts, generated.token_ids, visible.content_end(opens_at))):
                 upto, generated.cut_inside_call = min(upto, opens_at), True
         delta = visible.emit(upto)
         if delta:
