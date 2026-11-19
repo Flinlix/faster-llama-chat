@@ -63,7 +63,7 @@ class ContextOverflowError(RefusalError):
 
 
 class ArgumentTypeError(TypeError):
-    """An argument of a call, or a setting, is of a type that is refused; the message names it and the type it must be."""
+    """An argument of a call is of a type that is refused; the message names it and the type it must be. A setting of the wrong type is an :class:`InvalidSettingError`."""
 
 
 class EngineError(RuntimeError):
