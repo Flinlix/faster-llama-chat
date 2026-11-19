@@ -875,7 +875,8 @@ class ChatWrapper:
 
         Waits for any in-flight generation; on the thread that reads an
         unfinished reply, ends that reply first, as closing its stream does,
-        and from a tool that reply runs, is refused as any action is.
+        and from a tool that reply runs, is refused as any action is, changing
+        nothing. A reply asked for and not yet read raises once it is read.
         Closes a context passed to the constructor as well. Every action after
         close raises :class:`~llama_chat.errors.OutOfOrderError` once its
         arguments are checked;
@@ -885,11 +886,16 @@ class ChatWrapper:
         try:
             # Through its stream, as the next action ends it, so that the stream keeps its
             # summary; one another thread has begun to step is waited for below instead.
-            if self._holder is threading.current_thread() \
+            # From a tool a reply runs, that reply is running, and close() is refused below
+            # before it changes anything.
+            running = any(inspect.getgeneratorstate(s) == inspect.GEN_RUNNING
+                          for s in self._replies)
+            if self._holder is threading.current_thread() and not running \
                     and self._end_reply_waiting_for_reader() is not False:
-                # From a tool the reply runs, that reply is running, and close() is refused below.
+                # A reply begun is ended as closing its stream ends it; one not begun
+                # raises, as after any close, once it is read.
                 for steps in [s for s in self._replies
-                              if inspect.getgeneratorstate(s) != inspect.GEN_RUNNING]:
+                              if inspect.getgeneratorstate(s) == inspect.GEN_SUSPENDED]:
                     steps.close()
         finally:
             with self._held(settles=False):

@@ -699,3 +699,40 @@ def test_an_action_refused_out_of_order_names_in_its_own_words_the_action_and_th
     assert refused.value.field is None
     if before is not None:
         assert wrapper.conversation() == before
+
+
+def test_a_close_a_tool_asks_for_is_refused_and_leaves_the_replies_asked_for_after_it_to_be_answered():
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=1024, tool_timeout_s=None), context=fake)
+    refused = []
+
+    def closes():
+        try:
+            w.close()
+        except OutOfOrderError as error:
+            refused.append(error)
+        return "ok"
+
+    registry = ToolRegistry()
+    registry.tool(closes, description="Schliesst.", name="schliesst", parameters={})
+    w.begin(opened("s"), tools=registry.specs())
+    fake.call_script = ["fn:schliesst{}"]
+    first = w.reply("los", tool_call_policy=registry)
+    second = w.reply("danach")
+    assert first.finish().text and refused
+    assert second.finish().text
+    assert [m["content"] for m in after_system(w.conversation()["messages"])][-2] == "danach"
+
+
+def test_a_reply_not_begun_when_the_wrapper_closes_raises_that_it_is_closed_wherever_close_was_called():
+    """Closed on the thread that reads an unfinished reply or from where nothing is read, a reply asked for and not yet read raises alike."""
+    for reads_one_first in (True, False):
+        w = ChatWrapper(Config(context_size=1024), context=FakeContext(PLAIN, gen_tokens=20))
+        w.begin(opened("s"))
+        read = w.reply("eins")
+        if reads_one_first:
+            next(read)
+        waiting = w.reply("zwei")
+        w.close()
+        with pytest.raises(OutOfOrderError, match="this ChatWrapper is closed"):
+            waiting.finish()
