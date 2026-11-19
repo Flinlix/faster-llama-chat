@@ -72,9 +72,10 @@ own kernels or the CUDA backend.
 The same by hand:
 
 ```bash
-CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.23"   # CPU
-CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "llama-cpp-python>=0.3.23"     # Nvidia GPU
-pip install -e ".[test]"
+CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"   # CPU
+CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"     # Nvidia GPU
+pip install -e .                    # or -e ".[test,dev]" with the test dependencies
+git config core.hooksPath hooks     # with them: the checks before every push
 ```
 
 It installs as `faster-llama-chat` and is imported as `llama_chat`.
@@ -119,14 +120,25 @@ it in a `with`. To stop a generation from another thread, pass
 question is decoded too, which stops within 512 tokens, it ends the request
 with nothing changed: no question is added and no older exchange is dropped.
 After a tool's result, set before the next first word, it leaves the turn
-open with its results, for `reply()` to go on with.
+open with its results, for `reply()` to go on with. Set while registered
+tools run, it runs no later call of that round: the calls that ran keep their
+results, the rest stay owed. It also stops, within 512 tokens, the decode the
+reply before left for the next action, and the wait for a reply another
+thread holds, which then ends at once with nothing changed. A tool that reads
+the stream of the reply running it is refused with an `OutOfOrderError`, told
+to the model as the tool's failure.
 
 Actions that change the cache are serialized by one lock. `close()`, or
 `with ChatWrapper(...) as chat:`, waits for a running generation, frees the
 model and makes later actions raise, while `conversation()` and what says
 where it stands still answer. A reply holds the lock while it is read.
 An action on the thread that reads it ends that reply first, as closing its
-stream does, with a warning logged, and then goes on; a reply handed to
+stream does, with a warning logged, and then goes on. A `begin` refused by
+the checks that read its arguments alone (the declarations, the message forms,
+what the model can take, tags and tool names) ends nothing; any other refusal,
+such as a history the template refuses, one that does not fit, or a
+`truncate_last_reply` text that is no prefix of the reply, has ended it
+already. A reply handed to
 another thread is read by that thread from then on. An action from another
 thread waits for the reply, and where nobody reads the reply on for
 `unread_reply_timeout_s`, it ends that reply as closing its stream does (a call
@@ -244,8 +256,9 @@ none), `reasoning` and `generated_turns` (each turn the model generated with a
 call, as its tokens and its own messages, for the same model; see [Keeping a
 conversation](#keeping-a-conversation)), so `begin(**chat.conversation())`
 begins again as it was. Whatever `begin` takes without leaving anything out,
-this gives back unchanged but for the spelling of arguments and an empty reply
-text written as said. Safe from any thread, while a reply runs too: it reads
+this gives back unchanged but for the spelling of arguments, an empty reply
+text written as said, and two questions in a row joined where the template
+writes no two. Safe from any thread, while a reply runs too: it reads
 all of it as the newest finished change left it.
 
 **Where it stands.** `awaits_reply` says whether `reply()` without text would
@@ -257,7 +270,9 @@ and `can_take_system_prompt`. Both are settled when the model loads, never
 change, and are safe from any thread. `total_tokens`, `turn_open` and
 `pending_calls` are safe from any thread, as `conversation()` is: each is read
 as the newest finished change left it, so a count read while a reply streams is
-the one from before that reply.
+the one from before its generation, its question included, or, while a tool
+the reply runs is running, the one from the newest step of the reply that
+finished: its call, or the results written before it.
 
 `stop_reason` on a `Reply` is one of `STOP_REASONS` (the type `StopReason`):
 
@@ -333,15 +348,22 @@ the argument or setting it is about, where it is about one:
 | `OutOfOrderError` | the action needs another one first, which the message names |
 | `ContextOverflowError` | it does not fit; `needed_tokens` and `available_tokens` say by how much |
 
-A wrong type, or an argument an action does not take, is an
-`ArgumentTypeError`, a `TypeError` that names the argument. A text holding a
+A setting of the wrong type, of `Config`, of `Sampling` or a request's own
+(`max_reply_tokens`, `max_calls`), is an `InvalidSettingError` naming it, as
+a value out of its range is. Any other argument of the wrong type, or one an
+action does not take, is an `ArgumentTypeError`, a `TypeError` that names the
+argument. A text holding a
 lone surrogate (half of a UTF-16 pair, which no model can read) is refused with
 an `InvalidArgumentError` naming its argument; a tool result holding one is
 told to the model as an `unwritable_result` failure. A `ToolSpec` is checked
 where it is built: text keys only, a JSON value every model can be given, no
 `NaN`, nested at most 100 levels. An `EngineError`, a
 `RuntimeError`, says the engine failed while it decoded, edited or generated;
-the next action brings the cache back first. An `InternalError`, a
+the next action brings the cache back first. Where it failed while the results
+of the tools a reply ran were written, those results are kept and written by
+the next `reply()` or `inject_tool_result()` (a result handed over for the
+same call takes the place of the kept one), so no tool that ran is told to the
+model as not run. An `InternalError`, a
 `RuntimeError` too, is a fault of this library, found before it could spoil the
 conversation: a loop that made no progress, or, with `check_cache`, a cache that
 does not read as the render. After a loop that made no progress the
@@ -415,10 +437,13 @@ as it was. Every call is reported on
 `ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
 and one the reply cap or a cancel cut short, the room cut at its plain
 opening, or whose plain opening ended a reply under `"withhold"`, or one not
-run because its turn closed for want of room, as `"unfinished"`. The status is of
-the type `ToolCallStatus`. Neither of the last two is handed over in the
-stream or listed in `pending_calls`. An unfinished call has no name, arguments
-or id. An unreadable call has no name or arguments; where the reply stopped on
+run because its turn closed for want of room, as `"unfinished"`. A call whose
+tool ran but whose turn closed for want of room before its result was written,
+so that the model never read what the tool returned, is `"result_dropped"`.
+The status is of the type `ToolCallStatus`. Neither an unreadable nor an
+unfinished call is handed over in the stream or listed in `pending_calls`. An
+unfinished call has no name, arguments or id, except one read whole that was
+not run for want of room, which keeps them. An unreadable call has no name or arguments; where the reply stopped on
 it, it carries in `ToolCall.text` what the model wrote between the call's
 opening and its closing, and as an entry of a batch it carries its id.
 `conversation()` leaves it out of its messages with its result, the reply it
@@ -514,7 +539,8 @@ long is cut, its tags kept, and ends with a note the model reads, such as
 for the reply, the turn closes on what the model wrote, as the reply cap
 closes one: a reply that answers its calls itself, under `"refuse"` or a
 registry, ends with `"token_limit"`, each call not yet answered reported
-`"unfinished"`, and after `inject_tool_result`
+`"result_dropped"` where its tool ran and `"unfinished"` where it did not, and
+after `inject_tool_result`
 `turn_open` is false, the calls not yet answered are dropped, and the next
 question is asked as after any reply.
 
@@ -621,7 +647,12 @@ token for token. On another model, or without them, every turn is written as
 that model's template writes it from the messages alone. `generated_turns` is
 JSON-ready and only meaningful to the model that wrote it; reasoning on or off
 and the declared tools carry over to another model, its other settings come
-from it.
+from it. It is trusted input: its tokens go into the cache as they stand, the
+model's own tags included, and nothing checks them against the messages'
+text, so a `generated_turns` someone edited can put any turn, a system turn
+included, in front of the model. Give back only what `conversation()` gave,
+kept where nobody else can change it; where a saved conversation passes
+through hands you do not trust, begin again from its messages alone.
 
 To keep everything, older turns included, keep each message as you send it
 and each reply as you read it. A request whose generation fails before it says
@@ -694,13 +725,13 @@ value `Config` refuses.
 | `answer_room_tokens` | `1024` | the tokens a reply keeps for its answer where the model thinks first: a thought that reaches the rest of the generation's room, at most half of it, is closed as the template closes one, so the model answers; `None` lets a thought run until the room is spent |
 | `max_calls` | `10` | the ceiling on the calls one turn run against a registry may use, where a request gives none; in the last permitted round the model can no longer call, so it answers; `None` sets none |
 | `tool_timeout_s` | `60.0` | how long a tool a registry runs may take before it is answered with a `tool_timeout` failure; `None` waits for it |
-| `unread_reply_timeout_s` | `60.0` | how long an action waits for a reply nobody reads on before it ends that reply as closing its stream does; `None` waits until it is read, closed or collected |
+| `unread_reply_timeout_s` | `10.0` | how long an action waits for a reply nobody reads on before it ends that reply as closing its stream does; `None` waits until it is read, closed or collected |
 
 **Backend and hardware**
 
 | field | default | meaning |
 |------|------|------|
-| `gpu_layers` | `0` | layers offloaded to the GPU, at least `0`; `-1` for all |
+| `gpu_layers` | `0` | layers offloaded to the GPU: `-1` for all, else at least `0` |
 | `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
 | `decode_threads` | `None` | CPU threads for generating a reply, a token at a time, at least `1`; `None` uses one per physical core of the processors the process may run on, at most as many as its CPU quota allows |
 | `prefill_threads` | `None` | CPU threads for prefill, the decode of tokens the cache is given (a question, or what is decoded again), at least `1`; `None` means as many as `decode_threads`, and so one per physical core where that is not set either |
@@ -803,7 +834,10 @@ A caller's text (a message, a thought, a
 call's name and arguments, and each description of a declared tool) is
 tokenized with special-token parsing off, and the template's tags with it on,
 so a literal tag typed into a message or a tool's description stays text and
-can never forge a turn boundary. A conversation is refused where its
+can never forge a turn boundary. The rest of a declaration (a tool's name, a
+parameter's name, a choice value, a title) is what a template reads to decide
+what it writes, so it is written as it stands: `begin` refuses one that holds
+a tag with an `InvalidArgumentError` naming `tools`. A conversation is refused where its
 template writes anything derived from a text besides the text itself, such as
 the text's length, or something it writes only when the text holds a certain
 word. The plain text between two tags, the template's and the caller's alike,

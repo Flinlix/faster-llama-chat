@@ -6404,3 +6404,110 @@ fault of the library, not a refused action; rule 6 does not cover it. The
 error reaches the caller with its cause, and the next action brings the record
 of the cache back to the cache. The refusal path of the windowed drop decodes
 a few tokens more than the fallback; left as it is.
+
+## 2026-11-19: The whole-project review's findings, fixed
+
+The user chose to fix every finding of the whole-project review (page items
+521.x), with these choices: a call whose tool ran but whose result found no
+room gets a status of its own (522.3B); a fault of the library partway
+through a drop is undone at once, rule 6 unchanged (522.4B, which revises the
+516.23B decision above); saved turns are documented as trusted input
+(522.6C); a template that refuses certain dates is left as it is, since the
+library does not handle bugs in templates (522.7C); an action refused for its
+own arguments ends no reply (522.8A); a tag in a declaration's names is
+refused (522.9A); a reply nobody reads holds an action at most 10 s by
+default (522.10B); the known-fault list in the tests goes (521.46). None of
+the fixes is particular to one model, so no add-on file changed.
+
+- **Reading calls.** Where a template writes a call's arguments as one JSON
+  object, arguments that are no JSON object make the call unreadable; the
+  recorded way back through the format's delimiters (finding H7 of
+  2026-11-13) is gone, since it ran tools with values such as `Munich"}`.
+  After a quoted value only spaces and a separator may follow, and a
+  separator written without its spaces still parts the arguments (a one
+  character quote is escaped with a backslash, as JSON and Python write it).
+  One bad entry of a JSON batch is unreadable alone. A schema's references
+  are followed once each, so reading a call takes time linear in the schema
+  (21 levels of doubled references took 11.8 s, measured by the review). A
+  value written like a list stays text where the schema asks for text alone;
+  an empty value between tags is `{}` or `[]` where the schema asks for that
+  alone. A history call that writes a key twice is unreadable, as a generated
+  one is; both use one duplicate check.
+- **Status `"result_dropped"`.** Where a turn closes for want of room after
+  its tools ran, those calls are `"result_dropped"`, the calls not run
+  `"unfinished"`; before, one path reported them `"unfinished"` (read as not
+  run) and the other `"complete"`.
+- **Results kept across an engine failure.** Answers not yet written when the
+  engine fails wait in the wrapper, and the next reply or result writes them
+  in call order; a result the caller hands over for the same call replaces
+  the kept one.
+- **Cancel.** It is read before each registered call, it stops the work the
+  reply before left (the decode then stops after one part of 512 tokens and
+  leaves the rest to the next action, the form an interrupt already leaves),
+  and it ends the wait for a reply another thread holds; that wait looks at
+  the cancel every 0.05 s, its measure the time left until the longest wait
+  the platform allows. A cancelled request no longer decodes the whole kept
+  history again to roll back (measured on a cache that cannot shift: 1958
+  tokens before, at most 512 after).
+- **Threads.** A tool that reads its own reply's stream is refused; the reader
+  gets a copy of each call that runs; the open turn's policy is read from the
+  published copy outside the lock; `close()` copies the set of replies under
+  a lock of its own; a failure of the unread-reply timer is logged; a stream
+  half read at the interpreter's end prints nothing.
+- **Begin.** The checks that depend only on its arguments (declarations,
+  message forms, what the model can take, tags, names) run before it takes
+  the wrapper, so a begin refused for its arguments ends no reply. A tag in a
+  tool's name, a parameter's name, a choice value or a title is refused, as
+  the template reads those as written (the 316.10 decision kept marking to
+  descriptions; that holds, the rest is now refused rather than written). A
+  tool name the call format writes so that it reads back as another is
+  refused; this is checked where a call to a plain name reads back, which
+  leaves out a template whose add-on file names the call format.
+- **Settings.** A request's `max_calls` is refused as its config field is,
+  with an `InvalidSettingError`, for its type and its range alike, as
+  `max_reply_tokens` already was; the README now says that a setting of the
+  wrong type is an `InvalidSettingError`. An add-on file's `call` must be an
+  object with every field, and each value of `reasoning_on` text, a number,
+  true or false.
+- **The longest date** is the day whose date and time, in each form the
+  template writes the clock in, take the most tokens, plus each month's last
+  day for a template that names the months itself: 13 renders where there
+  were 19, and right in any language of the clock.
+- **Speed.** The answer collected while a reply streams is joined once per
+  read, so a long thought streams in time linear in it (an 8000 word thought
+  took 4.9 s under the profiler before, 0.9 s after; 2000 words 0.28 s before,
+  0.04 s after). A shared beginning is compared a block of 1024 tokens at a
+  time. A refused history names its refused message by halving. A cache that
+  can neither shift nor cut saves one state per reply, where its question's
+  text ends, instead of two; a reply shortened later decodes the end of that
+  turn and the generation prompt again (about ten tokens) instead of saving
+  the whole cache twice before every first word.
+- **Docs and names.** `ArgumentTypeError` and `QUESTION_CUT_MARK` are
+  exported; two stream methods are internal; `tool_results_cut` is a tuple
+  on a reply as on a report; errors listed twice in a docstring are merged;
+  the README's install by hand matches `install.sh`.
+
+After one review of these changes:
+
+- Answers kept after an engine failure are written within the action that
+  writes them, so an action refused or cancelled takes them back (rule 6): a
+  reply's first generation writes them inside its attempt, an injected
+  question inside its own change, and `inject_tool_result` writes them with
+  the caller's result as one change, all or none.
+- A begin's checks that read the model run under a lock `close()` takes
+  before it frees the model, after a check that the wrapper is open.
+- The strict reading of a quoted value applies only where the template
+  escapes its quotes (`CallBody.escapes_quotes`, read at load by writing a
+  value that holds the quote); a template that writes a quote unescaped keeps
+  the reading before, where such a quote is a character of the value.
+- A cancel between registered calls closes the turn for want of room and
+  counts its evictions as the path without a cancel does.
+- A parameter named `description` is checked for tags as any other.
+
+Not done in this round: the three speed findings on renders (a question after
+a drop on a cache that cannot shift waits for the re-decode; two templates
+that move their declarations render the conversation several times after each
+reply; one template renders it several times around tool turns). They change
+how renders are reused and are measured again in the benchmark that follows.
+The neutrality test was not given a list of common model names: such a list
+would itself name vendors in a file rule 3 keeps free of them.
