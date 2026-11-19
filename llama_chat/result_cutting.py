@@ -139,6 +139,8 @@ class ResultCutting:
             text = message["content"]
             if self._fits(at, text, room):
                 return
+            if self._length_with(at, cut_result(text, 0)) >= self._length_with(at, text):
+                continue                # its note alone is as long as it, so it stays whole
             if not self._fits(at, cut_result(text, 0), room):
                 messages[at] = with_result_text(message, cut_result(text, 0))
                 self._note(self._call_answered(at), 0, len(text), "a result", "at the begin")

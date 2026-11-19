@@ -104,6 +104,7 @@ class _Value:
     message: int                    # -1 for a declaration's
     kind: str                       # "content", "thought", "name", "argument" or "description"
     call: int = -1                  # which of the message's calls a name or an argument is of
+    is_question: bool = False       # the content of a user message
 
 
 def _marked(messages: list[dict], declarations: list[dict] | None
@@ -113,7 +114,8 @@ def _marked(messages: list[dict], declarations: list[dict] | None
 
     def mark(text: str, index: int, kind: str, call: int = -1) -> str:
         marker = f"QQ{len(values)}MQQ"
-        values[marker] = _Value(text, index, kind, call)
+        values[marker] = _Value(text, index, kind, call, is_question=(
+            kind == "content" and index >= 0 and messages[index].get("role") == "user"))
         return marker
 
     def mark_arguments(value, index: int, call: int):
@@ -265,6 +267,9 @@ def _walk(rendered: str, parts: list[str], values, written) -> tuple | None:
             while (end := rendered.find(following, start)) >= 0 and ways < 2:
                 ends_variant.passes(len(rendered) - start)
                 gap = rendered[at:end]
+                if not gap and value.is_question and value.text.strip():
+                    start = end + 1         # a question is never written as nothing
+                    continue
                 inner = gap.find(value.text) if value.text and gap.count(value.text) == 1 else -1
                 own = (at + inner, at + inner + len(value.text)) if inner >= 0 else (at, end)
                 n, after = rest(k + 1, end)

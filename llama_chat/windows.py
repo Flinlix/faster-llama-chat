@@ -86,8 +86,7 @@ class Windows:
                 counts_exchanges: bool = True, beside_open_turn: bool = False) -> bool:
         """Drop the oldest exchanges while over the limit, each removed from a render of the oldest two kept.
 
-        It stops before the newest two exchanges, which the window was rendered
-        from.
+        It keeps at least the newest exchange.
 
         Args:
             kept_until: Where in the cache the window's tag sits now; nothing
@@ -122,8 +121,8 @@ class Windows:
         while kept_until() + after > bound or too_many(most):
             dropping_variant.passes(len(self._state.messages))
             starts = exchange_starts(self._state.messages)
-            if len(starts) <= 2:
-                break
+            if len(starts) <= 1:
+                break                   # the newest exchange stays
             # An exchange that leaves a turn open writes what follows it otherwise once it goes.
             oldest_end = self._state.messages[starts[1] - 1]
             if oldest_end["role"] != "assistant" or oldest_end.get("tool_calls"):

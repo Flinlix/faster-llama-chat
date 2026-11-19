@@ -1002,10 +1002,18 @@ class ChatWrapper:
                     _answerable(generation.tool_calls), registry, budget)
                 may_call_again = registry is not None and budget.calls_left > 0
                 try:
-                    dropped = self._write_results(settled, may_call_again)
+                    dropped, unanswered = self._write_results(settled, may_call_again)
                     generations[-1] = replace(
                         generations[-1],
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                    if unanswered:
+                        # The turn closed on what the model wrote, for want of room to answer
+                        # the rest, which are not run.
+                        generations[-1] = replace(
+                            generations[-1], stop_reason="token_limit",
+                            tool_calls=[replace(call, status="unfinished") if call.id in unanswered
+                                        else call for call in generations[-1].tool_calls])
+                        return _sum_generations(generations, budget.calls_left == 0)
                 except ContextOverflowError:
                     # No room is left to answer: the turn closes on what the model
                     # wrote, as one the reply cap cuts does.
@@ -1160,12 +1168,18 @@ class ChatWrapper:
             raise returned[0].error
         return returned[0]
 
-    def _write_results(self, settled: Sequence[tuple[ToolCall, object]], may_call_again: bool) -> int:
-        """Write the result of each settled call, in order, a failure saying whether another call is worth making; how many history messages were evicted for them."""
+    def _write_results(self, settled: Sequence[tuple[ToolCall, object]],
+                       may_call_again: bool) -> tuple[int, list[str]]:
+        """Write the result of each settled call, in order, a failure saying whether another call is worth making, until the turn closes for want of room; how many history messages were evicted for them, and the ids of the calls left unanswered."""
+        unanswered: list[str] = []
+
         def write() -> None:
-            for call, result in settled:
+            for at, (call, result) in enumerate(settled):
+                if call.id not in {owed.id for owed in self._conversation.pending_calls}:
+                    unanswered.extend(later.id for later, _ in settled[at:])
+                    return
                 self._conversation.add_result(call.id, _explain_failure(result, may_call_again))
-        return self._evicted_by(write)
+        return self._evicted_by(write), unanswered
 
     def _evicted_by(self, action: Callable[[], None]) -> int:
         """Run ``action``; how many history messages it evicted."""

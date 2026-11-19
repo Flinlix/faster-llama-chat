@@ -6315,3 +6315,92 @@ templates whose call opens with no token of its own, a reply in a room too
 small for any call shows part of the call's opening as its answer, or nothing
 (rules 8 and 11). Their template files list it under `known_library_flaws`,
 and a test checks that it still shows there.
+
+## 2026-11-19: Faults the second survivor loop found, fixed
+
+Sorting the changes mutation testing left alive found these faults; the user
+chose a fix for each. None is particular to one model: each comes from a kind
+of template any model may have, so every fix is in the general code and no
+add-on file changed.
+
+- **Every long reply decoded the whole conversation on a cache that cannot
+  shift** (rule 4). A drop in windows stopped at the newest two exchanges,
+  even where those two were still past the drop bound, so the next reply was
+  over the threshold again. The drop now goes down to the newest exchange
+  alone. Measured on the invented template, a 1000-token context and 300
+  characters an exchange: before, every reply from the third decoded about
+  793 tokens; after, replies alternate between about 167 and 476, one drop
+  every second reply. Right after such a drop the model sees one exchange
+  less; with `max_history_exchanges=2` a drop keeps one.
+- **A reply in a room too small for a call showed part of the call's
+  opening** (rules 8 and 11), on templates whose call opens with plain text
+  and no token of its own. The opening was held back while the reply ran,
+  then released when the room ran out. A reply the room cuts at such an
+  opening now ends inside the call, reported `"unfinished"`. The
+  `known_library_flaws` marks of the five test templates went with it.
+- **Results were written into a turn already closed** (rules 7 and 11). After
+  a result, answering an unreadable call could close the turn for want of
+  room; the next result then raised `OutOfOrderError`. Writing stops once the
+  turn is closed, the reply ends with `"token_limit"`, and the calls not run
+  are reported `"unfinished"`.
+- **Calls a reply made went unreported.** An unreadable entry first in a
+  batch was answered at once and then missing from `Reply.tool_calls`; a
+  batch whose turn closed for want of room reported no call at all. Both are
+  reported now. Only a template that answers calls pays for telling which
+  calls a generation made (rule 5).
+- **A generated call with half a character pair in its arguments** was taken
+  while it ran and left out once the conversation began again (rule 10). A
+  generated call is now held to what a history's call is held to.
+- **Call reading guessed** (rule 2): text after the last argument, a second
+  copy of a call and a separator after the last argument were ignored by the
+  reader for argument tags; a call whose closing never came was read as far
+  as it got; a quote inside a value without quotes swallowed the following
+  arguments. Each is now unreadable, and a quote marks a string only where a
+  value starts. A schema reference through a list position is followed, and
+  an unreadable batch entry reports the text the model wrote, not a rebuilt
+  one.
+- **Call formats that cannot tell where a value ends** (a string marked on
+  one side only, a member opened or closed by its bare key) are refused where
+  a call format is made, so such a template's tools are refused at load.
+- **A template that leaves a past call out once a question follows** made
+  every later question refused. Tools are refused for such a template at
+  load (the user's choice over keeping the template's render for that turn).
+- **Load checks that named a false cause**: the turn after a reply was read
+  at the conversation's first token where the template writes no past reply
+  text; a template that refuses a question after a reply was blamed for a
+  reply that would never stop; and the check ran only with reasoning off. It
+  now finds the turn after a reply's opening where the text is left out,
+  names the refusal, and runs in each reasoning mode.
+- **A load refused a history it could keep** where `min_reply_tokens` is more
+  than half the context: it kept within half the context, then checked the
+  smaller room a reply leaves. Older exchanges now go before results are cut,
+  as in a running conversation. A result whose note would be no shorter than
+  it stays whole, as in a running conversation.
+- **A repeated question the template writes as nothing** was answered as an
+  empty one. A question's text is never placed in an empty stretch, so such a
+  render is refused for that question.
+- **A refused history named the wrong message** where a template judges a
+  message by the next one; each part is now checked with its next message too.
+- **The date grew past the room** (a fault of the 2026-11-17 fix): a system
+  prompt that fitted a short question only before the date grew left no room
+  for any question afterwards. `begin` now measures the room a short question
+  needs on the day of this year whose date the template writes longest (each
+  month's last day and the last week of September, at 23:59), skipping a date
+  the template refuses, and remembers the result for the same opening and
+  year. Two test templates refuse some dates outright. The refusal of a
+  question cut to its mark now counts the mark.
+- **A refused `close()` still ended other replies.** From a tool a reply
+  runs, `close()` now changes nothing before it is refused; a reply asked for
+  and not yet read raises that the wrapper is closed, wherever `close()` was
+  called.
+- **Registration**: the decorator form checks that it was given a function,
+  and a default no model can be given is left out by the same check a tool's
+  description is held to.
+- Removed: an unread field of the template properties and the cache record's
+  `reset`, which only tests called.
+
+Decided, not changed: an `InternalError` raised partway through a drop is a
+fault of the library, not a refused action; rule 6 does not cover it. The
+error reaches the caller with its cause, and the next action brings the record
+of the cache back to the cache. The refusal path of the windowed drop decodes
+a few tokens more than the fallback; left as it is.

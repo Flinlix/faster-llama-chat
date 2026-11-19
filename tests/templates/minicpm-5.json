@@ -1,5 +1,4 @@
 {
- "known_library_flaws": ["a reply in a room too small for a call shows part of the call's opening"],
  "tags": ["</function>", "</param>", "</s>", "</think>", "</tool_response>", "</tools>", "<function>", "<param>", "<think>", "<tool_def_sep>", "<tool_response>", "<tool_sep>", "<tools>", "<|im_end|>", "<|im_start|>"],
  "source": "openbmb/MiniCPM5-2B-GGUF",
  "eos_token": "</s>",

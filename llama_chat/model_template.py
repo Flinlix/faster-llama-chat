@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import calendar
+import contextlib
+import contextvars
 import json
 from datetime import datetime
 from collections.abc import Mapping
@@ -43,8 +46,32 @@ def _tojson(value, ensure_ascii: bool = False, indent: int | None = None,
                       sort_keys=sort_keys)
 
 
+# The moment a render writes where it reads the clock, the present where none is set.
+_RENDERED_ON: contextvars.ContextVar[datetime | None] = contextvars.ContextVar(
+    "rendered_on", default=None)
+
+
 def _strftime_now(form: str) -> str:
-    return datetime.now().strftime(form)
+    return (_RENDERED_ON.get() or datetime.now()).strftime(form)
+
+
+@contextlib.contextmanager
+def rendered_on(moment: datetime):
+    """Render, on this thread, as if the clock read ``moment``."""
+    token = _RENDERED_ON.set(moment)
+    try:
+        yield
+    finally:
+        _RENDERED_ON.reset(token)
+
+
+def moments_of_this_year() -> list[datetime]:
+    """Moments of the present year at which a date and a time are written at their longest, whatever the form: each month's last day and the seven days to September's end, all of them two-digit days, at a two-digit hour."""
+    now = datetime.now()
+    ends = [(month, calendar.monthrange(now.year, month)[1]) for month in range(1, 13)]
+    week = [(9, day) for day in range(24, 31)]        # every weekday, in the longest month name
+    return [now.replace(month=month, day=day, hour=23, minute=59, second=0)
+            for month, day in dict.fromkeys(ends + week)]
 
 
 def _environment() -> jinja2.Environment:

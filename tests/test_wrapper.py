@@ -1092,6 +1092,9 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
 # reply fails the test below until it is judged to serve every template and listed here.
 _PLAIN_REPLY_CODE = {
     "cache_sync.py": {
+        "_as_text",
+        "_as_text.<locals>.<genexpr>",
+        "_dropped_stretch_end",
         "CacheSync._bring_up",
         "CacheSync._brought_up_end",
         "CacheSync._can_cut",
@@ -1187,6 +1190,8 @@ _PLAIN_REPLY_CODE = {
         "question_splices",
     },
     "rendered_cache.py": {
+        "RenderedCache._window_after",
+        "RenderedCache._with_older_pinned",
         "RenderedCache._answer_guard",
         "RenderedCache._cut_to_fit",
         "RenderedCache._cut_to_fit.<locals>.fits",
@@ -1960,3 +1965,17 @@ def test_a_refused_history_names_the_refused_message_where_the_template_writes_n
     assert error.value.field == "messages"
     assert "does not write the user message 'refused' where it stands" in message
     assert "this text is refused" in message
+
+
+def test_a_refused_history_names_the_refused_message_where_the_template_judges_a_message_by_the_next():
+    """A message the template writes only with the one after it is not the one refused."""
+    judged_by_the_next = with_check_first(WRITES_TWO_QUESTIONS_REFUSES_A_TEXT, (
+        "{%- for m in messages -%}{%- if m.content == 'lonely' and (loop.last "
+        "or loop.nextitem.role != 'assistant') -%}{{ raise_exception('a lonely question needs "
+        "its reply') }}{%- endif -%}{%- endfor -%}"))
+    w = ChatWrapper(Config(context_size=1024), context=FakeContext(judged_by_the_next))
+    lonely = [{"role": "user", "content": "lonely"}, {"role": "assistant", "content": "b"}]
+    w.begin(opened("s", lonely))
+    with pytest.raises(TemplateRefusedError,
+                       match="does not write the user message 'refused' where it stands"):
+        w.begin(opened("s", lonely + [{"role": "user", "content": "refused"}]))

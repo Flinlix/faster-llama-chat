@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import json
 import logging
 import threading
 from collections.abc import Callable, Generator
@@ -32,6 +33,7 @@ from .conversation_state import (Ahead, Anchor, Changes, ConversationState, Made
 from .history_forms import (answer_in_order, completions_messages, intact_records, joined_question,
                             read_messages, with_generated_turns, with_questions_joined,
                             without_unreadable)
+from .model_template import moments_of_this_year, rendered_on
 from .messages import (GENERATED_TURN, QUESTION_CUT_MARK, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
@@ -82,6 +84,8 @@ class RenderedCache:
         self._memory = CacheSync(context)
         # Each template's answer guard, by the template's identity, the template kept alive with it.
         self._guards: dict[int, tuple[ResolvedTemplate, AnswerGuard]] = {}
+        # What a short question needs on the longest date, by the opening and year it was measured for.
+        self._longest_opening: tuple[tuple, int] | None = None
         # The one state object every part reads and changes; an action put back fills it in place.
         self._state = ConversationState()
         self._rendering = ConversationRendering(context, lambda: self.template, self._state)
@@ -343,6 +347,9 @@ class RenderedCache:
                 prompted = self._state.messages[-1]["role"] in ("user", "tool")
                 if self._state.messages[-1]["role"] == "assistant":
                     room = self._config.context_size
+                # Older exchanges go first, as in a running conversation, then results are cut.
+                if self._length(self._state.messages, prompted) > room:
+                    self._drop_while_over(room, generation_prompt=prompted)
                 if self._length(self._state.messages, prompted) > room:
                     self._cutting.cut_to_fit(room, self._held_indexes())
                 needed = self._length(self._state.messages, prompted)
@@ -491,10 +498,13 @@ class RenderedCache:
 
     def _refused_history(self, messages: list[dict]) -> TemplateRefusedError:
         """The refusal of ``messages``, a history this model's template will not write, naming the first message it refuses where it stands and the template's own cause."""
-        def written(part: list[dict]) -> bool:
-            return self._writes(part) or self._rendering.render(part, True) is not None
+        def written(i: int) -> bool:
+            # With the message after it too, for a template that judges a message by its next.
+            part = messages[:i + 1]
+            return (self._writes(part) or self._rendering.render(part, True) is not None
+                    or self._writes(messages[:i + 2]))
         at = next((i for i, m in enumerate(messages[:-1])
-                   if m["role"] != "system" and not written(messages[:i + 1])), len(messages) - 1)
+                   if m["role"] != "system" and not written(i)), len(messages) - 1)
         refused, part = messages[at], messages[:at + 1]
         # Two questions in a row stand here only where the template writes them: a begin joins them.
         refusal = (f"this model's template does not write the {refused['role']} message "
@@ -840,7 +850,8 @@ class RenderedCache:
         if fits(0):
             return kept(0)
         if not fits(len(text)):
-            alone = self._length_alone(question, room, generation_prompt=True)
+            # Counted as the shortest it is cut to: its mark alone.
+            alone = self._length_alone(kept(len(text)), room, generation_prompt=True)
             raise ContextOverflowError(
                 f"{what} needs {alone} tokens with the system prompt but {room} fit under the "
                 f"eviction threshold beside the reply's room, and the system prompt leaves no "
@@ -990,6 +1001,9 @@ class RenderedCache:
         """
         decoded_from = self.decoded
         evicted_before = self._state.changes.n_evicted
+        # Only a template that calls tools pays for telling the calls of this generation.
+        called_before = (_call_ids_since_question(self._state.messages)
+                         if self.template.properties.can_write_results else None)
         self.open_attempt(starts_request=on_started is not None, asks=text is not None)
         try:
             if cancel is not None and cancel.is_set():
@@ -1056,12 +1070,13 @@ class RenderedCache:
             raise
         finally:
             pieces.close()
+            read: list[ToolCall] = []
             if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
                 self.roll_back()            # nothing was produced, so nothing changes
             else:
                 try:
                     # Runs on normal completion and on early close alike.
-                    self._record_generated(generated, reply_text, unreadable_result)
+                    read = self._record_generated(generated, reply_text, unreadable_result)
                 except BaseException:
                     self.roll_back()
                     raise
@@ -1078,11 +1093,19 @@ class RenderedCache:
                 n_evicted_messages=n_evicted_messages,
                 stop_reason=generated.stop_reason,
                 # A reply taken back made no call; what is owed then is the turn it went back to.
-                tool_calls=_reported_calls(generated, [] if changes.taken_back else self.pending_calls),
+                tool_calls=_reported_calls(generated, [] if changes.taken_back
+                                           else self.pending_calls if called_before is None
+                                           else self._calls_to_report(called_before)),
                 tool_results_cut=results_cut,
                 n_reasoning_tokens=reply_text.thought_pieces,
                 thought=reply_text.thought,
             )
+            if read and not reply.tool_calls and generated.stop_reason == "tool_call" \
+                    and not changes.taken_back:
+                # The turn closed on what the model wrote, for want of room to answer its calls.
+                reply = replace(reply, stop_reason="token_limit", tool_calls=[
+                    call if call.status == "unreadable" else replace(
+                        call, status="unfinished") for call in read])
             on_reply(reply)
         return reply
 
@@ -1119,8 +1142,8 @@ class RenderedCache:
                                         self._context.is_special)
 
     def _record_generated(self, generated: GenerationAccumulator, reply_text: ReplyText,
-                          unreadable_result: dict) -> None:
-        """Record what one generation left and settle the cache after it.
+                          unreadable_result: dict) -> list[ToolCall]:
+        """Record what one generation left and settle the cache after it; the calls it read.
 
         A call that could not be read ends the generation as
         ``"unreadable_tool_call"``, and is answered with ``unreadable_result``.
@@ -1134,6 +1157,7 @@ class RenderedCache:
         kept_thought = reply_text.thought if tags and tags.past_keeps_thought else ""
         self.record_reply(reply_text.answer, kept_thought, calls, called, unreadable_result,
                           stopped=reply_text.met_stop_string, in_thought=reply_text.in_thought)
+        return calls
 
     def _read_calls(self, generated: GenerationAccumulator) -> list[ToolCall]:
         """The calls ``generated`` stopped on, empty where it produced no readable call.
@@ -1329,6 +1353,15 @@ class RenderedCache:
             return True
         except ContextOverflowError:
             return False
+
+    def _calls_to_report(self, called_before: set[str]) -> list[ToolCall]:
+        """The unreadable calls this generation made and answered at once, then the calls still owed; ``called_before`` holds the ids of the calls made before it."""
+        owed = self.pending_calls
+        skipped = called_before | {call.id for call in owed}
+        answered = [ToolCall("", {}, c["id"], "unreadable")
+                    for m in _since_question(self._state.messages) for c in m.get("tool_calls") or ()
+                    if UNREADABLE_CALL in c and c["id"] not in skipped]
+        return answered + owed
 
     def _answer_unreadable_owed(self) -> bool:
         """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; whether the turn closed instead, for want of room for it."""
@@ -1664,7 +1697,7 @@ class RenderedCache:
         Raises:
             ContextOverflowError: With ``remedy`` as what to do instead.
         """
-        needed = self._eviction.with_a_short_question()
+        needed = self._with_a_short_question_on_any_date()
         for limit, bound in ((self._config.evict_above_tokens, "the eviction threshold is"),
                              (self._max_prompt_tokens, "the room beside the reply's is")):
             if needed > limit:
@@ -1672,6 +1705,29 @@ class RenderedCache:
                     f"the system prompt and its declarations need {needed} tokens with a short "
                     f"question but {bound} {limit}; {remedy}, or {RAISE_THE_ROOM}",
                     needed, limit)
+
+    def _with_a_short_question_on_any_date(self) -> int:
+        """What the conversation takes with no history and the shortest question, on the day of this year whose date the template writes longest."""
+        if not self.template.properties.reads_clock:
+            return self._eviction.with_a_short_question()
+        moments = moments_of_this_year()
+        key = (json.dumps([self._system_part(), self._state.tools, self._state.reasoning],
+                          sort_keys=True, default=str), self.template, moments[0].year)
+        if self._longest_opening is not None and self._longest_opening[0] == key:
+            return self._longest_opening[1]
+        longest = self._eviction.with_a_short_question()
+        try:
+            for moment in moments:
+                with rendered_on(moment):
+                    self._rendering.forget_renders()
+                    try:
+                        longest = max(longest, self._eviction.with_a_short_question())
+                    except TemplateRefusedError:
+                        continue            # a date the template writes no conversation on
+        finally:
+            self._rendering.forget_renders()
+        self._longest_opening = (key, longest)
+        return longest
 
     def _ensure_within(self, limit: int, remedy: str, generation_prompt: bool = False) -> None:
         """Refuse a conversation that still renders longer than ``limit`` once every exchange that can go was dropped, measured with the generation prompt where ``generation_prompt``.
@@ -2305,6 +2361,17 @@ def _goes_on_from(history: list[dict], cached: list[dict]) -> bool:
     """Whether ``history`` opens with what ``cached`` ends with, so that a cache holding ``cached`` holds its oldest part."""
     return bool(history) and any(history[:len(cached) - i] == cached[i:]
                                  for i in range(len(cached)))
+
+
+def _since_question(messages: list[dict]) -> list[dict]:
+    """The messages after the newest question, oldest first."""
+    at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"), -1)
+    return messages[at + 1:]
+
+
+def _call_ids_since_question(messages: list[dict]) -> set[str]:
+    """The ids of every call made since the newest question."""
+    return {c["id"] for m in _since_question(messages) for c in m.get("tool_calls") or ()}
 
 
 def _unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:

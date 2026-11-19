@@ -3032,11 +3032,19 @@ def test_a_long_result_on_a_cache_that_cannot_shift_is_written_where_the_history
     assert wrapper.reply().finish().text
 
 
+_EVERY_CALL = "{%- set calls = (m.tool_calls or []) if calls_tools else [] -%}"
+assert _EVERY_CALL in TOOLS["chat_template"]
+# Writes a call only where no question follows its turn.
+_CALLS_IN_THE_NEWEST_EXCHANGE_ONLY = {**TOOLS, "chat_template": TOOLS["chat_template"].replace(
+    _EVERY_CALL,
+    "{%- set calls = (m.tool_calls or []) if calls_tools and loop.index0 > ns.newest else [] -%}")}
+
+
 @pytest.mark.parametrize("template", [
     _calls_in_plain_text(TOOLS, **{"{{- '}</call>' -}}": "{{- '}' -}}"}), PLAIN,
-    NO_DECLARATIONS, KEYLESS_CALLS, NO_RESULT_BLOCK],
+    NO_DECLARATIONS, KEYLESS_CALLS, NO_RESULT_BLOCK, _CALLS_IN_THE_NEWEST_EXCHANGE_ONLY],
     ids=["call-not-told-from-a-reply", "no-call", "no-declarations", "call-format-unreadable",
-         "no-result-block"])
+         "no-result-block", "past-call-left-out"])
 def test_every_cause_a_model_cannot_call_tools_for_is_refused_naming_the_argument_the_tools_came_in(
         template):
     wrapper = ChatWrapper(Config(context_size=1024), context=FakeContext(template))
@@ -3048,3 +3056,80 @@ def test_every_cause_a_model_cannot_call_tools_for_is_refused_naming_the_argumen
     with pytest.raises(UnsupportedError) as refused:
         wrapper.reply("Wetter?", tool_call_policy=weather_registry()).finish()
     assert refused.value.field == "tool_call_policy", refused.value
+
+
+@pytest.mark.parametrize("arguments", ['{"a": "\\ud800"}', '{"a": "x\\udfffy"}'],
+                         ids=["high-half-alone", "low-half-alone"])
+def test_a_generated_call_holding_half_a_character_is_unreadable_and_begins_again_the_same(arguments):
+    """A generated call is held to what a history's call is held to, so that it is not taken while it runs and left out once the conversation begins again."""
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin(opened("persona"), tools=[ToolSpec("clock", "", {
+        "type": "object", "properties": {"a": {"type": "string"}}})])
+    fake.call_script = [f'[{{"name": "clock", "arguments": {arguments}}}]']
+    reply = w.reply("wie spät?", tool_call_policy="yield").finish()
+    assert [call.status for call in reply.tool_calls] == ["unreadable"] and not w.pending_calls
+    saved = w.conversation()
+    report = w.begin(**saved)
+    assert not report.n_left_out_calls and w.conversation() == saved
+
+
+def _clock_registry():
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    return registry
+
+
+@pytest.mark.parametrize("batch", ['[{"no": "call"}, {"name": "clock", "arguments": {}}]',
+                                   '[{"name": "clock", "arguments": {}}, {"no": "call"}]'],
+                         ids=["unreadable-first", "unreadable-last"])
+def test_an_unreadable_entry_of_a_batch_is_reported_wherever_it_stands(batch):
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=2048), context=fake)
+    w.begin(opened("persona"), tools=_clock_registry().specs())
+    fake.call_script = [batch]
+    reply = w.reply("wie spät?", tool_call_policy=_clock_registry()).finish()
+    reported = [(call.name, call.status) for call in reply.tool_calls]
+    assert sorted(reported) == [("", "unreadable"), ("clock", "complete")]
+
+
+def test_a_batch_the_room_cannot_answer_is_reported_whole_as_the_room_ran_out():
+    """Where the turn closes on what the model wrote for want of room, each call it made is reported, none left out."""
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=160), context=fake)
+    w.begin(opened("persona"), tools=_clock_registry().specs())
+    fake.call_script = ['[{"no": "call"}, {"name": "clock", "arguments": {}}]']
+    reply = w.reply("wie spät?", tool_call_policy=_clock_registry()).finish()
+    assert reply.stop_reason == "token_limit"
+    assert [(call.name, call.status) for call in reply.tool_calls] == [
+        ("", "unreadable"), ("clock", "unfinished")]
+
+
+@pytest.mark.parametrize("context_size", range(150, 300, 5))
+def test_a_batch_whose_results_outgrow_the_room_closes_its_turn_and_the_next_question_is_answered(
+        context_size):
+    """Once the turn closes for want of room, the results not yet written are not written, and each call stays reported."""
+    fake = FakeContext(JSON_TOOLS)
+    w = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("persona"), tools=_clock_registry().specs())
+    fake.call_script = ['[{"name": "clock", "arguments": {}}, {"no": "call"},'
+                        ' {"name": "clock", "arguments": {}}]']
+    reply = w.reply("wie spät?", tool_call_policy=_clock_registry()).finish()
+    assert len(reply.tool_calls) == 3
+    assert not w.pending_calls
+    assert w.reply("und jetzt?").finish().stop_reason
+
+
+@pytest.mark.parametrize("template", [NO_RESULT_BLOCK, _PLAIN_RESULTS], ids=["no-result", "plain-results"])
+def test_a_reply_closed_on_an_unreadable_call_keeps_the_call_as_generated_after_the_next_question(template):
+    fake = FakeContext(template)
+    wrapper = ChatWrapper(Config(context_size=1024), context=fake)
+    wrapper.begin(opened("persona"))
+    unreadable = "fn:nonsense with no name"
+    fake.call_script = [unreadable]
+    reply = wrapper.reply("wie spät?", tool_call_policy="yield").finish()
+    assert reply.stop_reason == "unreadable_tool_call"
+    assert wrapper.conversation()["generated_turns"], "the closed turn no longer keeps its tokens as generated"
+    fake.call_script = []
+    wrapper.reply("und jetzt?").finish()
+    assert unreadable in held_text(fake)

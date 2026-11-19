@@ -425,7 +425,14 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
         # A reply cut before a call could follow its tag ends before the tag, as a cut
         # thought's tag is dropped.
         cut = generated.stop_reason in ("token_limit", "interrupted") and held_tag is not None
-        delta = visible.emit(held_tag[0] if cut and held_tag is not None else len(visible))
+        upto = held_tag[0] if cut and held_tag is not None else len(visible)
+        if generated.stop_reason == "token_limit" and call_open is None and open_text is not None:
+            # Where no token of its own opens a call, a reply cut at a call's opening text
+            # ends inside that call: the opening is the call's, not the answer's.
+            opens_at = visible.partial_match(open_text)
+            if opens_at < len(visible) and visible.since(opens_at).strip():
+                upto, generated.cut_inside_call = min(upto, opens_at), True
+        delta = visible.emit(upto)
         if delta:
             generated.text_pieces.append(delta)
             yield delta

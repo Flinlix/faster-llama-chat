@@ -3218,32 +3218,25 @@ def test_a_question_cut_again_after_midnight_is_its_end_alone_behind_one_mark_wi
     assert len(kept) < len(asked) and asked.endswith(kept[len(QUESTION_CUT_MARK):])
 
 
-def test_a_question_injected_after_the_date_grew_past_the_room_is_answered_or_refused_naming_the_injected_question(
-        clock):
-    """Where the grown date leaves the system turn no room for even the cut mark, the refusal says which text did not fit."""
+@pytest.mark.parametrize("today", [datetime.datetime(2026, 5, 31, 23, 59),
+                                   datetime.datetime(2026, 9, 1, 0, 1)], ids=["short-month", "long-month"])
+def test_a_system_prompt_that_leaves_a_short_question_room_only_on_some_dates_is_refused_on_every_date(
+        clock, today):
+    """The room a short question needs is measured on the date of the year the template writes longest, so that no day can come on which no question fits."""
     dated = with_check_first(PLAIN, "{{- '<[turn>date ' ~ strftime_now('%B') ~ '<turn]>\n' -}}")
-    before, after = datetime.datetime(2026, 8, 31, 23, 59), datetime.datetime(2026, 9, 1, 0, 1)
-    growth = len(after.strftime("%B")) - len(before.strftime("%B"))
     config = Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=100)
     room = min(config.evict_above_tokens, config.context_size - config.min_reply_tokens)
-    clock[0] = before
     fake = FakeContext(dated)
     alone = [{"role": "user", "content": QUESTION_CUT_MARK + "?"}]
-    # The longest system prompt a short question still fits beside, which the grown date overfills.
-    bare = len(fake.tokenize(fake.stated_render(opened("s") + alone, generation_prompt=True),
-                             add_special=True))
-    system = "s" * (1 + room - bare)
-    assert growth > 1
-    chat = ChatWrapper(config, context=fake)
-    chat.begin(opened(system))
-    clock[0] = after
-    try:
-        chat.inject("hallo")
-    except ContextOverflowError as refused:
-        assert "the injected question" in str(refused)
-        chat.begin(opened("s"))         # the remedy the refusal names: a shorter system prompt
-    else:
-        chat.reply().finish()
+    clock[0] = datetime.datetime(2026, 9, 1, 0, 1)         # September, the longest month name
+    longest = len(fake.tokenize(fake.stated_render(opened("s") + alone, generation_prompt=True),
+                                add_special=True))
+    clock[0] = today
+    fits_on_the_longest = ChatWrapper(config, context=fake)
+    fits_on_the_longest.begin(opened("s" * (1 + room - longest)))
+    assert fits_on_the_longest.reply("hallo").finish().n_generated_tokens
+    with pytest.raises(ContextOverflowError, match="with a short question but"):
+        ChatWrapper(config, context=FakeContext(dated)).begin(opened("s" * (2 + room - longest)))
 
 
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
@@ -3272,3 +3265,69 @@ def test_the_room_a_grown_date_takes_from_an_injected_question_evicts_for_room_a
     reply = chat.reply().finish()
     assert reply.n_evicted_messages == 2
     assert chat.conversation()["messages"][1:-1] == history[2:] + [{"role": "user", "content": question}]
+
+
+# Writes a question asked before as its turn's tags alone.
+_LEAVING_OUT_A_REPEATED_QUESTION = dict(_FALLBACK, chat_template=(
+    "{%- set ns = namespace(asked=[]) -%}"
+    "{%- for m in messages -%}<|{{ m.role }}_says|>"
+    "{%- if not (m.role == 'user' and m.content in ns.asked) -%}{{ m.content }}{%- endif -%}"
+    "{%- if m.role == 'user' -%}{%- set ns.asked = ns.asked + [m.content] -%}{%- endif -%}"
+    "<|said|>{%- endfor -%}"
+    "{%- if add_generation_prompt -%}<|assistant_says|>{%- endif -%}"))
+
+
+def test_a_question_the_template_writes_as_nothing_is_refused_and_the_next_one_answered():
+    """A render that leaves a question's text out is no place for it, so the question is not answered as an empty one."""
+    chat = ChatWrapper(Config(context_size=4096, min_reply_tokens=8),
+                       context=FakeContext(_LEAVING_OUT_A_REPEATED_QUESTION, ["Fine."] * 3))
+    chat.begin(opened(""))
+    chat.reply("Hello?").finish()
+    before = chat.conversation()
+    with pytest.raises(TemplateRefusedError):
+        chat.reply("Hello?").finish()
+    assert chat.conversation() == before
+    assert chat.reply("How are you?").finish().text
+
+
+def _turn_closed_for_room(stem, calls):
+    """A run on ``stem`` whose reply makes ``calls`` calls, the last with no room left to answer it; whether the closed turn keeps its tokens as generated."""
+    probe = _calling_again(stem)
+    for _ in range(calls):
+        call, = [e for e in probe.chat.reply(tool_call_policy="yield") if isinstance(e, ToolCall)]
+        held = probe.chat.total_tokens
+        probe.chat.inject_tool_result(call.id, "x")
+    closing = probe.template.properties.n_closing_tokens
+    run = _calling_again(stem, context_size=held + closing, min_reply_tokens=closing + 20)
+    registry = ToolRegistry()
+    registry.tool(lambda city: "x", name=WEATHER.name, description=WEATHER.description,
+                  parameters=WEATHER.parameters)
+    reply = run.chat.reply(tool_call_policy=registry).finish()
+    assert reply.stop_reason == "token_limit" and len(reply.tool_calls) == calls
+    return bool(internals.generated_turns_held(run.chat))
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_turn_closed_for_room_after_several_calls_keeps_its_tokens_where_one_after_a_single_call_does(stem):
+    assert _turn_closed_for_room(stem, 2) == _turn_closed_for_room(stem, 1)
+
+
+@pytest.mark.parametrize("max_history_exchanges", [None, 2], ids=["room", "exchange-limit"])
+def test_a_cache_that_cannot_shift_decodes_its_conversation_again_at_most_every_second_reply_where_two_exchanges_fill_its_room(
+        max_history_exchanges):
+    """Where the newest two exchanges alone are past the drop bound, a drop keeps the newest alone, so that the next reply decodes only what is new."""
+    exchange = 300                      # a question and its reply, in characters
+    fake = FakeContext(PLAIN, can_shift=False, gen_text="r" * (exchange // 2),
+                       gen_tokens=exchange // 2)
+    w = ChatWrapper(Config(context_size=1000, evict_above_fraction=0.8, min_reply_tokens=8,
+                           max_history_exchanges=max_history_exchanges), context=fake)
+    w.begin(opened("s"))
+    decodes_again = []
+    for n in range(10):
+        before = fake.total_prefilled()
+        w.reply(f"{n}" + "q" * (exchange // 2 - 1)).finish()
+        w.wait_idle()
+        # More than one new exchange and its tags: what was kept was decoded again.
+        decodes_again.append(fake.total_prefilled() - before > exchange * 4 // 3)
+    assert not any(one and the_next for one, the_next in zip(decodes_again, decodes_again[1:])), \
+        decodes_again

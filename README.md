@@ -359,7 +359,8 @@ reply starts where the system prompt has grown since, as a date the template
 writes may overnight; it keeps one mark. `begin` refuses a system prompt and
 declarations that would leave no room for a short question and the room a
 reply keeps (`min_reply_tokens`, at least the shortest reply that holds an
-answer), so no conversation it accepts is one that cannot answer.
+answer), measured on the day of the year whose date the template writes
+longest, so no conversation it accepts is one that cannot answer.
 
 ## Tool calling
 
@@ -412,8 +413,9 @@ where that turn stands is refused with a `ValueError`, the conversation left
 as it was. Every call is reported on
 `Reply.tool_calls`, whatever became of it: one that was read with its
 `ToolCall.status` `"complete"`, one that could not be read as `"unreadable"`,
-and one the reply cap or a cancel cut short, or whose plain opening ended a
-reply under `"withhold"`, as `"unfinished"`. The status is of
+and one the reply cap or a cancel cut short, the room cut at its plain
+opening, or whose plain opening ended a reply under `"withhold"`, or one not
+run because its turn closed for want of room, as `"unfinished"`. The status is of
 the type `ToolCallStatus`. Neither of the last two is handed over in the
 stream or listed in `pending_calls`. An unfinished call has no name, arguments
 or id. An unreadable call has no name or arguments; where the reply stopped on
@@ -511,7 +513,8 @@ long is cut, its tags kept, and ends with a note the model reads, such as
 `Reply.tool_results_cut`. Where not even a result cut to nothing leaves room
 for the reply, the turn closes on what the model wrote, as the reply cap
 closes one: a reply that answers its calls itself, under `"refuse"` or a
-registry, ends with `"token_limit"`, and after `inject_tool_result`
+registry, ends with `"token_limit"`, each call not yet answered reported
+`"unfinished"`, and after `inject_tool_result`
 `turn_open` is false, the calls not yet answered are dropped, and the next
 question is asked as after any reply.
 

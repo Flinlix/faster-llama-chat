@@ -1,5 +1,4 @@
 {
- "known_library_flaws": ["a reply in a room too small for a call shows part of the call's opening"],
  "tags": ["<|end_header_id|>", "<|eot_id|>", "<|start_header_id|>"],
  "source": "lex-au/Orpheus-3b-German-FT-Q8_0.gguf",
  "eos_token": "<|eot_id|>",
