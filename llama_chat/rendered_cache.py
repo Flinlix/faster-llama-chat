@@ -21,7 +21,7 @@ import copy
 import json
 import logging
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from typing import Any, cast
 from dataclasses import dataclass, replace
 
@@ -33,7 +33,7 @@ from .conversation_state import (Ahead, Anchor, Changes, ConversationState, Made
 from .history_forms import (answer_in_order, completions_messages, intact_records, joined_question,
                             read_messages, with_generated_turns, with_questions_joined,
                             without_unreadable)
-from .model_template import moments_of_this_year, rendered_on
+from .model_template import clock_forms_written, moments_of_this_year, rendered_on
 from .messages import (GENERATED_TURN, QUESTION_CUT_MARK, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
@@ -224,7 +224,13 @@ class RenderedCache:
 
     @turn_policy.setter
     def turn_policy(self, policy) -> None:
-        self._state.turn_policy = policy
+        if policy is not self._state.turn_policy:
+            self._state.turn_policy = policy
+            self._publish()
+
+    def published_turn_policy(self):
+        """The policy the newest turn was started with, from the newest publication; safe to read unlocked."""
+        return self._published.turn_policy
 
     @property
     def turn_budget(self):
@@ -503,8 +509,19 @@ class RenderedCache:
             part = messages[:i + 1]
             return (self._writes(part) or self._rendering.render(part, True) is not None
                     or self._writes(messages[:i + 2]))
-        at = next((i for i, m in enumerate(messages[:-1])
-                   if m["role"] != "system" and not written(i)), len(messages) - 1)
+        # Halved, as the parts a template writes run from the start up to the one it refuses:
+        # the first message whose part is refused, after one whose part is written.
+        low = 1 if messages and messages[0]["role"] == "system" else 0
+        high = len(messages) - 1
+        refusing_variant = LoopVariant("finding the refused message of a history")
+        while low < high:
+            refusing_variant.passes(high - low)
+            middle = (low + high) // 2
+            if written(middle):
+                low = middle + 1
+            else:
+                high = middle
+        at = low
         refused, part = messages[at], messages[:at + 1]
         # Two questions in a row stand here only where the template writes them: a begin joins them.
         refusal = (f"this model's template does not write the {refused['role']} message "
@@ -725,22 +742,24 @@ class RenderedCache:
         if starts_request:
             self._request = self._attempt if asks else None
 
-    def roll_back(self) -> None:
+    def roll_back(self, brings_up: bool = True) -> None:
         """Put the conversation and the cache back as the open attempt found them.
 
-        The cache is brought back at once where it is known; one a failure
-        left unknown is brought back by the next action.
+        The cache is brought back at once where it is known; without
+        ``brings_up``, only as far as one part of a long decode, as an
+        interrupt leaves it. One a failure left unknown, and the rest of such a
+        decode, is brought back by the next action.
         """
         if self._attempt is not None:
-            self._go_back_to(self._attempt)
+            self._go_back_to(self._attempt, brings_up)
 
-    def _go_back_to(self, snapshot: Snapshot) -> None:
+    def _go_back_to(self, snapshot: Snapshot, brings_up: bool = True) -> None:
         """Hold the conversation and the cache's tokens of ``snapshot``, ending the attempt."""
         self._state.put_back(snapshot.state)
         self._memory.replace(snapshot.tokens)
         self._attempt = None
         if self._memory.is_known:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception), self._memory.decoding_one_part(not brings_up):
                 self._memory.repair()       # where it fails, the next action decodes again
         self._publish()
 
@@ -774,13 +793,15 @@ class RenderedCache:
         self._note_prompt(ahead.after_question, ahead.reply_opening, self._memory.tokens)
         return True
 
-    def add(self, role: str, text: str) -> None:
+    def add(self, role: str, text: str, answers_first: Sequence[tuple[str, object]] = ()) -> None:
         """Decode a message without a reply after it, the oldest exchanges dropped for it where needed.
 
         A question is put in the stand-in's place as :meth:`ask` puts one, the
         generation prompt after it: within the room left for a reply, the
         conversation over ``evict_above_tokens`` until its reply settles, unless
-        ``max_history_exchanges`` is reached first.
+        ``max_history_exchanges`` is reached first. A question writes
+        ``answers_first`` before it, as :meth:`generation` does, within the
+        same change.
 
         Raises:
             ValueError: If no conversation was begun, an assistant message is
@@ -794,6 +815,8 @@ class RenderedCache:
         with _refused_as_the_text(), self._action():
             if role == "user":
                 _ensure_begun(self, "inject into")
+                if answers_first:
+                    self._write_answers_first(answers_first)
             else:
                 _ensure_ready(self, "inject", "inject into")
             message = {"role": role, "content": text}
@@ -927,15 +950,17 @@ class RenderedCache:
                 f"the conversation needs {len(target.tokens)} tokens but {room} leave room "
                 f"for the reply; {RAISE_THE_ROOM}", len(target.tokens), room)
         if self._memory.keeps_saved_states:
+            # One state, where the reply's turn begins: a reply written again or shortened decodes
+            # the few tokens of the generation prompt again rather than save the cache twice.
             end = len(target.tokens)
-            self._memory.pin([at for at in {self._state.prompt_start, end} if 0 < at <= end],
-                             _THE_REPLY)
+            start = self._state.prompt_start
+            self._memory.pin([start if 0 < start <= end else end], _THE_REPLY)
         return target
 
     def _pin_the_reply(self, opening: list[int], tokens: list[int], end: int) -> None:
-        """Keep states where the reply after ``tokens``, decoded to ``end``, begins and where its generation starts, so that a reply written again, or shortened, decodes only itself."""
+        """Keep a state where the reply after ``tokens``, decoded to ``end``, begins, so that a reply written again, or shortened, decodes only itself and its opening."""
         starts = end - len(opening) if opening and tokens[-len(opening):] == opening else end
-        self._memory.pin([at for at in {starts, end} if end - len(tokens) < at <= end], _THE_REPLY)
+        self._memory.pin([starts if end - len(tokens) < starts else end], _THE_REPLY)
 
     # ----- generating -------------------------------------------------------------------
     def generate(self, max_generated_tokens: int, generated: GenerationAccumulator, **options):
@@ -972,7 +997,8 @@ class RenderedCache:
                    max_generated_tokens: int, stop: tuple[str, ...],
                    cancel: threading.Event | None, sampling, unreadable_result: dict,
                    on_started: Callable[[], None] | None,
-                   on_reply: Callable[[Reply], None]) -> Generator[str, None, Reply]:
+                   on_reply: Callable[[Reply], None],
+                   answers_first: Sequence[tuple[str, object]] = ()) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end, stream what it shows, and record what it left, as a Reply.
 
         Without ``text``, it goes on with the open turn, adding no message of
@@ -998,6 +1024,9 @@ class RenderedCache:
                 starts, before anything it produces is recorded; given to a
                 request's first generation alone.
             on_reply: Given the Reply once the generation ends, early or not.
+            answers_first: ``(call_id, answer)`` pairs written first, each while
+                its call is the oldest still owed, taken back with the rest
+                where the request does not start.
         """
         decoded_from = self.decoded
         evicted_before = self._state.changes.n_evicted
@@ -1008,6 +1037,9 @@ class RenderedCache:
         try:
             if cancel is not None and cancel.is_set():
                 raise Cancelled("cancelled before the request was written")
+            if answers_first:
+                # Within the attempt, so that a request refused or cancelled takes them back too.
+                self._write_answers_first(answers_first)
             if text is not None:
                 self.ask(text, cancel)
             elif not self.turn_open:
@@ -1015,7 +1047,7 @@ class RenderedCache:
             if self._config.check_cache:
                 self._check_cache(prompted=True)
         except Cancelled:
-            self.roll_back()
+            self.roll_back(brings_up=False)     # the next action decodes what it needs
             return Reply(text="", n_prefilled_tokens=self.decoded - decoded_from,
                          n_prompt_tokens=self.total_tokens, n_generated_tokens=0,
                          n_evicted_messages=0, stop_reason="interrupted")
@@ -1072,7 +1104,9 @@ class RenderedCache:
             pieces.close()
             read: list[ToolCall] = []
             if not generated.token_ids and (failed or generated.stop_reason == "interrupted"):
-                self.roll_back()            # nothing was produced, so nothing changes
+                # Nothing was produced, so nothing changes; a cancelled request leaves the
+                # decode back to the next action.
+                self.roll_back(brings_up=failed or generated.stop_reason != "interrupted")
             else:
                 try:
                     # Runs on normal completion and on early close alike.
@@ -1096,7 +1130,7 @@ class RenderedCache:
                 tool_calls=_reported_calls(generated, [] if changes.taken_back
                                            else self.pending_calls if called_before is None
                                            else self._calls_to_report(called_before)),
-                tool_results_cut=results_cut,
+                tool_results_cut=tuple(results_cut),
                 n_reasoning_tokens=reply_text.thought_pieces,
                 thought=reply_text.thought,
             )
@@ -1354,14 +1388,29 @@ class RenderedCache:
         except ContextOverflowError:
             return False
 
+    def _write_answers_first(self, answers: Sequence[tuple[str, object]]) -> None:
+        """Write each ``(call_id, answer)`` while its call is the oldest still owed; where no room is left for one, the turn closes on what the model wrote."""
+        for call_id, answer in answers:
+            owed = self.pending_calls
+            if not owed or owed[0].id != call_id:
+                return
+            try:
+                self.add_result(call_id, answer)
+            except ContextOverflowError:
+                self.close_unanswered()
+                return
+
     def _calls_to_report(self, called_before: set[str]) -> list[ToolCall]:
-        """The unreadable calls this generation made and answered at once, then the calls still owed; ``called_before`` holds the ids of the calls made before it."""
-        owed = self.pending_calls
-        skipped = called_before | {call.id for call in owed}
-        answered = [ToolCall("", {}, c["id"], "unreadable")
-                    for m in _since_question(self._state.messages) for c in m.get("tool_calls") or ()
-                    if UNREADABLE_CALL in c and c["id"] not in skipped]
-        return answered + owed
+        """The calls this generation made, in the order the model wrote them: those still owed, and the unreadable ones answered at once; ``called_before`` holds the ids of the calls made before it."""
+        owed = {call.id: call for call in self.pending_calls}
+        made = []
+        for message in _since_question(self._state.messages):
+            for call in message.get("tool_calls") or ():
+                if call["id"] in owed:
+                    made.append(owed.pop(call["id"]))
+                elif UNREADABLE_CALL in call and call["id"] not in called_before:
+                    made.append(ToolCall("", {}, call["id"], "unreadable"))
+        return made + list(owed.values())
 
     def _answer_unreadable_owed(self) -> bool:
         """Answer each call still owed that could not be read, while one is next in order, with the failure the model is told; whether the turn closed instead, for want of room for it."""
@@ -1462,6 +1511,17 @@ class RenderedCache:
             _log.info("no room was left to answer the newest calls: the turn closed on what "
                       "the model wrote")
             self._settle()
+
+    def add_results(self, results: Sequence[tuple[str, object]]) -> None:
+        """Record each ``(call_id, result)`` in order, as :meth:`add_result` does, all of them or, where one is refused or fails, none.
+
+        Raises:
+            ValueError: As :meth:`add_result`, for the first that is refused.
+            ContextOverflowError: As :meth:`add_result`.
+        """
+        with self._action():
+            for call_id, result in results:
+                self.add_result(call_id, result)
 
     def add_result(self, call_id: str, result) -> None:
         """Record what the oldest owed call returned, then, after the last one, decode the prompt for the reply.
@@ -1715,15 +1775,24 @@ class RenderedCache:
                           sort_keys=True, default=str), self.template, moments[0].year)
         if self._longest_opening is not None and self._longest_opening[0] == key:
             return self._longest_opening[1]
-        longest = self._eviction.with_a_short_question()
+        self._rendering.forget_renders()
+        with clock_forms_written() as forms:
+            longest = self._eviction.with_a_short_question()
+        # The day whose date and time, in every form the template writes them in, take the
+        # most tokens, whatever the language of the clock's names; and each month's last day,
+        # for a template that names the months itself.
+        forms = sorted(set(forms))
+        day = max(moments, key=lambda moment: sum(
+            len(self._context.tokenize(moment.strftime(form), parse_special=False))
+            for form in forms))
+        month_ends = [moment for moment, after in zip(moments, moments[1:] + [None])
+                      if after is None or after.month != moment.month]
         try:
-            for moment in moments:
+            for moment in dict.fromkeys([day, *month_ends]):
                 with rendered_on(moment):
                     self._rendering.forget_renders()
-                    try:
+                    with contextlib.suppress(TemplateRefusedError):     # a date it writes nothing on
                         longest = max(longest, self._eviction.with_a_short_question())
-                    except TemplateRefusedError:
-                        continue            # a date the template writes no conversation on
         finally:
             self._rendering.forget_renders()
         self._longest_opening = (key, longest)
@@ -2159,9 +2228,11 @@ class RenderedCache:
             except BaseException as error:
                 self._state.put_back(saved)
                 self._memory.replace(held)
-                if isinstance(error, RefusalError) and was_current and self._memory.is_known:
+                if isinstance(error, (RefusalError, InternalError)) and was_current \
+                        and self._memory.is_known:
                     # An edit a refused action made, such as a shift for an eviction, is undone
-                    # now (rule 6); a failed one leaves the cache to the next action.
+                    # now (rule 6), as is one a fault of the library stopped partway; one the
+                    # engine failed at leaves the cache to the next action.
                     with contextlib.suppress(Exception):
                         self._memory.repair()
                 raise

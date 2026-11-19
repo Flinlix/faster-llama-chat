@@ -12,8 +12,10 @@ from llama_chat.generation import generate
 
 from tests.chat_messages import opened
 from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
-from tests.wrappers import add_tools, assert_consistent, tool_wrapper, rows
+from llama_chat.testing.invented_templates import PLAIN, TOOLS
+from llama_chat.tool_registry import ToolRegistry
+from llama_chat.tools import ToolCall, ToolSpec
+from tests.wrappers import add_tools, assert_consistent, numbered_exchanges, tool_wrapper, rows
 
 # Every sampling value set, as a generation is given them.
 SAMPLING = generation_sampling(Config(), None)
@@ -69,6 +71,62 @@ def test_cancel_set_before_start_yields_an_empty_interrupted_reply():
     assert reply.n_generated_tokens == 0
     # Cancelled before it started: the request changes nothing, its question included.
     assert (w.conversation(), w.total_tokens) == before
+
+
+def test_a_cancel_set_before_a_reply_also_stops_the_work_the_reply_before_left(monkeypatch):
+    """A drop on a cache that cannot shift leaves the kept history to decode again; a cancelled request leaves that to the next action."""
+    monkeypatch.setattr(ChatWrapper, "_start_settling", lambda self: None)    # left to the next action
+    fake = FakeContext(PLAIN, gen_tokens=5, gen_text="Antwort", can_shift=False)
+    w = ChatWrapper(Config(context_size=8000, evict_above_fraction=0.5), context=fake)
+    w.begin(opened("s" * 50) + numbered_exchanges(220))
+    w.reply("Frage? " + "x" * 60).finish()
+    assert w._conversation.settle_due        # a drop, whose decode waits for the next action
+    prefilled = fake.total_prefilled()
+    cancel = threading.Event()
+    cancel.set()
+    assert w.reply("noch eine?", cancel=cancel).finish().stop_reason == "interrupted"
+    assert fake.total_prefilled() - prefilled <= 512
+    assert "noch eine?" not in [m["content"] for m in w.conversation()["messages"]]
+    assert w.reply("und jetzt?").finish().stop_reason == "end_of_turn"
+
+
+def test_a_reply_waiting_for_one_another_thread_holds_ends_at_its_cancel():
+    fake = FakeContext(PLAIN, gen_tokens=50)
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    first = w.reply("eins")
+    next(first)                         # holds the wrapper, unread
+    cancel, ended = threading.Event(), []
+    waiting = threading.Thread(target=lambda: ended.append(w.reply("zwei", cancel=cancel).finish()),
+                               daemon=True)
+    waiting.start()
+    assert w._waiting.wait(timeout=5)
+    cancel.set()
+    waiting.join(2)
+    assert not waiting.is_alive() and ended[0].stop_reason == "interrupted"
+    first.finish()
+    assert "zwei" not in [m["content"] for m in w.conversation()["messages"]]
+
+
+_REFUSED_FOR_ITS_ARGUMENTS = {
+    "begin, a tool twice": lambda w: w.begin(opened("s"), tools=[_CLOCK, _CLOCK]),
+    "begin, reasoning": lambda w: w.begin(opened("s"), reasoning=True),
+    "begin, a message": lambda w: w.begin([{"role": "bogus", "content": "x"}]),
+    "inject, a role": lambda w: w.inject("x", role="tool"),
+}
+_CLOCK = ToolSpec(name="clock", description="Die Zeit.", parameters={"type": "object", "properties": {}})
+
+
+@pytest.mark.parametrize("action", sorted(_REFUSED_FOR_ITS_ARGUMENTS))
+def test_an_action_refused_for_its_own_arguments_leaves_the_reply_its_thread_reads_unended(action):
+    fake = FakeContext(TOOLS, gen_tokens=20)
+    w = ChatWrapper(Config(context_size=2000, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    stream = w.reply("eins")
+    next(stream)
+    with pytest.raises(ValueError):
+        _REFUSED_FOR_ITS_ARGUMENTS[action](w)
+    assert stream.reply is None and list(stream)        # read on to its end
 
 
 def test_generator_close_marks_interrupted():
@@ -329,3 +387,44 @@ def test_close_from_another_thread_waits_for_the_reply_being_read():
     assert first + "".join(stream) == text
     closing.join(10)
     assert not closing.is_alive()
+
+
+def test_a_call_handed_to_the_reader_is_a_copy_whose_change_the_tool_never_sees():
+    w, fake = tool_wrapper()
+    w.begin(opened("persona"))
+    given = []
+    registry = ToolRegistry()
+    def weather(city: str) -> str:
+        given.append(city)
+        return "sonnig"
+    registry.tool(weather, description="Wetter.")
+    fake.call_script = ["fn:weather{city:'Bonn'}"]
+    for step in w.reply("wetter?", tool_call_policy=registry):
+        if isinstance(step, ToolCall):
+            step.arguments["city"] = "Paris"        # the reader's own copy
+    assert given == ["Bonn"]
+
+
+def test_a_stream_left_half_read_as_the_program_ends_prints_no_error():
+    import subprocess
+    import sys
+    script = ("from llama_chat import ChatWrapper, Config\n"
+              "from llama_chat.testing.fake_context import FakeContext\n"
+              "from llama_chat.testing.invented_templates import PLAIN\n"
+              "w = ChatWrapper(Config(context_size=2000), context=FakeContext(PLAIN, gen_tokens=20))\n"
+              "w.begin([{'role': 'system', 'content': 's'}])\n"
+              "stream = w.reply('eins')\n"
+              "next(stream)\n")
+    ended = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+    assert ended.returncode == 0 and "Traceback" not in ended.stderr, ended.stderr
+
+
+def test_a_failure_of_the_watch_on_a_reply_nobody_reads_is_logged(monkeypatch, caplog):
+    w = ChatWrapper(Config(context_size=500), context=FakeContext(PLAIN))
+
+    def failing():
+        raise RuntimeError("the watch failed")
+    monkeypatch.setattr(w, "_end_unread_reply_now", failing)
+    with caplog.at_level("ERROR", logger="llama_chat"):
+        w._end_unread_reply()
+    assert "ending a reply nobody read failed" in caplog.text

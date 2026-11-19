@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import calendar
 import contextlib
 import contextvars
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections.abc import Mapping
 
 import jinja2
@@ -51,8 +50,27 @@ _RENDERED_ON: contextvars.ContextVar[datetime | None] = contextvars.ContextVar(
     "rendered_on", default=None)
 
 
+# Where a render is watched, each form it writes the clock in.
+_FORMS_WRITTEN: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "forms_written", default=None)
+
+
 def _strftime_now(form: str) -> str:
+    written = _FORMS_WRITTEN.get()
+    if written is not None:
+        written.append(form)
     return (_RENDERED_ON.get() or datetime.now()).strftime(form)
+
+
+@contextlib.contextmanager
+def clock_forms_written():
+    """Collect, on this thread, each form a render meanwhile writes the clock in."""
+    written: list[str] = []
+    token = _FORMS_WRITTEN.set(written)
+    try:
+        yield written
+    finally:
+        _FORMS_WRITTEN.reset(token)
 
 
 @contextlib.contextmanager
@@ -66,12 +84,10 @@ def rendered_on(moment: datetime):
 
 
 def moments_of_this_year() -> list[datetime]:
-    """Moments of the present year at which a date and a time are written at their longest, whatever the form: each month's last day and the seven days to September's end, all of them two-digit days, at a two-digit hour."""
-    now = datetime.now()
-    ends = [(month, calendar.monthrange(now.year, month)[1]) for month in range(1, 13)]
-    week = [(9, day) for day in range(24, 31)]        # every weekday, in the longest month name
-    return [now.replace(month=month, day=day, hour=23, minute=59, second=0)
-            for month, day in dict.fromkeys(ends + week)]
+    """Each day of the present year, at a two-digit hour."""
+    first = datetime.now().replace(month=1, day=1, hour=23, minute=59, second=0, microsecond=0)
+    return [moment for moment in (first + timedelta(days=n) for n in range(366))
+            if moment.year == first.year]
 
 
 def _environment() -> jinja2.Environment:

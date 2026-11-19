@@ -9,6 +9,7 @@ design_history.md, "The render is the conversation's encoding".
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import math
 import inspect
@@ -24,7 +25,7 @@ from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
 from .config import Config, DrawnSampling, Sampling, ensure_reply_cap, generation_sampling
 from .context import KVContext
 from .messages import ensure_role, ensure_text
-from .history_forms import ensure_generated_turns
+from .history_forms import ensure_generated_turns, read_messages
 from .rendered_cache import RenderedCache
 from .errors import (ArgumentTypeError, ContextOverflowError, InvalidArgumentError,
                      InvalidSettingError, OutOfOrderError, UnsupportedError,
@@ -32,7 +33,7 @@ from .errors import (ArgumentTypeError, ContextOverflowError, InvalidArgumentErr
 from .reply import TOOL_CALL_POLICIES, Reply, ReplyStream, Report, ToolCallPolicy
 from .resolved_template import Capabilities, ResolvedTemplate, ResolvedTemplates
 from .tool_registry import ToolRegistry
-from .tools import ToolCall, ToolSpec, ensure_declarable, unwritable_failure
+from .tools import ToolCall, ToolSpec, ensure_declarable, ensure_no_tags, unwritable_failure
 from .loop_variant import LoopVariant
 
 _log = logging.getLogger(__name__)
@@ -125,6 +126,10 @@ class ChatWrapper:
         self._holder: threading.Thread | None = None
         # Each reply's steps not yet collected, which close() ends first on the thread one holds it for.
         self._replies: weakref.WeakSet[Generator[Any, Any, Any]] = weakref.WeakSet()
+        # Held while that set is added to or copied, which any thread may do.
+        self._replies_lock = threading.Lock()
+        # Held while the model is read outside the wrapper's lock, and while it is freed.
+        self._model_lock = threading.Lock()
         # The actions that wait for the wrapper, which the work after a reply gives way to.
         self._waiting = _Waiting()
         # Every wait for the wrapper, a wait for it to go idle included, which an unread reply
@@ -141,6 +146,9 @@ class ChatWrapper:
         self._tool_threads: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
         # Those of them past ``tool_timeout_s``, whose calls were answered as failed meanwhile.
         self._late_tool_threads: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
+        # The answers to calls whose writing the engine failed at, which the next reply or
+        # result writes first, each while its call is still owed.
+        self._answers_waiting: list[tuple[ToolCall, object]] = []
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
@@ -207,8 +215,10 @@ class ChatWrapper:
                 hold, found by its messages and the question before them, is
                 put back as it was and restored as generated, token for
                 token; on another model, or without it, every turn is written
-                as this model's template writes it. See design_history.md,
-                "Two history forms".
+                as this model's template writes it. Trusted input: its tokens
+                are restored as they stand, tags included, so give back only
+                what :meth:`conversation` gave. See design_history.md, "Two
+                history forms".
 
         Returns:
             What it changed beyond what was asked: how many of the messages
@@ -261,24 +271,31 @@ class ChatWrapper:
             raise ArgumentTypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
         messages = list(messages or [])         # read once, a generator included
+        # Checked before the wrapper is taken, so that a begin refused for its own arguments
+        # ends no reply its thread reads, and destroys no conversation it was to replace.
+        specs = None if tools is None else list(tools)
+        ensure_declarable(specs or [])
+        with self._model_lock:              # the model is read: close() waits, and none is closed
+            self._ensure_open()
+            ensure_no_tags(specs or [], self._holds_tag)
+            if specs:
+                self._templates.for_conversation(True).ensure_names_read_back(
+                    [spec.name for spec in specs], "tools")
+        uses_tools = specs is not None
+        calls = any(_calls_tools(item) for item in messages)
+        if calls and not uses_tools and not self._templates.capabilities(False).can_call_tools \
+                and self._templates.capabilities(True).can_call_tools:
+            raise UnsupportedError(
+                "messages", "this model reads a turn that called tools only in a "
+                "conversation begun with tools; pass tools, an empty list included")
+        opens_on_system = bool(messages) and isinstance(messages[0], dict) \
+            and messages[0].get("role") == "system"
+        self._templates.ensure_accepts(
+            uses_tools, tools_field="tools" if specs else "messages" if calls else None,
+            reasoning=reasoning, system_prompt_field="messages" if opens_on_system else None)
+        read_messages(messages)
         with self._held():
             self._ensure_open()
-            # Validate before resetting: a failed begin must not destroy the
-            # conversation it was about to replace.
-            specs = None if tools is None else list(tools)
-            ensure_declarable(specs or [])
-            uses_tools = specs is not None
-            calls = any(_calls_tools(item) for item in messages)
-            if calls and not uses_tools and not self._templates.capabilities(False).can_call_tools \
-                    and self._templates.capabilities(True).can_call_tools:
-                raise UnsupportedError(
-                    "messages", "this model reads a turn that called tools only in a "
-                    "conversation begun with tools; pass tools, an empty list included")
-            opens_on_system = bool(messages) and isinstance(messages[0], dict) \
-                and messages[0].get("role") == "system"
-            self._templates.ensure_accepts(
-                uses_tools, tools_field="tools" if specs else "messages" if calls else None,
-                reasoning=reasoning, system_prompt_field="messages" if opens_on_system else None)
             self._conversation.forget_told()    # changes of earlier actions are told already
             # A begin leaves no turn a reply started, so a call it could not read is answered
             # as one in a turn that runs no call.
@@ -287,6 +304,7 @@ class ChatWrapper:
             # A turn the history leaves open was started by no reply.
             self._conversation.turn_policy = None
             self._conversation.turn_budget = _CallBudget(self._config.max_calls)
+            self._answers_waiting = []
             self._begins += 1
             return self._conversation.report()
 
@@ -318,14 +336,13 @@ class ChatWrapper:
             ArgumentTypeError: If ``text`` is not a ``str``.
             InvalidArgumentError: If ``role`` is another one, or ``text``
                 holds a lone surrogate, which no model can read.
-            OutOfOrderError: If no conversation has been begun, or an
+            OutOfOrderError: If no conversation has been begun, an
                 assistant message is given while a tool call has left a reply
-                open.
+                open, the wrapper is closed, or a tool the reply that holds the
+                wrapper runs asks for it.
             TemplateRefusedError: If the template does not write the message
                 here as its text, a question asked twice or an empty one on
                 some templates included, naming ``text``.
-            OutOfOrderError: If the wrapper is closed, or a tool the reply
-                that holds the wrapper runs asks for it.
             ContextOverflowError: If an assistant message cannot fit even
                 after evicting every non-system message, raised before
                 anything is evicted (a question is cut to fit as
@@ -338,7 +355,12 @@ class ChatWrapper:
         with self._held():
             self._ensure_open()
             self._conversation.forget_told()
-            self._conversation.add(role, text)
+            # A question closes an open turn: the answers the engine failed at are written first.
+            answers = ([(call.id, answer) for call, answer in self._answers_waiting]
+                       if role == "user" else [])
+            self._conversation.add(role, text, answers)
+            if role == "user":
+                self._answers_waiting = []
             return self._conversation.report()
 
     # ----- asking ---------------------------------------------------------------
@@ -416,7 +438,11 @@ class ChatWrapper:
                 holds them. Read when this is called, so a later change to
                 it changes nothing.
             cancel: Setting it, from any thread, stops generation within one
-                token and ends the turn with ``stop_reason == "interrupted"``.
+                token and ends the reply with ``stop_reason == "interrupted"``.
+                Set while registered tools run, it runs no later call of the
+                round, those not run staying owed; set before the reply's first
+                word, it also stops the wait for a reply another thread holds
+                and the decode the reply before left, within 512 tokens.
             sampling: This request's own sampling settings, in place of the
                 config's for the fields it sets.
 
@@ -445,14 +471,16 @@ class ChatWrapper:
         question gets a reply".
 
         Raises:
-            OutOfOrderError: At once, if no conversation has been begun; or,
-                without ``text``, if a result is still owed or there is
-                nothing to answer.
+            OutOfOrderError: At once, if no conversation has been begun or
+                the wrapper is closed, or, without ``text``, if a result is
+                still owed or there is nothing to answer; when it is read, if a
+                begin has replaced the conversation it was asked of since, or a
+                tool the reply that holds the wrapper runs asked for it.
             InvalidArgumentError: At once, if ``tool_call_policy`` is a text
                 that is none of :data:`~llama_chat.reply.TOOL_CALL_POLICIES`,
-                or ``max_calls`` is below 0 or given without a registry; at
-                the first iteration, if ``max_calls`` is given and the turn the
-                reply goes on with by then runs no call.
+                or ``max_calls`` is given without a registry; at the first
+                iteration, if ``max_calls`` is given and the turn the reply
+                goes on with by then runs no call.
             UnsupportedError: At the first iteration, if a registry holding
                 tools is given to a model that could never call one, naming
                 ``tool_call_policy``.
@@ -461,15 +489,12 @@ class ChatWrapper:
                 an empty one on some templates, naming ``text``.
             ArgumentTypeError: At once, if ``text`` is neither ``None`` nor a ``str``,
                 ``tool_call_policy`` is neither a text nor a registry,
-                ``max_calls`` is no whole number, ``stop`` is neither a
-                ``str`` nor an iterable of ``str``, ``cancel`` has no
-                ``is_set``, or ``sampling`` is neither ``None`` nor a
-                :class:`~llama_chat.config.Sampling`.
-            InvalidSettingError: At once, if ``max_reply_tokens`` allows no token.
-            OutOfOrderError: At once, if the wrapper is closed; when it is
-                read, if a begin has replaced the conversation it was asked
-                of since, or a tool the reply that holds the wrapper runs
-                asked for it.
+                ``stop`` is neither a ``str`` nor an iterable of ``str``,
+                ``cancel`` has no ``is_set``, or ``sampling`` is neither
+                ``None`` nor a :class:`~llama_chat.config.Sampling`.
+            InvalidSettingError: At once, if ``max_reply_tokens`` is no whole
+                number of at least 1, or ``max_calls`` no whole number of at
+                least 0, as their config fields are refused.
             ContextOverflowError: Only where too little room remains for the
                 reply to go on with an open turn; a question is cut to fit
                 instead, one injected earlier cut again where the system
@@ -495,23 +520,30 @@ class ChatWrapper:
             raise InvalidArgumentError(
                 "tool_call_policy", f"tool_call_policy must be one of "
                 f"{', '.join(map(repr, TOOL_CALL_POLICIES))}, not {tool_call_policy!r}")
-        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)):
-            raise ArgumentTypeError(f"max_calls must be None or a whole number, not {max_calls!r}")
-        if max_calls is not None and max_calls < 0:
-            raise InvalidArgumentError("max_calls", f"max_calls must be at least 0, not {max_calls}")
+        # A request's own setting, refused as its config field is.
+        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool)
+                                      or max_calls < 0):
+            raise InvalidSettingError("max_calls", f"max_calls must be None or a whole number of "
+                                                   f"at least 0, not {max_calls!r}")
         # Read from what the newest change published, so it never waits for the lock; the
         # policy is chosen again under the lock, from the turn open when the reply runs.
-        _ensure_max_calls_runs(self._policy_for(
-            tool_call_policy, text is None and self._conversation.published_turn_open()), max_calls)
+        published_turn = self._conversation.published_turn_policy()
+        _ensure_max_calls_runs(_policy_of(
+            tool_call_policy, published_turn if text is None and self._conversation.published_turn_open()
+            else None), max_calls)
         self._ensure_open()
-        self._conversation.ensure_can_reply(asks_question=text is not None)
+        if not self._answers_waiting:
+            # Answers the engine failed at are written first, under the lock.
+            self._conversation.ensure_can_reply(asks_question=text is not None)
         # Weak, so that an abandoned stream is collected, and its hold on the wrapper ends.
         stream_ref: list[Callable[[], ReplyStream | None]] = []
         steps = self._noting_each_reader(
             self._replying(text, tool_call_policy, max_calls, begun=self._begins, **options),
             stream_ref)
-        self._replies.add(steps)
-        stream = ReplyStream(steps, on_close=lambda: newest.get("reply"))
+        with self._replies_lock:
+            self._replies.add(steps)
+        stream = ReplyStream(steps, on_close=lambda: newest.get("reply"),
+                             runs_a_step=lambda: threading.current_thread() in self._tool_threads)
         stream_ref.append(weakref.ref(stream))
         return stream
 
@@ -554,7 +586,11 @@ class ChatWrapper:
         if self._conversation.settle_due:
             # Not a daemon: a process that ends right after a reply waits for it, rather than
             # tearing the model down under its decode.
-            threading.Thread(target=self._settle_when_free, name="llama_chat after a reply").start()
+            settling = threading.Thread(target=self._settle_when_free, name="llama_chat after a reply")
+            try:
+                settling.start()
+            except RuntimeError:
+                pass                # none can start, as at shutdown: the next action does the work
 
     def _settle_when_free(self) -> None:
         """Do the work a reply left, holding the wrapper, leaving a long decode to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
@@ -576,7 +612,11 @@ class ChatWrapper:
                   max_calls: int | None, begun: int, **options
                   ) -> Generator[str | ToolCall, None, Reply]:
         """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's; refused where a begin has replaced the conversation it was asked of, ``begun`` begins in."""
-        with self._held():
+        with self._held(cancel=options["cancel"]) as held:
+            if not held:
+                # Cancelled while it waited for another action: nothing changed.
+                return Reply(text="", n_prefilled_tokens=0, n_prompt_tokens=self.total_tokens,
+                             n_generated_tokens=0, n_evicted_messages=0, stop_reason="interrupted")
             if self._begins != begun:
                 raise OutOfOrderError(
                     None, "this reply was asked of a conversation that begin() has replaced "
@@ -604,12 +644,8 @@ class ChatWrapper:
 
     def _policy_for(self, given: ToolCallPolicy | ToolRegistry | None,
                     goes_on: bool) -> ToolCallPolicy | ToolRegistry:
-        """The policy a reply runs with: ``given``, else the turn's where it goes on with one, else ``"refuse"``."""
-        # Compared with None: an empty registry is false.
-        if given is not None:
-            return given
-        policy = self._conversation.turn_policy
-        return policy if goes_on and policy is not None else "refuse"
+        """The policy a reply runs with: ``given``, else the turn's where it goes on with one, else ``"refuse"``; the lock must be held."""
+        return _policy_of(given, self._conversation.turn_policy if goes_on else None)
 
     def _keep_turn(self, given: ToolCallPolicy | ToolRegistry | None,
                    policy: ToolCallPolicy | ToolRegistry, budget: _CallBudget) -> None:
@@ -653,14 +689,14 @@ class ChatWrapper:
 
         Raises:
             ArgumentTypeError: If ``call_id`` is no ``str``.
-            OutOfOrderError: If no conversation has been begun; or, its
-                ``field`` then ``call_id``, if no call is waiting, ``call_id``
-                is not the one owed, or it names a call :meth:`begin` left out
-                as one that could not be read. The call stays owed.
+            OutOfOrderError: If no conversation has been begun, the wrapper
+                is closed, or a tool the reply that holds the wrapper runs asks
+                for it; or, its ``field`` then ``call_id``, if no call is
+                waiting, ``call_id`` is not the one owed, or it names a call
+                :meth:`begin` left out as one that could not be read. The call
+                stays owed.
             UnsupportedError: If this model's template writes no result,
                 naming ``result``.
-            OutOfOrderError: If the wrapper is closed, or a tool the reply
-                that holds the wrapper runs asks for it.
         """
         if not isinstance(call_id, str):
             raise ArgumentTypeError(f"call_id must be the id of the call being answered, a str, "
@@ -674,10 +710,18 @@ class ChatWrapper:
                                                    and self._conversation.turn_budget.calls_left > 0)
             written = _explain_failure(result if failure is None else failure, may_call_again)
             self._conversation.forget_told()
+            # The answers kept for older calls first, the caller's own in place of one kept for
+            # its call, all of them or, where one is refused, none.
+            owed = [call.id for call in self._conversation.pending_calls]
+            kept = {call.id: answer for call, answer in self._answers_waiting}
+            before = owed[:owed.index(call_id)] if call_id in owed else []
+            results = [(owed_id, kept[owed_id]) for owed_id in before if owed_id in kept]
             try:
-                self._conversation.add_result(call_id, written)
+                self._conversation.add_results(results + [(call_id, written)])
             except ContextOverflowError:
                 self._conversation.close_unanswered()
+            self._answers_waiting = [(call, answer) for call, answer in self._answers_waiting
+                                     if call.id not in {call_id, *before}]
             report = self._conversation.report()
         if failure is not None:
             told = ("the turn closed for want of room instead" if report.turn_closed
@@ -706,17 +750,17 @@ class ChatWrapper:
 
         Raises:
             ArgumentTypeError: If ``keep_text`` is not a ``str``.
-            OutOfOrderError: If no conversation has been begun, if a reply is
-                open, or if the newest message is not the assistant's or holds
-                a tool call, one that could not be read included.
+            OutOfOrderError: If no conversation has been begun, a reply is
+                open, the newest message is not the assistant's or holds a
+                tool call, one that could not be read included, the wrapper is
+                closed, or a tool the reply that holds the wrapper runs asks
+                for it.
             InvalidArgumentError: If ``keep_text`` is not a prefix of its text.
             TemplateRefusedError: If the template does not write the reply
                 shortened to it, as one that writes no empty reply does not
                 write it shortened to ``""``; or, for the reply that ends a
                 turn that called tools, if its tokens as generated hold more
                 than its text, such as a call that went for want of room.
-            OutOfOrderError: If the wrapper is closed, or a tool the reply
-                that holds the wrapper runs asks for it.
         """
         ensure_text(keep_text, "keep_text", "keep_text")
         with self._held():
@@ -888,17 +932,18 @@ class ChatWrapper:
             # summary; one another thread has begun to step is waited for below instead.
             # From a tool a reply runs, that reply is running, and close() is refused below
             # before it changes anything.
-            running = any(inspect.getgeneratorstate(s) == inspect.GEN_RUNNING
-                          for s in self._replies)
+            with self._replies_lock:
+                replies = list(self._replies)
+            running = any(inspect.getgeneratorstate(s) == inspect.GEN_RUNNING for s in replies)
             if self._holder is threading.current_thread() and not running \
                     and self._end_reply_waiting_for_reader() is not False:
                 # A reply begun is ended as closing its stream ends it; one not begun
                 # raises, as after any close, once it is read.
-                for steps in [s for s in self._replies
+                for steps in [s for s in replies
                               if inspect.getgeneratorstate(s) == inspect.GEN_SUSPENDED]:
                     steps.close()
         finally:
-            with self._held(settles=False):
+            with self._held(settles=False), self._model_lock:
                 if not self._closed:
                     self._closed = True
                     self._context.close()
@@ -998,30 +1043,23 @@ class ChatWrapper:
                                     for call in generations[-1].tool_calls],
                         n_evicted_messages=generations[-1].n_evicted_messages + dropped)
                     return _sum_generations(generations, budget.calls_left == 0)
-                settled = yield from self._settle_calls(
-                    _answerable(generation.tool_calls), registry, budget)
+                cancel = kwargs["cancel"]
+                settled, ran = yield from self._settle_calls(
+                    _answerable(generation.tool_calls), registry, budget, cancel)
                 may_call_again = registry is not None and budget.calls_left > 0
-                try:
-                    dropped, unanswered = self._write_results(settled, may_call_again)
-                    generations[-1] = replace(
-                        generations[-1],
-                        n_evicted_messages=generations[-1].n_evicted_messages + dropped)
-                    if unanswered:
-                        # The turn closed on what the model wrote, for want of room to answer
-                        # the rest, which are not run.
-                        generations[-1] = replace(
-                            generations[-1], stop_reason="token_limit",
-                            tool_calls=[replace(call, status="unfinished") if call.id in unanswered
-                                        else call for call in generations[-1].tool_calls])
-                        return _sum_generations(generations, budget.calls_left == 0)
-                except ContextOverflowError:
-                    # No room is left to answer: the turn closes on what the model
-                    # wrote, as one the reply cap cuts does.
-                    dropped = self._evicted_by(self._conversation.close_unanswered)
-                    generations[-1] = replace(
-                        generations[-1], stop_reason="token_limit",
-                        n_evicted_messages=generations[-1].n_evicted_messages + dropped)
-                    return _sum_generations(generations, budget.calls_left == 0)
+                # Cancelled between calls, the calls that ran keep their results and the rest
+                # stay owed, as where the stream is closed at a call.
+                cancelled = len(settled) < len(_answerable(generation.tool_calls))
+                dropped, unanswered = self._write_or_close(settled, may_call_again)
+                generations[-1] = replace(
+                    generations[-1],
+                    n_evicted_messages=generations[-1].n_evicted_messages + dropped)
+                if unanswered:
+                    generations[-1] = _closed_for_room(generations[-1], unanswered, ran)
+                if cancelled:
+                    generations[-1] = replace(generations[-1], stop_reason="interrupted")
+                if cancelled or unanswered:
+                    return _sum_generations(generations, not cancelled and budget.calls_left == 0)
                 deltas = self._generate_round(may_call_again, may_call_after_unreadable(),
                                               max_reply_tokens=tokens_left(), **kwargs)
         finally:
@@ -1101,7 +1139,7 @@ class ChatWrapper:
         return "".join(reversed(written))
 
     def _settle_calls(self, asked: list[ToolCall], registry: ToolRegistry | None,
-                      budget: _CallBudget):
+                      budget: _CallBudget, cancel):
         """Decide what every call of one round gets back, running what may run, and hand over each call that runs before it runs.
 
         The calls are settled in the order asked, before any result is written.
@@ -1109,12 +1147,17 @@ class ChatWrapper:
         stream is closed at a call handed over, or anything is raised while it
         runs, a ``KeyboardInterrupt`` included, the results of the calls that ran
         before it are written, and it and the rest of the round stay owed.
+        Where ``cancel`` is set before a call would run, the calls from it on
+        are left out.
 
         Returns:
-            The ``(call, result)`` pairs.
+            The ``(call, result)`` pairs, and the ids of the calls whose tool ran.
         """
         settled: list[tuple[ToolCall, object]] = []
+        ran: set[str] = set()
         for call in asked:
+            if registry is not None and cancel is not None and cancel.is_set():
+                break
             if registry is None:
                 # Not "no tools exist": `begin` may have declared some. Raising
                 # would leave the turn open with no way to end it.
@@ -1123,7 +1166,9 @@ class ChatWrapper:
             elif budget.calls_left > 0:
                 budget.calls_left -= 1
                 try:
-                    yield call
+                    # A copy: what the reader does with it changes nothing the tool is given.
+                    yield replace(call, arguments=copy.deepcopy(call.arguments))
+                    ran.add(call.id)
                     result = self._run_tool(registry, call)
                 except BaseException:
                     # Closed at the call, or stopped while it ran (Ctrl+C): the calls that ran
@@ -1137,7 +1182,7 @@ class ChatWrapper:
                           "message": "no tool calls left in this turn; "
                                      f"the limit is {budget.max_calls}"}
             settled.append((call, result))
-        return settled
+        return settled, ran
 
     def _run_tool(self, registry: ToolRegistry, call: ToolCall):
         """What ``registry`` returns for ``call``, run on a thread of its own; a failure where it does not return within ``tool_timeout_s``.
@@ -1170,16 +1215,38 @@ class ChatWrapper:
 
     def _write_results(self, settled: Sequence[tuple[ToolCall, object]],
                        may_call_again: bool) -> tuple[int, list[str]]:
-        """Write the result of each settled call, in order, a failure saying whether another call is worth making, until the turn closes for want of room; how many history messages were evicted for them, and the ids of the calls left unanswered."""
+        """Write the result of each settled call, in order, a failure saying whether another call is worth making, until the turn closes for want of room; how many history messages were evicted for them, and the ids of the calls left unanswered.
+
+        Where anything but a want of room stops the writing, the answers not
+        yet written wait for the next reply or result, which writes them first.
+        """
+        answers = [(call, _explain_failure(result, may_call_again)) for call, result in settled]
         unanswered: list[str] = []
 
         def write() -> None:
-            for at, (call, result) in enumerate(settled):
+            for at, (call, answer) in enumerate(answers):
                 if call.id not in {owed.id for owed in self._conversation.pending_calls}:
-                    unanswered.extend(later.id for later, _ in settled[at:])
+                    unanswered.extend(later.id for later, _ in answers[at:])
                     return
-                self._conversation.add_result(call.id, _explain_failure(result, may_call_again))
-        return self._evicted_by(write), unanswered
+                self._conversation.add_result(call.id, answer)
+        try:
+            return self._evicted_by(write), unanswered
+        except ContextOverflowError:
+            raise
+        except BaseException:
+            owed = {call.id for call in self._conversation.pending_calls}
+            self._answers_waiting = [(call, answer) for call, answer in answers if call.id in owed]
+            raise
+
+    def _write_or_close(self, settled: Sequence[tuple[ToolCall, object]],
+                        may_call_again: bool) -> tuple[int, list[str]]:
+        """Write the results of ``settled``, as :meth:`_write_results` does, the turn closed on what the model wrote where no room is left for one; how many history messages went, and the ids of the calls left unanswered."""
+        try:
+            return self._write_results(settled, may_call_again)
+        except ContextOverflowError:
+            owed = {call.id for call in self._conversation.pending_calls}
+            dropped = self._evicted_by(self._conversation.close_unanswered)
+            return dropped, [call.id for call, _ in settled if call.id in owed]
 
     def _evicted_by(self, action: Callable[[], None]) -> int:
         """Run ``action``; how many history messages it evicted."""
@@ -1205,11 +1272,21 @@ class ChatWrapper:
                 not, for a stream closed before it returns.
         """
         self._ensure_open()
+        answers_first: list[tuple[str, object]] = []
+        if on_started is not None and self._answers_waiting:
+            # The answers the engine failed at, written by the request's first generation; once
+            # it starts they are written, and wait no more.
+            answers_first = [(call.id, answer) for call, answer in self._answers_waiting]
+            first_started = on_started
+
+            def on_started() -> None:
+                self._answers_waiting = []
+                first_started()
         generation = self._conversation.generation(
             text, recognizes_calls=recognizes_calls, withhold=withhold,
             max_generated_tokens=self._reply_cap(max_reply_tokens), stop=stop, cancel=cancel,
             sampling=sampling, unreadable_result=_explain_failure(_UNREADABLE, may_call_again),
-            on_started=on_started, on_reply=on_reply)
+            on_started=on_started, on_reply=on_reply, answers_first=answers_first)
         return (yield from generation)
 
     def _reply_cap(self, max_reply_tokens: int | None) -> int:
@@ -1222,42 +1299,63 @@ class ChatWrapper:
         """The template the conversation is written with now."""
         return self._conversation.template
 
+    def _holds_tag(self, text: str) -> bool:
+        """Whether ``text`` holds one of the model's tags."""
+        return any(self._context.is_special(token) for token in self._context.tokenize(text))
+
     def _ensure_open(self) -> None:
         if self._closed:
             raise OutOfOrderError(None, "this ChatWrapper is closed, and takes no action; "
                                         "build a new one")
 
     @contextlib.contextmanager
-    def _held(self, settles: bool = True):
-        """Hold the wrapper for one action, refusing one a tool the holding reply runs asks for; the work a reply left is done first, where ``settles``."""
+    def _held(self, settles: bool = True, cancel=None):
+        """Hold the wrapper for one action, refusing one a tool the holding reply runs asks for; the work a reply left is done first, where ``settles``.
+
+        Where ``cancel`` is set, the work a reply left stops, and so does the
+        wait for the wrapper, which then yields ``False`` without holding it;
+        it yields ``True`` once the wrapper is held.
+        """
         self._ensure_not_holding()
-        self._acquire()
+        if not self._acquire(cancel=cancel):
+            yield False
+            return
         try:
             self._holder = threading.current_thread()
             if settles:
-                self._settle_due_work()
-            yield
+                self._settle_due_work(cancel)
+            yield True
         finally:
             self._holder = None
             self._lock.release()
 
-    def _settle_due_work(self) -> None:
-        """Do the work a reply left, where the thread for it has not yet; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
+    def _settle_due_work(self, cancel=None) -> None:
+        """Do the work a reply left, where the thread for it has not yet, stopped where ``cancel`` is set; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
         if self._closed or not self._conversation.settle_due:
             return
         try:
-            self._conversation.settle()
+            self._conversation.settle(cancel)
         except Exception:
             _log.warning("the work after a reply failed; the cache is decoded again",
                          exc_info=True)
 
-    def _acquire(self, timeout_s: float = -1, gives_way: bool = True) -> bool:
-        """Take the wrapper's lock, waiting at most ``timeout_s`` (``-1`` for no limit); a reply that holds it unread for ``unread_reply_timeout_s`` is ended meanwhile, and the work after a reply gives way where ``gives_way``."""
+    def _acquire(self, timeout_s: float = -1, gives_way: bool = True, cancel=None) -> bool:
+        """Take the wrapper's lock, waiting at most ``timeout_s`` (``-1`` for no limit) and while ``cancel`` is unset; a reply that holds it unread for ``unread_reply_timeout_s`` is ended meanwhile, and the work after a reply gives way where ``gives_way``."""
         if self._lock.acquire(blocking=False):
             return True
         with self._blocked, self._waiting if gives_way else contextlib.nullcontext():
             self._watch_unread_reply()
-            return self._lock.acquire(timeout=timeout_s)
+            if cancel is None:
+                return self._lock.acquire(timeout=timeout_s)
+            # Waited for in slices, the time left until the longest wait the platform allows
+            # its measure, so that a cancel is read between them.
+            deadline_s = time.monotonic() + threading.TIMEOUT_MAX
+            waits_variant = LoopVariant("waiting for the wrapper until a cancel")
+            while not cancel.is_set():
+                waits_variant.passes(int((deadline_s - time.monotonic()) * 1000))
+                if self._lock.acquire(timeout=_CANCEL_LOOK_S):
+                    return True
+            return False
 
     def _watch_unread_reply(self, after_s: float | None = None) -> None:
         """Have a reply that holds the wrapper unread ended once ``unread_reply_timeout_s`` has passed, while an action waits for it."""
@@ -1274,7 +1372,15 @@ class ChatWrapper:
             self._unread_watch.start()
 
     def _end_unread_reply(self) -> None:
-        """End the reply that holds the wrapper unread for ``unread_reply_timeout_s``, while an action waits; look again later where none has yet."""
+        """End the reply that holds the wrapper unread for ``unread_reply_timeout_s``, while an action waits; look again later where none has yet. A failure is logged, on the timer's thread no caller reads."""
+        try:
+            self._end_unread_reply_now()
+        except Exception:
+            _log.error("ending a reply nobody read failed; the action waiting for it waits on",
+                       exc_info=True)
+
+    def _end_unread_reply_now(self) -> None:
+        """:meth:`_end_unread_reply`, its failures raised."""
         with self._unread_watch_lock:
             self._unread_watch = None
         if not self._blocked.is_set():
@@ -1283,11 +1389,11 @@ class ChatWrapper:
         assert limit is not None, "only a limit arms the watch"
         named = self._reply_waiting_for_reader
         stream = named() if named is not None else None
-        if stream is not None and stream.end_if_unread(limit):
+        if stream is not None and stream._end_if_unread(limit):
             _log.warning("a reply that nobody read for %s s was ended, so that the action "
                          "waiting for the wrapper goes on", limit)
             return
-        unread_s = stream.unread_s() if stream is not None else 0.0
+        unread_s = stream._unread_s() if stream is not None else 0.0
         self._watch_unread_reply(max(limit - unread_s, _UNREAD_WATCH_MIN_S))
 
     def _ensure_not_holding(self) -> None:
@@ -1320,7 +1426,7 @@ class ChatWrapper:
         """End the reply that holds the wrapper waiting for its reader, through its stream, unless a step of it runs; whether it did, ``None`` where no stream waits."""
         named = self._reply_waiting_for_reader
         stream = named() if named is not None else None
-        return None if stream is None else stream.end_if_unread(0.0)
+        return None if stream is None else stream._end_if_unread(0.0)
 
 
 class _Waiting:
@@ -1361,6 +1467,15 @@ class _CallBudget:
         self.calls_left = math.inf if self.max_calls is None else self.max_calls
 
 
+def _policy_of(given: ToolCallPolicy | ToolRegistry | None,
+               turn: ToolCallPolicy | ToolRegistry | None) -> ToolCallPolicy | ToolRegistry:
+    """The policy a reply runs with: ``given``, else ``turn``, that of the turn it goes on with, else ``"refuse"``."""
+    # Compared with None: an empty registry is false.
+    if given is not None:
+        return given
+    return turn if turn is not None else "refuse"
+
+
 def _stop_texts(stop) -> tuple[str, ...]:
     """A request's stop texts, read once; a single ``str`` is one stop text.
 
@@ -1381,7 +1496,8 @@ def _ensure_cancel_and_sampling(cancel, sampling) -> None:
         TypeError: Naming the option and what it must be.
     """
     if cancel is not None and not callable(getattr(cancel, "is_set", None)):
-        raise ArgumentTypeError(f"cancel must be a threading.Event, not {cancel!r}")
+        raise ArgumentTypeError(f"cancel must be a threading.Event, or anything with an is_set() "
+                                f"method, not {cancel!r}")
     if sampling is not None and not isinstance(sampling, Sampling):
         raise ArgumentTypeError(f"sampling must be a Sampling, not {sampling!r}")
 
@@ -1407,6 +1523,13 @@ def _unreadable(calls: list[ToolCall]) -> bool:
     return any(call.status == "unreadable" for call in calls)
 
 
+def _closed_for_room(generation: Reply, unanswered: list[str], ran: set[str]) -> Reply:
+    """``generation`` once its turn closed on what the model wrote, for want of room to answer the calls ``unanswered`` names: each reported ``"result_dropped"`` where its tool ran, ``"unfinished"`` where none did."""
+    return replace(generation, stop_reason="token_limit", tool_calls=[
+        replace(call, status="result_dropped" if call.id in ran else "unfinished")
+        if call.id in unanswered else call for call in generation.tool_calls])
+
+
 def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Reply:
     """Sum the generations of one exchange into the Reply that describes it."""
     return Reply(
@@ -1418,7 +1541,7 @@ def _sum_generations(generations: list[Reply], tool_limit_reached: bool) -> Repl
         stop_reason=generations[-1].stop_reason,
         tool_calls=[call for t in generations for call in t.tool_calls],
         tool_limit_reached=tool_limit_reached,
-        tool_results_cut=[call for t in generations for call in t.tool_results_cut],
+        tool_results_cut=tuple(call for t in generations for call in t.tool_results_cut),
         n_reasoning_tokens=sum(t.n_reasoning_tokens for t in generations),
         thought="\n\n".join(t.thought for t in generations if t.thought),
         evicted_for=next((t.evicted_for for t in reversed(generations) if t.evicted_for), None),
@@ -1437,6 +1560,8 @@ _AFTER_REPLY_WAIT_S = 1.0
 _AFTER_REPLY_PAUSE_S = 0.005
 # The least time between two looks for a reply that nobody reads.
 _UNREAD_WATCH_MIN_S = 0.05
+# How often a reply waiting for the wrapper looks at its cancel.
+_CANCEL_LOOK_S = 0.05
 # What a call that could not be read is answered with, before what to do next.
 _UNREADABLE = {"error": "unreadable_call", "message": "the call could not be read"}
 

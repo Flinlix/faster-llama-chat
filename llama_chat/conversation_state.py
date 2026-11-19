@@ -153,6 +153,7 @@ class Published:
     total_tokens: int = 0
     # The model's fingerprint, where a turn is kept: what the generated turns' tokens are valid for.
     model: str | None = None
+    turn_policy: object = None            # the policy the newest turn was started with
 
 
 def copied_value(value):

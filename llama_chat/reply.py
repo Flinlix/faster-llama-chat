@@ -86,7 +86,7 @@ class Reply:
     stop_reason: StopReason
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_limit_reached: bool = False
-    tool_results_cut: list[ToolCall] = field(default_factory=list)
+    tool_results_cut: tuple[ToolCall, ...] = ()
     n_reasoning_tokens: int = 0
     thought: str = ""
     evicted_for: EvictionCause | None = None
@@ -166,11 +166,15 @@ class ReplyStream(Generic[_Delta]):
     """
 
     def __init__(self, deltas: Generator[_Delta, None, Reply],
-                 on_close: Callable[[], Reply | None] | None = None) -> None:
+                 on_close: Callable[[], Reply | None] | None = None,
+                 runs_a_step: Callable[[], bool] = lambda: False) -> None:
         self._deltas = deltas
         self._on_close = on_close
+        # Whether the calling thread runs for a step of this stream, as a tool the reply runs does.
+        self._runs_a_step = runs_a_step
         self.reply: Reply | None = None
         self._stepping = threading.Lock()
+        self._stepper: threading.Thread | None = None
         # When the reader last took a step; None before the first and while one runs.
         self._read_at: float | None = None
 
@@ -183,8 +187,12 @@ class ReplyStream(Generic[_Delta]):
         # generator returns.
         if self.reply is not None:
             raise StopIteration
+        if self._stepper is threading.current_thread() or self._runs_a_step():
+            raise OutOfOrderError(None, "a tool the reply runs read that reply's own stream, "
+                                        "which would wait for the tool; read nothing of it "
+                                        "from a tool")
         with self._stepping:
-            self._read_at = None
+            self._read_at, self._stepper = None, threading.current_thread()
             try:
                 return next(self._deltas)
             except StopIteration as ended:
@@ -196,7 +204,7 @@ class ReplyStream(Generic[_Delta]):
             except Exception as error:
                 raise internal_error("ReplyStream.__next__", error) from error
             finally:
-                self._read_at = time.monotonic()
+                self._read_at, self._stepper = time.monotonic(), None
 
     def close(self) -> None:
         """Stop reading, recording what was generated. Idempotent, as a generator's is.
@@ -215,12 +223,12 @@ class ReplyStream(Generic[_Delta]):
         finally:
             self._stepping.release()
 
-    def unread_s(self) -> float:
+    def _unread_s(self) -> float:
         """How long the stream has waited for its reader's next step; ``0`` before the first and while one runs."""
         read_at = self._read_at
         return 0.0 if read_at is None else time.monotonic() - read_at
 
-    def end_if_unread(self, unread_s: float) -> bool:
+    def _end_if_unread(self, unread_s: float) -> bool:
         """Close the stream, as :meth:`close` does, where its reader has taken no step for ``unread_s`` seconds; whether it did.
 
         Its reader then finds it ended, :attr:`reply` as closing it leaves
@@ -229,7 +237,7 @@ class ReplyStream(Generic[_Delta]):
         if not self._stepping.acquire(blocking=False):
             return False                # a step runs: it is being read
         try:
-            if self._read_at is None or self.unread_s() < unread_s:
+            if self._read_at is None or self._unread_s() < unread_s:
                 return False
             self._close()
             return True

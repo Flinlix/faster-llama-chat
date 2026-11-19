@@ -736,3 +736,14 @@ def test_a_reply_not_begun_when_the_wrapper_closes_raises_that_it_is_closed_wher
         w.close()
         with pytest.raises(OutOfOrderError, match="this ChatWrapper is closed"):
             waiting.finish()
+
+
+def test_a_begin_after_close_reads_nothing_of_the_freed_model_and_says_it_is_closed():
+    fake = FakeContext(TOOLS)
+    w = ChatWrapper(Config(context_size=500), context=fake)
+    w.close()
+    tokenized = len(fake.tokenize_calls)
+    spec = ToolSpec(name="clock", description="time", parameters={"type": "object", "properties": {}})
+    with pytest.raises(OutOfOrderError, match="closed"):
+        w.begin([], tools=[spec])
+    assert len(fake.tokenize_calls) == tokenized

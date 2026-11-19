@@ -25,13 +25,14 @@ from llama_chat.config import Config, Sampling, generation_sampling
 from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec, MAX_ARGUMENT_DEPTH
 from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
-                        InvalidArgumentError, ToolCallPolicy, UnsupportedError)
+                        InvalidArgumentError, InvalidSettingError, ToolCallPolicy, UnsupportedError)
 from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
 from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from llama_chat.testing.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
+from llama_chat.testing import invented_templates
 from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT, TOOLS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent,
@@ -691,13 +692,13 @@ def test_a_message_that_is_not_text_is_refused_where_it_enters_naming_it():
     assert w.conversation() == before and fake.cache == held
 
 
-@pytest.mark.parametrize("max_calls, refusal", [(-1, InvalidArgumentError), (1.5, TypeError),
-                                                (True, TypeError)])
-def test_a_ceiling_on_calls_that_is_no_count_is_refused(max_calls, refusal):
+@pytest.mark.parametrize("max_calls", [-1, 1.5, True, "3"])
+def test_a_ceiling_on_calls_that_is_no_count_is_refused_as_its_setting_is(max_calls):
     w, _ = tool_wrapper()
     w.begin(opened("s"))
-    with pytest.raises(refusal, match="max_calls"):
+    with pytest.raises(InvalidSettingError, match="max_calls") as refused:
         w.reply("x", tool_call_policy=ToolRegistry(), max_calls=max_calls)
+    assert refused.value.field == "max_calls"
 
 
 def test_a_context_of_your_own_whose_methods_take_other_arguments_is_refused_at_the_start():
@@ -1261,6 +1262,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.prompt",
         "RenderedCache.prompt_text",
         "RenderedCache.published_turn_open",
+        "RenderedCache.published_turn_policy",
         "RenderedCache.reasoning",
         "RenderedCache.record_reply",
         "RenderedCache.report",
@@ -1348,6 +1350,7 @@ _PLAIN_REPLY_CODE = {
     },
     "sequences.py": {
         "common_prefix_length",
+        "common_prefix_length.<locals>.<genexpr>",
     },
     "split_render.py": {
         "_split_of",
@@ -1427,6 +1430,7 @@ _PLAIN_REPLY_CODE = {
         "_ensure_max_calls_runs",
         "_explain_failure",
         "_parting",
+        "_policy_of",
         "_stop_texts",
         "_sum_generations",
         "_sum_generations.<locals>.<genexpr>",
@@ -1474,6 +1478,54 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
     assert evicted                  # evictions among it
     allowed = {f"{file}:{name}" for file, names in _PLAIN_REPLY_CODE.items() for name in names}
     assert sorted(entered - allowed) == [], f"code new to a plain reply: {sorted(entered - allowed)}"
+
+
+def _code_a_reply_enters(template, cache) -> set[str]:
+    """Each function of the library a run of replies, evictions among them, enters on ``template``."""
+    import sys
+    fake = FakeContext(template, **cache)
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.8), context=fake)
+    w.begin(opened("s"))
+    for n in range(3):
+        fake.replies = [f"Reply {n} " * 3]
+        w.reply(f"Question {n}?").finish()
+    fake.replies = [f"A longer reply number {n} " * 3 for n in range(14)]
+    entered: set[str] = set()
+
+    def note(frame, event, _arg):
+        if event == "call" and "llama_chat/" in frame.f_code.co_filename \
+                and "llama_chat/testing/" not in frame.f_code.co_filename:
+            entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
+                        + frame.f_code.co_qualname)
+    sys.setprofile(note)
+    try:
+        for n in range(12):
+            w.reply(f"Question number {n}, a longer one?").finish()
+        w.inject("Noch etwas.")
+        w.reply().finish()
+    finally:
+        sys.setprofile(None)
+    return entered
+
+
+# Templates of one property each, beside the plainest one.
+_ONE_PROPERTY = {"tools": TOOLS, "reasoning": invented_templates._invented(can_reason=True),
+                 "clock": with_check_first(PLAIN, "{{- '<[turn>date ' ~ strftime_now('%B') ~ '<turn]>\n' -}}")}
+
+
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False)], ids=["shifts", "saves states"])
+@pytest.mark.counts_work
+def test_a_reply_on_a_template_of_one_property_never_enters_the_code_of_another(cache):
+    """Rule 5 beyond the plainest template: the code a property's replies enter that a plain one's do not is entered by no template without it."""
+    # What serves every template: the listed code, and what a plain run enters besides, which
+    # varies from run to run as the work after a reply comes before the next question or not.
+    allowed = {f"{file}:{name}" for file, names in _PLAIN_REPLY_CODE.items() for name in names}
+    plain = _code_a_reply_enters(PLAIN, cache) | allowed
+    entered = {name: _code_a_reply_enters(template, cache) for name, template in _ONE_PROPERTY.items()}
+    for name in entered:
+        for other in entered:
+            if other != name:
+                assert sorted(entered[name] & (entered[other] - plain)) == [], (name, other)
 
 
 def test_the_render_memory_holds_one_actions_renders_however_long_the_conversation():
@@ -1780,22 +1832,22 @@ def test_a_tool_spec_text_no_model_can_read_is_refused_naming_its_field_and_the_
 def test_a_streams_unread_time_is_zero_before_its_first_step_and_counts_from_its_last_step():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
     stream = w.reply("hallo")
-    assert stream.unread_s() == 0.0
+    assert stream._unread_s() == 0.0
     stepped_before = time.monotonic()
     next(stream)
-    assert 0.0 <= stream.unread_s() <= time.monotonic() - stepped_before
+    assert 0.0 <= stream._unread_s() <= time.monotonic() - stepped_before
     stream.finish()
 
 
 def test_a_stream_is_ended_only_once_its_reader_has_left_it_for_the_time_asked_and_says_whether_it_was():
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
     stream = w.reply("hallo")
-    assert stream.end_if_unread(0.0) is False           # not begun: nobody has left it yet
+    assert stream._end_if_unread(0.0) is False           # not begun: nobody has left it yet
     next(stream)
-    assert stream.end_if_unread(3600.0) is False
+    assert stream._end_if_unread(3600.0) is False
     assert stream.reply is None
     next(stream)
-    assert stream.end_if_unread(0.0) is True
+    assert stream._end_if_unread(0.0) is True
     assert list(stream) == [] and stream.reply is not None
 
 
@@ -1805,7 +1857,7 @@ def test_a_stream_left_at_the_very_instant_of_its_last_step_is_ended_by_a_limit_
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
     stream = w.reply("hallo")
     next(stream)
-    assert stream.end_if_unread(0.0) is True
+    assert stream._end_if_unread(0.0) is True
     assert list(stream) == [] and stream.reply is not None
 
 
@@ -1979,3 +2031,40 @@ def test_a_refused_history_names_the_refused_message_where_the_template_judges_a
     with pytest.raises(TemplateRefusedError,
                        match="does not write the user message 'refused' where it stands"):
         w.begin(opened("s", lonely + [{"role": "user", "content": "refused"}]))
+
+
+@pytest.mark.counts_work
+def test_naming_the_refused_message_of_a_long_history_renders_a_few_parts_of_it_not_every_one(
+        monkeypatch):
+    from llama_chat.rendering import ConversationRendering
+    refuses_long_histories = with_check_first(
+        PLAIN, "{%- if messages|length > 380 %}{{ raise_exception('too many') }}{% endif -%}")
+    w = ChatWrapper(Config(context_size=60000, evict_above_fraction=1.0),
+                    context=FakeContext(refuses_long_histories))
+    history = [message for n in range(200) for message in (
+        {"role": "user", "content": f"Frage {n}?"}, {"role": "assistant", "content": f"Antwort {n}."})]
+    rendering = ConversationRendering.render
+    renders = []
+    monkeypatch.setattr(ConversationRendering, "render",
+                        lambda self, *a, **k: renders.append(1) or rendering(self, *a, **k))
+    with pytest.raises(TemplateRefusedError, match="'Antwort 189.' where it stands"):
+        w.begin(opened("s", history))
+    assert len(renders) < 80
+
+
+@pytest.mark.counts_work
+def test_a_cache_that_can_neither_shift_nor_cut_saves_one_state_for_a_question_before_its_first_word():
+    """A saved state is a copy of the whole cache, so a question keeps one, where its text ends."""
+    fake = FakeContext(PLAIN, gen_tokens=5, can_shift=False)
+    w = ChatWrapper(Config(context_size=4000, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("s" * 300))
+    for n in range(3):
+        w.reply(f"Frage {n}?").finish()
+    w.wait_idle()
+    saving = fake.save_state
+    saved = []
+    fake.save_state = lambda: saved.append(len(fake.cache)) or saving()
+    stream = w.reply("Noch eine Frage?")
+    next(stream)
+    assert len(saved) == 1, saved
+    stream.finish()

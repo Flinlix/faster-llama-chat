@@ -23,7 +23,8 @@ import time
 import pytest
 
 import llama_chat
-from llama_chat import ChatWrapper, Config, ContextOverflowError, TemplateRefusedError
+from llama_chat import (ChatWrapper, Config, ContextOverflowError, InvalidArgumentError,
+                        TemplateRefusedError)
 from llama_chat.history_forms import answer_in_order, read_messages
 from llama_chat.messages import QUESTION_CUT_MARK
 from llama_chat.reply_text import begins_in_thought
@@ -1608,6 +1609,44 @@ def test_a_tag_typed_into_any_text_stays_text_and_every_token_is_the_templates(s
     _assert_tokens_are_the_templates(run, run.seen_tokens[-1], _expected_tokens(run, asked, tools))
 
 
+@pytest.mark.parametrize("name", ['get"weather', "x>y", "get(w", "a b", "look_up_2"])
+@pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES
+                                  if not shipped_addon_call(_FIXTURES[stem]["chat_template"])])
+def test_a_declared_tool_name_is_refused_or_a_call_to_it_written_as_the_template_writes_one_reaches_it(
+        stem, name):
+    run = _Run(stem)
+    try:
+        run.begin(tools=[ToolSpec(name=name, description="d.", parameters=WEATHER.parameters)])
+    except InvalidArgumentError as refused:
+        assert refused.field == "tools" and "reads back" in str(refused) and name != "look_up_2"
+        return
+    _opener, body, _closer = written_call(run.template, run.reader, name, {"city": "Bonn"})
+    run.context.replies = [ScriptedCall(body)]
+    calls = [e for e in run.chat.reply("?", tool_call_policy="yield") if isinstance(e, ToolCall)]
+    assert [call.name for call in calls] == [name]
+
+
+@pytest.mark.parametrize("place", ["name", "parameter", "choice", "title", "description's choice"])
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_tag_typed_into_a_declaration_where_the_template_reads_it_as_written_is_refused(stem, place):
+    run = _Run(stem)
+    forged = run.fixture["eos_token"]
+    parameter = {"type": "string", "enum": [f"a{forged}"] if place == "choice" else ["a"]}
+    if place == "title":
+        parameter["title"] = f"Q{forged}"
+    named = "description" if place == "description's choice" else "q"
+    if place == "description's choice":
+        parameter["enum"] = [f"a{forged}"]       # a parameter named so is checked as any other
+    spec = ToolSpec(name=f"look{forged}up" if place == "name" else "lookup", description="Looks up.",
+                    parameters={"type": "object", "properties": {
+                        f"q{forged}" if place == "parameter" else named: parameter}})
+    run.begin()
+    before = run.chat.conversation()
+    with pytest.raises(InvalidArgumentError, match="tags") as refused:
+        run.chat.begin(tools=[WEATHER, spec])
+    assert refused.value.field == "tools" and run.chat.conversation() == before
+
+
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_an_empty_description_of_a_tool_or_a_parameter_is_written_as_the_template_writes_it(stem):
     run = _Run(stem)
@@ -2162,7 +2201,6 @@ def test_a_model_that_would_call_in_a_room_no_call_fits_answers_instead(stem):
     assert reply.text and not reply.tool_calls, reply
 
 
-_NO_ROOM_FOR_A_CALL_FLAW = "a reply in a room too small for a call shows part of the call's opening"
 
 
 def _can_withhold_calls(stem: str, merges: bool) -> bool:
@@ -2176,7 +2214,7 @@ def _can_withhold_calls(stem: str, merges: bool) -> bool:
 @pytest.mark.parametrize("stem", [stem for stem in _TOOL_TEMPLATES if stem in _SYSTEM_TEMPLATES
                                   and not all(_can_withhold_calls(stem, m) for m in (False, True))])
 def test_a_call_the_room_cannot_hold_on_a_template_that_cannot_withhold_it_is_still_reported(stem):
-    """Where a call's opening cannot be kept from the model, the call it writes is reported, unfinished; a template listed with the known fault still shows it."""
+    """Where a call's opening cannot be kept from the model, the call it writes is reported, unfinished."""
     _opener, body, _closer = _call_body(_Run(stem), {"city": "Bonn"})
     context = FakeContext(_fixture(stem), merges=_TOKENIZER["merges"])
     chat = ChatWrapper(Config(context_size=_ROOM_TOKENS, min_reply_tokens=0, evict_above_fraction=1.0),
@@ -2191,9 +2229,6 @@ def test_a_call_the_room_cannot_hold_on_a_template_that_cannot_withhold_it_is_st
     if internals.template(chat).can_withhold_calls:
         pytest.skip("this tokenizer reads the call's opening as a token of its own")
     reply = chat.reply("x" * _ROOM_TOKENS + " Wetter?", tool_call_policy="yield").finish()
-    if _NO_ROOM_FOR_A_CALL_FLAW in expected(_FIXTURES[stem], "known_library_flaws"):
-        assert not reply.tool_calls, "the known fault is gone: take it off the template's list"
-        return
     assert [call.status for call in reply.tool_calls] == ["unfinished"], reply
 
 
@@ -2762,7 +2797,8 @@ def test_a_reply_settled_on_a_cache_that_saves_states_decodes_nothing_of_its_que
 
 @pytest.mark.counts_work
 @pytest.mark.parametrize("stem", _EVERY)
-def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_its_generation_began(stem):
+def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_its_turn_began(stem):
+    """One state is saved per reply, where its question's text ends: the end of that turn and the generation prompt are decoded again with the shortened reply, and nothing before them."""
     run = _Run(stem, context_size=16384, replies=_ANSWERS, **_COST_CACHES["saves states"])
     _settled_after(run, ["First question?", "Second question?", "Third question?"])
     prompted = run.seen_tokens[-1]          # the cache as the newest reply's generation began
@@ -2774,7 +2810,10 @@ def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_
     after = run.context.cache
     if after[:len(prompted)] != prompted:
         return      # the template writes the past reply after other text than its generation prompt
-    assert decoded <= len(after) - len(prompted)
+    # The state is kept where the question's text ends: its turn's end and the prompt follow.
+    opening = run.context.tokenize(run.template.properties.fragments.user_suffix
+                                   + run.template.generation_prompt(run.reasoning), parse_special=True)
+    assert decoded <= len(after) - len(prompted) + len(opening)
 
 
 def _refusing(fixture, guard):
@@ -3237,6 +3276,32 @@ def test_a_system_prompt_that_leaves_a_short_question_room_only_on_some_dates_is
     assert fits_on_the_longest.reply("hallo").finish().n_generated_tokens
     with pytest.raises(ContextOverflowError, match="with a short question but"):
         ChatWrapper(config, context=FakeContext(dated)).begin(opened("s" * (2 + room - longest)))
+
+
+class _ClockOfAnotherLanguage(datetime.datetime):
+    """A clock whose names are another language's: its longest month is October and its longest weekday Monday."""
+
+    def strftime(self, form):
+        months = {10: "o" * 12}
+        days = {0: "m" * 12}
+        return (form.replace("%B", months.get(self.month, "x" * 3))
+                .replace("%A", days.get(self.weekday(), "y" * 3)))
+
+
+def test_the_room_a_short_question_needs_is_measured_on_the_longest_date_in_any_language_of_the_clock(
+        clock):
+    dated = with_check_first(PLAIN, "{{- '<[turn>date ' ~ strftime_now('%A %B') ~ '<turn]>\n' -}}")
+    config = Config(context_size=600, evict_above_fraction=1.0, min_reply_tokens=100)
+    room = min(config.evict_above_tokens, config.context_size - config.min_reply_tokens)
+    fake = FakeContext(dated)
+    alone = [{"role": "user", "content": QUESTION_CUT_MARK + "?"}]
+    clock[0] = _ClockOfAnotherLanguage(2026, 10, 5, 23, 59)     # a Monday in October
+    longest = len(fake.tokenize(fake.stated_render(opened("s") + alone, generation_prompt=True),
+                                add_special=True))
+    clock[0] = _ClockOfAnotherLanguage(2026, 3, 4, 12, 0)
+    with pytest.raises(ContextOverflowError, match="with a short question but"):
+        ChatWrapper(config, context=FakeContext(dated)).begin(opened("s" * (2 + room - longest)))
+    ChatWrapper(config, context=FakeContext(dated)).begin(opened("s" * (1 + room - longest)))
 
 
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])

@@ -11,7 +11,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 from .errors import ArgumentTypeError, InvalidArgumentError
 
@@ -88,9 +88,9 @@ def json_value_fault(value) -> str | None:
     return None
 
 
-# Whether a call the model wrote was read: whole, not readable, or cut short by the
-# reply cap or a cancel.
-ToolCallStatus = Literal["complete", "unreadable", "unfinished"]
+# Whether a call the model wrote was read: whole, not readable, cut short by the reply
+# cap or a cancel, or run with its result left out for want of room.
+ToolCallStatus = Literal["complete", "unreadable", "unfinished", "result_dropped"]
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,11 @@ class ToolCall:
             answers itself, and ``"unfinished"`` for one the reply cap or a
             cancel cut short, or one whose plain opening ended a reply that
             withholds calls, which nothing answers: either is only reported,
-            with no name or arguments, and an unfinished one with no id.
+            with no name or arguments, and an unfinished one with no id. A
+            call read whole whose turn closed for want of room before its
+            result was written is ``"result_dropped"`` where its tool ran, so
+            the model never read what it returned, and ``"unfinished"`` where
+            it was not run.
         text: What the model wrote for a call that could not be read, where
             the reply stopped on it, between the call's opening and its
             closing; empty for any other.
@@ -195,6 +199,37 @@ def ensure_declarable(specs: list[ToolSpec]) -> None:
             raise InvalidArgumentError("tools", f"the declaration names the tool {spec.name!r} "
                                                 "twice; declare each name once")
         seen.add(spec.name)
+
+
+def ensure_no_tags(specs: list[ToolSpec], holds_tag: Callable[[str], bool]) -> None:
+    """Refuse a declaration that holds a tag where a template reads it as written: anywhere but in a description, which is written as text.
+
+    Raises:
+        InvalidArgumentError: Naming ``tools``, the tool and the place, where
+            ``holds_tag`` holds for a name, a key or a value of a declaration.
+    """
+    def fault(value, path: str) -> str | None:
+        if isinstance(value, str):
+            return path if holds_tag(value) else None
+        if isinstance(value, dict):
+            for key, item in value.items():
+                found = (path + f" key {key!r}" if isinstance(key, str) and holds_tag(key)
+                         else None if key == "description" and isinstance(item, str)
+                         else fault(item, f"{path}[{key!r}]"))
+                if found:
+                    return found
+        if isinstance(value, list):
+            return next((found for i, item in enumerate(value)
+                         if (found := fault(item, f"{path}[{i}]"))), None)
+        return None
+
+    for spec in specs:
+        found = fault(spec.name, "its name") or fault(spec.parameters, "parameters")
+        if found:
+            raise InvalidArgumentError(
+                "tools", f"the tool {spec.name!r} holds one of the model's tags in {found}, "
+                "which its template writes as the tag itself; a tag may stand only in a "
+                "description")
 
 
 def result_text(result) -> str:

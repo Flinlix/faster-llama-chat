@@ -18,6 +18,7 @@ from llama_chat import wrapper as wrapper_module
 from tests.chat_messages import opened
 from llama_chat.testing.fake_context import FakeContext
 from llama_chat.testing.invented_templates import PLAIN
+from tests import internals
 from tests.internals import held_tokens
 from tests.wrappers import assert_consistent
 
@@ -119,6 +120,7 @@ def _run(cache: str, point: str, action: str, monkeypatch):
     if action == "close":
         return None, None
     assert wrapper.wait_idle(timeout_s=_WAIT_S)
+    internals.bring_cache_back(wrapper)     # a cancel leaves the rest of a long decode to the next action
     assert_consistent(wrapper, fake)
     if given:
         # Rule 10, on the conversation as the begin was given it, which the work after the reply
@@ -160,8 +162,9 @@ def test_a_refused_begin_that_met_the_work_after_a_reply_leaves_the_cache_as_it_
     refused = []
 
     def refused_begin():
+        # Refused once it holds the wrapper: a system prompt that leaves no room.
         try:
-            wrapper.begin([{"role": "bogus", "content": "x"}])
+            wrapper.begin(opened("s" * 9000))
         except ValueError as error:
             refused.append(error)
     acting = threading.Thread(target=refused_begin, daemon=True)

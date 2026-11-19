@@ -27,7 +27,7 @@ INVENTED = {"tools": invented.TOOLS, "json tools": invented.JSON_TOOLS,
             "result lines": invented.RESULT_LINES, "json result lines": invented.JSON_RESULT_LINES,
             "declared in the newest turn": invented.TOOLS_DECLARED_IN_THE_NEWEST_TURN,
             "a template of their own": invented.TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN}
-REAL = sorted(stem for stem in STEMS if fixture(stem)["calls_tools"])
+REAL = sorted(STEMS)
 TEMPLATES = sorted(INVENTED) + REAL
 CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False)]
 KINDS = ("question", "reply", "result", "inject", "truncate", "begin", "wait")
@@ -219,14 +219,17 @@ class SequenceRun:
     def first_begin(self) -> bool:
         """Begin the conversation as drawn; whether it fits."""
         draw, wrapper = self.draw, self.wrapper
-        can = wrapper.capabilities(tools=True)
+        # A template without tools is begun without them, and its replies call nothing it reads.
+        calls = wrapper.capabilities(tools=True).can_call_tools
+        can = wrapper.capabilities(tools=calls)
         system = ([{"role": "system", "content": draw.choice(["Be brief.", "", "Du bist hilfreich. " * 5])}]
                   if can.can_take_system_prompt and draw.random() < 0.85 else [])
         reasoning = can.can_reason and draw.random() < 0.4
         history = ([{"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"}]
                    if draw.random() < 0.4 else [])
         try:
-            wrapper.begin(system + history, tools=REGISTRY.specs(), reasoning=reasoning)
+            wrapper.begin(system + history, tools=REGISTRY.specs() if calls else None,
+                          reasoning=reasoning)
         except ContextOverflowError:
             return False
         return True

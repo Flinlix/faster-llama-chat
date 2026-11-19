@@ -9,7 +9,7 @@ import threading
 import pytest
 
 from llama_chat.config import generation_sampling
-from llama_chat import (EngineError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
+from llama_chat import (EngineError, InternalError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.rendering import ConversationRendering
@@ -23,6 +23,7 @@ from tests.internals import generated_turns_held
 from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
                                       TOOLS_REFUSING_TWO_USER_TURNS, NO_DECLARATIONS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
+                            numbered_exchanges,
                             newest_turn, rows, tool_wrapper, weather_registry, with_check_first)
 from llama_chat.cache_sync import CacheSync
 from llama_chat.generation import GenerationAccumulator
@@ -388,6 +389,72 @@ def test_a_turn_closing_for_want_of_room_that_fails_part_way_leaves_the_call_owe
         _go_on(w, fake)
         assert_cache_reads_as_rendered(w, fake)
         w.close()
+
+
+@pytest.mark.parametrize("next_action", ["going-on", "question", "result", "injected question",
+                                         "refused result"])
+def test_a_result_the_engine_failed_to_write_is_written_by_the_next_action_and_not_lost(next_action):
+    fake = _Flaky(TOOLS)
+    w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
+    w.begin(opened("s"))
+    ran = []
+
+    def clock():
+        ran.append("clock")
+        fake.fail = "decode"            # writing its result fails
+        return "12:00"
+    registry = ToolRegistry()
+    registry.tool(clock, description="Die Zeit.", name="clock")
+    fake.call_script = ["fn:clock{}"]
+    with pytest.raises(EngineError):
+        w.reply("wie spät?", tool_call_policy=registry).finish()
+    assert ran == ["clock"] and w.turn_open
+    fake.call_script = []
+    if next_action == "refused result":
+        before = _state(w)
+        with pytest.raises(ValueError):
+            w.inject_tool_result("no-such-call", "13:00")
+        assert _state(w) == before                      # rule 6: the kept answer waits on
+        w.reply().finish()
+    elif next_action == "result":
+        w.inject_tool_result(w.pending_calls[0].id, "13:00")    # the caller's own answer wins
+    elif next_action == "injected question":
+        w.inject("und jetzt?")
+    else:
+        w.reply(None if next_action == "going-on" else "und jetzt?").finish()
+    assert [m["content"] for m in w.conversation()["messages"] if m["role"] == "tool"] == [
+        "13:00" if next_action == "result" else "12:00"]
+    assert ran == ["clock"]
+    assert_cache_reads_as_rendered(w, fake)
+
+
+@pytest.mark.parametrize("cache", sorted(_CACHES))
+def test_a_fault_of_the_library_partway_through_a_drop_leaves_the_cache_as_it_was(cache):
+    """Rule 6 holds for an InternalError too: the edit the drop made before it is undone at once."""
+    fake = FakeContext(PLAIN, gen_tokens=5, **_CACHES[cache])
+    w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.9), context=fake)
+    w.begin(opened("s", numbered_exchanges(14)))
+    memory, faults = w._conversation._memory, []
+    removing = memory.remove
+
+    def remove_then_fault(start, end):
+        removing(start, end)
+        if faults:
+            raise InternalError("a fault forced after the cache was edited")
+    memory.remove = remove_then_fault
+    for i in range(10):
+        before = _state(w)
+        faults.append(True)
+        try:
+            w.inject(f"Frage {i} " + "A" * 40)
+            w.inject("B" * 40, role="assistant")
+        except InternalError:
+            faults.clear()
+            assert _state(w) == before and fake.cache == internals.held_tokens(w)
+            _go_on(w, fake)
+            return
+        faults.clear()
+    pytest.fail("no inject evicted")
 
 
 _UNWRITABLE = [{"when": real_datetime.date(2026, 11, 8)}, {"t": float("nan")},
@@ -1033,7 +1100,8 @@ class _FailingAfterADecode(FakeContext):
 
 
 @pytest.mark.parametrize("cache", _CACHES)
-def test_a_question_cancelled_where_the_cache_cannot_be_brought_back_is_taken_back_and_the_next_is_answered(cache):
+def test_a_question_cancelled_where_the_cache_cannot_be_brought_back_is_taken_back_and_the_next_is_answered(
+        settles_in_the_background, cache):
     fake = _FailingAfterADecode(PLAIN, **_CACHES[cache])
     wrapper = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
     wrapper.begin(opened("persona"))
@@ -1044,6 +1112,7 @@ def test_a_question_cancelled_where_the_cache_cannot_be_brought_back_is_taken_ba
     reply = wrapper.reply("zwei", cancel=cancel).finish()
     assert (reply.text, reply.stop_reason) == ("", "interrupted")
     assert wrapper.conversation() == before
+    assert wrapper.wait_idle()          # the cache is brought up after it, which fails and is logged
     fake.fails = False
     assert wrapper.reply("drei").finish().text
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+import contextlib
 import logging
 
 import threading
@@ -18,6 +19,9 @@ from .loop_variant import LoopVariant
 _TOKEN_OFFSET = 0x10000
 # At most how many tokens a long decode runs on after a cancel is set, where one is watched.
 _CANCEL_PART_TOKENS = 512
+# An interrupt that stands set.
+_ALWAYS_SET = threading.Event()
+_ALWAYS_SET.set()
 
 
 _log = logging.getLogger(__name__)
@@ -225,6 +229,19 @@ class CacheSync:
         """Forget the tokens the cache was left behind, where it holds those before them exactly, as a decode an interrupt stopped leaves it."""
         if self._end is not None and self._end == self._valid < len(self._tokens):
             self.cut_to(self._valid)
+
+    @contextlib.contextmanager
+    def decoding_one_part(self, applies: bool = True):
+        """Where ``applies``, decode at most one part of a long decode meanwhile, cancel or no cancel, leaving the rest to the next bring-up as an interrupt does."""
+        if not applies:
+            yield
+            return
+        cancel, interrupt = self.cancel, self.interrupt
+        self.cancel, self.interrupt = None, _ALWAYS_SET
+        try:
+            yield
+        finally:
+            self.cancel, self.interrupt = cancel, interrupt
 
     def repair(self) -> bool:
         """Bring the cache to its tokens where a change was left for later or failed; whether it was needed.

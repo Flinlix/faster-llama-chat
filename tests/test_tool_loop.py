@@ -428,6 +428,9 @@ def test_a_running_reply_with_no_room_to_answer_its_call_closes_the_turn_as_the_
             continue                    # room for the result, or none for the call
         assert not wrapper.turn_open and wrapper.pending_calls == []
         assert [m["role"] for m in rows(wrapper)] == ["system", "user", "assistant"]
+        # A tool that ran is told apart from a call that was not run.
+        assert [(call.name, call.status) for call in reply.tool_calls] == [
+            ("clock", "result_dropped" if policy == "registry" else "unfinished")]
         fake.call_script = []
         assert wrapper.reply("wie spät?").finish().stop_reason == "end_of_turn"
         return
@@ -486,8 +489,8 @@ def test_an_oversized_result_is_cut_keeps_its_tags_and_tells_the_model_and_the_c
     kept = written.count("x")
     assert written.endswith(f"x\n(cut: {kept} of 10000 characters kept))</result>")
     fake.call_script = []
-    assert wrapper.reply().finish().tool_results_cut == [call]
-    assert wrapper.reply("und sonst?").finish().tool_results_cut == []
+    assert wrapper.reply().finish().tool_results_cut == (call,)
+    assert wrapper.reply("und sonst?").finish().tool_results_cut == ()
 
 
 def test_a_result_cut_under_a_registry_is_listed_on_its_reply():
@@ -498,7 +501,7 @@ def test_a_result_cut_under_a_registry_is_listed_on_its_reply():
     fake.call_script = ["fn:clock{}"]
     reply = wrapper.reply("wie spät?", tool_call_policy=registry).finish()
     assert without_ids(reply.tool_results_cut) == [ToolCall("clock", {})]
-    assert reply.tool_results_cut == reply.tool_calls
+    assert list(reply.tool_results_cut) == reply.tool_calls
 
 
 def _two_calls_owed(context_size):
@@ -518,7 +521,7 @@ def test_a_result_cut_leaves_room_for_the_results_still_owed_after_it():
     written = fake.text_of(fake.cache)
     assert "y" * 10 in written and " of 5000 characters kept)" in written
     fake.call_script = []
-    assert wrapper.reply().finish().tool_results_cut == [first]
+    assert wrapper.reply().finish().tool_results_cut == (first,)
 
 
 def test_short_results_that_fit_together_are_written_whole_and_keep_the_turn_open():
@@ -531,7 +534,7 @@ def test_short_results_that_fit_together_are_written_whole_and_keep_the_turn_ope
     wrapper.inject_tool_result(second.id, "b")
     assert wrapper.turn_open and not wrapper.pending_calls
     fake.call_script = []
-    assert wrapper.reply().finish().tool_results_cut == []
+    assert wrapper.reply().finish().tool_results_cut == ()
 
 
 @pytest.mark.parametrize("length", range(200, 300))
@@ -551,7 +554,7 @@ def test_a_turn_closed_for_want_of_room_lists_no_result_it_dropped_as_cut():
     assert not wrapper.turn_open
     assert "tool" not in [m["role"] for m in after_system(wrapper.conversation()["messages"])]
     fake.call_script = []
-    assert wrapper.reply("und?").finish().tool_results_cut == []
+    assert wrapper.reply("und?").finish().tool_results_cut == ()
 
 
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot-shift"])
@@ -572,7 +575,7 @@ def test_a_result_too_long_for_the_room_left_evicts_the_oldest_exchanges_first(c
     if not can_shift:
         assert len(questions) <= 3
     fake.call_script = []
-    assert wrapper.reply().finish().tool_results_cut == []
+    assert wrapper.reply().finish().tool_results_cut == ()
 
 
 # ----- the local loop ------------------------------------------------------
@@ -1371,6 +1374,50 @@ def test_a_running_reply_answers_every_call_of_a_batch():
     list(wrapper.reply("los", tool_call_policy=registry))
 
     assert ran == ["clock", "other"]
+
+
+def test_a_cancel_set_while_a_tool_of_a_batch_runs_runs_no_later_call_of_it():
+    wrapper, fake = tool_wrapper(template=JSON_TOOLS)
+    wrapper.begin(opened("persona"))
+    cancel, ran = threading.Event(), []
+    registry = ToolRegistry()
+    registry.tool(lambda: ran.append("clock") or cancel.set() or "12:00", description="…",
+                  name="clock")
+    registry.tool(lambda: ran.append("other") or {}, description="…", name="other")
+    fake.call_script = ['[{"name":"clock","arguments":{}},'
+                        '{"name":"other","arguments":{}}]']
+
+    reply = wrapper.reply("los", tool_call_policy=registry, cancel=cancel).finish()
+
+    assert ran == ["clock"] and reply.stop_reason == "interrupted"
+    # The call that ran keeps its result; the one not run stays owed.
+    assert [m["content"] for m in wrapper.conversation()["messages"] if m["role"] == "tool"] == [
+        "12:00"]
+    assert [call.name for call in wrapper.pending_calls] == ["other"]
+
+
+@pytest.mark.parametrize("tool_timeout_s", [None, 5.0], ids=["on-the-reply's-thread", "own-thread"])
+def test_a_tool_that_reads_the_stream_of_the_reply_running_it_is_refused_and_the_reply_goes_on(
+        tool_timeout_s):
+    fake = FakeContext(TOOLS)
+    wrapper = ChatWrapper(Config(context_size=512, evict_above_fraction=0.9,
+                                 tool_timeout_s=tool_timeout_s), context=fake)
+    wrapper.begin(opened("persona"))
+    streams, refusals = [], []
+
+    def reads_its_own_reply():
+        try:
+            next(streams[0])
+        except OutOfOrderError as refused:
+            refusals.append(refused)
+            raise
+    registry = ToolRegistry()
+    registry.tool(reads_its_own_reply, description="…", name="clock")
+    fake.call_script = ["fn:clock{}"]
+    streams.append(wrapper.reply("los", tool_call_policy=registry))
+    reply = streams[0].finish()
+    assert len(refusals) == 1 and "own stream" in str(refusals[0])
+    assert reply.stop_reason == "end_of_turn" and not wrapper.turn_open
 
 
 def test_the_results_of_a_batch_are_written_as_the_template_writes_a_batch():
@@ -3090,7 +3137,9 @@ def test_an_unreadable_entry_of_a_batch_is_reported_wherever_it_stands(batch):
     fake.call_script = [batch]
     reply = w.reply("wie spät?", tool_call_policy=_clock_registry()).finish()
     reported = [(call.name, call.status) for call in reply.tool_calls]
-    assert sorted(reported) == [("", "unreadable"), ("clock", "complete")]
+    # Both, in the order the model wrote them.
+    both = [("", "unreadable"), ("clock", "complete")]
+    assert reported == (both[::-1] if batch.startswith('[{"name"') else both)
 
 
 def test_a_batch_the_room_cannot_answer_is_reported_whole_as_the_room_ran_out():

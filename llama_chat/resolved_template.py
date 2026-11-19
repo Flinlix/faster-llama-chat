@@ -11,8 +11,8 @@ from collections.abc import Mapping
 
 from .cache_context import MODEL_READER, TOOL_USE_TEMPLATE, ensure_answers
 from .call_parsing import parse_calls
-from .errors import UnsupportedError
-from .messages import with_thought_as
+from .errors import InvalidArgumentError, UnsupportedError
+from .messages import calling_message, with_thought_as
 from .model_template import ModelTemplate
 from .reply_text import begins_in_thought, reply_header
 from .template import CallBoundary, shared_tags_length
@@ -20,6 +20,9 @@ from .template_reading import TemplateProperties, TemplateReader
 from .tools import ToolCall
 
 _log = logging.getLogger(__name__)
+# A tool name every call format writes and reads back, which shows whether a template writes
+# a call as the model does.
+_PLAIN_NAME = "tool_name"
 
 
 class ResolvedTemplate:
@@ -69,6 +72,13 @@ class ResolvedTemplate:
             for text in boundary.call_texts) if boundary.call_texts else 0)
         # Whether generation can keep a call's opening token from the model.
         self.can_withhold_calls = bool(boundary.tool_tokens)
+        # The texts a generated call is read between, as generation finds them.
+        self._call_marks = (tuple(context.token_text(token) for token in boundary.tool_tokens)
+                            if boundary.tool_tokens else
+                            tuple(text.strip() for text in boundary.call_texts)
+                            if boundary.call_texts else None)
+        # Whether a call to each tool name asked about is read back as written.
+        self._read_back: dict[str, bool] = {}
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
                generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
@@ -205,6 +215,42 @@ class ResolvedTemplate:
                            properties.call_lead_in, parameters, properties.json_call_keys,
                            properties.json_call_id_key)
 
+    def ensure_names_read_back(self, names: list[str], field: str) -> None:
+        """Refuse a tool name this model's call format writes so that a call to it reads back as another name, or as none.
+
+        Checked only where the template writes a call as the model does, as a
+        plain name shows; a call format an add-on file names may differ.
+
+        Raises:
+            InvalidArgumentError: Naming ``field`` and the first such name.
+        """
+        if self._call_marks is None or not self._reads_back(_PLAIN_NAME):
+            return
+        for name in names:
+            if not self._reads_back(name):
+                raise InvalidArgumentError(
+                    field, f"this model's call format writes a call to the tool {name!r} so "
+                    "that it reads back as another, so the model could never call it; name it "
+                    "with letters, digits and underscores")
+
+    def _reads_back(self, name: str) -> bool:
+        """Whether a call to ``name``, as the template writes it, reads back as a call to ``name``."""
+        if name not in self._read_back:
+            assert self._call_marks is not None, "only a template that marks its calls is asked"
+            call_open, call_close = self._call_marks
+            rendered = self.render([{"role": "user", "content": "?"},
+                                    calling_message("", [ToolCall(name, {})], 0)])
+            read: list[str] = []
+            if rendered is not None and call_open in rendered:
+                # The last call: a declaration may show an example call first.
+                written = rendered.rsplit(call_open, 1)[1].split(call_close, 1)[0]
+                try:
+                    read = [call.name for call in self.read_calls(written)]
+                except ValueError:
+                    pass
+            self._read_back[name] = read == [name]
+        return self._read_back[name]
+
     def ensure_tools_usable(self, field: str) -> None:
         """Refuse to declare tools this model could never use.
 
@@ -304,15 +350,15 @@ class Capabilities:
 class ResolvedTemplates:
     """This model's default chat template and, where it ships one, its template for a conversation that declares tools, each recovered and proven usable.
 
+    A template for tools that cannot be recovered leaves the model with its
+    default template, every conversation with tools refused with the cause.
+
     Args:
         context: The cache context to read the model through.
         addon_call: How the model's add-on file says a call is written, for
             both templates; see :class:`ResolvedTemplate`.
         reasoning_on: What the add-on file says turns reasoning on, for both
             templates; see :class:`ResolvedTemplate`.
-
-    A template for tools that cannot be recovered leaves the model with its
-    default template, every conversation with tools refused with the cause.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.

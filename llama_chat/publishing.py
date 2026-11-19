@@ -24,7 +24,8 @@ def published(state: ConversationState, pending_calls: list[ToolCall], turn_open
         begun=state.begun, turn_open=turn_open,
         newest_role=state.messages[-1]["role"] if state.messages else None,
         total_tokens=total_tokens,
-        model=model_fingerprint() if generated_turns_in(state.messages) else None)
+        model=model_fingerprint() if generated_turns_in(state.messages) else None,
+        turn_policy=state.turn_policy)
 
 
 def conversation_of(published: Published) -> dict:

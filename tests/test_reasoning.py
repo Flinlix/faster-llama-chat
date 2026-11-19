@@ -374,3 +374,27 @@ def test_a_headers_ends_move_only_off_a_tag_they_would_divide(answer, thought, t
         bounds = (len(found[0]), len(answer) - len(found[1]))
         assert not any(at < bound < at + len(tag) for tag in tags for bound in bounds
                        for at in (m.start() for m in re.finditer(re.escape(tag), answer)))
+
+
+@pytest.mark.timed
+def test_streaming_a_long_thought_takes_time_in_proportion_to_it():
+    import time
+    from llama_chat.testing.invented_templates import _invented
+
+    def timed(words: int) -> float:
+        """The shorter of two replies thinking ``words`` words, in this thread's processor time."""
+        times = []
+        for _ in range(2):
+            fake = FakeContext(_invented(can_reason=True),
+                               replies=["<thought>" + "denk " * words + "</thought>Antwort."])
+            w = ChatWrapper(Config(context_size=words * 6 + 2000, answer_room_tokens=None),
+                            context=fake)
+            w.begin(opened("s"), reasoning=True)
+            started = time.thread_time()
+            assert w.reply("q").finish().text == "Antwort."
+            times.append(time.thread_time() - started)
+        return min(times)
+
+    timed(500)                                  # warmed up
+    # Four times the thought takes about four times as long, not sixteen times.
+    assert timed(8000) < 8 * timed(2000)
