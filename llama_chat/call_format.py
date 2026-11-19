@@ -186,7 +186,7 @@ def extract_call_body(render: Render, call_open: str,
     key_in_close = _KEY in pair_sep and _KEY in body_close
     if key_in_close:
         pair_sep, body_close = pair_sep.replace(_KEY, "{key}"), body_close.replace(_KEY, "{key}")
-    body = CallBody(
+    fields = dict(
         name_close=name_close,
         key_open=opens_args[len(name_close):],
         key_close=bare_before,
@@ -205,6 +205,11 @@ def extract_call_body(render: Render, call_open: str,
                                                    (pair, {_KEY: _STRING, _KEY2: _STRING2}))),
         **_nested_forms(rendered_body, text, before_value[len(bare_before):], quote_close),
     )
+    try:
+        body = CallBody(**fields)
+    except ValueError:
+        # Delimiters that cannot tell where a value ends.
+        return None
     # A delimiter still holding a probe's own text is no fixed delimiter at all.
     sentinels = (TOOL_SENTINEL, _KEY, _KEY2, _STRING, _STRING2, str(_NUMBER))
     if any(sentinel in delimiter for sentinel in sentinels

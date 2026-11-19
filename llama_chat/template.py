@@ -119,6 +119,13 @@ class CallBody:
                                 and self.member_close.count("{key}") == 1):
             raise ValueError("nested delimiters come as all four, member_open and "
                              "member_close each holding {key} once, or not at all")
+        if any(nested) and "" in (self.member_open.replace("{key}", ""),
+                                  self.member_close.replace("{key}", "")):
+            raise ValueError("a member's opening and closing each hold text besides its key, "
+                             "or a member's end could not be told from its value")
+        if bool(self.quote_open) != bool(self.quote_close):
+            raise ValueError("a string is quoted on both sides or on neither, or its end "
+                             "could not be told from the text after it")
 
 
 @dataclass(frozen=True)

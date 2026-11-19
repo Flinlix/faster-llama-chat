@@ -896,3 +896,44 @@ def test_a_removed_thought_is_read_from_a_template_that_removes_it_only_from_a_r
     render = _removing_render(refuses_other_roles=refuses_other_roles)
     found = extract_removed_thought(render, extract_fragments(render, tags), tags)
     assert (found and (found.thought_open, found.thought_close)) == ("<q>", "</q>")
+
+
+def _string_marked_before(messages, **_options):
+    """A delimited model that marks a string by text before it and by nothing after it."""
+    def written(fn):
+        return ",".join(f"{k}:s~{v}" if isinstance(v, str) else f"{k}:{v}"
+                        for k, v in fn["arguments"].items())
+    return "".join(_turn_tags(m, "".join(f"<call>fn:{c['function']['name']}{{{written(c['function'])}}}</call>"
+                                         for c in m.get("tool_calls", ())))
+                   for m in messages)
+
+
+def _member_opened_by_its_key_alone(messages, **_options):
+    """A delimited model that opens a nested object's member with its bare key."""
+    def value(v):
+        if isinstance(v, dict):
+            return "".join(f"{k}{value(x)}|</{k}>" for k, x in v.items())
+        if isinstance(v, list):
+            return "".join(f"|<entry>{value(x)}|</entry>" for x in v)
+        return str(v)
+    return "".join(_turn_tags(m, "".join(
+        f"<call>fn:{c['function']['name']}\">|"
+        + "".join(f"<{k}>{value(v)}|</{k}>|" for k, v in c["function"]["arguments"].items())
+        + "</call>" for c in m.get("tool_calls", ()))) for m in messages)
+
+
+@pytest.mark.parametrize("render", [_string_marked_before, _member_opened_by_its_key_alone],
+                         ids=["string-marked-on-one-side", "member-opened-by-its-key"])
+def test_a_call_format_whose_delimiters_cannot_tell_where_a_value_ends_is_not_recovered(render):
+    assert extract_call_body(render, "<call>", "</call>") is None
+
+
+@pytest.mark.parametrize("fields", [
+    {"quote_open": "s~"}, {"quote_close": "~"},
+    {"member_open": "{key}", "member_close": "|</{key}>", "item_open": "[", "item_close": "]"},
+    {"member_open": "<{key}>", "member_close": "{key}", "item_open": "[", "item_close": "]"}],
+    ids=["quote-opened-only", "quote-closed-only", "member-opened-by-its-key", "member-closed-by-its-key"])
+def test_a_call_format_that_cannot_tell_where_a_value_ends_is_refused_where_it_is_made(fields):
+    with pytest.raises(ValueError, match="could not be told"):
+        CallBody(name_close=">", key_open="<", key_close=">", pair_sep=",", body_close="",
+                 empty_close="", **fields)
