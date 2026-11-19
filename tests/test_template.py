@@ -58,8 +58,9 @@ def test_a_split_render_takes_time_in_proportion_to_the_messages():
         return min(times)
 
     timed(2000)                                 # warmed up
-    # Twice the messages take about twice as long, not four times.
-    assert timed(40000) < 3 * timed(20000)
+    # Four times the messages take about four times as long, not sixteen times; the wide margin
+    # leaves room for a machine that is busy meanwhile.
+    assert timed(40000) < 8 * timed(10000)
 
 
 def _closed_by_the_next_question(after_reply: str = "", footer: str = "", head: str = "") -> dict:
