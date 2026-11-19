@@ -16,7 +16,7 @@ from .errors import InternalError
 # whole conversation without evicting or cutting anything: a begin keeps what fits in half
 # of its context, and a conversation fills at most its context.
 _ROOM_FACTOR = 4
-# How many tokens on each side of the first difference the error shows.
+# How many tokens, from the first difference on, the error shows of the cache and of the render.
 _SHOWN_TOKENS = 12
 
 

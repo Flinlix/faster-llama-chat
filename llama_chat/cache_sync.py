@@ -78,14 +78,6 @@ class CacheSync:
         """Whether the cache holds exactly :attr:`tokens` now."""
         return self._end == self._valid == len(self._tokens)
 
-    def reset(self) -> None:
-        """Empty the cache and forget every saved state, as a new conversation does."""
-        self._context.reset()
-        self._tokens, self._valid, self._end = [], 0, 0
-        self.version += 1
-        self._rest_states, self._logits = [], False
-        self._pins, self._pinned, self._at_cuts = {}, {}, []
-
     def pin(self, positions, kept_for: str) -> None:
         """Keep a state saved where the first ``pos`` tokens end, for each ``pos`` of ``positions``, for as long as they stay, where the cache needs saved states.
 

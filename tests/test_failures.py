@@ -685,7 +685,7 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
         "generate closed early": lambda: memory.tokens and generate(closed_early=True),
         "pin": lambda: memory.pin(draw.sample(range(len(memory.tokens) + 2), k=2),
                                   draw.choice(["opening", "exchanges"])),
-        "reset": memory.reset, "rest": memory.rest, "repair": memory.repair,
+        "rest": memory.rest, "repair": memory.repair,
     }
     for _ in range(3000):
         name = draw.choice(sorted(actions))
@@ -1082,7 +1082,7 @@ def test_a_version_of_the_tokens_a_cache_should_hold_never_comes_back_for_other_
         "replace": lambda: memory.replace(
             draw.choice([memory.tokens, memory.tokens[:-1] + some_tokens()])),
         "generate": lambda: memory.tokens and generate(),
-        "reset": memory.reset, "rest": memory.rest, "repair": memory.repair,
+        "rest": memory.rest, "repair": memory.repair,
     }
     seen = {memory.version: list(memory.tokens)}
     for _ in range(2000):
