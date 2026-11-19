@@ -240,6 +240,8 @@ class SequenceRun:
                                 before=draw.choice(["", "", "Moment.", "Ich schaue"]),
                                 closes=draw.random() < 0.85)
                    for _ in range(draw.choice([0, 0, 1, 1, 2, 3]))]
+        if not self.wrapper.capabilities(tools=True).can_call_tools:
+            replies = []                # a template without calls is never scripted one
         replies.append(draw.choice(["Fertig.", "", "Gut so", " spaced\n", "Ein Satz. " * draw.randint(3, 40),
                                     "Antwort <call> mit Tag.", "Denken</thought>Antwort.",
                                     "<thought>Denken</thought>Antwort."]))
