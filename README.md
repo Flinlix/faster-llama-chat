@@ -433,7 +433,8 @@ out.
 **Tools a model could not use are refused where you hand them over**, by
 `begin(tools=...)` and a running `reply`, naming what
 is missing: a template that describes a call, renders the declarations, has a
-readable argument spelling, and a block for the result, with an
+readable argument spelling, a block for the result, and keeps a past call
+written once a later question follows it, with an
 `UnsupportedError` whose `field` names the parameter the tools came in.
 `capabilities(tools=True).can_call_tools` answers the same question up
 front. A declaration that names one tool twice is

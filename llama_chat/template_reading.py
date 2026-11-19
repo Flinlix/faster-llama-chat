@@ -103,6 +103,7 @@ class TemplateReader:
             self._variables = self._resolve_declaration_variables()
         self._can_declare_tools = self._resolve_can_declare_tools()
         self._can_write_results = self._resolve_can_write_results()
+        self._writes_past_calls = self._resolve_writes_past_calls()
         self._reasoning = self._resolve_reasoning()
         # A prompt "with reasoning" that closes the thought already reasons not at all.
         self._can_reason = self._reasoning is not None and not (
@@ -115,6 +116,8 @@ class TemplateReader:
                                                  thought_tags=tuple(t for t in tags if t))
         if reasoning_on:
             self._ensure_reasoning_on_changes_the_prompt()
+        if self._can_reason and not self._fragments.assistant_suffix.strip():
+            self._ensure_next_turn_ends_a_reply(reasoning=True)
         self._check_what_generation_reads()
         boundary = self._boundary
         # A turn may end inside a call, which is then closed as the template closes one.
@@ -133,11 +136,11 @@ class TemplateReader:
             content_rewrites=self._fragments.rewrites, tool_fragments=self._tool_calls,
             boundary=self._boundary, call_close_text=self._call_close_text,
             call_lead_in=self._call_lead_in,
-            call_format_from_addon=self._call_from_file, call_body=self._call_body,
+            call_body=self._call_body,
             json_call_keys=self._json_keys, json_call_id_key=self._json_id_key,
             declares_before_newest_turn=self._declares_before_newest_turn,
             declaration_variables=dict(self._variables),
-            can_declare_tools=self._can_declare_tools,
+            can_declare_tools=self._can_declare_tools, writes_past_calls=self._writes_past_calls,
             can_write_results=self._can_write_results, reasoning=self._reasoning,
             can_reason=self._can_reason, n_closing_tokens=self._n_closing_tokens,
             tag_texts=self._tag_texts,
@@ -247,7 +250,7 @@ class TemplateReader:
         """
         closing = self._fragments.assistant_suffix.strip()
         if not closing:
-            self._ensure_next_turn_ends_a_reply()
+            self._ensure_next_turn_ends_a_reply(reasoning=False)
             return
         pieces = split_at_tags(self._context, closing)
         if not (pieces and pieces[0][1]):
@@ -258,15 +261,28 @@ class TemplateReader:
                 "is malformed, so the model cannot be used."
             )
 
-    def _ensure_next_turn_ends_a_reply(self) -> None:
-        """Ensure the turn after a reply opens with a tag that ends a generation.
+    def _ensure_next_turn_ends_a_reply(self, reasoning: bool) -> None:
+        """Ensure the turn after a reply opens with a tag that ends a generation, in the reasoning mode given.
 
         Raises:
             ValueError: If it opens with plain text, or with a tag the model
-                generates without ending.
+                generates without ending, or if where a reply ends cannot be
+                read.
         """
-        past = self._render(list(_PAST_REPLY), reasoning=False)
-        after = past.split(_NEXT, 1)[-1].lstrip() if past is not None else ""
+        mode = "with reasoning on, " if reasoning else ""
+        past = self._render(list(_PAST_REPLY), reasoning=reasoning)
+        if past is None:
+            raise ValueError(
+                f"{mode}this model's template writes nothing after a reply and refuses a "
+                "question after one, so where a reply ends could not be read; the model "
+                "cannot be used")
+        after = self._after_a_reply(past, reasoning)
+        if after is None:
+            raise ValueError(
+                f"{mode}this model's template writes nothing after a reply and no past "
+                "reply where it stands, so where a reply ends could not be read; the model "
+                "cannot be used")
+        after = after.lstrip()
         first = self._context.tokenize(after, add_special=False)[:1] if after else []
         if first and self._context.is_special(first[0]):
             if self._context.ends_generation(first[0]):
@@ -276,9 +292,23 @@ class TemplateReader:
         else:
             opens_with = "no tag of the model's own"
         raise ValueError(
-            "this model's template writes nothing after a reply, and the turn after "
+            f"{mode}this model's template writes nothing after a reply, and the turn after "
             f"one opens with {opens_with}, so a reply would never stop; the model "
             "cannot be used")
+
+    def _after_a_reply(self, past: str, reasoning: bool) -> str | None:
+        """``past``, the render of a question, a reply and a question, from where the reply ends: after its text, or after its turn's opening, as a reply is prompted in either mode, where the template leaves the text out; ``None`` where neither stands."""
+        if _NEXT in past:
+            return past.split(_NEXT, 1)[1]
+        asked = past.find(_PROMPT)
+        if asked < 0:
+            return None
+        for opening in dict.fromkeys((self._generation_prompt(reasoning).strip(),
+                                      self._generation_prompt(False).strip())):
+            at = past.find(opening, asked + len(_PROMPT)) if opening else -1
+            if at >= 0:
+                return past[at + len(opening):]
+        return None
 
     def _resolve_turn_end_token(self) -> int | None:
         """The first token of the closing after a reply, where it is one of the model's tags."""
@@ -525,6 +555,24 @@ class TemplateReader:
             generation_prompt=True, reasoning=False)
         return rendered is not None and _RESULT in rendered
 
+    def _resolve_writes_past_calls(self) -> bool:
+        """Whether a call the template writes while its turn is the newest stays written once a later question follows."""
+        if not self._calls_marked:
+            return False
+        answered = [{"role": "user", "content": _PROMPT},
+                    calling_message("", [ToolCall(_PROBE_FUNCTION, {})], 0),
+                    result_message(_PROBE_FUNCTION, call_id(0), _RESULT)]
+        newest = self._render(answered, generation_prompt=True, reasoning=False)
+        past = self._render([*answered, {"role": "assistant", "content": _TEXT},
+                             {"role": "user", "content": _NEXT}],
+                            generation_prompt=True, reasoning=False)
+        if newest is None or past is None or _RESULT not in newest or _RESULT not in past:
+            return True
+        call_open = (self._boundary.call_texts[0] if self._boundary.call_texts
+                     else self._tool_calls.call_open if self._tool_calls is not None else "").strip()
+        written = (render.split(_RESULT, 1)[0] for render in (newest, past))
+        return not call_open or next(written).count(call_open) <= next(written).count(call_open)
+
     def _system_turn(self, tools: list[dict] | None) -> str | None:
         """The system turn rendered ahead of a user turn, which some templates require.
 
@@ -569,7 +617,6 @@ class TemplateProperties:
         call_close_text: The text a call ends with, empty where the model
             marks no call.
         call_lead_in: Fixed text the model writes before a call's name.
-        call_format_from_addon: The call format comes from the add-on file.
         call_body: How a call's arguments are spelled, where not as JSON.
         json_call_keys: The keys a JSON call names its function and arguments
             by, where a call is JSON.
@@ -580,6 +627,8 @@ class TemplateProperties:
             passed under.
         can_declare_tools: The template writes the declarations.
         can_write_results: The template writes a call's result.
+        writes_past_calls: The template still writes a call once a later
+            question follows its turn.
         reasoning: How a thought is marked and turned on, where it is.
         can_reason: A conversation can be asked to reason.
         n_closing_tokens: Tokens the closing after a reply takes at most.
@@ -596,13 +645,13 @@ class TemplateProperties:
     boundary: CallBoundary
     call_close_text: str
     call_lead_in: str
-    call_format_from_addon: bool
     call_body: CallBody | None
     json_call_keys: tuple[str, ...] | None
     json_call_id_key: str | None
     declares_before_newest_turn: bool
     declaration_variables: dict
     can_declare_tools: bool
+    writes_past_calls: bool
     can_write_results: bool
     reasoning: Reasoning | None
     can_reason: bool
@@ -632,9 +681,9 @@ class TemplateProperties:
 
     @property
     def can_call_tools(self) -> bool:
-        """Whether the call tags, the declarations, the argument spelling and the result block all came out of the template."""
+        """Whether the call tags, the declarations, the argument spelling and the result block all came out of the template, and a past call stays written."""
         return (self.calls_marked and self.can_declare_tools and self.call_body is not None
-                and self.can_write_results)
+                and self.can_write_results and self.writes_past_calls)
 
     @property
     def can_turn_off_reasoning(self) -> bool:

@@ -213,7 +213,8 @@ class ResolvedTemplate:
 
         Raises:
             UnsupportedError: If the call tags, the declarations, the argument
-                spelling or the result block cannot be had from this model.
+                spelling or the result block cannot be had from this model, or
+                its template leaves a past call out.
         """
         if not self.properties.calls_marked and self.properties.tool_fragments is not None:
             raise UnsupportedError(
@@ -241,6 +242,12 @@ class ResolvedTemplate:
                 field,
                 "this model's template renders no tool result, so a call could "
                 "be made but never answered")
+        if not self.properties.writes_past_calls:
+            raise UnsupportedError(
+                field,
+                "this model's template leaves a call out once a later question "
+                "follows it, so a turn that called tools could not stay as the "
+                "model wrote it")
 
 
 def with_tool_list(render, listed: bool):
@@ -272,8 +279,9 @@ class Capabilities:
     Attributes:
         can_call_tools: Tools can be used every step of the way: the template
             describes a call, renders the declarations that tell the model a
-            tool exists, has a readable argument spelling, and renders a block
-            to answer a call in. Where only the spelling is missing, a call is
+            tool exists, has a readable argument spelling, renders a block to
+            answer a call in, and keeps a past call written once a later
+            question follows it. Where only the spelling is missing, a call is
             still detected, so a reply can still end with
             ``"unreadable_tool_call"``, but nothing runnable comes out of it.
         can_reason: ``reasoning=True`` is accepted: the template marks a

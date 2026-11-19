@@ -94,8 +94,49 @@ def test_a_reply_closed_by_nothing_on_a_template_that_refuses_a_second_question_
     one_question = _closed_by_the_next_question(head=(
         "{%- if messages | selectattr('role', 'eq', 'user') | list | length > 1 -%}"
         "{{ raise_exception('one question only') }}{%- endif -%}"))
-    with pytest.raises(ValueError, match="writes nothing after a reply"):
+    with pytest.raises(ValueError, match="writes nothing after a reply and refuses a question after one"):
         ResolvedTemplate(FakeContext(one_question))
+
+
+def _closed_by_the_next_question_writing_no_past_reply(question_opening: str = "<|ask|>") -> dict:
+    """:func:`_closed_by_the_next_question` opened by a tag, writing a reply's text only where the reply is the newest message, its questions opened by ``question_opening``."""
+    template = _closed_by_the_next_question()
+    text = template["chat_template"].replace(
+        "<|answer|>{{ m.content }}", "<|answer|>{%- if loop.last -%}{{ m.content }}{%- endif -%}")
+    # Opened by a tag that ends nothing, so that the conversation's first token answers no question.
+    return {**template, "chat_template": "<|rules|>" + text.replace(
+        "<|ask|>{{ m.content }}", question_opening + "{{ m.content }}")}
+
+
+def test_a_template_that_leaves_out_a_past_replys_text_is_judged_by_the_turn_after_its_reply():
+    """Where a past reply's text is left out, the check reads the turn after the reply's opening, not the conversation's first token."""
+    assert ResolvedTemplate(FakeContext(_closed_by_the_next_question_writing_no_past_reply()))
+    with pytest.raises(ValueError, match="the turn after one opens with no tag of the model's own"):
+        ResolvedTemplate(FakeContext(_closed_by_the_next_question_writing_no_past_reply(
+            "Q: <|ask|>")))
+
+
+def _reasoning_closed_by_the_next_question(question_opening_with_reasoning: str) -> dict:
+    """A reasoning template that writes nothing after a reply, its question opened by ``question_opening_with_reasoning`` and then a tag that ends a generation where reasoning is on."""
+    return {"chat_template": (
+        "{%- set reasons = enable_thinking is defined and enable_thinking -%}"
+        "{%- for m in messages -%}"
+        "{%- if m.role == 'user' -%}{%- if reasons -%}" + question_opening_with_reasoning
+        + "{%- endif -%}<|ask|>{{ m.content }}"
+        "{%- elif m.role == 'system' -%}<|rules|>{{ m.content }}"
+        "{%- elif m.role == 'assistant' -%}<|answer|>{{ m.content }}"
+        "{%- endif -%}{%- endfor -%}"
+        "{%- if add_generation_prompt -%}<|answer|><|ponder|>"
+        "{%- if not reasons -%}<|/ponder|>{%- endif -%}{%- endif -%}"),
+        "eos_token": "<|stop|>", "ends_generation": ["<|ask|>"],
+        "render_variables": {"off": {"enable_thinking": False}, "on": {"enable_thinking": True}}}
+
+
+def test_the_turn_after_a_reply_is_checked_in_each_reasoning_mode():
+    assert ResolvedTemplate(FakeContext(_reasoning_closed_by_the_next_question(""))).properties.can_reason
+    with pytest.raises(ValueError, match="^with reasoning on, this model's template writes nothing "
+                                         "after a reply, and the turn after one opens with no tag"):
+        ResolvedTemplate(FakeContext(_reasoning_closed_by_the_next_question("Q: ")))
 
 
 @pytest.mark.parametrize("arguments, options", [
