@@ -2310,7 +2310,7 @@ class RenderedCache:
                 self._state.checks = self._render_checks()
                 self._state.anchors = ()
                 self._pin_opening()
-        saved = self._state.copied()
+        saved, kept = self._state.copied(), self._memory.kept_conversations()
         # The copy made above serves unless the bring-up changed what the cache holds.
         held = whole if len(whole) > len(self._memory.tokens) or whole == self._memory.tokens \
             else list(self._memory.tokens)
@@ -2322,6 +2322,7 @@ class RenderedCache:
             except BaseException as error:
                 self._state.put_back(saved)
                 self._memory.replace(held)
+                self._memory.put_back_kept(kept)
                 if isinstance(error, (RefusalError, InternalError)) and was_current \
                         and self._memory.is_known:
                     # An edit a refused action made, such as a shift for an eviction, is undone

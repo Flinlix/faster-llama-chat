@@ -6896,3 +6896,29 @@ at once: llama-3.2 from 736 to 95 tokens at most before the first word, the
 other templates unchanged in that pattern; asked always at once, the most stays as it was,
 since every other question then meets the drop.
 
+### After one review of these changes
+
+One review agent read the three changes and the fixes listed under "After a
+second review" in the entry before. Its findings, all fixed:
+
+- A question answered first got only the room left in the context, so its
+  reply stopped at `token_limit` (349 to 457 of 705 tokens on the stand-in,
+  where it ended its turn before). Now only with a reply cap that fits, and
+  without tools (above).
+- `inject` deferred the work, which then decoded ahead a second user turn
+  after the injected question; with `check_cache` the next action raised
+  `InternalError` on 19 of the 53 test templates. `inject` defers nothing now.
+- The fit counted the question's text alone, not its tags or the generation
+  prompt; it now measures the conversation with the question, prompted.
+- The placement check's form for a conversation that ends on a question was
+  the form without the generation prompt, though `begin` decodes the prompted
+  one; it now takes the prompted form wherever a reply follows.
+- A begin that failed after switching to a kept conversation lost that
+  conversation from the store, so going back to it decoded it again. A failed
+  action now puts the kept conversations back as they were.
+
+Checked and left: a template for tools that refuses the add-on file's
+reasoning levels leaves the model without tools, logged at load, and every
+begin with tools is refused naming the cause. Rule 2 allows a refusal where
+the thing is asked for, which this is.
+

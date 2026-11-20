@@ -1394,6 +1394,11 @@ def test_a_begin_that_keeps_or_takes_back_a_conversation_failing_at_any_point_ch
             w.begin(**target)
         except RuntimeError:
             assert w.conversation() == before, at
+            if goes_back and keeps:
+                # The conversation it went back to is kept still.
+                edits = len(fake.edits)
+                w.begin(**target)
+                assert any(edit[0] == "restore whole" for edit in fake.edits[edits:]), at
         else:
             assert w.conversation()["messages"] == target["messages"], at
         w.reply("Und jetzt?").finish()

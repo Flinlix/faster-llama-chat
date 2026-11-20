@@ -1113,6 +1113,7 @@ _PLAIN_REPLY_CODE = {
         "CacheSync.is_current",
         "CacheSync.is_known",
         "CacheSync.keeps_saved_states",
+        "CacheSync.kept_conversations",
         "CacheSync.pin",
         "CacheSync.pinned",
         "CacheSync.remove",

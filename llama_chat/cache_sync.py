@@ -295,6 +295,15 @@ class CacheSync:
         self.decode(target[same:], want_logits=want_logits)
         return held
 
+    def kept_conversations(self) -> tuple | None:
+        """The caches kept of conversations switched away from, as they stand now, for :meth:`put_back_kept`; ``None`` where none are kept."""
+        return None if self._kept is None else self._kept.entries()
+
+    def put_back_kept(self, kept: tuple | None) -> None:
+        """Keep the caches :meth:`kept_conversations` gave as ``kept``, as a failed action leaves them."""
+        if self._kept is not None and kept is not None:
+            self._kept.put_back(kept)
+
     def replace(self, tokens: list[int]) -> None:
         """Hold ``tokens`` instead, as :meth:`hold` does without touching the cache, which is brought to them before it is next used."""
         if list(tokens) == self._tokens:
@@ -538,6 +547,15 @@ class _KeptCaches:
     def may_keep(self, n_tokens: int) -> bool:
         """Whether a cache of ``n_tokens`` may fit the bound: none as long as one that held no more did not."""
         return self._too_large is None or n_tokens < self._too_large
+
+    def entries(self) -> tuple:
+        """The caches kept, and the fewest tokens one held that alone took more than the bound, as they stand now."""
+        return list(self._kept), self._too_large
+
+    def put_back(self, entries: tuple) -> None:
+        """Keep what :meth:`entries` gave instead of what is kept now."""
+        kept, self._too_large = entries
+        self._kept = list(kept)
 
     def take(self, at: int) -> tuple[list[int], Sized]:
         """The kept cache ``at``, which is kept no longer."""
