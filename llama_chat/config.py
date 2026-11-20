@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, fields, replace
 
 from .errors import InvalidSettingError
@@ -304,6 +305,20 @@ def _is_of_kind(value, kind: str) -> bool:
     if kind == "float":
         return isinstance(value, (int, float)) and math.isfinite(value)
     return isinstance(value, str)
+
+
+def model_file(config: Config) -> str:
+    """The model file ``config`` names.
+
+    Raises:
+        InvalidSettingError: If ``model_path`` is unset or names no file.
+    """
+    if not config.model_path:
+        raise InvalidSettingError("model_path", "model_path is unset; a model cannot be "
+                                                "loaded without one")
+    if not os.path.isfile(config.model_path):
+        raise InvalidSettingError("model_path", f"no model file at {config.model_path!r}")
+    return config.model_path
 
 
 def ensure_token_cap(tokens: int | None, name: str) -> None:

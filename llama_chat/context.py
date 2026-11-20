@@ -16,9 +16,8 @@ from pathlib import Path
 
 from ._backend import Backend
 from .cache_context import TOOL_USE_TEMPLATE
-from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, DrawnSampling
+from .config import UNQUANTIZED_KV_CACHE_TYPE, Config, DrawnSampling, model_file
 from .errors import EngineError
-from .errors import InvalidSettingError
 
 SEQ = 0  # the one sequence id, there being one conversation
 # The GGUF keys that state the sampling a model recommends, by Sampling's names.
@@ -66,15 +65,11 @@ class KVContext:
         self, config: Config,
         on_load_progress: Callable[[float], None] | None = None,
     ) -> None:
-        if not config.model_path:
-            raise InvalidSettingError("model_path", "model_path is unset; a model cannot be "
-                                                    "loaded without one")
-        if not os.path.isfile(config.model_path):
-            raise InvalidSettingError("model_path", f"no model file at {config.model_path!r}")
+        model_path = model_file(config)
         self._config = config
         self._backend = Backend()
         self._model = self._backend.load_model(
-            config.model_path, config.gpu_layers, progress=on_load_progress)
+            model_path, config.gpu_layers, progress=on_load_progress)
         self._engine_context = None
         try:
             template = self._backend.metadata_value(self._model, "tokenizer.chat_template")
@@ -97,7 +92,7 @@ class KVContext:
             self._template_texts = {name: text for name, text in texts.items() if text}
             self._special_tokens: tuple[int, ...] | None = None
             self._fingerprint: str | None = None
-            self._model_bytes = os.path.getsize(config.model_path)
+            self._model_bytes = os.path.getsize(model_path)
         except BaseException:
             # Free whatever was created before the failure.
             if self._engine_context is not None:

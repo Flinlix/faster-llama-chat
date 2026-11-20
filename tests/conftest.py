@@ -21,6 +21,20 @@ from .wrappers import (assert_cache_reads_as_rendered, assert_conversation_is_it
                        assert_kept_turns_hold_no_later_result)
 
 
+
+def _engine_built() -> bool:
+    """Whether the engine's bindings import."""
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+# The tests of the engine's own module need the engine built.
+collect_ignore = [] if _engine_built() else ["test_backend.py"]
+
+
 # How long a test may run before it counts as hung; a test that needs longer says so with
 # ``@pytest.mark.time_limit_s(n)``.
 _TIME_LIMIT_S = 60

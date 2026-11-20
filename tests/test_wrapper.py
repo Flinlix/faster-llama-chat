@@ -479,18 +479,20 @@ def test_begin_rejects_system_prompt_over_threshold():
 
 
 @pytest.mark.parametrize("failing", ["ResolvedTemplates", "RenderedCache"])
-def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing):
+def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, failing, tmp_path):
     closed = []
+    (tmp_path / "model.gguf").write_bytes(b"")
     loaded = FakeContext(PLAIN)
     loaded.close = lambda: closed.append(True)
-    monkeypatch.setattr("llama_chat.wrapper.KVContext", lambda config, on_load_progress: loaded)
+    pytest.importorskip("llama_cpp", reason="the engine is not installed")
+    monkeypatch.setattr("llama_chat.context.KVContext", lambda config, on_load_progress: loaded)
 
     def refuse(*args, **kwargs):
         raise MemoryError("failed part-way")
 
     monkeypatch.setattr(f"llama_chat.wrapper.{failing}", refuse)
     with pytest.raises(MemoryError):
-        ChatWrapper(Config(context_size=500))
+        ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=500))
     assert closed == [True]
 
 
@@ -870,15 +872,17 @@ def test_the_conversation_holds_only_what_was_recorded_an_early_closed_reply_inc
     assert rows(w)[-1] == {"role": "assistant", "text": "r"}
 
 
-def test_config_holds_the_sampling_the_model_supplies_whoever_built_the_context(monkeypatch):
-    given = Config(context_size=512)
+def test_config_holds_the_sampling_the_model_supplies_whoever_built_the_context(monkeypatch, tmp_path):
+    (tmp_path / "model.gguf").write_bytes(b"")
+    given = Config(model_path=str(tmp_path / "model.gguf"), context_size=512)
 
     class _Loaded(FakeContext):
         def __init__(self, config, on_load_progress=None):
             super().__init__(PLAIN)
             self.recommended = {"temperature": 0.6, "top_p": 0.9}
 
-    monkeypatch.setattr("llama_chat.wrapper.KVContext", _Loaded)
+    pytest.importorskip("llama_cpp", reason="the engine is not installed")
+    monkeypatch.setattr("llama_chat.context.KVContext", _Loaded)
     loaded = ChatWrapper(given).config
     own = ChatWrapper(given, context=_Loaded(given)).config
     assert loaded == own
@@ -2093,3 +2097,39 @@ def test_a_cache_that_can_neither_shift_nor_cut_saves_a_state_before_a_first_wor
     next(stream)
     assert len(saved) == (1 if rewrites else 0), saved
     stream.finish()
+
+
+def test_without_the_engine_a_context_of_ones_own_still_answers_and_a_model_file_is_refused_naming_it(tmp_path):
+    """The engine is loaded with the first model file: without it installed, the library and its test context run, a model path that names no file is refused as with it, and loading a model file says what is missing."""
+    import subprocess
+    import sys
+
+    script = """
+import sys
+sys.modules["llama_cpp"] = None                     # as if the engine were not installed
+from llama_chat import ChatWrapper, Config
+from llama_chat.testing.fake_context import FakeContext
+from llama_chat.testing.invented_templates import PLAIN
+chat = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN, ["Hello."]))
+chat.begin([])
+assert chat.reply("Hi").finish().text == "Hello."
+from llama_chat import InvalidSettingError
+for unusable in (None, sys.argv[1] + ".missing"):
+    try:
+        ChatWrapper(Config(model_path=unusable))
+    except InvalidSettingError as refused:
+        assert refused.field == "model_path", refused
+    else:
+        raise AssertionError(f"a model_path of {unusable!r} was taken")
+try:
+    ChatWrapper(Config(model_path=sys.argv[1]))
+except ImportError as error:
+    assert "llama-cpp-python" in str(error), error
+else:
+    raise AssertionError("a model file loaded without the engine")
+"""
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"")
+    done = subprocess.run([sys.executable, "-c", script, str(model)], capture_output=True, text=True,
+                          timeout=120)
+    assert done.returncode == 0, done.stderr

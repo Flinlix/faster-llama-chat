@@ -19,8 +19,7 @@ from collections.abc import Callable, Generator, Iterable
 
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
-from .config import Config, Sampling, ensure_token_cap, generation_sampling
-from .context import KVContext
+from .config import Config, Sampling, ensure_token_cap, generation_sampling, model_file
 from .conversation_state import reasoning_switch
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_generated_turns, read_messages
@@ -74,8 +73,11 @@ class ChatWrapper:
         Raises:
             ArgumentTypeError: If ``context`` does not answer everything the wrapper
                 calls on it.
+            ImportError: Where the wrapper loads the model itself and the
+                engine's bindings are not installed.
             InvalidSettingError: If ``model_path`` is unset or names no
-                file, where the wrapper loads the model itself.
+                file, where the wrapper loads the model itself, with the
+                engine's bindings installed or not.
             RuntimeError: Where the wrapper loads the model itself, if the
                 model or its context cannot be created, or the cache cannot
                 perform one of the edits eviction rests on.
@@ -92,10 +94,13 @@ class ChatWrapper:
         if config is None:
             config = Config()
         owns_context = context is None
-        self._context = (
-            KVContext(config, on_load_progress=on_load_progress)
-            if owns_context else context
-        )
+        if owns_context:
+            # The engine is loaded with the first model file, so that a context of one's own needs none.
+            model_file(config)
+            from .context import KVContext
+            self._context = KVContext(config, on_load_progress=on_load_progress)
+        else:
+            self._context = context
         # Everything that can be settled about this model is settled here.
         try:
             ensure_answers(self._context, CACHE_CONTEXT)

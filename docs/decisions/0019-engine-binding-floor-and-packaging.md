@@ -21,11 +21,17 @@ saved states rest on; every other name is present from 0.3.9 on.
   it has. An unknown signature warns at the first generation, which then runs
   unpenalized rather than refusing to start.
 - `install.sh` checks the build by constructing the adapter, which raises where
-  a symbol is missing. The message for a missing engine package names 0.3.23
-  and `./install.sh`, with the build by hand beside it.
+  a symbol is missing. The message for a missing engine package names 0.3.23,
+  that it is built from source for the machine, and the README's install
+  section, which gives `./install.sh` and the build by hand.
 - The distribution is named `faster-llama-chat` and is imported as
   `llama_chat`. An environment that installed the old distribution name must
   uninstall it first, as both claim `llama_chat`.
+- The engine is imported when the first model file is loaded, not with the
+  package: a caller with a context of its own, `llama_chat.testing`
+  and the tests that use no model run without the engine built (2026-11-20). A
+  `model_path` that names no file is refused as a setting before the engine is
+  imported, so the refusal is the same with or without it.
 - Python 3.11 is the version the package requires; no claim is made of the
   oldest version it is tested on. `jinja2` is a declared dependency (0004).
 

@@ -22,6 +22,7 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
     """A KVContext that samples ``order`` and renders each token from ``pieces``."""
     from types import SimpleNamespace
 
+    pytest.importorskip("llama_cpp", reason="the engine is not installed")
     from llama_chat.context import KVContext
 
     sampled = iter(order)
