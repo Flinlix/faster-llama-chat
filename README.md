@@ -245,7 +245,12 @@ write it shortened to `""`.
 the evictions over the limits and the decode ahead of the next question, runs
 right after on a thread of the library's own, holding the wrapper as any
 action does; the next action, or `wait_idle`, waits for it, or does it first
-where that thread has not begun. An action that waits stops a long decode
+where that thread has not begun. A question `reply` asks before that thread
+begins, on a cache that cannot shift, is answered first where the evictions
+would decode the history again, no tools are declared, and the question and a
+reply of its cap (`max_reply_tokens`) fit beside the history as it is; the
+work then follows its reply, and the question after that waits for it. An
+action that waits stops a long decode
 there between its parts: what that work did stands, and the rest of the
 decode is done first by that action. What that work evicted and decoded is counted by the next request: in
 its `Reply`, or in the next `Report`; a `begin` leaves it to the conversation

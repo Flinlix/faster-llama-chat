@@ -106,6 +106,13 @@ def done_after_the_newest_reply(wrapper) -> tuple[int, int]:
     return conversation._decoded_after_reply, conversation._evicted_after_reply[0]
 
 
+def leaves_a_drop(wrapper) -> bool:
+    """Whether the work after the newest reply is still to do and will drop history: the conversation is over ``evict_above_tokens``."""
+    conversation = wrapper._conversation
+    return conversation.settle_due and conversation._length(
+        conversation.messages, generation_prompt=False) > wrapper.config.evict_above_tokens
+
+
 def keeps_the_rest_after_a_drop(wrapper) -> bool:
     """Whether the cache keeps the exchanges after the oldest once it goes: it shifts, and the template writes them as before, around the conversation's turns that called tools too."""
     return wrapper._conversation._eviction.keeps_the_rest

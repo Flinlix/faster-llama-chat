@@ -109,6 +109,7 @@ class RenderedCache:
         # evicted, with why, which the next action reports, and the tokens it decoded,
         # which the next request counts as its own.
         self._settle_due = False
+        self._drop_left = False             # whether the work a reply left waited for a question
         self._evicted_after_reply: tuple[int, EvictionCause | None] = (0, None)
         self._decoded_after_reply = 0
         # What ``check_cache`` found once the work after a reply ended, which the next action
@@ -295,6 +296,7 @@ class RenderedCache:
             self._state.tools, self._state.reasoning = list(tools or []), reasoning
             self._state.uses_tool_template = tools is not None
             self._state.unreadable_result = unreadable_result
+            self._drop_left = False
             joins = self._joins_questions
             given = read_messages(history)
             if joins:
@@ -632,7 +634,8 @@ class RenderedCache:
         """Whether a reply left the work after it to do: the evictions and the decode ahead of the next question."""
         return self._settle_due
 
-    def settle(self, interrupt: Interrupt | None = None) -> None:
+    def settle(self, interrupt: Interrupt | None = None, question: str | None = None,
+               reply_tokens: int = 0) -> None:
         """Do the work a reply left, where it left any: drop what is over the limits, then render and decode ahead for the next question.
 
         Args:
@@ -640,6 +643,13 @@ class RenderedCache:
                 long decode between its parts; what the work did stands, and
                 the cache is left behind its tokens, which the next action
                 decodes before its own work.
+            question: The text of the question the reply waiting for this
+                one answers. Where a drop would decode the history again, no
+                tools are declared, no exchange limit is passed, and the
+                question and a reply of ``reply_tokens`` fit beside the cache
+                as it is, the work is left to the work after that reply, once:
+                the question after that waits for it.
+            reply_tokens: The cap on that reply's tokens.
 
         Raises:
             Exception: What a failed decode raises, which leaves the
@@ -648,6 +658,12 @@ class RenderedCache:
         if not self._settle_due:
             return
         self._settle_due = False
+        if question is not None and not self._drop_left \
+                and self._answers_first(question, reply_tokens):
+            # The reply makes the work due again; one taken back leaves it to the next.
+            self._drop_left = True
+            return
+        self._drop_left = False
         changes = replace(self._state.changes,
                           tool_results_cut=list(self._state.changes.tool_results_cut))
         decoded = self.decoded
@@ -673,6 +689,17 @@ class RenderedCache:
             self._evicted_after_reply = (self._evicted_after_reply[0] + went,
                                          self._state.changes.evicted_for)
             self._state.changes = changes
+
+    def _answers_first(self, question: str, reply_tokens: int) -> bool:
+        """Whether ``question`` is answered before the drop the newest reply left: on a cache that cannot shift, which decodes the history it keeps again, without tools, whose results need room no cap bounds, where the cache holds everything it is to hold and the question and a reply of ``reply_tokens`` fit beside it."""
+        if self._context.can_shift or self._state.tools or not self._memory.is_current \
+                or self._eviction.too_many() \
+                or self._length(self._state.messages, generation_prompt=False) \
+                <= self._config.evict_above_tokens:
+            return False
+        asked = self._state.messages + [{"role": "user", "content": question}]
+        return self._length(asked, generation_prompt=True) + reply_tokens \
+            <= self._config.context_size
 
     def changes_so_far(self) -> Changes:
         """What the actions changed since the caller last asked for a :meth:`report`, left to be asked for still."""

@@ -635,7 +635,8 @@ class ChatWrapper:
                   max_calls: int | None, begun: int, **options
                   ) -> Generator[str | ToolCall, None, Reply]:
         """The reply :meth:`reply` describes, its policy chosen under the lock: ``given``, else the open turn's; refused where a begin has replaced the conversation it was asked of, ``begun`` begins in."""
-        with self._held(cancel=options["cancel"]) as held:
+        with self._held(cancel=options["cancel"], question=text,
+                        reply_tokens=self._reply_cap(options["max_reply_tokens"])) as held:
             if not held:
                 # Cancelled while it waited for another action: nothing changed.
                 return Reply(text="", n_prefilled_tokens=0, n_prompt_tokens=self.total_tokens,
@@ -1334,8 +1335,9 @@ class ChatWrapper:
                                         "build a new one")
 
     @contextlib.contextmanager
-    def _held(self, settles: bool = True, cancel=None):
-        """Hold the wrapper for one action, refusing one a tool the holding reply runs asks for; the work a reply left is done first, where ``settles``.
+    def _held(self, settles: bool = True, cancel=None, question: str | None = None,
+              reply_tokens: int = 0):
+        """Hold the wrapper for one action, refusing one a tool the holding reply runs asks for; the work a reply left is done first, where ``settles``, or after the reply to ``question``, of at most ``reply_tokens``, where that waits less.
 
         Where ``cancel`` is set, the work a reply left stops, and so does the
         wait for the wrapper, which then yields ``False`` without holding it;
@@ -1348,18 +1350,19 @@ class ChatWrapper:
         try:
             self._holder = threading.current_thread()
             if settles:
-                self._settle_due_work(cancel)
+                self._settle_due_work(cancel, question, reply_tokens)
             yield True
         finally:
             self._holder = None
             self._lock.release()
 
-    def _settle_due_work(self, cancel=None) -> None:
-        """Do the work a reply left, where the thread for it has not yet, stopped where ``cancel`` is set; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
+    def _settle_due_work(self, cancel=None, question: str | None = None,
+                         reply_tokens: int = 0) -> None:
+        """Do the work a reply left, where the thread for it has not yet, stopped where ``cancel`` is set, as :meth:`RenderedCache.settle` does before ``question`` and its ``reply_tokens``; the lock must be held. A failure is logged: it left the conversation as it was, and the cache to be decoded again."""
         if self._closed or not self._conversation.settle_due:
             return
         try:
-            self._conversation.settle(cancel)
+            self._conversation.settle(cancel, question, reply_tokens)
         except Exception:
             _log.warning("the work after a reply failed; the cache is decoded again",
                          exc_info=True)

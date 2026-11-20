@@ -6865,3 +6865,34 @@ Two changes, for every template:
 Measured: Cohere 2 from 14 to 8 whole renders per tool turn, one split per
 action; most templates from 19 to 13 renders per tool turn (Mistral Small 3.2 15).
 
+### A question met before the work after a reply (521.15)
+
+On a cache that cannot shift, the drop after a reply decodes the history it
+keeps again. A question that came before that work began (in the pause after
+the reply, or before the background thread took the wrapper) waited for the
+drop and the decode first. Such a question, asked with `reply`, is now
+answered first, where the cache holds everything it is to hold, no tools are
+declared, no exchange limit is passed, and the question with its tags and a
+reply of its cap fit in the context beside the cache; the drop follows its
+reply. Without a cap (`max_reply_tokens` in the request or the config) the
+reply may take the whole context, so the question waits for the drop as
+before: a reply answered first gets only the room left above the threshold,
+and would otherwise stop short where it would have ended its turn. With tools
+declared the room their results need is not bounded, so such a question waits
+too. `inject` defers nothing: it generates nothing to answer first, and
+`inject` followed by `reply()` waits no longer than `reply(text)`. It does so once:
+the question after that, met the same way, waits for it, so that the
+conversation does not grow to the context. A question that meets the work
+once it has begun waits as before, since the cut has removed the tokens it
+would be answered from.
+
+Cost: the history decoded again after that reply holds the question's
+exchange too, so the total decoded grows by one exchange. The work after the
+reply is no longer owed while the question is answered: a reply taken back
+leaves it to the reply after, so it never runs on a conversation that ends on
+a question. Measured on the
+stand-in at 2,048 tokens with a reply cap of 120, every other question asked
+at once: llama-3.2 from 736 to 95 tokens at most before the first word, the
+other templates unchanged in that pattern; asked always at once, the most stays as it was,
+since every other question then meets the drop.
+

@@ -230,6 +230,43 @@ def test_a_question_waits_only_for_its_own_tokens(stem, injected):
 
 
 @pytest.mark.counts_work
+@pytest.mark.parametrize("can_cut", [False, True], ids=["neither", "cuts"])
+@pytest.mark.parametrize("stem", sorted(_FIXTURES))
+def test_a_question_right_after_a_reply_that_leaves_a_drop_on_a_cache_that_cannot_shift_waits_only_for_itself(
+        stem, can_cut, monkeypatch):
+    """The drop, which decodes the history kept again, follows its reply instead, where a reply of the cap fits; the question after that, asked at once, waits for it."""
+    # The work after a reply is left to the next action, as where the question comes at once.
+    monkeypatch.setattr(ChatWrapper, "_start_settling", lambda self: None)
+    probe = _Run(stem)
+    probe.begin()
+    opening = len(probe.context.cache)     # a template's own preamble may be long
+    run = _Run(stem, can_shift=False, can_cut_tail=can_cut,
+               replies=[f"Answer {k} " + "v" * 60 for k in range(40)])
+    run.chat.close()
+    run.chat = ChatWrapper(Config(context_size=opening + 2048, min_reply_tokens=8,
+                                  max_reply_tokens=120, evict_above_fraction=0.75),
+                           context=run.context)
+    run.begin()
+    for k in range(40):
+        asked = f"Question {k} " + "w" * 60
+        answer = run.chat.reply(asked).finish().text
+        if internals.leaves_a_drop(run.chat):
+            break
+        run.chat.wait_idle(10)
+    else:
+        pytest.fail("no reply left a drop")
+    question = "Asked at once?"
+    waited = run.context.total_prefilled()
+    replied = run.chat.reply(question).finish()
+    # With all the room its cap gives it.
+    assert replied.stop_reason != "token_limit" and replied.text.startswith("Answer")
+    # The newest exchange too, which a template may write otherwise once a question follows.
+    assert run.decoded[-1] - waited <= (len(question) + len(internals.prompt_text(run.chat))
+                                        + _exchange_length(run, asked, answer) + 40)
+    assert run.chat.reply("And again at once?").finish().n_evicted_messages > 0
+
+
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", sorted(_FIXTURES))
 def test_a_question_injected_over_the_threshold_waits_only_for_itself_and_evicts_after_its_reply(stem):
     question = "Some background you need not repeat. " * 6 + QUESTIONS[3]
