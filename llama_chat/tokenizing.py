@@ -116,7 +116,7 @@ def tokenize_pieces(reader: Tokenizer, pieces: list[tuple[str, bool]], *,
 
 
 class MemoTokenizer:
-    """A model's tokenizer that remembers, up to a bound in entries and in characters, what it tokenized."""
+    """A model's tokenizer that remembers, up to a bound in entries and in characters, what it tokenized, and each token's text and whether it is a tag."""
 
     _BOUND = 20000                  # entries kept before the memory starts over
     _BOUND_CHARS = 4_000_000        # characters of text kept, with their tokens, before it does
@@ -125,6 +125,9 @@ class MemoTokenizer:
         self._reader = reader
         self._known: dict = {}
         self._chars = 0
+        # Each token's text and whether it is a tag, at most one entry per token of the vocabulary.
+        self._texts: dict[int, str] = {}
+        self._specials: dict[int, bool] = {}
 
     def tokenize(self, text, add_special=False, parse_special=True):
         key = (text, add_special, parse_special)
@@ -141,7 +144,13 @@ class MemoTokenizer:
         return tokens
 
     def token_text(self, token):
-        return self._reader.token_text(token)
+        text = self._texts.get(token)
+        if text is None:
+            text = self._texts[token] = self._reader.token_text(token)
+        return text
 
     def is_special(self, token):
-        return self._reader.is_special(token)
+        special = self._specials.get(token)
+        if special is None:
+            special = self._specials[token] = self._reader.is_special(token)
+        return special
