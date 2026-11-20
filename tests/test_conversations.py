@@ -322,12 +322,24 @@ def test_a_question_that_repeats_an_earlier_reply_is_refused_before_its_reply_wh
     assert chat.reply("Something else?").finish().text == "Fine."
 
 
+@pytest.mark.counts_work
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
-def test_a_conversation_whose_declarations_move_with_each_question_renders_no_windows(stem):
+def test_a_conversation_with_tools_declared_renders_only_its_newest_exchanges_where_windows_stand(stem):
+    """Declarations that move with each question included."""
     run = _Run(stem)
     run.begin(tools=[WEATHER])
+    # The system turn, the window's at most four exchanges, the stand-in.
+    window = (1 if run.system else 0) + 2 * 4 + 1
+    largest = []
+    for question in QUESTIONS:
+        rendered = len(run.context.rendered)
+        run.chat.reply(question).finish()
+        run.chat.wait_idle(10)
+        largest.append(max(run.context.rendered[rendered:], default=0))
     moving = internals.template(run.chat).properties.declares_before_newest_turn
-    assert not (moving and internals.renders_in_windows(run.chat))
+    assert internals.renders_in_windows(run.chat) or not moving
+    if internals.renders_in_windows(run.chat):
+        assert max(largest[4:]) <= window, largest
 
 
 def test_a_question_the_template_writes_otherwise_than_the_stand_in_is_rendered_as_it_comes():
@@ -1145,13 +1157,11 @@ def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when
     assert passes() == 1 and windows() >= 1
     seen = windows()
     add_tools(run.chat, [WEATHER])
-    # Declarations that move with each question leave no windows to check.
-    moves = internals.template(run.chat).properties.declares_before_newest_turn
-    assert passes() == 2 and (windows() == seen) == moves
+    assert passes() == 2 and windows() > seen
     seen = windows()
     clock[0] = real_datetime.datetime(2026, 11, 8, 0, 1)
     run.chat.reply(QUESTIONS[1]).finish()
-    assert passes() == 3 and (windows() == seen) == moves
+    assert passes() == 3 and windows() > seen
 
 
 # ----- reasoning ---------------------------------------------------------------------

@@ -1751,10 +1751,7 @@ class RenderedCache:
         render = self._rendering.render
         ensure_history_stays_written(render, system)
         tools = self._state.tools
-        # Declarations that move with the newest question leave no window as the whole
-        # render writes it.
-        windows = (not self._moves_declarations()
-                   and windows_are_exact(render, system, self._rendering.tag_from))
+        windows = windows_are_exact(render, system, self._rendering.tag_from)
         calls = self.template.properties.can_call_tools
         with clock_forms_written() as forms:
             opening = self._rendering.opening_render(system)
@@ -1989,6 +1986,10 @@ class RenderedCache:
             return None
         if not self._state.checks.tool_windows \
                 and not self._rendering.template_writes(messages[start:]):
+            return None
+        # A template may write a message otherwise where a later one repeats its text, which
+        # only a render of the whole conversation shows.
+        if not self._state.checks.repeats_alike and _repeats_before(messages, anchor.index + 1):
             return None
         kept = tuple(turn for _, _, turn in generated_turns_in(messages[:anchor.index + 1]))
         if len(kept) != len(anchor.kept) or any(a is not b for a, b in zip(kept, anchor.kept)):
@@ -2470,6 +2471,14 @@ def _decodes(data: bytes) -> bool:
     except UnicodeDecodeError:
         return False
     return True
+
+
+def _repeats_before(messages: list[dict], start: int) -> bool:
+    """Whether a question of ``messages`` from ``start`` on repeats the text of a message before it."""
+    texts = {m["content"] for m in messages[start:]
+             if m["role"] == "user" and isinstance(m.get("content"), str)}
+    return any(m.get("content") in texts for m in messages[:start]
+               if isinstance(m.get("content"), str))
 
 
 def _closes_turn(message: dict) -> bool:

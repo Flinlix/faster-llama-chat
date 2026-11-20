@@ -6818,3 +6818,31 @@ plain JSON. The server passes a request's level on where the model knows it
 (521.15 to 521.17). They change how renders are reused on the core path and
 none of them concerns the models the user runs; they are carried to the next
 round as a decision rather than built in a hurry beside the rest.
+
+## 2026-11-20: The three render-speed findings, built
+
+535.6A: the render-speed findings 521.15 to 521.17, carried from the round
+before, built alone. Measured on the stand-in model (`tests/test_conversations`'s
+run, a character tokenizer), counting renders of the template that hold the
+whole conversation.
+
+### Windows where declarations move with the newest question (521.16)
+
+Mistral Small 3.2 and Ministral 2410 with tools declared rendered the whole
+conversation 4 times after every reply and 14 times around each tool turn,
+since windows were switched off for any template whose declarations move
+(B9, section "What every model no longer pays for" of the 2026-11-13 entry). B9's cause, the window
+check failing at every reply, no longer holds: a window opens at the tag
+after the anchor's reply, which lies before the stretch the old declarations
+leave, and the cache search removes that stretch as it did for a whole
+render. Windows are now read from `windows_are_exact` alone. Measured: 0
+whole renders per reply and per tool turn on both, the tokens decoded per
+reply unchanged (231, the declarations decoded again each question).
+
+Found by the conversation tests: Ministral 2410 writes the declarations
+before every user message equal to the newest one, so a question repeating
+an earlier one changes how that earlier one is written. A window is therefore
+refused where the template writes a repeated question otherwise
+(`repeats_alike` false) and a question after the anchor repeats a text before
+it; the conversation is then rendered whole, as the splice already was.
+
