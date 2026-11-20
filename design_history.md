@@ -6846,3 +6846,22 @@ refused where the template writes a repeated question otherwise
 (`repeats_alike` false) and a question after the anchor repeats a text before
 it; the conversation is then rendered whole, as the splice already was.
 
+### The form the cache holds, once (521.17)
+
+Cohere 2 numbers calls over the whole conversation, so its windows cannot
+hold tool turns, and each tool turn rendered the whole conversation 14 times.
+Two changes, for every template:
+
+- The check that holds an unplaceable generated turn as the template writes
+  it (316.7) split the conversation with and without the generation prompt.
+  It now splits the form the cache holds: with the prompt where the
+  conversation ends on a result, as `begin` already chose. The other form of
+  the same messages is not rendered before a message is added.
+- The memo of renders and splits keeps the previous action's entries for one
+  more action, where the template does not read the clock, so that the work
+  after a reply reuses the reply's split. It holds at most two actions'
+  renders.
+
+Measured: Cohere 2 from 14 to 8 whole renders per tool turn, one split per
+action; most templates from 19 to 13 renders per tool turn (Mistral Small 3.2 15).
+

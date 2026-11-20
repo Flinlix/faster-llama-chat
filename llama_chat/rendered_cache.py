@@ -1493,12 +1493,11 @@ class RenderedCache:
         system = system_part(messages)
         rendered = messages if found is None else system + messages[found[0]:]
         offset = 0 if found is None else found[0] - len(system)
-        unplaced = set()
-        for generation_prompt in (False, True):
-            split = self._rendering.split(rendered, generation_prompt)
-            if split is not None:
-                unplaced |= {last + offset for first, last, turn in generated_turns_in(rendered)
-                             if self._rendering.place(first, last, turn.on_call, split) is None}
+        # In the form the cache holds them in: with the generation prompt where a reply follows.
+        split = self._rendering.split(rendered, messages[-1]["role"] in ("user", "tool"))
+        unplaced = set() if split is None else {
+            last + offset for first, last, turn in generated_turns_in(rendered)
+            if self._rendering.place(first, last, turn.on_call, split) is None}
         for last in unplaced:
             messages[last] = with_generated_turn(messages[last], None)
         held = {turn for _, _, turn in generated_turns_in(messages)}
@@ -2117,7 +2116,7 @@ class RenderedCache:
         return ([max(older)] if older else []) + list(places)
 
     def _newest_exchanges_at(self) -> list[int] | None:
-        """Where in the cache each of the two newest exchanges begins, the tag that opens its question, those that cannot be told left out; ``None`` where this action rendered the conversation whole in neither form, which it is not rendered again for."""
+        """Where in the cache each of the two newest exchanges begins, the tag that opens its question, those that cannot be told left out; ``None`` where neither this action nor the one before rendered the conversation whole in either form, which it is not rendered again for."""
         messages = self._state.messages
         # Not the first after the system turn, whose tag may stand inside it: the opening's
         # state stands there.
@@ -2257,7 +2256,9 @@ class RenderedCache:
     def _acting(self, finishes_what_was_left: bool):
         """:meth:`_action`'s work once a fault the check found is dealt with."""
         if not self._depth:
-            self._rendering.forget_renders()    # an action inside another keeps its renders
+            # An action inside another keeps its renders; one whose template reads the clock
+            # renders anew, as the clock may read otherwise now.
+            self._rendering.next_action(keeps_renders=not self.template.properties.reads_clock)
         # Put back whole where the action fails, the part an interrupt left undecoded included.
         whole = list(self._memory.tokens)
         if not finishes_what_was_left:

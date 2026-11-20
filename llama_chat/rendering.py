@@ -74,9 +74,9 @@ class ConversationRendering:
 
     ``inputs`` holds those, and is read at every use as it is then. Renders
     and splits are reused while the template, the declarations and the
-    reasoning switch stay as they were, and until :meth:`forget_renders`,
-    which each outermost action calls, so that the memo holds one action's
-    renders.
+    reasoning switch stay as they were: within one action, and into the next
+    where :meth:`next_action` keeps them, so that the memo holds at most two
+    actions' renders, until :meth:`forget_renders`.
     """
 
     def __init__(self, context, template: Callable[[], ResolvedTemplate],
@@ -86,6 +86,7 @@ class ConversationRendering:
         self._inputs = inputs
         self._reader = MemoTokenizer(context)
         self._memo: dict = {}             # renders and splits, by what was rendered
+        self._earlier: dict = {}          # those of the action before, until this one uses them
         self._memo_made_for: tuple | None = None    # the template and inputs the memo holds
         self._tag_tokens: dict = {}       # each template's call tags, by their texts
 
@@ -97,15 +98,28 @@ class ConversationRendering:
     def forget_renders(self) -> None:
         """Render everything again from now on."""
         self._memo.clear()
+        self._earlier.clear()
+
+    def next_action(self, keeps_renders: bool) -> None:
+        """Start the memo of the next action, with the renders of the one before where ``keeps_renders``, those of earlier actions forgotten."""
+        self._earlier = self._memo if keeps_renders else {}
+        self._memo = {}
 
     def _current_memo(self) -> dict:
         """The memo of renders and splits, emptied first where the template, the declarations or the reasoning switch changed since it was filled."""
         inputs = self._inputs
         made_for = (self._template, tuple(inputs.tools), inputs.reasoning)
         if made_for != self._memo_made_for:
-            self._memo.clear()
+            self.forget_renders()
             self._memo_made_for = made_for
         return self._memo
+
+    def _memo_holding(self, key: tuple[str, str]) -> dict:
+        """The current memo, holding what the action before made for ``key`` where this one has not made it."""
+        memo = self._current_memo()
+        if key not in memo and key in self._earlier:
+            memo[key] = self._earlier.pop(key)
+        return memo
 
     # ----- rendering ----------------------------------------------------------------
     def render(self, messages, generation_prompt: bool) -> str | None:
@@ -119,7 +133,7 @@ class ConversationRendering:
         tools = self._declarations() if declarations is None else declarations
         key = ("render", json.dumps([messages, declarations, generation_prompt], sort_keys=True,
                                     default=str))
-        memo = self._current_memo()
+        memo = self._memo_holding(key)
         if key not in memo:
             memo[key] = self._template.render(
                 messages, tools, generation_prompt=generation_prompt,
@@ -155,7 +169,7 @@ class ConversationRendering:
         """
         given = self._as_given(messages)
         key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
-        memo = self._current_memo()
+        memo = self._memo_holding(key)
         if key not in memo:
             declarations = self._declarations()
             # The render as it is is the one :meth:`render` makes, and shares its memo.
@@ -168,10 +182,10 @@ class ConversationRendering:
         return memo[key]
 
     def split_made(self, messages, generation_prompt: bool) -> SplitRender | None:
-        """:meth:`split` of ``messages`` where this action made it already, ``None`` where it did not."""
+        """:meth:`split` of ``messages`` where this action or the one before made it already, ``None`` where neither did."""
         given = self._as_given(messages)
         key = ("split", json.dumps([given, generation_prompt], sort_keys=True, default=str))
-        return self._current_memo().get(key)
+        return self._memo_holding(key).get(key)
 
     def opening_render(self, system: list[dict]) -> str | None:
         """How the template opens a conversation on ``system``, which changes where it writes the date, say."""
