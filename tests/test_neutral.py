@@ -35,11 +35,11 @@ _SUPPORTED_SECTION = re.compile(r"(?ms)^## Supported models$.*?(?=^## )")
 # The library's and its engine's own names, which hold a family's letters.
 _OWN_NAMES = ("faster-llama-chat", "llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
 _OWN_NAME = re.compile("|".join(map(re.escape, _OWN_NAMES)), re.IGNORECASE)
-# The engine's module, its tests and the benchmark that runs the engine's own chat interface,
-# which name the engine's functions: the words its module's name begins with, alone or
-# before an underscore.
+# The engine's module, its tests, the benchmark that runs the engine's own chat interface and
+# the script that reads a model file's vocabulary, which name the engine's functions: the
+# words its module's name begins with, alone or before an underscore.
 _ENGINE_FILES = {_PACKAGE / "_backend.py", Path(__file__).parent / "test_backend.py",
-                 _ROOT / "benchmarks" / "compare.py"}
+                 _ROOT / "benchmarks" / "compare.py", Path(__file__).parent / "new_template.py"}
 _ENGINE_PREFIX = "llama_cpp".split("_")[0]
 
 
