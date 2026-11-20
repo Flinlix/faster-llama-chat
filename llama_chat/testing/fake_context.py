@@ -16,6 +16,7 @@ import itertools
 import json
 import re
 import sys
+from collections.abc import Iterable
 
 from llama_chat.addon_files import addon_file
 from llama_chat.cache_context import TOOL_USE_TEMPLATE
@@ -205,7 +206,7 @@ class FakeContext:
         extra_tags: Tags of the model's vocabulary its template never writes.
     """
 
-    def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
+    def __init__(self, fixture: dict, replies: Iterable[str | ScriptedCall] = (), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
                  decode_blocks: bool = False,
                  tokens_spell_text: bool = True, writes_tags: bool = False,

@@ -88,9 +88,8 @@ def json_value_fault(value) -> str | None:
     return None
 
 
-# Whether a call the model wrote was read: whole, not readable, cut short by the reply
-# cap or a cancel, or run with its result left out for want of room.
 ToolCallStatus = Literal["complete", "unreadable", "unfinished", "result_dropped"]
+"""Whether a call the model wrote was read: whole, not readable, cut short by the reply cap or a cancel, or run with its result left out for want of room."""
 
 
 @dataclass(frozen=True)

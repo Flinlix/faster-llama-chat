@@ -12,14 +12,16 @@ from .errors import LIBRARY_ERRORS, OutOfOrderError, internal_error
 from .tools import ToolCall
 
 
-# Why a generation ended, the same list wherever a reply says it.
 StopReason = Literal["end_of_turn", "stop_string", "token_limit", "interrupted", "tool_call",
                      "unreadable_tool_call"]
+"""Why a generation ended, the same list wherever a reply says it."""
 STOP_REASONS: tuple[str, ...] = get_args(StopReason)
+"""Every :data:`StopReason`."""
 
-# What becomes of a call the model makes, where a request names it rather than passing a registry.
 ToolCallPolicy = Literal["withhold", "refuse", "yield"]
+"""What becomes of a call the model makes, where a request names it rather than passing a registry."""
 TOOL_CALL_POLICIES: tuple[str, ...] = get_args(ToolCallPolicy)
+"""Every :data:`ToolCallPolicy`."""
 
 
 @dataclass
@@ -94,10 +96,10 @@ class Reply:
     kept_text: str | None = None
 
 
-# Why the oldest history went: the conversation no longer fit, the exchange limit was reached,
-# or begin kept no more than half the context.
 EvictionCause = Literal["room", "exchange_limit", "half_context"]
+"""Why the oldest history went: the conversation no longer fit, the exchange limit was reached, or begin kept no more than half the context."""
 EVICTION_CAUSES: tuple[str, ...] = get_args(EvictionCause)
+"""Every :data:`EvictionCause`."""
 
 
 @dataclass(frozen=True)

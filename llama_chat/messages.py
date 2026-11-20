@@ -25,8 +25,8 @@ GENERATED_TURN = "generated_turn"
 UNREADABLE_CALL = "unreadable"
 
 
-# What a question cut to fit the room begins with, in place of what was cut.
 QUESTION_CUT_MARK = "[…] "
+"""What a question cut to fit the room begins with, in place of what was cut."""
 
 def ensure_text(text, what: str, field: str = "text") -> None:
     """Refuse a message's text that is not a ``str``, or that no model can read, naming the message as ``what``.

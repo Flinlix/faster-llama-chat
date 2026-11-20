@@ -15,9 +15,8 @@ from typing import Protocol
 from .config import DrawnSampling
 from .errors import ArgumentTypeError
 
-# The name of the further chat template a GGUF may ship for a conversation that
-# declares tools, beside its default one.
 TOOL_USE_TEMPLATE = "tool_use"
+"""The name of the further chat template a GGUF may ship for a conversation that declares tools, beside its default one."""
 
 
 class ModelReader(Protocol):

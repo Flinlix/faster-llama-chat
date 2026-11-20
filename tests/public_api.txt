@@ -1,0 +1,245 @@
+class ArgumentTypeError(TypeError)
+class CacheContext(ModelReader, Protocol)
+  def apply_eviction(self, start: 'int', end: 'int') -> 'None'
+  property can_cut_tail
+  property can_shift
+  def chat_template_text(self, template_name: 'str | None' = None) -> 'str | None'
+  def close(self) -> 'None'
+  property context_size
+  property decode_blocks
+  def decode_generated(self, token_ids: 'list[int]', start_pos: 'int') -> 'None'
+  def ends_generation(self, token: 'int') -> 'bool'
+  def eos_token_text(self) -> 'str'
+  def is_special(self, token: 'int') -> 'bool'
+  def model_fingerprint(self) -> 'str'
+  def prefill(self, token_ids: 'list[int]', start_pos: 'int', want_logits: 'bool') -> 'None'
+  def recommended_sampling(self) -> 'Mapping[str, float]'
+  def remove_from(self, pos: 'int') -> 'None'
+  def reset(self) -> 'None'
+  def restore_state(self, state, pos: 'int') -> 'None'
+  def restore_whole_state(self, state) -> 'None'
+  def sampled_tokens(self, sampling: 'DrawnSampling', withheld_tokens: 'tuple[int, ...]') -> 'Generator[int, None, None]'
+  def save_state(self)
+  def save_whole_state(self)
+  def special_tokens(self) -> 'tuple[int, ...]'
+  def token_bytes(self, token: 'int') -> 'bytes'
+  def token_text(self, token: 'int') -> 'str'
+  def tokenize(self, text: 'str', add_special: 'bool' = False, parse_special: 'bool' = True) -> 'list[int]'
+class Capabilities()
+  field can_call_tools: bool
+  field can_reason: bool
+  field can_turn_off_reasoning: bool
+  field can_take_system_prompt: bool
+  field reasoning_levels: tuple[str, ...]
+  def __init__(self, can_call_tools: 'bool', can_reason: 'bool', can_turn_off_reasoning: 'bool', can_take_system_prompt: 'bool', reasoning_levels: 'tuple[str, ...]') -> None
+class ChatWrapper()
+  def __enter__(self) -> 'ChatWrapper'
+  def __exit__(self, *_) -> 'None'
+  def __init__(self, config: 'Config | None' = None, context=None, *, on_load_progress: 'Callable[[float], None] | None' = None) -> 'None'
+  property awaits_reply
+  def begin(self, messages: 'list[dict] | None' = None, tools: 'Iterable[ToolSpec] | None' = None, *, reasoning: 'bool' = False, reasoning_level: 'str | None' = None, generated_turns: 'dict | None' = None) -> 'Report'
+  property can_shift
+  def capabilities(self, *, tools: 'bool') -> 'Capabilities'
+  def close(self) -> 'None'
+  property config
+  def conversation(self) -> 'dict'
+  def generated_turns(self) -> 'dict | None'
+  def inject(self, text: 'str', role: 'str' = 'user') -> 'Report'
+  def inject_tool_result(self, call_id: 'str', result: 'object') -> 'Report'
+  property pending_calls
+  def reply(self, text: 'str | None' = None, *, tool_call_policy: 'ToolCallPolicy | ToolRegistry | None' = None, max_calls: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, stop: 'str | Iterable[str] | None' = None, cancel: 'threading.Event | None' = None, sampling: 'Sampling | None' = None) -> 'ReplyStream'
+  property total_tokens
+  def truncate_last_reply(self, keep_text: 'str') -> 'None'
+  property turn_open
+  def wait_idle(self, timeout_s: 'float | None' = None) -> 'bool'
+class Config()
+  field model_path: str | None
+  field temperature: float | None
+  field top_k: int | None
+  field top_p: float | None
+  field min_p: float | None
+  field repetition_penalty: float | None
+  field presence_penalty: float | None
+  field frequency_penalty: float | None
+  field penalty_window_tokens: int | None
+  field seed: int | None
+  field context_size: int
+  field evict_above_fraction: float
+  field max_history_exchanges: int | None
+  field max_reply_tokens: int | None
+  field max_thought_tokens: int | None
+  field min_reply_tokens: int
+  field min_answer_tokens: int | None
+  field answer_room_tokens: int | None
+  field max_calls: int | None
+  field tool_timeout_s: float | None
+  field unread_reply_timeout_s: float | None
+  field gpu_layers: int
+  field kv_cache_on_gpu: bool
+  field decode_threads: int | None
+  field prefill_threads: int | None
+  field max_batch_tokens: int
+  field micro_batch_tokens: int | None
+  field flash_attention: bool | None
+  field kv_cache_type: str
+  field kept_conversation_bytes: int
+  field check_cache: bool
+  def __init__(self, model_path: 'str | None' = None, temperature: 'float | None' = None, top_k: 'int | None' = None, top_p: 'float | None' = None, min_p: 'float | None' = None, repetition_penalty: 'float | None' = None, presence_penalty: 'float | None' = None, frequency_penalty: 'float | None' = None, penalty_window_tokens: 'int | None' = None, seed: 'int | None' = None, context_size: 'int' = 4096, evict_above_fraction: 'float' = 0.75, max_history_exchanges: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, min_reply_tokens: 'int' = 32, min_answer_tokens: 'int | None' = 1, answer_room_tokens: 'int | None' = 1024, max_calls: 'int | None' = 10, tool_timeout_s: 'float | None' = 60.0, unread_reply_timeout_s: 'float | None' = 10.0, gpu_layers: 'int' = -1, kv_cache_on_gpu: 'bool' = True, decode_threads: 'int | None' = None, prefill_threads: 'int | None' = None, max_batch_tokens: 'int' = 2048, micro_batch_tokens: 'int | None' = None, flash_attention: 'bool | None' = None, kv_cache_type: 'str' = 'f16', kept_conversation_bytes: 'int' = 0, check_cache: 'bool' = False) -> None
+  property evict_above_tokens
+class ContextOverflowError(RefusalError)
+  def __init__(self, message: 'str', needed_tokens: 'int | None' = None, available_tokens: 'int | None' = None) -> 'None'
+class DrawnSampling()
+  field temperature: float
+  field top_k: int
+  field top_p: float
+  field min_p: float
+  field repetition_penalty: float
+  field presence_penalty: float
+  field frequency_penalty: float
+  field penalty_window_tokens: int
+  field seed: int | None
+  def __init__(self, temperature: 'float', top_k: 'int', top_p: 'float', min_p: 'float', repetition_penalty: 'float', presence_penalty: 'float', frequency_penalty: 'float', penalty_window_tokens: 'int', seed: 'int | None') -> None
+EVICTION_CAUSES = ('room', 'exchange_limit', 'half_context')
+class EngineError(RuntimeError)
+EvictionCause = typing.Literal['room', 'exchange_limit', 'half_context']
+class InternalError(RuntimeError)
+class InvalidArgumentError(RefusalError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+class InvalidSettingError(RefusalError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+class OutOfOrderError(RefusalError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+QUESTION_CUT_MARK = '[…] '
+class RefusalError(ValueError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+class Reply()
+  field text: str
+  field n_prefilled_tokens: int
+  field n_prompt_tokens: int
+  field n_generated_tokens: int
+  field n_evicted_messages: int
+  field stop_reason: StopReason
+  field tool_calls: list[ToolCall]
+  field tool_limit_reached: bool
+  field tool_results_cut: tuple[ToolCall, ...]
+  field n_reasoning_tokens: int
+  field thought: str
+  field evicted_for: EvictionCause | None
+  field taken_back: bool
+  field kept_text: str | None
+  def __init__(self, text: 'str', n_prefilled_tokens: 'int', n_prompt_tokens: 'int', n_generated_tokens: 'int', n_evicted_messages: 'int', stop_reason: 'StopReason', tool_calls: 'list[ToolCall]' = <factory>, tool_limit_reached: 'bool' = False, tool_results_cut: 'tuple[ToolCall, ...]' = (), n_reasoning_tokens: 'int' = 0, thought: 'str' = '', evicted_for: 'EvictionCause | None' = None, taken_back: 'bool' = False, kept_text: 'str | None' = None) -> None
+class ReplyStream(Generic)
+  def __enter__(self) -> 'ReplyStream[_Delta]'
+  def __exit__(self, *_) -> 'None'
+  def __init__(self, deltas: 'Generator[_Delta, None, Reply]', on_close: 'Callable[[], Reply | None] | None' = None, runs_a_step: 'Callable[[], bool]' = <function ReplyStream.<lambda>>) -> 'None'
+  def __iter__(self) -> 'ReplyStream[_Delta]'
+  def __next__(self) -> '_Delta'
+  def close(self) -> 'None'
+  def finish(self) -> 'Reply | None'
+class Report()
+  field n_evicted_messages: int
+  field evicted_for: EvictionCause | None
+  field n_kept_messages: int | None
+  field n_left_out_calls: int
+  field n_turns_restored: int
+  field generated_turns_ignored: bool
+  field tool_results_cut: tuple[ToolCall, ...]
+  field turn_closed: bool
+  field question_joined: bool
+  field taken_back: bool
+  def __init__(self, n_evicted_messages: 'int' = 0, evicted_for: 'EvictionCause | None' = None, n_kept_messages: 'int | None' = None, n_left_out_calls: 'int' = 0, n_turns_restored: 'int' = 0, generated_turns_ignored: 'bool' = False, tool_results_cut: 'tuple[ToolCall, ...]' = (), turn_closed: 'bool' = False, question_joined: 'bool' = False, taken_back: 'bool' = False) -> None
+STOP_REASONS = ('end_of_turn', 'stop_string', 'token_limit', 'interrupted', 'tool_call', 'unreadable_tool_call')
+class Sampling()
+  field temperature: float | None
+  field top_k: int | None
+  field top_p: float | None
+  field min_p: float | None
+  field repetition_penalty: float | None
+  field presence_penalty: float | None
+  field frequency_penalty: float | None
+  field penalty_window_tokens: int | None
+  field seed: int | None
+  def __init__(self, temperature: 'float | None' = None, top_k: 'int | None' = None, top_p: 'float | None' = None, min_p: 'float | None' = None, repetition_penalty: 'float | None' = None, presence_penalty: 'float | None' = None, frequency_penalty: 'float | None' = None, penalty_window_tokens: 'int | None' = None, seed: 'int | None' = None) -> None
+StopReason = typing.Literal['end_of_turn', 'stop_string', 'token_limit', 'interrupted', 'tool_call', 'unreadable_tool_call']
+TOOL_CALL_POLICIES = ('withhold', 'refuse', 'yield')
+TOOL_USE_TEMPLATE = 'tool_use'
+class TemplateRefusedError(RefusalError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+class ToolCall()
+  field name: str
+  field arguments: dict
+  field id: str
+  field status: ToolCallStatus
+  field text: str
+  def __init__(self, name: 'str', arguments: 'dict', id: 'str' = '', status: 'ToolCallStatus' = 'complete', text: 'str' = '') -> None
+ToolCallPolicy = typing.Literal['withhold', 'refuse', 'yield']
+ToolCallStatus = typing.Literal['complete', 'unreadable', 'unfinished', 'result_dropped']
+class ToolRegistry()
+  def __init__(self) -> 'None'
+  def call(self, call: 'ToolCall') -> 'Any'
+  def specs(self) -> 'list[ToolSpec]'
+  def tool(self, function_or_description: 'Callable | str | None' = None, /, *, name: 'str | None' = None, description: 'str | None' = None, parameters: 'dict | None' = None) -> 'Callable'
+class ToolSpec()
+  field name: str
+  field description: str
+  field parameters: dict
+  def __init__(self, name: 'str', description: 'str', parameters: 'dict') -> None
+  def as_declaration(self) -> 'dict'
+class UnsupportedError(RefusalError)
+  def __init__(self, field: 'str | None', message: 'str') -> 'None'
+class testing.FakeContext()
+  def __init__(self, fixture: 'dict', replies: 'Iterable[str | ScriptedCall]' = (), *, gen_tokens: 'int' = 5, gen_text: 'str' = 'reply', can_shift: 'bool' = True, can_cut_tail: 'bool' = False, decode_blocks: 'bool' = False, tokens_spell_text: 'bool' = True, writes_tags: 'bool' = False, extra_tags: 'tuple[str, ...]' = (), merges: 'bool' = False) -> 'None'
+  def apply_eviction(self, start: 'int', end: 'int') -> 'None'
+  def chat_template_text(self, template_name: 'str | None' = None) -> 'str | None'
+  def close(self) -> 'None'
+  def decode_generated(self, token_ids: 'list[int]', start_pos: 'int') -> 'None'
+  def edit_count(self, kind: 'str') -> 'int'
+  def ends_generation(self, token: 'int') -> 'bool'
+  def eos_token_text(self) -> 'str'
+  def is_generated_only(self, token: 'int') -> 'bool'
+  def is_special(self, token: 'int') -> 'bool'
+  def model_fingerprint(self) -> 'str'
+  def prefill(self, token_ids: 'list[int]', start_pos: 'int', want_logits: 'bool') -> 'None'
+  def recommended_sampling(self) -> 'dict'
+  def remove_from(self, pos: 'int') -> 'None'
+  property rendered
+  def reset(self) -> 'None'
+  def restore_state(self, state, pos: 'int') -> 'None'
+  def restore_whole_state(self, state) -> 'None'
+  def sampled_tokens(self, sampling, withheld_tokens)
+  def save_state(self)
+  def save_whole_state(self)
+  def special_tokens(self) -> 'tuple[int, ...]'
+  def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False, for_tools: 'bool | None' = None)
+  def text_of(self, tokens: 'list[int]') -> 'str'
+  def token_bytes(self, token: 'int') -> 'bytes'
+  def token_text(self, token: 'int') -> 'str'
+  def tokenize(self, text: 'str', add_special: 'bool' = False, parse_special: 'bool' = True) -> 'list[int]'
+  def total_prefilled(self) -> 'int'
+class testing.ScriptedCall()
+  def __init__(self, body: 'str', before: 'str' = '', closes: 'bool' = True) -> 'None'
+testing.invented_templates.CALL_BODY
+testing.invented_templates.CALL_TAGS
+testing.invented_templates.EMPTY_THOUGHT
+testing.invented_templates.INVENTED
+testing.invented_templates.JOINS_USER_TURNS
+testing.invented_templates.JSON_RESULT_LINES
+testing.invented_templates.JSON_TOOLS
+testing.invented_templates.KEYLESS_CALLS
+testing.invented_templates.NO_DECLARATIONS
+testing.invented_templates.NO_RESULT_BLOCK
+testing.invented_templates.NUMBERED
+testing.invented_templates.PLAIN
+testing.invented_templates.REASONING
+testing.invented_templates.REASONING_KEEPING_THOUGHTS
+testing.invented_templates.REFUSES_A_TEXT
+testing.invented_templates.REFUSES_TWO_USER_TURNS
+testing.invented_templates.RESULT_LINES
+testing.invented_templates.TAGS
+testing.invented_templates.THINK_ON
+testing.invented_templates.TOOLS
+testing.invented_templates.TOOLS_CLOSING_OPEN_TURNS
+testing.invented_templates.TOOLS_DECLARED_IN_THE_NEWEST_TURN
+testing.invented_templates.TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
+testing.invented_templates.TOOLS_REFUSING_TWO_USER_TURNS
+testing.invented_templates.WRITES_TWO_QUESTIONS_REFUSES_A_TEXT
