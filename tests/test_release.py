@@ -1,4 +1,4 @@
-"""A release is the tag of the version ``pyproject.toml`` states, and the documentation installs that release."""
+"""A release is the tag of the version ``pyproject.toml`` states, and the documentation and the citation file name that release."""
 
 import re
 import tomllib
@@ -12,3 +12,9 @@ def test_every_release_the_readme_installs_is_the_version_pyproject_states():
     named = re.findall(r"@v(\d+\.\d+\.\d+)", (_ROOT / "README.md").read_text())
     assert named, "the README installs no release"
     assert set(named) == {stated}, f"the README installs {sorted(set(named))}, pyproject.toml states {stated}"
+
+
+def test_the_citation_file_names_the_version_pyproject_states():
+    stated = tomllib.loads((_ROOT / "pyproject.toml").read_text())["project"]["version"]
+    cited = re.search(r"^version: (\S+)$", (_ROOT / "CITATION.cff").read_text(), re.M)
+    assert cited and cited.group(1) == stated, f"CITATION.cff names {cited and cited.group(1)}, pyproject.toml states {stated}"
