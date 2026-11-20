@@ -97,6 +97,8 @@ def _probed_context(reports_shift, cuts_tail, saves=True):
         return cuts_tail or p1 >= 0 or restored
 
     context = object.__new__(KVContext)
+
+    context._decode_blocks = False
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._backend = SimpleNamespace(
         can_shift=lambda ctx: reports_shift,
@@ -241,6 +243,7 @@ def test_every_cache_quantization_config_offers_resolves_to_a_type_id():
 
 def test_a_removal_the_cache_refuses_is_raised():
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._engine_context = "the context"
     context._backend = SimpleNamespace(kv_seq_rm=lambda *args: False)
     with pytest.raises(RuntimeError, match="refused"):
@@ -260,6 +263,7 @@ def test_a_reply_ends_at_its_turn_end_token_which_is_neither_cached_nor_shown():
     sampled = iter(["Pa", "ris", "<response_end>", "<end>"])
     decoded = []
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._config = Config()
     context._build_sampler = lambda config, withheld=(): "sampler"
@@ -286,6 +290,7 @@ def _merging_context():
         return (["BOS"] if add_special else []) + [
             f"TAG{tok}" if parse_special and tok in ("<t>", "<e>") else tok for tok in found]
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._vocab = None
     context._backend = SimpleNamespace(
         tokenize=tokenize,
@@ -318,6 +323,7 @@ def _sampling_context(sampled):
     """A context that samples ``sampled`` in order and records what it decodes and removes."""
     sampled, decoded, removed = iter(sampled), [], []
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._engine_context, context._vocab, context._max_batch_tokens = "ctx", None, 8
     context._config = Config()
     context._build_sampler = lambda config, withheld=(): "sampler"
@@ -487,6 +493,7 @@ def test_the_models_tags_are_the_tokens_the_engine_marks_read_once():
     backend._vocab_n_tokens = lambda vocab: len(attrs)
     backend._get_attr = lambda vocab, token: walked.append(token) or attrs[token]
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._vocab, context._special_tokens, context._backend = None, None, backend
     assert context.special_tokens() == (1, 3)
     assert context.special_tokens() == (1, 3)
@@ -511,7 +518,7 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
         kv_seq_rm=lambda ctx, seq, p0, p1: True,
         kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
         decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", len(tokens), pos)),
-        kv_clear=lambda ctx: performed.append(("clear",)),
+        kv_clear=lambda ctx: performed.append(("clear",)), supports_gpu_offload=lambda: False,
     )
     monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
@@ -528,10 +535,10 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
     (10, False, 8, 32, None),
     (-1, False, 8, 32, None),
     (10, True, 8, 32, 8),
-    (-1, True, 2048, 4096, 2048),
+    (-1, True, 2048, 4096, 512),
     (-1, True, 64, 32, 32),
 ])
-def test_a_full_batch_warms_up_first_only_where_layers_run_on_a_gpu(
+def test_a_full_micro_batch_warms_up_first_only_where_layers_run_on_a_gpu(
         tmp_path, monkeypatch, gpu_layers, offload, max_batch_tokens, context_size, full_batch):
     performed = []
     backend = SimpleNamespace(
@@ -619,6 +626,7 @@ def test_flash_attention_is_the_engines_choice_unless_set_or_a_quantized_cache_n
 def _gguf_stating(stated: dict, context_size: int = 4096):
     """A KVContext of ``context_size`` tokens whose model's GGUF holds ``stated``, by key."""
     context = object.__new__(KVContext)
+    context._decode_blocks = False
     context._model = "model"
     context._config = Config(context_size=context_size)
     context._backend = SimpleNamespace(metadata_value=lambda model, key: stated.get(key))
@@ -654,6 +662,7 @@ def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, in
     monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "cpu")
     monkeypatch.setattr("llama_chat.context._CGROUP", tmp_path / "cgroup")
     monkeypatch.setattr("llama_chat.context._OWN_CGROUPS", tmp_path / "own-cgroups")
+    monkeypatch.setattr("llama_chat.context._PERFORMANCE_CPUS", tmp_path / "performance-cpus")
     (tmp_path / "own-cgroups").write_text(own_cgroups)
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(cores_of), raising=False)
 
@@ -670,6 +679,17 @@ _TWO_THREADS_PER_CORE = {cpu: (0, cpu % 8) for cpu in range(16)}
 def test_the_physical_cores_are_counted_among_those_this_process_may_use(
         tmp_path, monkeypatch, cores_of, cores):
     _processor_topology(tmp_path, monkeypatch, cores_of)
+    assert _physical_cores() == cores
+
+
+@pytest.mark.parametrize("listed, cores", [("0-7", 4), ("0-3,6", 3), ("", 8), ("12-15", 8)])
+def test_where_the_system_lists_performance_cores_only_those_are_counted(
+        tmp_path, monkeypatch, listed, cores):
+    # Eight threads on four performance cores, two each, and four efficiency cores.
+    cores_of = {**{cpu: (0, cpu // 2) for cpu in range(8)}, **{cpu: (0, cpu) for cpu in range(8, 12)}}
+    _processor_topology(tmp_path, monkeypatch, cores_of)
+    if listed:
+        (tmp_path / "performance-cpus").write_text(listed + "\n")
     assert _physical_cores() == cores
 
 
@@ -730,7 +750,7 @@ def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, mon
         vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
         can_shift=lambda ctx: True, kv_seq_rm=lambda ctx, seq, p0, p1: True,
         kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
-        decode=lambda *args: None, kv_clear=lambda ctx: None)
+        decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: False)
     monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
@@ -776,6 +796,7 @@ def _set_kv_cache_on_gpu(cparams, enable):
 def _stub_context(chains):
     """A real KVContext over a backend that records which chain it samples from."""
     ctx = object.__new__(KVContext)
+    ctx._decode_blocks = False
     tokens = iter([0, 1, 2])
     ctx._backend = SimpleNamespace(
         sample=lambda sampler, llama_ctx: (chains["sampled"].append(sampler),
@@ -876,6 +897,7 @@ def test_a_chain_a_stage_fails_to_join_is_freed():
 
     freed = []
     ctx = object.__new__(KVContext)
+    ctx._decode_blocks = False
     ctx._vocab = None
     ctx._backend = SimpleNamespace(sampler_chain=lambda: "chain", add_withheld=refuse,
                                    free_sampler=freed.append)
@@ -967,3 +989,96 @@ def test_the_readmes_logging_example_shows_every_line_the_engine_writes(tmp_path
     ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                          cwd=tmp_path, check=True)
     assert "a debug line" in ran.stderr
+
+
+def test_a_saved_state_reuses_a_buffer_no_state_holds_and_keeps_at_most_one_spare():
+    backend = Backend()
+    held = backend._free_state_buffer(16)
+    first_free = backend._free_state_buffer(16)
+    address = ctypes.addressof(first_free)
+    del first_free
+    # A buffer nobody holds is written into again; one a state still holds never is.
+    again = backend._free_state_buffer(16)
+    assert ctypes.addressof(again) == address and again is not held
+    other = backend._free_state_buffer(32)
+    del again, other
+    backend._free_state_buffer(8)
+    assert len(backend._state_buffers) <= 3        # the held one, the new one, one spare
+    assert any(b is held for b in backend._state_buffers)
+
+
+def _penalized_draws(sampling, histories, logits, monkeypatch, filtered: bool) -> list[int]:
+    """The token the chain ``sampling`` asks for draws after each history, over ``logits``, with or without the filter before the penalties."""
+    import random as _random
+
+    import llama_chat.context as context_module
+    if not filtered:
+        monkeypatch.setattr(context_module, "_candidates_before_penalties", lambda *args: None)
+    ctx = object.__new__(KVContext)
+    ctx._decode_blocks = False
+    ctx._vocab = None
+    ctx._config = SimpleNamespace(context_size=4096)
+    ctx._backend = Backend()
+    ctx._backend._vocab_n_tokens = lambda vocab: len(logits)
+    drawn = []
+    for history in histories:
+        chain = ctx._build_sampler(sampling)
+        for token in history:
+            llama_cpp.llama_sampler_accept(chain, token)
+        data = (llama_cpp.llama_token_data * len(logits))(
+            *(llama_cpp.llama_token_data(i, value, 0.0) for i, value in enumerate(logits)))
+        candidates = llama_cpp.llama_token_data_array(data, len(logits), -1, False)
+        llama_cpp.llama_sampler_apply(chain, ctypes.byref(candidates))
+        drawn.append(candidates.data[candidates.selected].id)
+        ctx._backend.free_sampler(chain)
+    _random.seed()
+    return drawn
+
+
+@pytest.mark.parametrize("penalties", [dict(repetition_penalty=1.3), dict(presence_penalty=1.5),
+                                       dict(frequency_penalty=0.7, repetition_penalty=1.05)])
+@pytest.mark.parametrize("temperature, top_k", [(0.8, 20), (0.0, 20), (1.2, 5)])
+def test_a_filter_before_penalties_that_only_lower_leaves_every_draw_as_it_was(
+        monkeypatch, penalties, temperature, top_k):
+    import random as _random
+    rng = _random.Random(7)
+    logits = [rng.gauss(0.0, 3.0) for _ in range(3000)]
+    # Histories that penalize the likeliest tokens, so that the penalized ones fall out of the top.
+    likeliest = sorted(range(len(logits)), key=lambda t: -logits[t])[:60]
+    histories = [[rng.choice(likeliest) for _ in range(rng.randint(0, 50))] for _ in range(60)]
+    sampling = generation_sampling(Config(), Sampling(
+        temperature=temperature, top_k=top_k, top_p=0.95, min_p=0.0, penalty_window_tokens=64,
+        seed=11, **{"repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
+                    **penalties}))
+    assert _penalized_draws(sampling, histories, logits, monkeypatch, True) == \
+        _penalized_draws(sampling, histories, logits, monkeypatch, False)
+
+
+def test_penalties_are_applied_to_the_likeliest_tokens_alone_only_where_they_only_lower():
+    import llama_chat.context as context_module
+    sampling = generation_sampling(Config(), Sampling(
+        temperature=0.8, top_k=40, top_p=0.95, min_p=0.0, repetition_penalty=1.1,
+        presence_penalty=0.0, frequency_penalty=0.0, penalty_window_tokens=64))
+    assert context_module._candidates_before_penalties(sampling, 64) == 104
+    assert context_module._candidates_before_penalties(
+        dataclasses.replace(sampling, repetition_penalty=0.9), 64) is None
+    assert context_module._candidates_before_penalties(
+        dataclasses.replace(sampling, top_k=0), 64) is None
+    assert context_module._candidates_before_penalties(
+        dataclasses.replace(sampling, temperature=0.0, top_k=0), 64) == 65
+
+
+@pytest.mark.parametrize("gpu_layers", [0, 10, -1])
+def test_no_gpu_layers_hands_the_engine_no_device_at_all(gpu_layers):
+    asked = []
+    backend = Backend()
+
+    def load(path, mparams):
+        listed = mparams.devices
+        asked.append((mparams.n_gpu_layers, bool(listed),
+                      bool(listed) and ctypes.c_void_p.from_address(listed).value))
+        return "model"
+    backend._load_model = load
+    backend.load_model("m.gguf", gpu_layers)
+    # An empty list, its one entry the end mark, names no device; no list leaves the choice to the engine.
+    assert asked == [(gpu_layers, True, None)] if gpu_layers == 0 else [(gpu_layers, False, False)]

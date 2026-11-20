@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import inspect
 import logging
+import sys
 import threading
 from typing import Callable
 
@@ -24,6 +25,19 @@ except ImportError as exc:  # pragma: no cover
 from .errors import EngineError  # noqa: E402  (after the dependency's own check)
 
 _log = logging.getLogger(__name__)
+
+# The bytes a token's text is spelled into first; a longer one takes a buffer of its size.
+_PIECE_BYTES = 64
+
+
+
+def _refs_of_an_unheld_buffer() -> int:
+    """What ``sys.getrefcount`` gives, inside a comprehension over a list of buffers, for a buffer only that list holds, as this interpreter counts."""
+    buffers = [(ctypes.c_uint8 * 1)()]
+    return [sys.getrefcount(buffer) for buffer in buffers][0]
+
+
+_REFS_OF_AN_UNHELD_BUFFER = _refs_of_an_unheld_buffer()
 
 # The C API's floor on how many candidates a truncating stage may leave.
 _MIN_CANDIDATES = 1
@@ -122,6 +136,7 @@ class Backend:
         # Only the part of a sequence's state that cannot be cut back; the
         # rest is cut with a removal after the restore.
         self._state_flags = llama_cpp.LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY
+        self._state_buffers: list = []      # every state buffer made, held or free
 
         self._is_eog = _required_symbol("llama_vocab_is_eog")
         self._token_eos = _required_symbol("llama_vocab_eos")
@@ -152,8 +167,13 @@ class Backend:
     # ----- model / context lifecycle ------------------------------------
     def load_model(self, path: str, n_gpu_layers: int,
                    progress: Callable[[float], None] | None = None):
+        """The model at ``path``, ``n_gpu_layers`` of its layers on a GPU; with ``0``, no device but the processor is used at all."""
         mparams = self._llama_cpp.llama_model_default_params()
         mparams.n_gpu_layers = n_gpu_layers
+        if n_gpu_layers == 0:
+            # An empty device list: the engine would otherwise hand large batches to a GPU.
+            no_devices = (ctypes.c_void_p * 1)()
+            mparams.devices = ctypes.addressof(no_devices)
         if progress is not None:
             @self._llama_cpp.llama_progress_callback
             def _report_progress(frac, _user_data):
@@ -187,6 +207,10 @@ class Backend:
             cparams.n_threads_batch = n_threads_batch
         self._set_flash_attn(cparams, flash_attn)
         self._set_kv_cache_on_gpu(cparams, kv_cache_on_gpu)
+        # One buffer for the sequence: attention over the cache's rows, so that a layer with a
+        # window reads its window alone, while the cache still shifts. See design_history.md,
+        # "The unified cache".
+        cparams.kv_unified = True
         if type_k is not None:
             cparams.type_k = type_k
         if type_v is not None:
@@ -260,13 +284,15 @@ class Backend:
                 raise EngineError(f"the engine could not tokenize a text: it needs {-n} tokens")
         return list(buf[:n])
 
-    def token_to_piece_bytes(self, vocab, token: int) -> bytes:
+    def token_to_piece_bytes(self, vocab, token: int, buf=None) -> bytes:
         """Return the raw UTF-8 bytes for ``token``, possibly a partial codepoint.
 
         A codepoint can be split across tokens, so callers stream these bytes
-        through an incremental decoder.
+        through an incremental decoder. ``buf``, a buffer of
+        :data:`_PIECE_BYTES` characters, is written into where given.
         """
-        buf = (ctypes.c_char * 64)()
+        if buf is None:
+            buf = (ctypes.c_char * _PIECE_BYTES)()
         n = self._token_to_piece(vocab, token, buf, len(buf), 0, True)
         if n < 0:
             buf = (ctypes.c_char * (-n))()
@@ -296,7 +322,8 @@ class Backend:
 
     def vocabulary_pieces(self, vocab):
         """Each token's text, in token order, as the engine spells it."""
-        return (self.token_to_piece_bytes(vocab, token)
+        buf = (ctypes.c_char * _PIECE_BYTES)()      # one buffer for the whole scan
+        return (self.token_to_piece_bytes(vocab, token, buf)
                 for token in range(self._vocab_n_tokens(vocab)))
 
     def special_tokens(self, vocab) -> tuple[int, ...]:
@@ -389,10 +416,49 @@ class Backend:
             RuntimeError: If the build saves nothing.
         """
         size = self._state_size(ctx, seq, self._state_flags)
-        buffer = (ctypes.c_uint8 * size)()
+        buffer = self._free_state_buffer(size)
         if self._state_get(ctx, buffer, size, seq, self._state_flags) != size:
             raise EngineError("the engine did not save the cache's state")
         return buffer
+
+    def _free_state_buffer(self, size: int):
+        """A buffer of ``size`` bytes for a state: one an earlier state no longer holds, else a new one.
+
+        See design_history.md, "Saved states reuse their buffers". At most
+        one buffer nobody holds is kept beside those in use.
+        """
+        # A buffer only this list refers to holds no state anyone keeps.
+        unheld = [b for b in self._state_buffers if sys.getrefcount(b) <= _REFS_OF_AN_UNHELD_BUFFER]
+        reused = next((b for b in unheld if len(b) == size), None)
+        spare = [b for b in unheld if b is not reused][:1]
+        self._state_buffers = [b for b in self._state_buffers
+                               if b is reused or b not in unheld or b in spare]
+        if reused is not None:
+            return reused
+        buffer = (ctypes.c_uint8 * size)()
+        self._state_buffers.append(buffer)
+        return buffer
+
+    def save_whole_state(self, ctx, seq: int):
+        """All of ``seq``'s state, as a host buffer of its own.
+
+        Raises:
+            RuntimeError: If the build saves nothing.
+        """
+        size = self._state_size(ctx, seq, 0)
+        buffer = (ctypes.c_uint8 * size)()
+        if self._state_get(ctx, buffer, size, seq, 0) != size:
+            raise EngineError("the engine did not save the cache's state")
+        return buffer
+
+    def restore_whole_state(self, ctx, seq: int, buffer) -> None:
+        """Put ``seq`` back into the state :meth:`save_whole_state` saved in ``buffer``.
+
+        Raises:
+            RuntimeError: If the cache refuses it.
+        """
+        if self._state_set(ctx, buffer, len(buffer), seq, 0) == 0:
+            raise EngineError("the engine refused the cache's saved state")
 
     def restore_state(self, ctx, seq: int, buffer) -> None:
         """Put ``seq`` back into the state ``buffer`` was saved from.

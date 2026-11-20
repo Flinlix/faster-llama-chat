@@ -34,8 +34,12 @@ _GGUF_SAMPLING_KEYS = {"temperature": "general.sampling.temp", "top_k": "general
 _WHOLE_NUMBER_FIELDS = {"top_k", "penalty_window_tokens"}
 # The penalty window a GGUF states to mean the whole context, as llama.cpp reads it.
 _WHOLE_CONTEXT_WINDOW = -1
+# The micro-batch llama.cpp decodes in where none is set, the largest one a batch is run as.
+_ENGINE_MICRO_BATCH_TOKENS = 512
 # Where the system describes each processor's package and core, on Linux.
 _CPU_TOPOLOGY = Path("/sys/devices/system/cpu")
+# Where the system lists the performance cores of a processor with two kinds, on Linux.
+_PERFORMANCE_CPUS = Path("/sys/devices/cpu_core/cpus")
 # Where the control groups that hold CPU quotas are mounted, and which ones this process is in, on Linux.
 _CGROUP = Path("/sys/fs/cgroup")
 _OWN_CGROUPS = Path("/proc/self/cgroup")
@@ -84,6 +88,7 @@ class KVContext:
                 n_threads_batch=config.prefill_threads or config.decode_threads or cores)
             self._vocab = self._backend.vocab(self._model)
             self._max_batch_tokens = config.max_batch_tokens
+            self._decode_blocks = config.gpu_layers == 0 or not self._backend.supports_gpu_offload()
             self._settle_cache_edits()
             self._warm_up()
             # The default template under None, and each further one the GGUF ships by its name.
@@ -113,6 +118,11 @@ class KVContext:
     def can_shift(self) -> bool:
         """Whether eviction can shift survivors in place, rather than rebuild."""
         return self._can_shift
+
+    @property
+    def decode_blocks(self) -> bool:
+        """Whether a decode runs on the processor alone, which returns only once it is done; one with layers on a GPU returns as soon as the work is queued."""
+        return self._decode_blocks
 
     @property
     def can_cut_tail(self) -> bool:
@@ -196,7 +206,7 @@ class KVContext:
         self._backend.decode(self._engine_context, token_ids, start_pos, SEQ, want_logits, self._max_batch_tokens)
 
     def _warm_up(self) -> None:
-        """Decode a full batch where layers run on a GPU, then two tokens and a single one.
+        """Decode a full micro-batch where layers run on a GPU, then two tokens and a single one.
 
         The cache is cleared after each. See design_history.md, "A full batch
         warms the GPU at load".
@@ -206,7 +216,9 @@ class KVContext:
             tok = 0
         batches = [[tok] * 2, [tok]]
         if self._config.gpu_layers != 0 and self._backend.supports_gpu_offload():
-            batches.insert(0, [tok] * min(self._max_batch_tokens, self._config.context_size))
+            micro_batch = self._config.micro_batch_tokens or _ENGINE_MICRO_BATCH_TOKENS
+            batches.insert(0, [tok] * min(micro_batch, self._max_batch_tokens,
+                                          self._config.context_size))
         for tokens in batches:
             self._backend.decode(self._engine_context, tokens, 0, SEQ, True, self._max_batch_tokens)
             self.reset()  # empty again before the conversation's first prefill
@@ -226,6 +238,19 @@ class KVContext:
     def save_state(self):
         """What a cache that cannot shift needs to be put back to where it rests now."""
         return self._backend.save_state(self._engine_context, SEQ)
+
+    def save_whole_state(self):
+        """Everything the cache holds, for :meth:`restore_whole_state`, as a buffer whose length is its size in bytes."""
+        return self._backend.save_whole_state(self._engine_context, SEQ)
+
+    def restore_whole_state(self, state) -> None:
+        """Put the cache back to ``state``, which :meth:`save_whole_state` gave, emptying it first.
+
+        Raises:
+            RuntimeError: If the cache refuses the state.
+        """
+        self._backend.kv_clear(self._engine_context)
+        self._backend.restore_whole_state(self._engine_context, SEQ, state)
 
     def restore_state(self, state, pos: int) -> None:
         """Put the cache back to ``state``, saved when it held ``pos`` tokens.
@@ -330,8 +355,11 @@ class KVContext:
             if sampling.repetition_penalty != 1.0 \
                     or sampling.presence_penalty or sampling.frequency_penalty:
                 # A window longer than the context reads the same tokens as one as long as it.
-                backend.add_penalties(chain, self._vocab,
-                                      min(sampling.penalty_window_tokens, self.context_size),
+                window = min(sampling.penalty_window_tokens, self.context_size)
+                kept = _candidates_before_penalties(sampling, window)
+                if kept is not None and kept < backend.vocabulary_size(self._vocab):
+                    backend.add_top_k(chain, kept)
+                backend.add_penalties(chain, self._vocab, window,
                                       sampling.repetition_penalty,
                                       sampling.frequency_penalty,
                                       sampling.presence_penalty)
@@ -354,6 +382,21 @@ class KVContext:
             raise
 
 
+def _candidates_before_penalties(sampling: DrawnSampling, window: int) -> int | None:
+    """How many of the likeliest tokens the penalties may be applied to alone, every draw unchanged; ``None`` where all of them must be.
+
+    Penalties that only lower a token's logit lower at most ``window``
+    tokens, those of the window, so the tokens a later top-k of ``k`` keeps
+    are among the ``k + window`` likeliest before them. Greedy keeps one.
+    """
+    lowers_only = sampling.repetition_penalty >= 1.0 and sampling.presence_penalty >= 0.0 \
+        and sampling.frequency_penalty >= 0.0
+    keeps = 1 if sampling.temperature <= 0.0 else sampling.top_k
+    if not lowers_only or keeps <= 0:
+        return None
+    return keeps + window
+
+
 def _physical_cores() -> int:
     """The physical cores this process may run on, at most as many as its CPU quota allows.
 
@@ -362,6 +405,10 @@ def _physical_cores() -> int:
     """
     cpus = (sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
             else range(os.cpu_count() or 1))
+    # Where the system lists performance cores apart, only those are counted; see
+    # design_history.md, "Twelve small ones".
+    performance = [cpu for cpu in cpus if cpu in _performance_cpus()]
+    cpus = performance or cpus
     threads = len(cpus)
     try:
         cores = len({tuple((_CPU_TOPOLOGY / f"cpu{cpu}" / "topology" / name).read_text().strip()
@@ -370,6 +417,19 @@ def _physical_cores() -> int:
         cores = threads if threads <= 4 else threads // 2
     allowed = _quota_cores()
     return cores if allowed is None else min(cores, allowed)
+
+
+def _performance_cpus() -> frozenset[int]:
+    """The processors the system lists as performance cores, where it tells two kinds apart; empty where it does not."""
+    try:
+        listed = _PERFORMANCE_CPUS.read_text().strip()
+    except OSError:
+        return frozenset()
+    found: set[int] = set()
+    for part in filter(None, listed.split(",")):
+        first, _, last = part.partition("-")
+        found.update(range(int(first), int(last or first) + 1))
+    return frozenset(found)
 
 
 def _quota_cores() -> int | None:
