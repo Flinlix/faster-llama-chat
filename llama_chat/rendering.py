@@ -1,8 +1,7 @@
 """A conversation's renders: any messages as its template writes them, split into the template's text and the caller's, and tokenized as the cache holds them.
 
 A turn kept as the tokens it was generated as stands in the tokens for the
-template's version of it. See design_history.md, "The target, built without
-the cache".
+template's version of it. See docs/decisions/0028-a-turn-that-called-tools-keeps-its-generated-tokens.md.
 """
 
 from __future__ import annotations

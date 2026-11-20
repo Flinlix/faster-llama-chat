@@ -50,8 +50,7 @@ class CacheSync:
 
     Every change to :attr:`tokens` goes through here. A cache that shifts or
     cuts its end takes each change at once; one that cannot is brought back to
-    :attr:`tokens` before the next generation or rest. See design_history.md,
-    "How eviction works".
+    :attr:`tokens` before the next generation or rest. See docs/decisions/0022-eviction-drops-whole-oldest-exchanges.md.
     """
 
     def __init__(self, context: CacheContext, micro_batch_tokens: int | None = None,
@@ -166,7 +165,7 @@ class CacheSync:
                 self._tokens += out.token_ids
 
     def _switch_for(self, target: list[int], same: int) -> int:
-        """Keep the cache where ``target`` leaves most of it, and hold a kept one instead where that shares more of ``target``; how much of ``target`` the cache then holds. See design_history.md, "Conversations switched away from are kept"."""
+        """Keep the cache where ``target`` leaves most of it, and hold a kept one instead where that shares more of ``target``; how much of ``target`` the cache then holds. See docs/decisions/0031-conversations-switched-away-from-are-kept.md."""
         store = self._kept
         assert store is not None, "a switch is asked only where caches are kept"
         kept = store.longest_start(target)
@@ -281,7 +280,7 @@ class CacheSync:
                 and template_written[0] <= same < template_written[1]:
             # What the template wrote before a reply and leaves out once the reply is past, such
             # as an empty thought, is shifted out rather than the reply decoded again. See
-            # design_history.md, "What the template leaves out of a past reply is shifted out".
+            # docs/decisions/0021-one-owner-brings-the-cache-to-its-target.md.
             found = _left_out_stretch_end(self._tokens, target, same, template_written[1])
         if found is not None:
             self.remove(same, found)

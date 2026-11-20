@@ -99,7 +99,7 @@ def moments_of_this_year() -> list[datetime]:
 class _RememberingSandbox(ImmutableSandboxedEnvironment):
     """The immutable sandbox, its answer on each attribute remembered by the kind of object it is read on and the attribute's name, the only two things that answer depends on.
 
-    See design_history.md, "The sandbox's answers remembered".
+    See docs/decisions/0004-the-library-renders-the-template.md.
     """
 
     def __init__(self, **options) -> None:

@@ -3,8 +3,7 @@
 Plain functions over message lists, testable without a model. Inside, the
 conversation keeps the messages a template is given: a call's arguments as
 the object they encode, a call the model wrote unreadably marked as one, and
-a turn kept as generated on the message it ends with. See design_history.md,
-"Two history forms".
+a turn kept as generated on the message it ends with. See docs/decisions/0029-two-history-forms.md.
 """
 
 from __future__ import annotations

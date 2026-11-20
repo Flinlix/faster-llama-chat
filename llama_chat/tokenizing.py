@@ -59,8 +59,8 @@ def tokenize_pieces(reader: Tokenizer, pieces: list[tuple[str, bool]], *,
     """``pieces`` as one render tokenizes them.
 
     The model's own tags are tokenized as tags, and the plain text between two
-    tags as one run with special-token parsing off. See the README, "Special
-    tokens in message content".
+    tags as one run with special-token parsing off. See docs/guide/without-a-template.md,
+    "Special tokens in message content".
 
     Args:
         pieces: The text in order, each marked whether it is the caller's own,

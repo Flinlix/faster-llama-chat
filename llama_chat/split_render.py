@@ -7,8 +7,7 @@ say where each text goes; the render as
 it is must then be the marked one with each marker replaced by its text as the
 template writes it, which may wrap text of its own around it where it is placed
 in only one way. Otherwise the template wrote more of a text than the text
-itself, and the conversation is refused. See design_history.md, "Every text
-placed by a marker render".
+itself, and the conversation is refused. See docs/decisions/0005-every-caller-text-is-placed-by-a-marker-render.md.
 """
 
 from __future__ import annotations

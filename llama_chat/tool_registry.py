@@ -32,7 +32,7 @@ class ToolRegistry:
 
     Registering makes a tool runnable at once. :meth:`specs` gives the
     declarations that ``begin`` tells the model. Nothing here writes to a model, so nothing here learns what
-    the conversation still holds. See the README, "Tool calling".
+    the conversation still holds. See docs/guide/tool-calling.md.
     """
 
     def __init__(self) -> None:

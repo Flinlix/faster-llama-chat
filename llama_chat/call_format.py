@@ -2,8 +2,7 @@
 
 The tags a generated call sits between, what separates and closes calls, and
 how a call spells its name and arguments. Where a comparison proves nothing the
-answer is ``None`` rather than a guess. See design_history.md, "How a call's
-format is recovered".
+answer is ``None`` rather than a guess. See docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md.
 """
 
 from __future__ import annotations
@@ -114,7 +113,7 @@ def extract_call_body(render: Render, call_open: str,
                       close_tag: str) -> CallBody | None:
     """Recover how this model spells a name and its arguments between the tags.
 
-    See design_history.md, "How a call's format is recovered".
+    See docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md.
 
     Args:
         render: As :func:`~llama_chat.template_extract.extract_fragments`.

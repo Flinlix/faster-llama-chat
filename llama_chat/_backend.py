@@ -114,7 +114,7 @@ class Backend:
     """Version-stable handles for the low-level calls this package makes."""
 
     # Control tokens and the ones a fine-tune added. Both count as tags; see
-    # design_history.md, "How a call's format is recovered".
+    # docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md.
     _TAG_ATTRS = llama_cpp.LLAMA_TOKEN_ATTR_CONTROL | llama_cpp.LLAMA_TOKEN_ATTR_USER_DEFINED
 
     def __init__(self) -> None:
@@ -208,8 +208,7 @@ class Backend:
         self._set_flash_attn(cparams, flash_attn)
         self._set_kv_cache_on_gpu(cparams, kv_cache_on_gpu)
         # One buffer for the sequence: attention over the cache's rows, so that a layer with a
-        # window reads its window alone, while the cache still shifts. See design_history.md,
-        # "The unified cache".
+        # window reads its window alone, while the cache still shifts. See docs/decisions/0014-engine-context-settings.md.
         cparams.kv_unified = True
         if type_k is not None:
             cparams.type_k = type_k
@@ -270,7 +269,7 @@ class Backend:
         """Convert ``text`` to token ids, prepending BOS when ``add_special``.
 
         ``parse_special`` decides whether tag text resolves to its control
-        token. See the README, "Special tokens in message content".
+        token. See docs/guide/without-a-template.md, "Special tokens in message content".
         """
         raw = text.encode("utf-8")
         n_max = len(raw) + 16
@@ -424,7 +423,7 @@ class Backend:
     def _free_state_buffer(self, size: int):
         """A buffer of ``size`` bytes for a state: one an earlier state no longer holds, else a new one.
 
-        See design_history.md, "Saved states reuse their buffers". At most
+        See docs/decisions/0024-saved-states-on-a-cache-that-cannot-cut.md. At most
         one buffer nobody holds is kept beside those in use.
         """
         # A buffer only this list refers to holds no state anyone keeps.

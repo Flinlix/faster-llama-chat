@@ -2,7 +2,7 @@
 
 Running calls is :mod:`llama_chat.tool_registry`'s, and reading a call back
 from what the model wrote is :mod:`llama_chat.call_parsing`'s. See
-design_history.md, "Reasons moved out of the code".
+docs/decisions/0038-a-call-is-read-only-where-all-its-text-is-read.md.
 """
 
 from __future__ import annotations

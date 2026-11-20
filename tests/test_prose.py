@@ -1,4 +1,4 @@
-"""The project's prose keeps the writing rules a machine can check: no em dash anywhere, no dash between clauses, and outside the design history no path of one machine.
+"""The project's prose keeps the writing rules a machine can check: no em dash anywhere, no dash between clauses, and outside the decision records no path of one machine.
 
 Prose is the Markdown outside code blocks and code spans, and the docstrings
 and comments of the Python files.
@@ -15,9 +15,9 @@ import pytest
 
 _ROOT = Path(__file__).parent.parent
 # Folders a tool writes, which hold copies of the project's files.
-_BUILT = {"mutants", "build", "dist", "__pycache__"}
-# Where the machines measurements were taken on are named.
-_HISTORY = {"design_history.md"}
+_BUILT = {"mutants", "build", "dist", "site", "__pycache__"}
+# Where the machines measurements were taken on are named: the decision records.
+_DECISIONS = _ROOT / "docs" / "decisions"
 
 _EM_DASH = re.compile("\u2014")
 _CLAUSE_DASH = re.compile(r"\w\s(?:-|--|–)\s\w")
@@ -67,7 +67,7 @@ def _breaks(path: Path) -> list[str]:
         where = f"{path.relative_to(_ROOT)}:{number}"
         if _CLAUSE_DASH.search(prose):
             found.append(f"{where}: a dash between clauses")
-        if path.name not in _HISTORY:
+        if _DECISIONS not in path.parents:
             if _MACHINE_PATH.search(prose):
                 found.append(f"{where}: a path of one machine")
     return found

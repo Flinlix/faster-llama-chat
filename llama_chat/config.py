@@ -23,7 +23,7 @@ class Config:
     The eight model sampling fields, ``temperature`` to
     ``penalty_window_tokens``, left ``None`` take the model's own when it
     loads, value by value: its add-on file's, else what its GGUF states, else
-    llama.cpp's default. See the README, "Configuration".
+    llama.cpp's default. See docs/guide/configuration.md.
 
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.
@@ -115,8 +115,7 @@ class Config:
             size its compute buffer is reserved for; at most
             ``max_batch_tokens``. ``None`` leaves the engine's own default.
             A larger one can read a long prefill faster and takes more
-            memory on the device; see design_history.md, "The engine keeps
-            its own micro-batch".
+            memory on the device; see docs/decisions/0015-the-engine-keeps-its-own-micro-batch.md.
         flash_attention: ``True`` or ``False`` forces flash attention on or
             off. ``None`` leaves it to the engine, except under a quantized
             ``kv_cache_type``, which requires it and turns it on.

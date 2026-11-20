@@ -208,8 +208,7 @@ class KVContext:
     def _warm_up(self) -> None:
         """Decode a full micro-batch where layers run on a GPU, then two tokens and a single one.
 
-        The cache is cleared after each. See design_history.md, "A full batch
-        warms the GPU at load".
+        The cache is cleared after each. See docs/decisions/0016-the-warm-up-at-load.md.
         """
         tok = self._backend.token_eos(self._vocab)
         if tok < 0:  # no EOS; any valid id warms the graph
@@ -406,7 +405,7 @@ def _physical_cores() -> int:
     cpus = (sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
             else range(os.cpu_count() or 1))
     # Where the system lists performance cores apart, only those are counted; see
-    # design_history.md, "Twelve small ones".
+    # docs/decisions/0017-unset-thread-counts-follow-the-physical-cores.md.
     performance = [cpu for cpu in cpus if cpu in _performance_cpus()]
     cpus = performance or cpus
     threads = len(cpus)

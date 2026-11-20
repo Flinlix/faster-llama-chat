@@ -1,8 +1,7 @@
 """Decoding ahead of the next question from a render of the newest exchanges alone, and dropping the oldest exchanges in such renders, where the template writes them as the whole render does.
 
 :class:`Windows` holds no state of its own: it reads and changes the
-conversation's state, and is given its cache. See design_history.md,
-"Rendering windows".
+conversation's state, and is given its cache. See docs/decisions/0026-renders-are-windows-of-the-newest-exchanges.md.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 :class:`Eviction` holds no state of its own: it changes the conversation's
 state, and records there what went and why, so that an action put back puts
-back what an eviction did too. See design_history.md, "How eviction works".
+back what an eviction did too. See docs/decisions/0022-eviction-drops-whole-oldest-exchanges.md.
 """
 
 from __future__ import annotations
@@ -23,8 +23,7 @@ _log = logging.getLogger(__name__)
 
 # Where the cache cannot shift, the fraction of the room under the eviction
 # threshold, after a short question, and of ``max_history_exchanges``, that an
-# eviction brings the conversation down to. In (0, 1]. See design_history.md,
-# "Settings, add-on files and logging", 266.3.
+# eviction brings the conversation down to. In (0, 1]. See docs/decisions/0023-without-a-shift-an-eviction-drops-well-below-the-threshold.md.
 EVICT_TO_FRACTION_WITHOUT_SHIFT = 0.5
 
 

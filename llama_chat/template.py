@@ -60,7 +60,7 @@ class CallBody:
     """How a model spells a function name and its arguments between the tags.
 
     Recovered from the model's own template, or built from its add-on file's
-    call. See design_history.md, "How a call's format is recovered", for the
+    call. See docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md for the
     shapes these fields take on real models.
 
     Attributes:
