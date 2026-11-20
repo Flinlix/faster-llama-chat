@@ -26,18 +26,31 @@ for arg in "$@"; do
 done
 [ -n "$BACKEND" ] || BACKEND="$(command -v nvidia-smi >/dev/null && echo cuda || echo cpu)"
 
-# Build prerequisites (cmake, a C++ compiler, Python headers).
+# Build prerequisites (cmake, a C++ compiler, Python headers), installed only when asked.
 if ! command -v cmake >/dev/null || ! command -v g++ >/dev/null; then
-    echo "Installing build tools (needs sudo)..."
-    sudo apt-get update
-    sudo apt-get install -y build-essential cmake python3-dev
+    echo "The build needs cmake, a C++ compiler and the Python headers."
+    if command -v apt-get >/dev/null && [ -t 0 ]; then
+        read -r -p "Install them with: sudo apt-get install -y build-essential cmake python3-dev? [y/N] " answer
+        [ "$answer" = "y" ] || [ "$answer" = "Y" ] || { echo "Install them, then run $0 again." >&2; exit 1; }
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake python3-dev
+    else
+        echo "Install them with your system's package manager, then run $0 again." >&2
+        exit 1
+    fi
 fi
 
-# Use the project venv if present, otherwise the active python.
-PIP="${PIP:-.venv/bin/pip}"
-[ -x "$PIP" ] || PIP="pip"
-PYTHON="$(dirname "$PIP")/python"
-[ -x "$PYTHON" ] || PYTHON="python"
+# The project venv's Python if present, otherwise the active one; pip always runs as its module.
+PYTHON="${PYTHON:-.venv/bin/python}"
+command -v "$PYTHON" >/dev/null || PYTHON="$(command -v python || command -v python3 || echo python)"
+
+# The CUDA compiler where the build looks for it: CUDACXX, PATH, or the toolkit's default place.
+if [ "$BACKEND" = "cuda" ] && [ -z "${CUDACXX:-}" ] && ! command -v nvcc >/dev/null \
+        && [ ! -x /usr/local/cuda/bin/nvcc ]; then
+    echo "The CUDA build needs the CUDA compiler (nvcc): not in CUDACXX, on PATH or in /usr/local/cuda." >&2
+    echo "Install the CUDA toolkit, or run $0 --cpu." >&2
+    exit 1
+fi
 
 if [ "$BACKEND" = "cuda" ]; then
     CMAKE_ARGS="-DGGML_CUDA=on"
@@ -48,17 +61,17 @@ fi
 echo "Building llama-cpp-python from source ($BACKEND backend: $CMAKE_ARGS)..."
 CMAKE_ARGS="$CMAKE_ARGS" \
 CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
-    "$PIP" install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
+    "$PYTHON" -m pip install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
 
 # Install faster-llama-chat itself (editable) so `import llama_chat` and the demo work
 # without setting PYTHONPATH. Pass --dev to also install the test, development and documentation tools.
 echo "Installing faster-llama-chat (editable)..."
 if [ "$DEV" = 1 ]; then
-    "$PIP" install -e ".[test,dev,docs]"
+    "$PYTHON" -m pip install -e ".[test,dev,docs]"
     # The checks before every push: hooks/pre-push.
     git config core.hooksPath hooks
 else
-    "$PIP" install -e "."
+    "$PYTHON" -m pip install -e "."
 fi
 
 echo "Verifying the build and the llama.cpp symbols the package relies on..."
