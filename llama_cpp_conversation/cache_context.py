@@ -56,7 +56,7 @@ class ModelReader(Protocol):
         """The sampling values the model states for itself, by the names :class:`Sampling` gives them; empty where it states none.
 
         Only the fields an add-on file may set too are taken
-        (:data:`~llama_chat.addon_files.SAMPLING_FIELDS`); another name is
+        (:data:`~llama_cpp_conversation.addon_files.SAMPLING_FIELDS`); another name is
         refused where the wrapper is built.
         """
 

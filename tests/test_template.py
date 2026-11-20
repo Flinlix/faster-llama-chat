@@ -3,11 +3,11 @@
 import json
 import pytest
 
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
-from llama_chat.errors import TemplateRefusedError
-from llama_chat.split_render import split_render
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN
+from llama_cpp_conversation.errors import TemplateRefusedError
+from llama_cpp_conversation.split_render import split_render
 
 
 def test_the_generation_prompt_is_the_reply_tag_where_the_template_adds_nothing_to_it():
@@ -40,7 +40,7 @@ def test_a_tag_in_a_content_stays_in_it():
 def test_a_split_render_takes_time_in_proportion_to_the_messages():
     import time
 
-    from llama_chat.split_render import split_render
+    from llama_cpp_conversation.split_render import split_render
 
     def render(messages, declarations):
         return "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages)
@@ -149,7 +149,7 @@ def test_the_turn_after_a_reply_is_checked_in_each_reasoning_mode():
 ])
 def test_tojson_writes_json_as_json_dumps_does_keeping_letters_beyond_ascii_unless_asked(
         arguments, options):
-    from llama_chat.model_template import compiled
+    from llama_cpp_conversation.model_template import compiled
     value = {"zeta": "café 漢", "alpha": [1, {"b": 2.5, "a": None, "c": True}]}
     rendered = compiled("{{ value | tojson" + arguments + " }}").render(value=value)
     assert rendered == json.dumps(value, **{"ensure_ascii": False, **options})
@@ -210,7 +210,7 @@ def test_the_sandbox_answers_each_attribute_as_jinja_does_by_the_kind_of_object_
     import jinja2
     from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-    from llama_chat.model_template import _RememberingSandbox
+    from llama_cpp_conversation.model_template import _RememberingSandbox
     # The answer is read off the object's type and the attribute's name in this Jinja release;
     # a release that reads more must be checked again before it is let in.
     assert jinja2.__version__.startswith("3.1.")

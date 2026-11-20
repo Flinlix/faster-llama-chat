@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from llama_chat import ChatWrapper, Config
+from llama_cpp_conversation import ChatWrapper, Config
 
 
 def banner(title: str) -> None:

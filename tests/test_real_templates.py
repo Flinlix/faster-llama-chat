@@ -14,18 +14,18 @@ import pytest
 
 from tests.chat_messages import opened
 
-from llama_chat import ChatWrapper, Config
-from llama_chat.addon_files import addon_file, template_fingerprint
-from llama_chat.cache_context import TOOL_USE_TEMPLATE
-from llama_chat.errors import UnsupportedError
-from llama_chat.reply_text import ReplyText, begins_in_thought
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tokenizing import first_special_token
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall
+from llama_cpp_conversation import ChatWrapper, Config
+from llama_cpp_conversation.addon_files import addon_file, template_fingerprint
+from llama_cpp_conversation.cache_context import TOOL_USE_TEMPLATE
+from llama_cpp_conversation.errors import UnsupportedError
+from llama_cpp_conversation.reply_text import ReplyText, begins_in_thought
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.tokenizing import first_special_token
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall
 
 from .chat_templates import KNOWN_KEYS, REQUIRED_KEYS, STEMS, WEATHER, expected, fixture
-from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, call_marks, shipped_addon_call,
+from llama_cpp_conversation.testing.fake_context import (WRITTEN_ID, FakeContext, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
 
 _TOOL_STEMS = [stem for stem in STEMS if fixture(stem)["calls_tools"]]
@@ -71,7 +71,7 @@ def test_a_template_reads_the_clock_where_it_names_it_and_every_one_writing_a_da
 @pytest.mark.parametrize("stem", STEMS)
 def test_a_load_works_out_what_a_template_writes_after_the_last_message_once_per_set_of_variables(
         stem, monkeypatch):
-    from llama_chat import template_extract
+    from llama_cpp_conversation import template_extract
     worked_out = []
     end = template_extract._conversation_end
     monkeypatch.setattr(template_extract, "_conversation_end",

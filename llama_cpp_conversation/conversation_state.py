@@ -61,7 +61,7 @@ class Ahead:
 
 @dataclass
 class Changes:
-    """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_chat.reply.Report` gives it."""
+    """What the actions since the caller last asked changed beyond what was asked, as :class:`~llama_cpp_conversation.reply.Report` gives it."""
 
     n_evicted: int = 0                    # history messages evicted, each result counting as one
     evicted_for: EvictionCause | None = None

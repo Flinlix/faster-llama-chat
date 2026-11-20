@@ -17,10 +17,11 @@ binding maps them by an older numbering. The engine's errors were filed as
 
 - `_backend.py` installs its own callback through `llama_log_set` when it is
   imported, held at module level since the engine keeps only a raw pointer.
-  Each line becomes a record of the logger `llama_chat.engine`: debug to
-  `DEBUG`, info and a line without a level to `INFO`, warn to `WARNING`, error
-  to `ERROR`. A continuation goes on with the open line at its level, a call of
-  several lines becomes a record per line, and blank lines are dropped.
+  Each line becomes a record of the logger `llama_cpp_conversation.engine`:
+  debug to `DEBUG`, info and a line without a level to `INFO`, warn to
+  `WARNING`, error to `ERROR`. A continuation goes on with the open line at its
+  level, a call of several lines becomes a record per line, and blank lines are
+  dropped.
 - `log_level` and `LOG_LEVELS` are removed.
 - Across the library each level means one thing: `INFO` for a change of the
   conversation the caller did not ask for, `DEBUG` for a slower path (the

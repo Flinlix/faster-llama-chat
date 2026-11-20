@@ -11,13 +11,13 @@ reasoning switch, 122 of 130 reasoning tests passed.
 
 ## Decision
 
-- One stand-in, `FakeContext` (shipped as `llama_chat.testing`), with one
-  tokenizer, one cache and one scripted model, renders real Jinja templates
-  through the renderer a model loads with: the test templates of real families
-  in `tests/templates/` and small invented ones. Every conversation test runs
-  on a tokenizer of one token per character and on a merging one, which joins
-  a space with the letter after it. The stand-in reads only the tags each
-  template's file lists and can write a reply's tags as their tokens.
+- One stand-in, `FakeContext` (shipped as `llama_cpp_conversation.testing`),
+  with one tokenizer, one cache and one scripted model, renders real Jinja
+  templates through the renderer a model loads with: the test templates of real
+  families in `tests/templates/` and small invented ones. Every conversation
+  test runs on a tokenizer of one token per character and on a merging one,
+  which joins a space with the letter after it. The stand-in reads only the
+  tags each template's file lists and can write a reply's tags as their tokens.
 - What a test expects of a template stands in that template's file
   (`render_variables`, tags, call opening, which properties it has, its card's
   sampling); `tests/test_real_templates.py` checks each stated value against

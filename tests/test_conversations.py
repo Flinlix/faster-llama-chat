@@ -22,22 +22,22 @@ import time
 
 import pytest
 
-import llama_chat
-from llama_chat import (ChatWrapper, Config, ContextOverflowError, InvalidArgumentError,
+import llama_cpp_conversation
+from llama_cpp_conversation import (ChatWrapper, Config, ContextOverflowError, InvalidArgumentError,
                         TemplateRefusedError)
-from llama_chat.history_forms import answer_in_order, read_messages
-from llama_chat.messages import QUESTION_CUT_MARK
-from llama_chat.reply_text import begins_in_thought
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec, result_text
+from llama_cpp_conversation.history_forms import answer_in_order, read_messages
+from llama_cpp_conversation.messages import QUESTION_CUT_MARK
+from llama_cpp_conversation.reply_text import begins_in_thought
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec, result_text
 
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from . import internals
 from .chat_templates import ANSWERS, QUESTIONS, STEMS, WEATHER, expected, fixture, in_each_thought_form
-from llama_chat.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
+from llama_cpp_conversation.testing.fake_context import (WRITTEN_ID, FakeContext, ScriptedCall, call_marks, shipped_addon_call,
                            shipped_addon_reasoning_on, written_call)
-from llama_chat.testing.invented_templates import NUMBERED, TOOLS, PLAIN
+from llama_cpp_conversation.testing.invented_templates import NUMBERED, TOOLS, PLAIN
 from .wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, numbered_exchanges,
                        rendered_pieces, two_owed_calls, with_check_first)
 
@@ -791,7 +791,7 @@ def _library_steps_per_token(run, stream, length):
     return [later - earlier for earlier, later in zip(at_each_token, at_each_token[1:])]
 
 
-_LIBRARY = os.path.dirname(llama_chat.__file__)
+_LIBRARY = os.path.dirname(llama_cpp_conversation.__file__)
 # The stand-in model the tests run on, which is no part of what a reply costs.
 _STAND_IN = os.path.join(_LIBRARY, "testing")
 
@@ -907,7 +907,7 @@ def test_a_reply_whose_settling_fails_leaves_the_next_reply_following_the_render
 
 
 def test_a_reply_whose_tokens_as_generated_hold_a_call_that_went_is_not_shortened():
-    from llama_chat.testing.invented_templates import TOOLS
+    from llama_cpp_conversation.testing.invented_templates import TOOLS
     for size in range(200, 900, 2):
         context = FakeContext(TOOLS, [ScriptedCall("not a call", before="Moment. ")])
         chat = ChatWrapper(Config(context_size=size, evict_above_fraction=1.0,
@@ -1185,7 +1185,7 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
 @pytest.mark.counts_work
 def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
         stem, system, clock, monkeypatch):
-    from llama_chat import opening_checks
+    from llama_cpp_conversation import opening_checks
     checked = []
     for name in ("ensure_history_stays_written", "windows_are_exact"):
         check = getattr(opening_checks, name)
@@ -1765,7 +1765,7 @@ def test_a_reply_that_can_begin_no_call_and_no_ending_streams_each_character_as_
 
 # ----- one template's own cases ------------------------------------------------------
 def test_a_turn_kept_longer_than_the_template_writes_it_counts_against_the_limits():
-    from llama_chat.testing.invented_templates import TOOLS
+    from llama_cpp_conversation.testing.invented_templates import TOOLS
     from tests.wrappers import weather_registry
     fake = FakeContext(TOOLS, gen_tokens=6, gen_text="Sonnig")
     chat = ChatWrapper(Config(context_size=800, evict_above_fraction=0.6, min_reply_tokens=20),
@@ -1908,7 +1908,7 @@ def test_a_call_quoted_in_a_thought_stays_the_thoughts_where_the_template_writes
 
 
 def test_the_tokenizer_memory_holds_no_more_text_than_its_bound_however_long_a_result():
-    from llama_chat.tokenizing import MemoTokenizer
+    from llama_cpp_conversation.tokenizing import MemoTokenizer
 
     memo = MemoTokenizer(FakeContext(_FALLBACK))
     for n in range(3):
@@ -1958,7 +1958,7 @@ def test_a_first_reply_that_produces_nothing_leaves_what_begin_decoded_in_the_ca
 
 @pytest.mark.counts_work
 def test_a_question_far_within_the_room_is_not_measured_in_the_system_turns_render(monkeypatch):
-    from llama_chat.rendering import ConversationRendering
+    from llama_cpp_conversation.rendering import ConversationRendering
 
     stem = next(stem for stem in _TOOL_TEMPLATES)
     tools = [ToolSpec(name=f"tool_{n}", description=f"Does thing {n}.",
@@ -2698,7 +2698,7 @@ def test_a_call_a_client_adds_after_a_reply_leaves_the_next_prompt_the_templates
 
 def test_dropping_an_exchange_whose_turn_a_question_closed_writes_what_follows_it_anew():
     """The invented templates keep a turn open across a question no reply closed: once that exchange goes, the reply after it gets its own header."""
-    from llama_chat.testing.invented_templates import TOOLS
+    from llama_cpp_conversation.testing.invented_templates import TOOLS
     fake = FakeContext(TOOLS, ["reply", "ok", "ok"])
     chat = ChatWrapper(Config(context_size=2000, max_history_exchanges=3), context=fake)
     clock = ToolSpec("clock", "Die Zeit.", {"type": "object", "properties": {}})
@@ -2745,7 +2745,7 @@ def test_a_reply_that_ran_a_call_is_cut_to_what_its_one_stream_showed(stem, cut)
 
 def _rewrites_calls_after_a_drop(stem) -> bool:
     """Whether the template writes the calls after the oldest exchange otherwise once it goes, as one that numbers them by place does."""
-    from llama_chat.render_checks import rest_stays_after_a_drop, tool_exchanges
+    from llama_cpp_conversation.render_checks import rest_stays_after_a_drop, tool_exchanges
     run = _Run(stem)
     run.begin(tools=[WEATHER])
     render = run.chat._conversation._rendering.render
@@ -2805,7 +2805,7 @@ def test_a_reply_taken_back_on_a_turn_a_call_left_open_reports_no_call_and_ends(
 @pytest.mark.parametrize("stem", _REFUSING_AN_EMPTY_REPLY)
 def test_a_reply_whose_unreadable_call_fails_to_be_answered_is_taken_back(stem, monkeypatch):
     """Without its call, the reply is one the template does not write; it goes with its question, and the next question is answered."""
-    from llama_chat.rendered_cache import RenderedCache
+    from llama_cpp_conversation.rendered_cache import RenderedCache
     run = _Run(stem)
     run.begin()
     before = run.chat.conversation()
@@ -3465,7 +3465,7 @@ def test_a_cache_that_cannot_shift_decodes_its_conversation_again_at_most_every_
 def test_going_back_to_a_conversation_switched_away_from_decodes_it_again_only_where_none_is_kept(
         kept_bytes, decoded_again):
     """A conversation a begin leaves is kept within the bound, and one begun again from it holds it at once; with no room kept, it is decoded again."""
-    from llama_chat.testing.invented_templates import PLAIN
+    from llama_cpp_conversation.testing.invented_templates import PLAIN
     fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.")
     chat = ChatWrapper(Config(context_size=8192, kept_conversation_bytes=kept_bytes), context=fake)
     long = [m for n in range(20) for m in ({"role": "user", "content": f"Frage {n} " + "x" * 40},
@@ -3488,7 +3488,7 @@ def test_going_back_to_a_conversation_switched_away_from_decodes_it_again_only_w
 def test_going_back_to_one_of_several_kept_conversations_holds_that_one_when_the_bound_drops_the_oldest(
         cache):
     """The bound holds two kept caches: keeping a third drops the oldest, and the one gone back to is the one held, the cache reading as its render."""
-    from llama_chat.testing.invented_templates import PLAIN
+    from llama_cpp_conversation.testing.invented_templates import PLAIN
 
     def history(name):
         return opened(name, [m for n in range(20) for m in (

@@ -1,4 +1,4 @@
-"""Small chat templates in an invented format, each a fixture of the form :class:`~llama_chat.testing.fake_context.FakeContext` takes.
+"""Small chat templates in an invented format, each a fixture of the form :class:`~llama_cpp_conversation.testing.fake_context.FakeContext` takes.
 
 Every tag is invented, not any real model's, so nothing can pass by matching a
 format hard-coded somewhere. Each template is the one Jinja text below, with
@@ -6,7 +6,7 @@ the switches at its top set as that template needs them, and is rendered by
 the renderer a model is loaded with.
 """
 
-from llama_chat.template import CallBody
+from llama_cpp_conversation.template import CallBody
 
 # The text every invented template shares. A call leaves its turn open, and the
 # result and the prose after it stay inside that same turn. A past reply's thought

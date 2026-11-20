@@ -28,7 +28,7 @@ def test_the_rules_are_numbered_from_one_without_a_gap():
 
 def test_every_file_a_rule_is_verified_by_exists():
     for number, text in _rules().items():
-        named = re.findall(r"`((?:tests|llama_chat)/[\w/.-]+)`", text)
+        named = re.findall(r"`((?:tests|llama_cpp_conversation)/[\w/.-]+)`", text)
         assert named, f"rule {number} names no file it is verified by"
         for path in named:
             assert (_ROOT / path).exists(), f"rule {number} names {path}, which does not exist"

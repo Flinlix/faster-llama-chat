@@ -4,17 +4,17 @@ import threading
 
 import pytest
 
-from llama_chat.errors import OutOfOrderError
+from llama_cpp_conversation.errors import OutOfOrderError
 
-from llama_chat.config import Config, generation_sampling
-from llama_chat import ChatWrapper, InvalidArgumentError
-from llama_chat.generation import generate
+from llama_cpp_conversation.config import Config, generation_sampling
+from llama_cpp_conversation import ChatWrapper, InvalidArgumentError
+from llama_cpp_conversation.generation import generate
 
 from tests.chat_messages import opened
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN, TOOLS
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN, TOOLS
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec
 from tests.wrappers import add_tools, assert_consistent, numbered_exchanges, tool_wrapper, rows
 
 # Every sampling value set, as a generation is given them.
@@ -132,7 +132,7 @@ def test_an_action_refused_for_its_own_arguments_leaves_the_reply_its_thread_rea
 def test_generator_close_marks_interrupted():
     # stream.close() records the same stop reason on the accumulator (the Reply
     # itself is unreachable after close(): Python offers no return channel).
-    from llama_chat.generation import GenerationAccumulator
+    from llama_cpp_conversation.generation import GenerationAccumulator
 
     fake = FakeContext(PLAIN, gen_tokens=5, gen_text="abcde")
     acc = GenerationAccumulator()
@@ -250,7 +250,7 @@ def test_a_long_decode_after_a_reply_gives_way_to_an_action_that_waits(settles_i
     decode, parts, started = fake.prefill, [], threading.Event()
 
     def watched(token_ids, start_pos, want_logits):
-        if threading.current_thread().name == "llama_chat after a reply":
+        if threading.current_thread().name == "llama_cpp_conversation after a reply":
             parts.append(len(token_ids))
             if len(parts) == 1:
                 started.set()
@@ -280,7 +280,7 @@ def test_a_failure_of_the_work_after_a_reply_is_logged_and_the_next_action_decod
         decode(token_ids, start_pos, want_logits)
 
     fake.prefill = failing
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         assert w.reply("Wie geht es?").finish().text == "Gut."
         assert w.wait_idle(timeout_s=5)
     assert any("after a reply failed" in r.getMessage() for r in caplog.records)
@@ -295,7 +295,7 @@ def test_the_work_after_a_reply_is_waited_for_when_the_process_ends(settles_in_t
     fake.holds = True
     w.reply("Wie geht es?").finish()
     assert fake.waiting.wait(timeout=5)
-    working = [t for t in threading.enumerate() if t.name == "llama_chat after a reply"]
+    working = [t for t in threading.enumerate() if t.name == "llama_cpp_conversation after a reply"]
     assert working and not any(t.daemon for t in working)
     fake.go.set()
     assert w.wait_idle(timeout_s=5)
@@ -303,7 +303,7 @@ def test_the_work_after_a_reply_is_waited_for_when_the_process_ends(settles_in_t
 
 def test_the_work_after_a_reply_is_left_to_the_next_action_where_the_wrapper_stays_held(
         monkeypatch):
-    from llama_chat import wrapper as module
+    from llama_cpp_conversation import wrapper as module
     monkeypatch.setattr(module, "_AFTER_REPLY_WAIT_S", 0.05)
     fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.")
     w = ChatWrapper(Config(context_size=500, evict_above_fraction=1.0), context=fake)
@@ -334,7 +334,7 @@ def test_an_action_that_interrupts_the_work_after_a_reply_decodes_no_more_than_w
         decode, parts, started = fake.prefill, [], threading.Event()
 
         def watched(token_ids, start_pos, want_logits):
-            if interrupts and threading.current_thread().name == "llama_chat after a reply":
+            if interrupts and threading.current_thread().name == "llama_cpp_conversation after a reply":
                 parts.append(len(token_ids))
                 if len(parts) == 1:
                     started.set()
@@ -408,9 +408,9 @@ def test_a_call_handed_to_the_reader_is_a_copy_whose_change_the_tool_never_sees(
 def test_a_stream_left_half_read_as_the_program_ends_prints_no_error():
     import subprocess
     import sys
-    script = ("from llama_chat import ChatWrapper, Config\n"
-              "from llama_chat.testing.fake_context import FakeContext\n"
-              "from llama_chat.testing.invented_templates import PLAIN\n"
+    script = ("from llama_cpp_conversation import ChatWrapper, Config\n"
+              "from llama_cpp_conversation.testing.fake_context import FakeContext\n"
+              "from llama_cpp_conversation.testing.invented_templates import PLAIN\n"
               "w = ChatWrapper(Config(context_size=2000), context=FakeContext(PLAIN, gen_tokens=20))\n"
               "w.begin([{'role': 'system', 'content': 's'}])\n"
               "stream = w.reply('eins')\n"
@@ -425,6 +425,6 @@ def test_a_failure_of_the_watch_on_a_reply_nobody_reads_is_logged(monkeypatch, c
     def failing():
         raise RuntimeError("the watch failed")
     monkeypatch.setattr(w, "_end_unread_reply_now", failing)
-    with caplog.at_level("ERROR", logger="llama_chat"):
+    with caplog.at_level("ERROR", logger="llama_cpp_conversation"):
         w._end_unread_reply()
     assert "ending a reply nobody read failed" in caplog.text

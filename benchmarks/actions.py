@@ -18,9 +18,9 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from llama_chat import ChatWrapper, Config, ToolRegistry
-from llama_chat import context as context_module
-from llama_chat import model_template
+from llama_cpp_conversation import ChatWrapper, Config, ToolRegistry
+from llama_cpp_conversation import context as context_module
+from llama_cpp_conversation import model_template
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("model_path")

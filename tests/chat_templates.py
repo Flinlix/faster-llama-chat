@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from llama_chat.tools import ToolSpec
+from llama_cpp_conversation.tools import ToolSpec
 
 
 _TEMPLATES = Path(__file__).parent / "templates"

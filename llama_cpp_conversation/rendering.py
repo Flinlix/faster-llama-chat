@@ -26,7 +26,7 @@ _ANSWER_MARK = "QQANSWERMARKQQ"
 
 @dataclass(frozen=True, eq=False)
 class GeneratedTurn:
-    """A turn held as the tokens it was generated as, in place of the template's version of it; the message it ends with holds it under :data:`~llama_chat.messages.GENERATED_TURN`."""
+    """A turn held as the tokens it was generated as, in place of the template's version of it; the message it ends with holds it under :data:`~llama_cpp_conversation.messages.GENERATED_TURN`."""
 
     tokens: tuple[int, ...]
     span: int                             # how many messages it covers, the one holding it the last

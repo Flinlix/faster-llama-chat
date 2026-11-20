@@ -18,9 +18,9 @@ import re
 import sys
 from collections.abc import Iterable
 
-from llama_chat.addon_files import addon_file
-from llama_chat.cache_context import TOOL_USE_TEMPLATE
-from llama_chat.model_template import ModelTemplate
+from llama_cpp_conversation.addon_files import addon_file
+from llama_cpp_conversation.cache_context import TOOL_USE_TEMPLATE
+from llama_cpp_conversation.model_template import ModelTemplate
 
 
 

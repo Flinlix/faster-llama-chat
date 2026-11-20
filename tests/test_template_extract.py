@@ -13,18 +13,18 @@ from pathlib import Path
 
 import pytest
 
-import llama_chat
-from llama_chat.call_format import extract_call_body, extract_tool_fragments, extract_call_close_text, extract_json_call_id_key, extract_named_twice_opening
-from llama_chat.model_template import ModelTemplate, names_read
-from llama_chat.tokenizing import tag_texts
-from llama_chat.template import CallBody
-from llama_chat.template_extract import (as_probes_read, extract_content_rewrites,
+import llama_cpp_conversation
+from llama_cpp_conversation.call_format import extract_call_body, extract_tool_fragments, extract_call_close_text, extract_json_call_id_key, extract_named_twice_opening
+from llama_cpp_conversation.model_template import ModelTemplate, names_read
+from llama_cpp_conversation.tokenizing import tag_texts
+from llama_cpp_conversation.template import CallBody
+from llama_cpp_conversation.template_extract import (as_probes_read, extract_content_rewrites,
                                          extract_fragments, reasoning_switch, extract_reasoning, extract_removed_thought)
 
 from .chat_templates import STEMS, expected, fixture
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import TAGS as INVENTED_TAGS
-from llama_chat.messages import call_id
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import TAGS as INVENTED_TAGS
+from llama_cpp_conversation.messages import call_id
 
 
 def _tool_fragments(render, tags=INVENTED_TAGS):
@@ -486,7 +486,7 @@ _SENTINEL = re.compile(r"[A-Z][A-Z0-9]{3,}")
 def _sentinels() -> dict[str, str]:
     """Every sentinel the library defines, by the module and name it is defined under."""
     found = {}
-    for path in sorted(Path(llama_chat.__file__).parent.glob("*.py")):
+    for path in sorted(Path(llama_cpp_conversation.__file__).parent.glob("*.py")):
         for node in ast.parse(path.read_text()).body:
             if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
                     and isinstance(node.value.value, str) and _SENTINEL.fullmatch(node.value.value):
@@ -512,26 +512,26 @@ def test_no_render_sentinel_contains_another():
 
 
 def test_a_user_tag_after_a_past_replys_own_closing_is_found_by_the_models_tags_of_any_shape():
-    from llama_chat.template_extract import _longest_shared_end
+    from llama_cpp_conversation.template_extract import _longest_shared_end
     tags = ("{{user}}", "{{bos}}")
     assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", tags) == "{{user}}"
     assert _longest_shared_end("</a>{{user}}", "{{bos}}{{user}}", ()) == ""
 
 
 def test_a_shared_beginning_ends_where_one_of_the_models_tags_ends_whatever_its_shape():
-    from llama_chat.template import shared_tags_length
+    from llama_cpp_conversation.template import shared_tags_length
     assert shared_tags_length("«turn»model", "«turn»user", ("«turn»",)) == len("«turn»")
     assert shared_tags_length("«turn»model", "«turn»user", ()) == 0
     assert shared_tags_length("say model", "say user", ()) == len("say ")
 
 
 def test_a_shared_beginning_never_ends_inside_a_tag_that_a_shorter_tag_begins():
-    from llama_chat.template import shared_tags_length
+    from llama_cpp_conversation.template import shared_tags_length
     assert shared_tags_length("<a><ab>x", "<a><ac>y", ("<a", "<ab>", "<ac>")) == 2
 
 
 def test_an_empty_tag_text_is_no_tag():
-    from llama_chat.tokenizing import tag_texts
+    from llama_cpp_conversation.tokenizing import tag_texts
 
     class _Reader:
         def special_tokens(self):
@@ -559,7 +559,7 @@ def test_what_a_template_writes_once_after_the_last_message_is_read_by_tags_of_a
 def test_a_call_id_is_read_between_the_name_and_the_arguments_and_refused_elsewhere(where, readable):
     """Rule 2: an id the template writes where it cannot be told from the text around it leaves no call format, rather than one that misreads every call."""
     import jinja2
-    from llama_chat.call_format import holds_the_probe_id
+    from llama_cpp_conversation.call_format import holds_the_probe_id
     after = "#{{c.id}}" if not readable else ""
     template = jinja2.Environment().from_string(
         "{%- for m in messages -%}<{{m.role}}>{{m.content}}{%- for c in m.tool_calls or [] -%}"
@@ -797,7 +797,7 @@ def test_a_json_call_holds_its_id_under_a_key_only_where_the_template_writes_the
 
 @pytest.mark.parametrize("tags", [("aa",), ("ab", "b"), ("a", "ab"), ("aba",), ("a", "aa", "aab")])
 def test_a_shared_beginning_is_the_longest_that_ends_a_tag_without_cutting_another(tags):
-    from llama_chat.template import shared_tags_length
+    from llama_cpp_conversation.template import shared_tags_length
 
     def ends_cleanly(text, at):
         if not text[:at].endswith(tags):

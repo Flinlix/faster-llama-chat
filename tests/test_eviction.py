@@ -5,18 +5,18 @@ import math
 import random
 import pytest
 
-from llama_chat.config import Config
-from llama_chat import ChatWrapper, ContextOverflowError
-from llama_chat.messages import QUESTION_CUT_MARK
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation import ChatWrapper, ContextOverflowError
+from llama_cpp_conversation.messages import QUESTION_CUT_MARK
 from tests.chat_messages import opened, after_system
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN, TOOLS
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import assert_consistent, held_text, rows
-from llama_chat.conversation_state import ConversationState
-from llama_chat.eviction import Eviction, EVICT_TO_FRACTION_WITHOUT_SHIFT
-from llama_chat.tools import ToolCall
+from llama_cpp_conversation.conversation_state import ConversationState
+from llama_cpp_conversation.eviction import Eviction, EVICT_TO_FRACTION_WITHOUT_SHIFT
+from llama_cpp_conversation.tools import ToolCall
 from tests import internals
-from llama_chat.cache_sync import CacheSync
+from llama_cpp_conversation.cache_sync import CacheSync
 
 
 def _n_kept(wrapper):
@@ -155,7 +155,7 @@ def test_eviction_shift_mode_does_not_rebuild():
 
 
 def test_a_dropped_stretch_is_found_among_token_ids_up_to_the_bound_the_readme_names():
-    from llama_chat.cache_sync import CacheSync
+    from llama_cpp_conversation.cache_sync import CacheSync
     fake = FakeContext(PLAIN)
     memory = CacheSync(fake)
     low, high = -0x10000, 0xFFFFF                   # -65,536 and 1,048,575
@@ -209,7 +209,7 @@ def test_a_question_longer_than_the_room_keeps_its_end_and_is_answered(asks, cap
                     context=fake)
     w.begin(opened("s", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]))
     question = "Anfang " + "x" * 2000 + " und die eigentliche Frage?"
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         if asks == "reply":
             assert w.reply(question).finish().text
         else:
@@ -295,8 +295,8 @@ def test_a_reply_over_the_threshold_alone_stays_until_the_next_question_so_it_ca
 @pytest.mark.parametrize("can_shift", [True, False], ids=["shifts", "cannot shift"])
 def test_the_search_for_how_many_exchanges_to_drop_measures_a_few_times(can_shift):
     """Each guess is placed by how far over the limit the last measure was, so 300 exchanges take a few measures, not one per halving."""
-    from llama_chat import eviction
-    from llama_chat.testing.invented_templates import NUMBERED
+    from llama_cpp_conversation import eviction
+    from llama_cpp_conversation.testing.invented_templates import NUMBERED
     measures = []
     search = eviction.Eviction._drop_oldest_exchanges
 
@@ -552,8 +552,8 @@ def test_the_search_for_how_many_exchanges_to_drop_takes_no_more_than_twice_the_
 def test_beside_an_open_turn_an_eviction_brings_the_conversation_down_to_what_its_docstring_names():
     """Where the cache cannot shift, the bound is the room under ``limit`` after a short question, or after the open turn where that alone takes more, both measured with the generation prompt the next reply reads."""
     from types import SimpleNamespace
-    from llama_chat.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
-    from llama_chat.messages import QUESTION_CUT_MARK
+    from llama_cpp_conversation.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
+    from llama_cpp_conversation.messages import QUESTION_CUT_MARK
 
     def stub_length(messages, generation_prompt):
         return sum(len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or ""))
@@ -582,8 +582,8 @@ def test_beside_an_open_turn_an_eviction_brings_the_conversation_down_to_what_it
 
 
 def test_a_target_that_drops_a_stretch_of_the_cache_decodes_only_what_its_longest_kept_run_leaves():
-    from llama_chat.cache_sync import CacheSync
-    from llama_chat.sequences import common_prefix_length
+    from llama_cpp_conversation.cache_sync import CacheSync
+    from llama_cpp_conversation.sequences import common_prefix_length
     draw = random.Random(0)
     for _ in range(1000):
         # Runs and repeated pieces, so that the stretch kept can be found at several places.
@@ -748,7 +748,7 @@ def test_the_history_kept_at_a_begin_is_the_same_whatever_count_the_search_start
 
 def test_a_template_that_writes_the_rest_otherwise_only_around_tool_turns_keeps_it_where_none_is_held():
     from tests.chat_templates import STEMS, fixture
-    from llama_chat.render_checks import rest_stays_after_a_drop, tool_exchanges
+    from llama_cpp_conversation.render_checks import rest_stays_after_a_drop, tool_exchanges
     for stem in sorted(STEMS):
         fake = FakeContext(fixture(stem))
         w = ChatWrapper(Config(), context=fake)

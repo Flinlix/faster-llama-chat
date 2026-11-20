@@ -72,7 +72,7 @@ def _most_kept(fits: Callable[[int], bool], total: int, guess: int | None = None
 
 
 class ResultCutting:
-    """Writes results into the conversation state it was made with, measured with ``measure``, which counts the tokens of messages as :meth:`~llama_chat.rendering.ConversationRendering.length` does."""
+    """Writes results into the conversation state it was made with, measured with ``measure``, which counts the tokens of messages as :meth:`~llama_cpp_conversation.rendering.ConversationRendering.length` does."""
 
     def __init__(self, measure: Callable[[list[dict], bool], int], state: ConversationState,
                  text_within: Callable[[str, int], int]) -> None:

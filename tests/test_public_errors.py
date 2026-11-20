@@ -10,17 +10,17 @@ import time
 
 import pytest
 
-from llama_chat import (ChatWrapper, Config, ContextOverflowError, InternalError, ToolRegistry,
+from llama_cpp_conversation import (ChatWrapper, Config, ContextOverflowError, InternalError, ToolRegistry,
                         ToolSpec)
-from llama_chat.errors import (LIBRARY_ERRORS, ArgumentTypeError, InvalidArgumentError,
+from llama_cpp_conversation.errors import (LIBRARY_ERRORS, ArgumentTypeError, InvalidArgumentError,
                                InvalidSettingError, OutOfOrderError, UnsupportedError,
                                raising_library_errors_only)
-from llama_chat.rendered_cache import RenderedCache
+from llama_cpp_conversation.rendered_cache import RenderedCache
 from tests.chat_messages import after_system, opened
-from llama_chat.testing.fake_context import FakeContext, ScriptedCall
-from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
+from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import assert_cache_reads_as_rendered, tool_wrapper, weather_registry, begun_wrapper
-from llama_chat.reply import ReplyStream
+from llama_cpp_conversation.reply import ReplyStream
 from tests import internals
 
 _LONE = "a\ud800b"
@@ -58,7 +58,7 @@ def test_a_fault_while_a_reply_streams_is_an_internal_error_and_the_next_questio
     """The reply keeps what it had produced, as any failed reply does (rule 6)."""
     wrapper, fake = tool_wrapper()
     wrapper.begin(opened("s"))
-    monkeypatch.setattr("llama_chat.rendered_cache.ReplyText.feed",
+    monkeypatch.setattr("llama_cpp_conversation.rendered_cache.ReplyText.feed",
                         lambda *_args: 1 / 0)
     with pytest.raises(InternalError, match="ZeroDivisionError"):
         wrapper.reply("eins").finish()

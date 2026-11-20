@@ -13,16 +13,17 @@ or levels the renders cannot tell apart. A second way to state them in code
 
 - A model's add-on file is the JSON file next to the GGUF with the model's
   name, where its `templates` list names this model's template fingerprint;
-  otherwise the file shipped in `llama_chat/addons/` whose `templates` names
-  it. Fingerprints are 64-digit lowercase hex. No two shipped files may name
-  one template.
+  otherwise the file shipped in `llama_cpp_conversation/addons/` whose
+  `templates` names it. Fingerprints are 64-digit lowercase hex. No two shipped
+  files may name one template.
 - A file next to the GGUF that is not JSON is refused at load, naming it. One
   that is JSON but no add-on file, or names another template, is not used: the
-  shipped file applies, and a warning on `llama_chat.addon_files` names the
-  file and the reason. A file that names the template is checked whole and
-  refused where malformed: every value is type-checked by the code that checks
-  `Config`, a null sampling value is refused, `call` must be an object with
-  every field, each `reasoning_on` value text, a number or a boolean.
+  shipped file applies, and a warning on `llama_cpp_conversation.addon_files`
+  names the file and the reason. A file that names the template is checked
+  whole and refused where malformed: every value is type-checked by the code
+  that checks `Config`, a null sampling value is refused, `call` must be an
+  object with every field, each `reasoning_on` value text, a number or a
+  boolean.
 - A file fills in only what the template cannot tell, except a call format it
   names, which wins over the template's, tag-marked templates included; its
   closing is still checked against the template.

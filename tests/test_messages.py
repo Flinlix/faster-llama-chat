@@ -5,13 +5,13 @@ import logging
 
 import pytest
 
-from llama_chat.history_forms import (answer_in_order, completions_messages, read_messages,
+from llama_cpp_conversation.history_forms import (answer_in_order, completions_messages, read_messages,
                                       without_unreadable)
-from llama_chat.messages import (UNREADABLE_CALL, call_id, exchange_count, exchange_starts,
+from llama_cpp_conversation.messages import (UNREADABLE_CALL, call_id, exchange_count, exchange_starts,
                                  history_count, next_call_number)
-from llama_chat.tools import ToolCall
+from llama_cpp_conversation.tools import ToolCall
 from tests.chat_messages import Result, opened, tool_turn
-from llama_chat.errors import InvalidArgumentError, ArgumentTypeError
+from llama_cpp_conversation.errors import InvalidArgumentError, ArgumentTypeError
 from tests.wrappers import tool_wrapper
 
 
@@ -223,7 +223,7 @@ def test_a_call_left_out_shares_no_id_with_one_kept():
 
 
 def test_a_call_name_of_the_wrong_type_is_refused_naming_where_it_stands():
-    from llama_chat.errors import ArgumentTypeError
+    from llama_cpp_conversation.errors import ArgumentTypeError
     from tests.wrappers import tool_wrapper
     wrapper, _ = tool_wrapper()
     called = {"type": "function", "id": "c1", "function": {"name": 5, "arguments": "{}"}}
@@ -280,9 +280,9 @@ def test_a_call_field_of_the_wrong_type_is_refused_naming_the_type_it_was_given(
 
 @pytest.mark.parametrize("function", [{"name": "f", "arguments": "{"}, {"name": "", "arguments": "{}"}])
 def test_a_call_that_could_not_be_read_is_said_once_at_info(function, caplog):
-    with caplog.at_level(logging.INFO, logger="llama_chat"):
+    with caplog.at_level(logging.INFO, logger="llama_cpp_conversation"):
         read_messages(_calling({"id": "c", "type": "function", "function": function}))
-    said = [r for r in caplog.records if r.name == "llama_chat.history_forms"]
+    said = [r for r in caplog.records if r.name == "llama_cpp_conversation.history_forms"]
     assert len(said) == 1 and said[0].levelno == logging.INFO
     assert "could not be read" in said[0].getMessage()
 

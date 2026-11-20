@@ -7,9 +7,9 @@ change that keeps the behaviour changes this module alone.
 import dataclasses
 import sys
 
-from llama_chat.cache_sync import _TOKEN_OFFSET
-from llama_chat import rendering
-from llama_chat.template_reading import TemplateReader
+from llama_cpp_conversation.cache_sync import _TOKEN_OFFSET
+from llama_cpp_conversation import rendering
+from llama_cpp_conversation.template_reading import TemplateReader
 
 
 def token_id_range() -> range:
@@ -174,5 +174,5 @@ def joins_questions(wrapper) -> bool:
 
 def unreadable_result_text(wrapper) -> str:
     """The text a call that could not be read is answered with now."""
-    from llama_chat.tools import result_text
+    from llama_cpp_conversation.tools import result_text
     return result_text(wrapper._conversation._state.unreadable_result)

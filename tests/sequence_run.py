@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import json
 
-from llama_chat import (ChatWrapper, Config, ContextOverflowError, OutOfOrderError,
+from llama_cpp_conversation import (ChatWrapper, Config, ContextOverflowError, OutOfOrderError,
                         TemplateRefusedError, ToolRegistry, ToolSpec, UnsupportedError)
-from llama_chat.errors import LIBRARY_ERRORS, EngineError, InternalError, InvalidArgumentError
+from llama_cpp_conversation.errors import LIBRARY_ERRORS, EngineError, InternalError, InvalidArgumentError
 from tests import internals
-from llama_chat.testing import invented_templates as invented
+from llama_cpp_conversation.testing import invented_templates as invented
 from tests.chat_templates import STEMS, fixture
-from llama_chat.testing.fake_context import FakeContext, ScriptedCall, shipped_addon_call, written_call
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall, shipped_addon_call, written_call
 from tests.test_failures import _Flaky
 from tests.wrappers import assert_cache_reads_as_rendered, assert_conversation_is_its_forms
 

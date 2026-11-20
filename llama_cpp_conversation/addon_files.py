@@ -151,7 +151,7 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
 
     Args:
         recommended: The sampling the model states for itself, as
-            :meth:`~llama_chat.cache_context.ModelReader.recommended_sampling` gives it.
+            :meth:`~llama_cpp_conversation.cache_context.ModelReader.recommended_sampling` gives it.
         addon: The model's add-on file, as :func:`addon_file` reads it.
 
     Raises:

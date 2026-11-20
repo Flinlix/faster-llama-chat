@@ -2,7 +2,7 @@
 
 The conversation is kept as the messages a chat template is given, and the
 cache as the template's render of them, decoded only where it differs from
-what the cache holds. See :mod:`llama_chat.rendered_cache` and
+what the cache holds. See :mod:`llama_cpp_conversation.rendered_cache` and
 docs/decisions/0001-the-cache-holds-the-templates-render.md.
 """
 
@@ -42,7 +42,7 @@ class ChatWrapper:
     """Stateful single-conversation chat over a cache context, with KV reuse.
 
     Once built, every public action raises only the library's own errors
-    (:data:`~llama_chat.errors.LIBRARY_ERRORS`), each naming the argument and
+    (:data:`~llama_cpp_conversation.errors.LIBRARY_ERRORS`), each naming the argument and
     the cause; a refused action changes nothing, and a failed reply keeps only
     what it had produced.
     """
@@ -61,7 +61,7 @@ class ChatWrapper:
         same way for a context of your own as for one this loads.
 
         Args:
-            config: The configuration; :class:`~llama_chat.config.Config`'s
+            config: The configuration; :class:`~llama_cpp_conversation.config.Config`'s
                 defaults where it is not given.
             context (CacheContext | None): A cache context of your own, in place of the one built
                 from ``config``. :meth:`close` closes it too; only a
@@ -199,7 +199,7 @@ class ChatWrapper:
                 newest exchange may take the room a reply leaves, its results
                 cut to fit as :meth:`inject_tool_result` cuts one. Older ones
                 are dropped unrendered.
-            tools: Tools to declare, a list of :class:`~llama_chat.tools.ToolSpec`
+            tools: Tools to declare, a list of :class:`~llama_cpp_conversation.tools.ToolSpec`
                 such as ``registry.specs()`` gives, written
                 where this model's template declares them; nothing else of
                 them is kept. Refused up front
@@ -233,7 +233,7 @@ class ChatWrapper:
             after the system message it kept and why it left the others out,
             the calls it left out, the results it cut, and the generated
             turns it restored. Each such change is also logged once, at
-            ``INFO``, under the logger ``llama_chat``.
+            ``INFO``, under the logger ``llama_cpp_conversation``.
 
         Raises:
             ContextOverflowError: If the system prompt and its declarations
@@ -425,7 +425,7 @@ class ChatWrapper:
                   call from the text after it where they would join without
                   whitespace.
                 * ``"yield"``: each call is handed over as a
-                  :class:`~llama_chat.tools.ToolCall` after the text, and the
+                  :class:`~llama_cpp_conversation.tools.ToolCall` after the text, and the
                   turn stays open. Answer each with :meth:`inject_tool_result`,
                   in order, then call this again without ``text``; that reply
                   is parted from the text before the call as under
@@ -433,7 +433,7 @@ class ChatWrapper:
                   failure and the reply goes on; the model may write another
                   call as long as there is room, and after three such calls
                   in a row it is told not to call again.
-                * A :class:`~llama_chat.tool_registry.ToolRegistry`: each call is run
+                * A :class:`~llama_cpp_conversation.tool_registry.ToolRegistry`: each call is run
                   against it, its result written, and the reply goes on until
                   the model answers. Each call that runs is handed over in the
                   stream just before it runs. In the last permitted round the
@@ -479,7 +479,7 @@ class ChatWrapper:
         fit beside the system prompt, replaced by it, the unanswered one
         counted as evicted. A question too long for the room the system prompt
         leaves under the eviction threshold keeps as much of its end as fits,
-        possibly none of it, :data:`~llama_chat.messages.QUESTION_CUT_MARK`
+        possibly none of it, :data:`~llama_cpp_conversation.messages.QUESTION_CUT_MARK`
         in place of its beginning, and a warning is logged. It is refused only
         where the template does not write that question as its text, such as
         an empty one on some templates, which leaves the next question free.
@@ -494,7 +494,7 @@ class ChatWrapper:
                 begin has replaced the conversation it was asked of since, or a
                 tool the reply that holds the wrapper runs asked for it.
             InvalidArgumentError: At once, if ``tool_call_policy`` is a text
-                that is none of :data:`~llama_chat.reply.TOOL_CALL_POLICIES`,
+                that is none of :data:`~llama_cpp_conversation.reply.TOOL_CALL_POLICIES`,
                 or ``max_calls`` is given without a registry; at the first
                 iteration, if ``max_calls`` is given and the turn the reply
                 goes on with by then runs no call.
@@ -508,7 +508,7 @@ class ChatWrapper:
                 ``tool_call_policy`` is neither a text nor a registry,
                 ``stop`` is neither a ``str`` nor an iterable of ``str``,
                 ``cancel`` has no ``is_set``, or ``sampling`` is neither
-                ``None`` nor a :class:`~llama_chat.config.Sampling`.
+                ``None`` nor a :class:`~llama_cpp_conversation.config.Sampling`.
             InvalidSettingError: At once, if ``max_reply_tokens`` or
                 ``max_thought_tokens`` is no whole number of at least 1, or
                 ``max_calls`` no whole number of at least 0, as their config
@@ -607,7 +607,7 @@ class ChatWrapper:
         if self._conversation.settle_due:
             # Not a daemon: a process that ends right after a reply waits for it, rather than
             # tearing the model down under its decode.
-            settling = threading.Thread(target=self._settle_when_free, name="llama_chat after a reply")
+            settling = threading.Thread(target=self._settle_when_free, name="llama_cpp_conversation after a reply")
             try:
                 settling.start()
             except RuntimeError:
@@ -945,7 +945,7 @@ class ChatWrapper:
         and from a tool that reply runs, is refused as any action is, changing
         nothing. A reply asked for and not yet read raises once it is read.
         Closes a context passed to the constructor as well. Every action after
-        close raises :class:`~llama_chat.errors.OutOfOrderError` once its
+        close raises :class:`~llama_cpp_conversation.errors.OutOfOrderError` once its
         arguments are checked;
         :meth:`conversation` and the properties that say where it stands still
         answer.

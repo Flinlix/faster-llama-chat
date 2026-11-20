@@ -3,11 +3,11 @@
 import re
 import pytest
 
-from llama_chat import ChatWrapper, Config, InternalError
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_cpp_conversation import ChatWrapper, Config, InternalError
+from llama_cpp_conversation.tools import ToolCall, ToolSpec
 from tests.chat_messages import tool_turn, opened, after_system
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN, TOOLS, REASONING
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN, TOOLS, REASONING
 from tests.internals import held_tokens, leave_cache_behind, overwrite_held_tokens, generated_turns_held
 from tests.wrappers import (assert_cache_reads_as_rendered, begun_wrapper, reasoning_wrapper,
                             tool_wrapper, ask_through_a_tool_call, THOUGHTFUL)
@@ -189,7 +189,7 @@ def test_a_cache_missing_an_exchange_after_a_generated_turn_is_caught_where_repl
 @pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
                                    dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
 def test_check_cache_stops_a_reply_the_cache_no_longer_holds_the_render_for(cache):
-    from llama_chat import InternalError
+    from llama_cpp_conversation import InternalError
     fake = FakeContext(PLAIN, replies=["Gut.", "Ja.", "Auch."], **cache)
     wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
     wrapper.begin(opened("s"))
@@ -231,7 +231,7 @@ def test_check_cache_logs_a_fault_it_finds_after_a_reply(caplog):
         memory._tokens[at] = fake.cache[at] = memory.tokens[at - 1]
         return held
     memory.hold = holding_one_token_wrong
-    with caplog.at_level("ERROR", logger="llama_chat"):
+    with caplog.at_level("ERROR", logger="llama_cpp_conversation"):
         wrapper.reply("Wie geht es?").finish()
     assert any("check_cache" in r.getMessage() for r in caplog.records)
     wrapper.close()                             # its cache holds the wrong token on purpose
@@ -415,7 +415,7 @@ def test_check_cache_names_a_fault_after_a_reply_as_found_there_and_shows_both_s
         memory._tokens[at] = fake.cache[at] = memory.tokens[at - 1]
         return held
     memory.hold = holding_one_token_wrong
-    with caplog.at_level("ERROR", logger="llama_chat"):
+    with caplog.at_level("ERROR", logger="llama_cpp_conversation"):
         wrapper.reply("Wie geht es?").finish()
         assert wrapper.wait_idle(timeout_s=5)
     faults = [r.getMessage() for r in caplog.records if r.getMessage().startswith("check_cache: ")]

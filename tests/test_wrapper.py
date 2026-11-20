@@ -10,7 +10,7 @@ import ast
 import re
 import time
 import types
-import llama_chat.reply
+import llama_cpp_conversation.reply
 import dataclasses
 import functools
 import json
@@ -19,21 +19,21 @@ import typing
 
 import pytest
 
-from llama_chat.errors import ArgumentTypeError, OutOfOrderError, TemplateRefusedError
+from llama_cpp_conversation.errors import ArgumentTypeError, OutOfOrderError, TemplateRefusedError
 
-from llama_chat.config import Config, Sampling, generation_sampling
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec, MAX_ARGUMENT_DEPTH
-from llama_chat import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
+from llama_cpp_conversation.config import Config, Sampling, generation_sampling
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec, MAX_ARGUMENT_DEPTH
+from llama_cpp_conversation import (TOOL_CALL_POLICIES, ChatWrapper, ContextOverflowError,
                         InvalidArgumentError, InvalidSettingError, ToolCallPolicy, UnsupportedError)
-from llama_chat.addon_files import SHIPPED_ADDONS, template_fingerprint
+from llama_cpp_conversation.addon_files import SHIPPED_ADDONS, template_fingerprint
 from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
-from llama_chat.testing.fake_context import BOS, FakeContext
+from llama_cpp_conversation.testing.fake_context import BOS, FakeContext
 from tests.internals import read_fragments_as
-from llama_chat.testing import invented_templates
-from llama_chat.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
+from llama_cpp_conversation.testing import invented_templates
+from llama_cpp_conversation.testing.invented_templates import (JOINS_USER_TURNS, JSON_TOOLS, PLAIN, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT, TOOLS)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent,
                             begun_wrapper, tool_wrapper, rows, weather_registry, with_check_first)
@@ -423,9 +423,9 @@ def test_the_config_cannot_be_changed_once_a_wrapper_runs_with_it():
 
 def test_the_package_exports_the_one_protocol_a_wrapper_takes():
     """The model reader is a part of the cache context, which no wrapper takes alone."""
-    import llama_chat
-    assert "CacheContext" in llama_chat.__all__
-    assert "ModelReader" not in llama_chat.__all__ and not hasattr(llama_chat, "ModelReader")
+    import llama_cpp_conversation
+    assert "CacheContext" in llama_cpp_conversation.__all__
+    assert "ModelReader" not in llama_cpp_conversation.__all__ and not hasattr(llama_cpp_conversation, "ModelReader")
 
 
 @pytest.mark.parametrize("timeout_s", [-1, -5, -0.5])
@@ -441,7 +441,7 @@ def test_a_negative_wait_is_refused_naming_its_setting(timeout_s):
 
 def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on():
     """An implementer reads the protocol, not the stand-in."""
-    from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
+    from llama_cpp_conversation.cache_context import CACHE_CONTEXT, CacheContext
     def member(name):
         return getattr(CacheContext, name)
     undocumented = [name for name in CACHE_CONTEXT
@@ -454,16 +454,16 @@ def test_the_documentation_imports_only_exported_names_and_names_every_one():
     """Every name the README and the guides tell a caller to take from the package is exported, and every export is told of."""
     import re
     from pathlib import Path
-    import llama_chat
-    root = Path(llama_chat.__file__).parents[1]
+    import llama_cpp_conversation
+    root = Path(llama_cpp_conversation.__file__).parents[1]
     readme = "\n".join(path.read_text(encoding="utf-8") for path in
                        [root / "README.md", *sorted((root / "docs" / "guide").glob("*.md"))])
-    told = set(re.findall(r"`(\w+)`,? from `(llama_chat[\w.]*)`", readme))
-    for module, imported in re.findall(r"from (llama_chat[\w.]*) import ([\w, ]+)", readme):
+    told = set(re.findall(r"`(\w+)`,? from `(llama_cpp_conversation[\w.]*)`", readme))
+    for module, imported in re.findall(r"from (llama_cpp_conversation[\w.]*) import ([\w, ]+)", readme):
         told |= {(name.strip(), module) for name in imported.split(",")}
-    assert told and all(module == "llama_chat" and name in llama_chat.__all__
+    assert told and all(module == "llama_cpp_conversation" and name in llama_cpp_conversation.__all__
                         for name, module in told)
-    assert [name for name in llama_chat.__all__ if f"`{name}" not in readme] == []
+    assert [name for name in llama_cpp_conversation.__all__ if f"`{name}" not in readme] == []
 
 
 def test_begin_rejects_system_prompt_over_threshold():
@@ -485,12 +485,12 @@ def test_a_construction_that_fails_after_the_model_loaded_frees_it(monkeypatch, 
     loaded = FakeContext(PLAIN)
     loaded.close = lambda: closed.append(True)
     pytest.importorskip("llama_cpp", reason="the engine is not installed")
-    monkeypatch.setattr("llama_chat.context.KVContext", lambda config, on_load_progress: loaded)
+    monkeypatch.setattr("llama_cpp_conversation.context.KVContext", lambda config, on_load_progress: loaded)
 
     def refuse(*args, **kwargs):
         raise MemoryError("failed part-way")
 
-    monkeypatch.setattr(f"llama_chat.wrapper.{failing}", refuse)
+    monkeypatch.setattr(f"llama_cpp_conversation.wrapper.{failing}", refuse)
     with pytest.raises(MemoryError):
         ChatWrapper(Config(model_path=str(tmp_path / "model.gguf"), context_size=500))
     assert closed == [True]
@@ -627,7 +627,7 @@ def test_every_generation_is_handed_every_sampling_value():
 
 
 def test_what_the_model_can_do_is_answered_per_kind_of_conversation_and_never_changes():
-    from llama_chat.testing.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
+    from llama_cpp_conversation.testing.invented_templates import REASONING, TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN
 
     # The template for tools can reason, the default template cannot.
     fake = FakeContext({**TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN,
@@ -760,8 +760,8 @@ def test_a_template_that_refuses_two_user_turns_keeps_a_reply_without_an_answer(
 def test_a_reply_that_produced_nothing_the_template_cannot_write_takes_its_question_back(
         stem, nothing):
     """These templates write no empty reply, so the request is taken back whole and the next question is answered; a later round cancelled before its first word leaves its turn open."""
-    from llama_chat.resolved_template import ResolvedTemplate
-    from llama_chat.testing.fake_context import ScriptedCall, written_call
+    from llama_cpp_conversation.resolved_template import ResolvedTemplate
+    from llama_cpp_conversation.testing.fake_context import ScriptedCall, written_call
     fake = FakeContext(fixture(stem), gen_tokens=7, gen_text="Antwort")
     w = ChatWrapper(Config(context_size=8192, evict_above_fraction=1.0, **UNGUARDED), context=fake)
     cancel, options = threading.Event(), {}
@@ -882,7 +882,7 @@ def test_config_holds_the_sampling_the_model_supplies_whoever_built_the_context(
             self.recommended = {"temperature": 0.6, "top_p": 0.9}
 
     pytest.importorskip("llama_cpp", reason="the engine is not installed")
-    monkeypatch.setattr("llama_chat.context.KVContext", _Loaded)
+    monkeypatch.setattr("llama_cpp_conversation.context.KVContext", _Loaded)
     loaded = ChatWrapper(given).config
     own = ChatWrapper(given, context=_Loaded(given)).config
     assert loaded == own
@@ -1019,7 +1019,7 @@ def test_begin_says_how_many_history_messages_it_left_out_and_why(caplog):
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=400), context=fake)
     history = [{"role": "user", "content": "q" * 60}, {"role": "assistant", "content": "a" * 60}] * 4
-    with caplog.at_level("INFO", logger="llama_chat"):
+    with caplog.at_level("INFO", logger="llama_cpp_conversation"):
         report = w.begin(opened("s", history))
     assert report.n_kept_messages < len(history) and report.evicted_for == "half_context"
     assert report.n_evicted_messages == len(history) - report.n_kept_messages
@@ -1027,14 +1027,14 @@ def test_begin_says_how_many_history_messages_it_left_out_and_why(caplog):
     assert said == (f"the {report.n_evicted_messages} oldest history message(s) went so that "
                     "half of the 400-token context stays free at a begin")
     caplog.clear()
-    with caplog.at_level("INFO", logger="llama_chat"):
+    with caplog.at_level("INFO", logger="llama_cpp_conversation"):
         w.begin(opened("s", history[-2:]))          # kept whole: nothing to say
     assert not caplog.records
 
 
 def test_generated_turns_of_another_model_are_reported_as_unused(caplog):
     w, _ = begun_wrapper()
-    with caplog.at_level("INFO", logger="llama_chat"):
+    with caplog.at_level("INFO", logger="llama_cpp_conversation"):
         report = w.begin(opened("s", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]), generated_turns={"model": "another", "turns": []})
     assert report.generated_turns_ignored
     assert any("another model's" in r.getMessage() for r in caplog.records)
@@ -1486,9 +1486,9 @@ def test_a_reply_on_a_template_without_reasoning_tools_or_a_clock_never_enters_t
     entered = set()
 
     def note(frame, event, _arg):
-        if event == "call" and "llama_chat/" in frame.f_code.co_filename \
-                and "llama_chat/testing/" not in frame.f_code.co_filename:
-            entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
+        if event == "call" and "llama_cpp_conversation/" in frame.f_code.co_filename \
+                and "llama_cpp_conversation/testing/" not in frame.f_code.co_filename:
+            entered.add(frame.f_code.co_filename.split("llama_cpp_conversation/")[1] + ":"
                         + frame.f_code.co_qualname)
 
     evicted = 0
@@ -1519,9 +1519,9 @@ def _code_a_reply_enters(template, cache) -> set[str]:
     entered: set[str] = set()
 
     def note(frame, event, _arg):
-        if event == "call" and "llama_chat/" in frame.f_code.co_filename \
-                and "llama_chat/testing/" not in frame.f_code.co_filename:
-            entered.add(frame.f_code.co_filename.split("llama_chat/")[1] + ":"
+        if event == "call" and "llama_cpp_conversation/" in frame.f_code.co_filename \
+                and "llama_cpp_conversation/testing/" not in frame.f_code.co_filename:
+            entered.add(frame.f_code.co_filename.split("llama_cpp_conversation/")[1] + ":"
                         + frame.f_code.co_qualname)
     sys.setprofile(note)
     try:
@@ -1584,7 +1584,7 @@ def test_every_action_reports_no_eviction_where_nothing_went():
 
 @pytest.mark.counts_work
 def test_a_reply_publishes_once_per_action_and_builds_no_history_copy_until_one_is_read(monkeypatch):
-    from llama_chat import publishing, rendered_cache
+    from llama_cpp_conversation import publishing, rendered_cache
     w, _fake = begun_wrapper()
     w.reply("eins").finish()
     made, built = [], []
@@ -1879,7 +1879,7 @@ def test_a_stream_is_ended_only_once_its_reader_has_left_it_for_the_time_asked_a
 
 def test_a_stream_left_at_the_very_instant_of_its_last_step_is_ended_by_a_limit_of_zero(monkeypatch):
     """A clock that has not moved on since the step, as a coarse one may not have."""
-    monkeypatch.setattr(llama_chat.reply, "time", types.SimpleNamespace(monotonic=lambda: 1000.0))
+    monkeypatch.setattr(llama_cpp_conversation.reply, "time", types.SimpleNamespace(monotonic=lambda: 1000.0))
     w, fake = begun_wrapper(gen_tokens=8, gen_text="Antwort.")
     stream = w.reply("hallo")
     next(stream)
@@ -2062,7 +2062,7 @@ def test_a_refused_history_names_the_refused_message_where_the_template_judges_a
 @pytest.mark.counts_work
 def test_naming_the_refused_message_of_a_long_history_renders_a_few_parts_of_it_not_every_one(
         monkeypatch):
-    from llama_chat.rendering import ConversationRendering
+    from llama_cpp_conversation.rendering import ConversationRendering
     refuses_long_histories = with_check_first(
         PLAIN, "{%- if messages|length > 380 %}{{ raise_exception('too many') }}{% endif -%}")
     w = ChatWrapper(Config(context_size=60000, evict_above_fraction=1.0),
@@ -2083,7 +2083,7 @@ def test_naming_the_refused_message_of_a_long_history_renders_a_few_parts_of_it_
 def test_a_cache_that_can_neither_shift_nor_cut_saves_a_state_before_a_first_word_only_where_the_reply_is_written_again(
         rewrites):
     """A saved state is a copy of the whole cache, so a question keeps one, where its text ends, only where the template writes a past reply otherwise than it was prompted, which takes the cache back there after the reply."""
-    from llama_chat.testing.invented_templates import REASONING
+    from llama_cpp_conversation.testing.invented_templates import REASONING
     fake = FakeContext(REASONING if rewrites else PLAIN, gen_tokens=5, can_shift=False)
     w = ChatWrapper(Config(context_size=4000, evict_above_fraction=0.9), context=fake)
     w.begin(opened("s" * 300))
@@ -2107,13 +2107,13 @@ def test_without_the_engine_a_context_of_ones_own_still_answers_and_a_model_file
     script = """
 import sys
 sys.modules["llama_cpp"] = None                     # as if the engine were not installed
-from llama_chat import ChatWrapper, Config
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
+from llama_cpp_conversation import ChatWrapper, Config
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN
 chat = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN, ["Hello."]))
 chat.begin([])
 assert chat.reply("Hi").finish().text == "Hello."
-from llama_chat import InvalidSettingError
+from llama_cpp_conversation import InvalidSettingError
 for unusable in (None, sys.argv[1] + ".missing"):
     try:
         ChatWrapper(Config(model_path=unusable))

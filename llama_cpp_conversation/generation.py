@@ -34,7 +34,7 @@ class GenerationAccumulator:
             the time the stream yields again or ends.
         text_pieces: Visible reply text so far, as it was yielded; :attr:`text`
             joins it.
-        stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
+        stop_reason: One of :data:`~llama_cpp_conversation.reply.STOP_REASONS`.
         tool_call: What the model generated between its call tags, tags
             excluded, when ``stop_reason`` is ``"tool_call"``. Never part of
             ``text``.

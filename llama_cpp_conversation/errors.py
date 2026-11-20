@@ -18,7 +18,7 @@ class RefusalError(ValueError):
 
     Attributes:
         field: The argument or setting the refusal is about, as the call or
-            :class:`~llama_chat.config.Config` spells it; ``None`` where it
+            :class:`~llama_cpp_conversation.config.Config` spells it; ``None`` where it
             is about none.
     """
 
@@ -28,7 +28,7 @@ class RefusalError(ValueError):
 
 
 class InvalidSettingError(RefusalError):
-    """A setting of :class:`~llama_chat.config.Config` or :class:`~llama_chat.config.Sampling`, or a request's own, holds a value that is refused."""
+    """A setting of :class:`~llama_cpp_conversation.config.Config` or :class:`~llama_cpp_conversation.config.Sampling`, or a request's own, holds a value that is refused."""
 
 
 class InvalidArgumentError(RefusalError):

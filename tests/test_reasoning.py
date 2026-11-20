@@ -9,19 +9,19 @@ import pytest
 from tests.chat_messages import opened
 from tests.chat_templates import STEMS
 
-from llama_chat.addon_files import template_fingerprint
-from llama_chat.config import Config
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.template import Reasoning
-from llama_chat.tools import ToolSpec
-from llama_chat.wrapper import ChatWrapper
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
+from llama_cpp_conversation.addon_files import template_fingerprint
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.template import Reasoning
+from llama_cpp_conversation.tools import ToolSpec
+from llama_cpp_conversation.wrapper import ChatWrapper
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import (EMPTY_THOUGHT, PLAIN, REASONING, REASONING_KEEPING_THOUGHTS,
                                       THINK_ON)
 
 from tests.wrappers import (THOUGHTFUL, UNGUARDED, assert_consistent, held_text, reasoning_wrapper,
                             rendered_close, rendered_prompt, rendered_reply, system_turn, rows)
-from llama_chat.reply_text import reply_header
+from llama_cpp_conversation.reply_text import reply_header
 # ----- reasoning, as the template turns it on ------------------------------
 def test_the_switch_and_the_thought_tags_are_recovered_from_the_template():
     w, _fake = reasoning_wrapper()
@@ -99,8 +99,8 @@ def test_the_reply_hands_back_the_thought_it_kept_out_of_the_answer():
 
 
 def test_a_reply_of_several_generations_hands_back_each_thought_in_order():
-    from llama_chat.tool_registry import ToolRegistry
-    from llama_chat.testing.fake_context import ScriptedCall
+    from llama_cpp_conversation.tool_registry import ToolRegistry
+    from llama_cpp_conversation.testing.fake_context import ScriptedCall
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Uhrzeit.", name="uhr", parameters={"type": "object"})
     fake = FakeContext(REASONING_KEEPING_THOUGHTS, replies=[
@@ -241,8 +241,8 @@ def test_a_reply_kept_with_its_thought_holds_the_tokens_its_text_tokenizes_into(
 
 # ----- a header naming another reader --------------------------------------
 def test_a_header_naming_another_reader_is_never_shown():
-    from llama_chat.reply_text import ReplyText, reply_header
-    from llama_chat.template import Reasoning
+    from llama_cpp_conversation.reply_text import ReplyText, reply_header
+    from llama_cpp_conversation.template import Reasoning
     tags = Reasoning(thought_open=" to=self<|body|>", thought_close="<|call_ends|>",
                      generation_prompt="")
     assert reply_header(" to=user<|body|>", tags) == ("to=", "<|body|>")
@@ -257,8 +257,8 @@ def test_a_header_naming_another_reader_is_never_shown():
 
 
 def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_shared_ends():
-    from llama_chat.reply_text import reply_header
-    from llama_chat.template import Reasoning
+    from llama_cpp_conversation.reply_text import reply_header
+    from llama_cpp_conversation.template import Reasoning
     def tags(thought_open):
         return Reasoning(thought_open=thought_open, thought_close="<|call_ends|>", generation_prompt="")
     assert reply_header("<|a|>user<|a|>", tags("<|a|>")) is None
@@ -267,8 +267,8 @@ def test_no_header_is_read_where_either_opening_leaves_no_reader_between_its_sha
 
 
 def test_a_header_never_divides_one_of_the_models_tags():
-    from llama_chat.reply_text import reply_header
-    from llama_chat.template import Reasoning
+    from llama_cpp_conversation.reply_text import reply_header
+    from llama_cpp_conversation.template import Reasoning
     thought = Reasoning(thought_open="<|OPEN_THOUGHT|>", thought_close="<|SHUT_THOUGHT|>",
                         generation_prompt="")
     assert reply_header("<|OPEN_TEXT|>", thought) == ("<|OPEN_T", "T|>")
@@ -380,7 +380,7 @@ def test_a_headers_ends_move_only_off_a_tag_they_would_divide(answer, thought, t
 @pytest.mark.timed
 def test_streaming_a_long_thought_takes_time_in_proportion_to_it():
     import time
-    from llama_chat.testing.invented_templates import _invented
+    from llama_cpp_conversation.testing.invented_templates import _invented
 
     def timed(words: int) -> float:
         """The shorter of two replies thinking ``words`` words, in this thread's processor time."""
@@ -456,7 +456,7 @@ def test_a_conversation_at_each_level_is_written_with_it_and_begins_again_at_it(
 
 
 def test_a_level_the_template_does_not_know_or_one_without_reasoning_is_refused_by_name_and_changes_nothing():
-    from llama_chat.errors import InvalidArgumentError, UnsupportedError
+    from llama_cpp_conversation.errors import InvalidArgumentError, UnsupportedError
     stem = _WITH_LEVELS[0]
     w, _fake = _levelled_wrapper(stem)
     w.begin(opened("s"), reasoning=True)
@@ -472,7 +472,7 @@ def test_a_level_the_template_does_not_know_or_one_without_reasoning_is_refused_
 
 
 def test_a_template_without_levels_reasons_as_it_does_by_default_or_not_at_all():
-    from llama_chat.errors import UnsupportedError
+    from llama_cpp_conversation.errors import UnsupportedError
     from tests.chat_templates import STEMS, expected, fixture
     stem = next(stem for stem in sorted(STEMS)
                 if fixture(stem)["can_reason"] and not expected(fixture(stem), "reasoning_levels"))

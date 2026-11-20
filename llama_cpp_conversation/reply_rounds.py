@@ -137,7 +137,7 @@ class ReplyRounds:
             budget: The calls the turn may still run. Nothing is run under
                 ``"refuse"``, so it does not bind there.
             on_started: As :meth:`generate`, for the first generation.
-            text, max_reply_tokens, **kwargs: As :meth:`~llama_chat.wrapper.ChatWrapper.reply`.
+            text, max_reply_tokens, **kwargs: As :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.reply`.
 
         Raises:
             UnsupportedError: If ``policy`` is a registry holding tools this
@@ -364,7 +364,7 @@ class ReplyRounds:
                 returned.append(registry.call(call))
             except BaseException as error:      # raised again on the reply's thread
                 returned.append(_Raised(error))
-        runner = threading.Thread(target=run, name=f"llama_chat tool {call.name}", daemon=True)
+        runner = threading.Thread(target=run, name=f"llama_cpp_conversation tool {call.name}", daemon=True)
         self._tool_threads.add(runner)
         runner.start()
         runner.join(min(self._config.tool_timeout_s, threading.TIMEOUT_MAX))
@@ -425,10 +425,10 @@ class ReplyRounds:
                   max_thought_tokens: int | None,
                   on_reply: Callable[[Reply], None], withhold: bool = False,
                   on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
-        """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it; the lock must be held.
+        """One generation, as :meth:`~llama_cpp_conversation.rendered_cache.RenderedCache.generation` runs it; the lock must be held.
 
         Args:
-            text, stop, cancel: As :meth:`~llama_chat.wrapper.ChatWrapper.reply`.
+            text, stop, cancel: As :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.reply`.
             max_reply_tokens: The cap on this generation's tokens, ``None``
                 for the config's.
             max_thought_tokens: The cap on a thought's tokens, ``None`` for none.

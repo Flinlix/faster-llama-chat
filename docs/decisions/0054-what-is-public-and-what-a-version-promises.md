@@ -11,7 +11,7 @@ number says, and nothing noticed a change to a public signature.
 ## Decision
 
 - `docs/guide/compatibility.md` states what is public: the names
-  `llama_chat` exports, `llama_chat.testing`, what
+  `llama_cpp_conversation` exports, `llama_cpp_conversation.testing`, what
   `conversation()` returns and `begin` takes, the add-on file format, the cache
   context protocol and the two logger names. Everything else, the wording of
   messages included, is not.

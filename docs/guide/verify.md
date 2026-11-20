@@ -11,21 +11,21 @@ python examples/demo.py /path/to/model.gguf          # against a real model
 The suite also runs the linter and the type checker, and checks the writing
 rules of the prose and that every file the contract names exists. Every test
 has a time limit; past it the run stops and prints where each thread stood.
-`LLAMA_CHAT_CHECK_EVERY_ACTION=1` runs the suite with `check_cache` on in every
+`LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION=1` runs the suite with `check_cache` on in every
 wrapper, the tests that count the library's work left out.
 
 The random sequences are drawn by Hypothesis: a failing one is cut down to the
 shortest that still fails and printed step by step, with what replays it. The
 suite draws the same ones every run; `-m slow` draws new ones,
-`LLAMA_CHAT_SLOW_EXAMPLES` of them, 1500 by default. Nothing of either is kept
+`LLAMA_CPP_CONVERSATION_SLOW_EXAMPLES` of them, 1500 by default. Nothing of either is kept
 on disk by Hypothesis; a sequence once found failing is kept in
 `tests/found_sequences/` instead, as what it drew and its steps, and replayed
 every run.
 
-The tests on real model files read their paths from `LLAMA_CHAT_TEST_MODELS`,
-separated as the system separates paths, and offload `LLAMA_CHAT_TEST_GPU_LAYERS`
+The tests on real model files read their paths from `LLAMA_CPP_CONVERSATION_TEST_MODELS`,
+separated as the system separates paths, and offload `LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS`
 layers, all by default. Each runs a long conversation with `check_cache` on and
-bounds how much the process grows; `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND`, a shell
+bounds how much the process grows; `LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND`, a shell
 command that prints the MiB the process `{pid}` holds on the GPU, bounds GPU
 memory too; the decision record
 [Faults show themselves](../decisions/0048-faults-that-show-themselves.md) holds one.

@@ -8,26 +8,26 @@ import threading
 
 import pytest
 
-from llama_chat.config import generation_sampling
-from llama_chat import (EngineError, InternalError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
+from llama_cpp_conversation.config import generation_sampling
+from llama_cpp_conversation import (EngineError, InternalError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
-from llama_chat.kept_turns import KeptTurns
-from llama_chat.rendered_cache import RenderedCache
-from llama_chat.rendering import ConversationRendering
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
+from llama_cpp_conversation.kept_turns import KeptTurns
+from llama_cpp_conversation.rendered_cache import RenderedCache
+from llama_cpp_conversation.rendering import ConversationRendering
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, expected, fixture
-from llama_chat.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.fake_context import FakeContext
 from tests import internals
 from tests.internals import generated_turns_held
-from llama_chat.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
+from llama_cpp_conversation.testing.invented_templates import (PLAIN, REASONING, REFUSES_TWO_USER_TURNS, TOOLS,
                                       TOOLS_REFUSING_TWO_USER_TURNS, NO_DECLARATIONS, WRITES_TWO_QUESTIONS_REFUSES_A_TEXT)
 from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered, assert_consistent, held_text,
                             numbered_exchanges,
                             newest_turn, rows, tool_wrapper, weather_registry, with_check_first)
-from llama_chat.cache_sync import CacheSync
-from llama_chat.generation import GenerationAccumulator
+from llama_cpp_conversation.cache_sync import CacheSync
+from llama_cpp_conversation.generation import GenerationAccumulator
 
 
 class _Flaky(FakeContext):
@@ -483,7 +483,7 @@ def test_a_result_handed_over_that_cannot_be_written_reaches_the_model_as_a_fail
     w.begin(opened("persona"))
     fake.call_script = ["fn:clock{}"]
     call, = [e for e in w.reply("wie spät?", tool_call_policy="yield") if isinstance(e, ToolCall)]
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         w.inject_tool_result(call.id, result)
     assert "unwritable_result" in held_text(fake) and "NaN" not in held_text(fake)
     assert w.pending_calls == [] and "unwritable_result" in caplog.text
@@ -723,7 +723,7 @@ def test_a_refused_action_leaves_a_cache_that_cannot_cut_ready_to_generate():
 
 
 def test_a_decode_that_fails_before_the_pinned_state_is_saved_loses_none_of_its_tokens():
-    from llama_chat.cache_sync import CacheSync
+    from llama_cpp_conversation.cache_sync import CacheSync
     fake = _Flaky(PLAIN, can_shift=False, can_cut_tail=False)
     memory = CacheSync(fake)
     memory.pin([3], "opening")
@@ -741,8 +741,8 @@ def test_every_change_to_the_tokens_a_cache_should_hold_changes_their_version(ca
                                                                              can_cut_tail):
     import random
 
-    from llama_chat.generation import GenerationAccumulator
-    from llama_chat.cache_sync import CacheSync
+    from llama_cpp_conversation.generation import GenerationAccumulator
+    from llama_cpp_conversation.cache_sync import CacheSync
     fake = _Flaky(PLAIN, gen_tokens=2, can_shift=can_shift, can_cut_tail=can_cut_tail)
     memory, draw = CacheSync(fake), random.Random(0)
 

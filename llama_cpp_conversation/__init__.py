@@ -1,4 +1,4 @@
-"""llama_chat: a KV-cache managing chat wrapper around llama.cpp.
+"""llama_cpp_conversation: a KV-cache managing chat wrapper around llama.cpp.
 
 The core actions, each prefilling as little as possible:
 

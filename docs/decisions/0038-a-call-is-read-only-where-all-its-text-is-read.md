@@ -10,10 +10,10 @@ tool unnoticed: `01234` became 1234, `1e5` became "100000.0".
 
 ## Decision
 
-- Reading a call back from what the model wrote is `llama_chat.call_parsing`,
-  apart from declaring tools (`tools.py`) and running them
-  (`tool_registry.py`): an engine reached over a wire emits calls it cannot
-  run, and reads them without a registry.
+- Reading a call back from what the model wrote is
+  `llama_cpp_conversation.call_parsing`, apart from declaring tools
+  (`tools.py`) and running them (`tool_registry.py`): an engine reached over a
+  wire emits calls it cannot run, and reads them without a registry.
 - A call is readable only where all of its text is read. Text after the last
   argument, an unclosed argument, a blank pair, a key written twice (in JSON
   too, nested ones included), a second copy of a call, a separator after the

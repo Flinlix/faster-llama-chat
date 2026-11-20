@@ -13,11 +13,11 @@ import threading
 
 import pytest
 
-from llama_chat import ChatWrapper, Config
-from llama_chat import wrapper as wrapper_module
+from llama_cpp_conversation import ChatWrapper, Config
+from llama_cpp_conversation import wrapper as wrapper_module
 from tests.chat_messages import opened
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN
 from tests import internals
 from tests.internals import held_tokens
 from tests.wrappers import assert_consistent
@@ -29,7 +29,7 @@ _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut
 _POINTS = ("before", "part 1", "part 2", "after")
 _ACTIONS = ("question", "inject and reply", "begin the same", "begin another", "truncate",
             "wait", "close", "a reply cancelled at once")
-_THREAD = "llama_chat after a reply"
+_THREAD = "llama_cpp_conversation after a reply"
 _WAIT_S = 10
 
 

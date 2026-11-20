@@ -838,7 +838,7 @@ class RenderedCache:
         while the reply is recorded. See docs/decisions/0033-one-undo-path.md.
 
         Args:
-            text, stop, cancel: As :meth:`~llama_chat.wrapper.ChatWrapper.reply`.
+            text, stop, cancel: As :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.reply`.
             max_generated_tokens: The cap on this generation's tokens.
             max_thought_tokens: The cap on a thought's tokens, ``None`` for none.
             sampling: Every value the generation draws with.

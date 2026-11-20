@@ -48,9 +48,10 @@ file to change one part of it.
 - The plain-reply list of the rule 5 test names functions by their new
   modules.
 - Each module logs under its own name, so the lines about cut or joined
-  questions and closed turns now come from `llama_chat.message_admission`,
-  and the tool timeout from `llama_chat.reply_rounds`. The names a caller is
-  told to use, `llama_chat` and `llama_chat.engine`, are unchanged.
+  questions and closed turns now come from
+  `llama_cpp_conversation.message_admission`, and the tool timeout from
+  `llama_cpp_conversation.reply_rounds`. The names a caller is told to use,
+  `llama_cpp_conversation` and `llama_cpp_conversation.engine`, are unchanged.
 
 ## Alternatives rejected
 

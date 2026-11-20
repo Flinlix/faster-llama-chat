@@ -3,11 +3,11 @@
 import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 
-from llama_chat import ChatWrapper, Config, ContextOverflowError
+from llama_cpp_conversation import ChatWrapper, Config, ContextOverflowError
 from tests.chat_messages import opened
 from tests.chat_templates import STEMS, fixture
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 
 _TEMPLATES = {"plain": PLAIN, "tools": TOOLS, "reasoning": REASONING,
               **{stem: fixture(stem) for stem in STEMS}}

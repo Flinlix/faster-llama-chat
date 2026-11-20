@@ -1,25 +1,25 @@
 """Every loop of the library ends: each pass makes its variant smaller, or the loop is one of the forms that end by construction."""
 
 import re
-import llama_chat.call_parsing
+import llama_cpp_conversation.call_parsing
 import ast
 from pathlib import Path
 
 import pytest
 
-from llama_chat import InternalError, ChatWrapper
-from llama_chat.loop_variant import LoopVariant
-from llama_chat.call_parsing import parse_calls
-from llama_chat.testing.invented_templates import CALL_BODY, PLAIN
+from llama_cpp_conversation import InternalError, ChatWrapper
+from llama_cpp_conversation.loop_variant import LoopVariant
+from llama_cpp_conversation.call_parsing import parse_calls
+from llama_cpp_conversation.testing.invented_templates import CALL_BODY, PLAIN
 from tests.test_call_parsing import _ELEMENTS
-from llama_chat.reply_text import ReplyText, reply_header
-from llama_chat.template import Reasoning
+from llama_cpp_conversation.reply_text import ReplyText, reply_header
+from llama_cpp_conversation.template import Reasoning
 from tests.test_reply_text import _fed_as_tokens
-from llama_chat.config import Config
-from llama_chat.testing.fake_context import FakeContext
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.testing.fake_context import FakeContext
 from tests.chat_messages import opened
 
-_PACKAGE = Path(__file__).parent.parent / "llama_chat"
+_PACKAGE = Path(__file__).parent.parent / "llama_cpp_conversation"
 
 
 def _loops():
@@ -102,10 +102,10 @@ def test_a_variant_below_zero_stops_the_loop():
 
 def test_a_reply_whose_turn_never_closes_stops_instead_of_running_on():
     """A generation loop that makes no progress is stopped by its variant, the conversation left usable as after any failed reply."""
-    from llama_chat.wrapper import ChatWrapper
-    from llama_chat import Config
-    from llama_chat.testing.fake_context import FakeContext, ScriptedCall
-    from llama_chat.testing.invented_templates import TOOLS
+    from llama_cpp_conversation.wrapper import ChatWrapper
+    from llama_cpp_conversation import Config
+    from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
+    from llama_cpp_conversation.testing.invented_templates import TOOLS
     from tests.chat_messages import opened
     fake = FakeContext(TOOLS)
     wrapper = ChatWrapper(Config(context_size=2048), context=fake)
@@ -138,7 +138,7 @@ def test_a_loop_of_the_call_reader_that_makes_no_progress_is_named_in_its_error(
         def passes(self, measure):
             super().passes(0)
 
-    monkeypatch.setattr(llama_chat.call_parsing, "LoopVariant", Stalling)
+    monkeypatch.setattr(llama_cpp_conversation.call_parsing, "LoopVariant", Stalling)
     with pytest.raises(InternalError) as raised:
         parse_calls(body, call_body, "fn:")
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
@@ -157,7 +157,7 @@ def test_a_loop_of_the_reply_text_that_makes_no_progress_is_named_in_its_error(r
         def passes(self, measure):
             super().passes(0)
 
-    monkeypatch.setattr(llama_chat.reply_text, "LoopVariant", StallingLoop)
+    monkeypatch.setattr(llama_cpp_conversation.reply_text, "LoopVariant", StallingLoop)
     with pytest.raises(InternalError) as raised:
         run()
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
@@ -171,7 +171,7 @@ def test_a_loop_of_the_thought_filter_that_makes_no_progress_is_named_in_its_err
         def passes(self, measure):
             super().passes(0)
 
-    monkeypatch.setattr(llama_chat.reply_text, "LoopVariant", Stalling)
+    monkeypatch.setattr(llama_cpp_conversation.reply_text, "LoopVariant", Stalling)
     reply = ReplyText(Reasoning("<thought>", "</thought>", "", ""), "", None, "", [])
     with pytest.raises(InternalError) as raised:
         reply.feed("<thought>x</thought>y")
@@ -193,7 +193,7 @@ def test_a_loop_dropping_exchanges_in_windows_that_makes_no_progress_is_named_in
     for i in range(10):
         w.reply(f"Frage {i}?").finish()
     w.wait_idle()
-    monkeypatch.setattr(llama_chat.windows, "LoopVariant", StallingDrop)
+    monkeypatch.setattr(llama_cpp_conversation.windows, "LoopVariant", StallingDrop)
     # Long enough that more than one exchange goes at once.
     with pytest.raises(InternalError) as raised:
         w.reply("lang " * 80).finish()
@@ -210,8 +210,8 @@ def test_a_loop_finding_a_tag_before_a_place_that_makes_no_progress_is_named_in_
         def passes(self, measure):
             super().passes(0)
 
-    monkeypatch.setattr(llama_chat.template, "LoopVariant", Stalling)
+    monkeypatch.setattr(llama_cpp_conversation.template, "LoopVariant", Stalling)
     with pytest.raises(InternalError) as raised:
-        llama_chat.template.shared_tags_length("<a><a>", "<a><a>x", ("<a>",))
+        llama_cpp_conversation.template.shared_tags_length("<a><a>", "<a><a>x", ("<a>",))
     loop = re.match(r"(.*) made no progress", str(raised.value)).group(1)
     assert loop != "None" and len(loop.split()) >= 2

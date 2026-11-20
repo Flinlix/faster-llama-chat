@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-import llama_chat
-from llama_chat import Config
-from llama_chat.testing.fake_context import FakeContext, written_call
-from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
+import llama_cpp_conversation
+from llama_cpp_conversation import Config
+from llama_cpp_conversation.testing.fake_context import FakeContext, written_call
+from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 
 _ROOT = Path(__file__).parent.parent
 _DOCUMENTS = ["README.md"] + sorted(str(p.relative_to(_ROOT)) for p in (_ROOT / "docs/guide").glob("*.md"))
@@ -48,7 +48,7 @@ def _script(model: FakeContext, calls: list) -> None:
 
 @pytest.mark.parametrize("document", [d for d in _DOCUMENTS if _examples(d)])
 def test_every_example_of_a_document_runs(document, monkeypatch, capsys):
-    real = llama_chat.ChatWrapper
+    real = llama_cpp_conversation.ChatWrapper
     models = []
 
     calls: list = []                    # the calls the current example's model makes
@@ -58,10 +58,10 @@ def test_every_example_of_a_document_runs(document, monkeypatch, capsys):
         _script(models[-1], calls)
         return real(config or Config(), context=context or models[-1], **options)
 
-    monkeypatch.setattr(llama_chat, "ChatWrapper", stand_in)
+    monkeypatch.setattr(llama_cpp_conversation, "ChatWrapper", stand_in)
     chat = stand_in(Config(context_size=2048))
     chat.begin([])
-    levels = {name: logging.getLogger(name).level for name in ("llama_chat", "llama_chat.engine")}
+    levels = {name: logging.getLogger(name).level for name in ("llama_cpp_conversation", "llama_cpp_conversation.engine")}
     handlers = list(logging.getLogger().handlers)
     namespace = {"chat": chat, "asyncio": asyncio}
     try:

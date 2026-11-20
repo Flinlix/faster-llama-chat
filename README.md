@@ -1,4 +1,4 @@
-# faster-llama-chat: a KV-cache manager for llama.cpp
+# llama-cpp-conversation: a KV-cache manager for llama.cpp
 
 <!-- --8<-- [start:lead] -->
 A Python chat library over llama.cpp whose goal is to **prefill as little as
@@ -20,7 +20,7 @@ comes from a small JSON add-on file.
 
 The [documentation](#documentation) has a guide per task and the API
 reference. The reasons behind each design choice are in the
-[decision records](https://flinlix.github.io/faster-llama-chat/decisions/).
+[decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/).
 
 ## Why
 
@@ -37,20 +37,20 @@ instead: it removes the oldest exchange's tokens and shifts the survivors'
 positions down, so kept messages are never processed again.
 The comparison with llama-cpp-python's own chat interface, measured on one
 machine, is in its
-[decision record](https://flinlix.github.io/faster-llama-chat/decisions/0055-measured-against-llama-cpp-pythons-own-chat/).
+[decision record](https://flinlix.github.io/llama-cpp-conversation/decisions/0055-measured-against-llama-cpp-pythons-own-chat/).
 <!-- --8<-- [end:why] -->
 
 ## Install
 
 <!-- --8<-- [start:install] -->
 ```bash
-CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/faster-llama-chat@v3.0.0"   # CPU
-CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/faster-llama-chat@v3.0.0"     # Nvidia GPU
+CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/llama-cpp-conversation@v3.0.0"   # CPU
+CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/llama-cpp-conversation@v3.0.0"     # Nvidia GPU
 ```
 
 The package is installed from GitHub; it is not published elsewhere. `@v3.0.0`
 names a release; without it, the newest commit is installed. Each
-[release](https://github.com/Flinlix/faster-llama-chat/releases) also carries
+[release](https://github.com/Flinlix/llama-cpp-conversation/releases) also carries
 the built package.
 
 llama-cpp-python is built **from source per machine**, so it uses that CPU's
@@ -73,14 +73,14 @@ pip install -e .                    # or -e ".[test,dev,docs]" with those tools
 git config core.hooksPath hooks     # with them: the checks before every push
 ```
 
-It installs as `faster-llama-chat` and is imported as
-`llama_chat`. <!-- --8<-- [end:install] -->
+It installs as `llama-cpp-conversation` and is imported as
+`llama_cpp_conversation`. <!-- --8<-- [end:install] -->
 
 ## Quick start
 
 <!-- --8<-- [start:quick-start] -->
 ```python
-from llama_chat import ChatWrapper, Config
+from llama_cpp_conversation import ChatWrapper, Config
 
 chat = ChatWrapper(Config(model_path="models/your-model.gguf", context_size=8192,
                           gpu_layers=-1))
@@ -107,7 +107,7 @@ print(reply.text, reply.stop_reason)
 <!-- --8<-- [end:quick-start] -->
 
 How a reply streams, how to stop one, and how the wrapper behaves across
-threads: [Streams, cancelling and threads](https://flinlix.github.io/faster-llama-chat/guide/streams-and-threads/).
+threads: [Streams, cancelling and threads](https://flinlix.github.io/llama-cpp-conversation/guide/streams-and-threads/).
 
 ## Supported models
 
@@ -174,16 +174,16 @@ the same way, and refused with its cause where it cannot be.
 
 ## Documentation
 
-- [What to call, by task](https://flinlix.github.io/faster-llama-chat/guide/actions/)
-- [Streams, cancelling and threads](https://flinlix.github.io/faster-llama-chat/guide/streams-and-threads/)
-- [Tool calling](https://flinlix.github.io/faster-llama-chat/guide/tool-calling/)
-- [Reasoning](https://flinlix.github.io/faster-llama-chat/guide/reasoning/)
-- [Keeping a conversation](https://flinlix.github.io/faster-llama-chat/guide/keeping-a-conversation/)
-- [Configuration](https://flinlix.github.io/faster-llama-chat/guide/configuration/)
-- [Add-on files](https://flinlix.github.io/faster-llama-chat/guide/add-on-files/)
-- [A model without a usable template](https://flinlix.github.io/faster-llama-chat/guide/without-a-template/)
-- [Your own cache context](https://flinlix.github.io/faster-llama-chat/guide/cache-context/)
-- [Verify](https://flinlix.github.io/faster-llama-chat/guide/verify/)
-- [Compatibility](https://flinlix.github.io/faster-llama-chat/guide/compatibility/)
-- [API reference](https://flinlix.github.io/faster-llama-chat/reference/)
-- [Decision records](https://flinlix.github.io/faster-llama-chat/decisions/)
+- [What to call, by task](https://flinlix.github.io/llama-cpp-conversation/guide/actions/)
+- [Streams, cancelling and threads](https://flinlix.github.io/llama-cpp-conversation/guide/streams-and-threads/)
+- [Tool calling](https://flinlix.github.io/llama-cpp-conversation/guide/tool-calling/)
+- [Reasoning](https://flinlix.github.io/llama-cpp-conversation/guide/reasoning/)
+- [Keeping a conversation](https://flinlix.github.io/llama-cpp-conversation/guide/keeping-a-conversation/)
+- [Configuration](https://flinlix.github.io/llama-cpp-conversation/guide/configuration/)
+- [Add-on files](https://flinlix.github.io/llama-cpp-conversation/guide/add-on-files/)
+- [A model without a usable template](https://flinlix.github.io/llama-cpp-conversation/guide/without-a-template/)
+- [Your own cache context](https://flinlix.github.io/llama-cpp-conversation/guide/cache-context/)
+- [Verify](https://flinlix.github.io/llama-cpp-conversation/guide/verify/)
+- [Compatibility](https://flinlix.github.io/llama-cpp-conversation/guide/compatibility/)
+- [API reference](https://flinlix.github.io/llama-cpp-conversation/reference/)
+- [Decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/)

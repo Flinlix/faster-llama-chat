@@ -1,4 +1,4 @@
-"""Every public name keeps its signature: what ``llama_chat`` exports and what ``llama_chat.testing`` offers, compared with ``tests/public_api.txt``.
+"""Every public name keeps its signature: what ``llama_cpp_conversation`` exports and what ``llama_cpp_conversation.testing`` offers, compared with ``tests/public_api.txt``.
 
 A change to a signature updates that file in the same commit, with the kind of
 release it needs (``docs/guide/compatibility.md``): ``python -m tests.test_public_api``
@@ -12,8 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import llama_chat
-from llama_chat.testing import fake_context, invented_templates
+import llama_cpp_conversation
+from llama_cpp_conversation.testing import fake_context, invented_templates
 
 _LIST = Path(__file__).with_name("public_api.txt")
 
@@ -29,7 +29,7 @@ def _members(owner) -> list[str]:
         lines += [f"  field {f.name}: {f.type}" for f in dataclasses.fields(owner) if not f.name.startswith("_")]
     found = {}
     for base in reversed(owner.__mro__):
-        if base.__module__.split(".")[0] == llama_chat.__name__:
+        if base.__module__.split(".")[0] == llama_cpp_conversation.__name__:
             found.update(vars(base))
     for name, member in sorted(found.items()):
         if name.startswith("_") and name not in _USED_SPECIAL:
@@ -57,8 +57,8 @@ def _described(name: str, value) -> list[str]:
 def public_api() -> str:
     """Every public name with its signature, one per line."""
     lines = []
-    for name in sorted(llama_chat.__all__):
-        lines += _described(name, getattr(llama_chat, name))
+    for name in sorted(llama_cpp_conversation.__all__):
+        lines += _described(name, getattr(llama_cpp_conversation, name))
     lines += _described("testing.FakeContext", fake_context.FakeContext)
     lines += _described("testing.ScriptedCall", fake_context.ScriptedCall)
     lines += [f"testing.invented_templates.{name}" for name in sorted(vars(invented_templates))

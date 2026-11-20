@@ -11,8 +11,8 @@ import json
 import sys
 from pathlib import Path
 
-from llama_chat._backend import Backend
-from llama_chat.cache_context import TOOL_USE_TEMPLATE
+from llama_cpp_conversation._backend import Backend
+from llama_cpp_conversation.cache_context import TOOL_USE_TEMPLATE
 
 _TEMPLATES = Path(__file__).parent / "templates"
 

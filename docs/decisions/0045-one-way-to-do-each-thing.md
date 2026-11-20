@@ -27,8 +27,8 @@ more pair that can disagree.
   result), `turn_open` (a tool call left the newest turn open).
 - Types that serve only the library are not exported: `ModelReader`,
   `GenerationAccumulator`, `CallBoundary`, `ToolCallFragments`, `CallBody`,
-  `result_text`. The test stand-in ships as `llama_chat.testing`, so a server's
-  suite can run on it.
+  `result_text`. The test stand-in ships as `llama_cpp_conversation.testing`,
+  so a server's suite can run on it.
 - A wrong state is refused at once by `reply()`, against the published copy
   (0044), not at the first read of its stream.
 

@@ -1,4 +1,4 @@
-# 0019. llama-cpp-python 0.3.23 is the oldest binding supported; the package installs as faster-llama-chat
+# 0019. llama-cpp-python 0.3.23 is the oldest binding supported; the package installs as llama-cpp-conversation
 
 Date: 2026-11-13
 
@@ -24,11 +24,10 @@ saved states rest on; every other name is present from 0.3.9 on.
   a symbol is missing. The message for a missing engine package names 0.3.23,
   that it is built from source for the machine, and the README's install
   section, which gives `./install.sh` and the build by hand.
-- The distribution is named `faster-llama-chat` and is imported as
-  `llama_chat`. An environment that installed the old distribution name must
-  uninstall it first, as both claim `llama_chat`.
+- The distribution is named `llama-cpp-conversation` and is imported as
+  `llama_cpp_conversation` (0056).
 - The engine is imported when the first model file is loaded, not with the
-  package: a caller with a context of its own, `llama_chat.testing`
+  package: a caller with a context of its own, `llama_cpp_conversation.testing`
   and the tests that use no model run without the engine built (2026-11-20). A
   `model_path` that names no file is refused as a setting before the engine is
   imported, so the refusal is the same with or without it.

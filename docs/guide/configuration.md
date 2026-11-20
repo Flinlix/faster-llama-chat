@@ -79,29 +79,30 @@ tune: `context=` (a [cache context of your own](cache-context.md)) and
 not raise.
 
 **Logging.** Everything llama.cpp writes, and what the library itself has to
-say, goes to Python's `logging`, under the logger `llama_chat` and llama.cpp's
-lines under its child `llama_chat.engine`, one record per line: llama.cpp's
-errors as `ERROR`, its warnings as `WARNING`, its load-time listings as `INFO`
-and `DEBUG`. With no logging configured, Python shows warnings and errors on
-stderr, and nothing below them whatever level a logger is set to; showing
-`INFO` and `DEBUG` lines takes a handler, such as the one `logging.basicConfig()`
-puts on stderr. The library's own levels mean one thing each: `INFO`, the
-conversation changed in a way the caller did not ask for, such as history that
-went ("the 80 oldest history message(s) went so that half of the 8192-token
-context stays free at a begin"), a call left out, a result cut to fit, a reply
-taken back, or an open turn a question closed; `DEBUG`, a slower
-path was taken, such as the cache decoded again; `WARNING`, something to fix,
-such as an add-on file that is not used. Each `INFO` change is also in the
-`Report` the action returns (`begin`, `inject`, `inject_tool_result`) or in
-the `Reply`; why history went is one of
-`EVICTION_CAUSES`, typed as `EvictionCause`. To show only errors, or everything:
+say, goes to Python's `logging`, under the logger `llama_cpp_conversation` and
+llama.cpp's lines under its child `llama_cpp_conversation.engine`, one record
+per line: llama.cpp's errors as `ERROR`, its warnings as `WARNING`, its
+load-time listings as `INFO` and `DEBUG`. With no logging configured, Python
+shows warnings and errors on stderr, and nothing below them whatever level a
+logger is set to; showing `INFO` and `DEBUG` lines takes a handler, such as the
+one `logging.basicConfig()` puts on stderr. The library's own levels mean one
+thing each: `INFO`, the conversation changed in a way the caller did not ask
+for, such as history that went ("the 80 oldest history message(s) went so that
+half of the 8192-token context stays free at a begin"), a call left out, a
+result cut to fit, a reply taken back, or an open turn a question closed;
+`DEBUG`, a slower path was taken, such as the cache decoded again; `WARNING`,
+something to fix, such as an add-on file that is not used. Each `INFO` change
+is also in the `Report` the action returns (`begin`, `inject`,
+`inject_tool_result`) or in the `Reply`; why history went is one of
+`EVICTION_CAUSES`, typed as `EvictionCause`. To show only errors, or
+everything:
 
 ```python
 import logging
 logging.basicConfig()               # a handler on stderr that shows every level it is given
-logging.getLogger("llama_chat").setLevel(logging.ERROR)
-logging.getLogger("llama_chat.engine").setLevel(logging.DEBUG)   # every line llama.cpp writes
+logging.getLogger("llama_cpp_conversation").setLevel(logging.ERROR)
+logging.getLogger("llama_cpp_conversation.engine").setLevel(logging.DEBUG)   # every line llama.cpp writes
 ```
 
-llama.cpp has one log output per process, so importing `llama_chat` routes it
-for the whole process, a model loaded by other code included.
+llama.cpp has one log output per process, so importing `llama_cpp_conversation`
+routes it for the whole process, a model loaded by other code included.

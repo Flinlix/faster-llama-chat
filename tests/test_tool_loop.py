@@ -7,19 +7,19 @@ import threading
 
 import pytest
 
-from llama_chat.addon_files import template_fingerprint
-from llama_chat.config import Config
-from llama_chat.rendered_cache import RenderedCache
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec, result_text
-from llama_chat import (ChatWrapper, ContextOverflowError, InternalError, OutOfOrderError,
+from llama_cpp_conversation.addon_files import template_fingerprint
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.rendered_cache import RenderedCache
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec, result_text
+from llama_cpp_conversation import (ChatWrapper, ContextOverflowError, InternalError, OutOfOrderError,
                         UnsupportedError)
-from llama_chat.reply_rounds import MAX_UNREADABLE_CALLS_IN_A_ROW
+from llama_cpp_conversation.reply_rounds import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
-from llama_chat.testing.fake_context import FakeContext, ScriptedCall, written_call
-from llama_chat.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall, written_call
+from llama_cpp_conversation.testing.invented_templates import (JSON_RESULT_LINES, JSON_TOOLS, KEYLESS_CALLS,
                                       NO_DECLARATIONS, NO_RESULT_BLOCK, PLAIN, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS, TOOLS_DECLARED_IN_THE_NEWEST_TURN,
                                       TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN, CALL_TAGS)
@@ -28,9 +28,9 @@ from tests.wrappers import (UNGUARDED, add_tools, assert_cache_reads_as_rendered
                             newest_turn, system_turn, tool_wrapper, weather_registry,
                             without_ids, rows, numbered_exchanges, two_owed_calls, unbegun_tool_wrapper)
 from tests import internals
-from llama_chat.conversation_state import ConversationState
-from llama_chat.messages import result_message, UNKNOWN_FUNCTION, UNREADABLE_CALL
-from llama_chat.result_cutting import ResultCutting, cut_result
+from llama_cpp_conversation.conversation_state import ConversationState
+from llama_cpp_conversation.messages import result_message, UNKNOWN_FUNCTION, UNREADABLE_CALL
+from llama_cpp_conversation.result_cutting import ResultCutting, cut_result
 
 
 def _result_of(fake):
@@ -1990,7 +1990,7 @@ def test_a_fault_while_a_call_is_read_is_raised_and_leaves_the_conversation_whol
     def faulty(*args, **kwargs):
         raise TypeError("a fault in the library")
 
-    monkeypatch.setattr("llama_chat.resolved_template.parse_calls", faulty)
+    monkeypatch.setattr("llama_cpp_conversation.resolved_template.parse_calls", faulty)
     with pytest.raises(InternalError, match="a fault in the library"):
         wrapper.reply("wie spät?", tool_call_policy="yield").finish()
     monkeypatch.undo()
@@ -2795,7 +2795,7 @@ def test_a_call_reported_as_cut_shares_no_part_of_its_arguments_with_the_convers
 
 
 def test_every_result_cut_is_logged_at_info_with_how_much_of_it_was_kept(caplog):
-    caplog.set_level(logging.INFO, logger="llama_chat")
+    caplog.set_level(logging.INFO, logger="llama_cpp_conversation")
     wrapper, fake = tool_wrapper(template=JSON_TOOLS, context_size=400)
     wrapper.begin(opened("s"), tools=[ToolSpec("clock", "", {"type": "object", "properties": {}})])
     fake.call_script = ['{"name": "clock", "arguments": {}}']
@@ -2804,7 +2804,7 @@ def test_every_result_cut_is_logged_at_info_with_how_much_of_it_was_kept(caplog)
     cut = wrapper.inject_tool_result(wrapper.pending_calls[0].id, "x" * 3000).tool_results_cut
     assert cut
     lines = [record.getMessage() for record in caplog.records
-             if record.levelno == logging.INFO and record.name.startswith("llama_chat")]
+             if record.levelno == logging.INFO and record.name.startswith("llama_cpp_conversation")]
     assert any(" of 3000 characters" in line for line in lines), lines
 
 
@@ -2917,7 +2917,7 @@ def test_a_begin_cuts_the_newest_results_first_each_to_the_longest_start_that_fi
     for room in range(_merged_length(_begun_with(nothing_kept), True) - 2, _merged_length(_begun_with(texts), True) + 2):
         state = ConversationState(messages=_begun_with(texts))
         cutting = ResultCutting(_merged_length, state, _text_within)
-        with caplog.at_level(logging.INFO, logger="llama_chat"):
+        with caplog.at_level(logging.INFO, logger="llama_cpp_conversation"):
             caplog.clear()
             cutting.cut_to_fit(room, set())
         expected = _expected_cut(texts, room)
@@ -2925,7 +2925,7 @@ def test_a_begin_cuts_the_newest_results_first_each_to_the_longest_start_that_fi
         assert state.messages[:len(_BEGUN)] == _BEGUN
         cut = [i for i, text in enumerate(texts) if expected[i] != text]
         assert [call.id for call in state.results_cut] == [("call_a", "call_b")[i] for i in reversed(cut)]
-        logged = [r.getMessage() for r in caplog.records if r.name == "llama_chat.result_cutting"]
+        logged = [r.getMessage() for r in caplog.records if r.name == "llama_cpp_conversation.result_cutting"]
         assert [_CUT_LOGGED.search(line).groups() for line in logged] == [
             (str(_kept(expected[i])), str(len(texts[i])))
             for i in reversed(cut)], room

@@ -1,7 +1,7 @@
 # Tool calling
 
 ```python
-from llama_chat import ChatWrapper, Config, ToolCall, ToolRegistry
+from llama_cpp_conversation import ChatWrapper, Config, ToolCall, ToolRegistry
 
 registry = ToolRegistry()
 
@@ -133,7 +133,7 @@ counts as a failure too, and so does one that JSON cannot write, `NaN` and
 infinity included. A result handed to `inject_tool_result` is told the same
 way, a dict carrying `error` included; one that JSON cannot write is answered
 with the same `unwritable_result` failure, and a warning on the logger
-`llama_chat` says so. A call is read only where all of its text is
+`llama_cpp_conversation` says so. A call is read only where all of its text is
 read: text left after it, a blank pair or a key written twice makes it
 unreadable. Each call of a batch is judged on its own, so one entry that is no
 call is told so in its place while the others are answered. A call whose

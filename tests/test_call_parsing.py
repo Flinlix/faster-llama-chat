@@ -7,10 +7,10 @@ import re
 import json
 import pytest
 
-from llama_chat.call_parsing import parse_calls
-from llama_chat.template import CallBody
-from llama_chat.tools import ToolCall, MAX_ARGUMENT_DEPTH
-from llama_chat.testing.invented_templates import CALL_BODY
+from llama_cpp_conversation.call_parsing import parse_calls
+from llama_cpp_conversation.template import CallBody
+from llama_cpp_conversation.tools import ToolCall, MAX_ARGUMENT_DEPTH
+from llama_cpp_conversation.testing.invented_templates import CALL_BODY
 
 
 _KEY_VALUE = CallBody(name_close="", key_open="<key_is>", key_close="</key_is><value_is>",

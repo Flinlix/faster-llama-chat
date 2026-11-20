@@ -19,7 +19,7 @@ UNQUANTIZED_KV_CACHE_TYPE = "f16"
 
 @dataclass(frozen=True)
 class Config:
-    """Runtime configuration for :class:`~llama_chat.wrapper.ChatWrapper`, every value checked where it is made.
+    """Runtime configuration for :class:`~llama_cpp_conversation.wrapper.ChatWrapper`, every value checked where it is made.
 
     The eight model sampling fields, ``temperature`` to
     ``penalty_window_tokens``, left ``None`` take the model's own when it
@@ -66,7 +66,7 @@ class Config:
         min_reply_tokens: The room a reply keeps: a ``begin`` that leaves
             less beside a short question, and a reply going on with an open
             turn that would leave less, is refused with
-            :class:`~llama_chat.errors.ContextOverflowError`, and a longer
+            :class:`~llama_cpp_conversation.errors.ContextOverflowError`, and a longer
             question is cut to leave it. Never fewer are
             kept than the shortest reply that holds an answer takes, so ``0``
             keeps only those. It must stay below ``context_size``, which no
@@ -133,7 +133,7 @@ class Config:
         check_cache: Check, right before every generation and once the work
             after a reply has ended, that the cache holds what a fresh begin
             of its conversation holds. A fault found before a generation
-            raises :class:`~llama_chat.errors.InternalError` and the reply is
+            raises :class:`~llama_cpp_conversation.errors.InternalError` and the reply is
             put back; one found after a reply is logged and raised by the next
             action but a begin, which writes the cache anew. A fault the cache keeps is raised again by every reply
             until the conversation begins again. For finding faults: each

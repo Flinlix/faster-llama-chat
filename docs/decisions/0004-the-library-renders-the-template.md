@@ -13,12 +13,12 @@ the binding all the same, and a template's own refusal reason was lost.
 ## Decision
 
 - A context gives the template's text (`chat_template_text`) and the text of
-  its end-of-sequence token (`eos_token_text`). `llama_chat/model_template.py`
-  renders it in the environment chat templates are written for: Jinja's
-  immutable sandbox, blocks trimmed, the `generation` block tag passed
-  through, loop controls, and `tojson` writing non-ASCII as it is. These are
-  the binding formatter's settings, so every render is unchanged. `jinja2` is
-  a declared dependency.
+  its end-of-sequence token (`eos_token_text`).
+  `llama_cpp_conversation/model_template.py` renders it in the environment chat
+  templates are written for: Jinja's immutable sandbox, blocks trimmed, the
+  `generation` block tag passed through, loop controls, and `tojson` writing
+  non-ASCII as it is. These are the binding formatter's settings, so every
+  render is unchanged. `jinja2` is a declared dependency.
 - A template that is not valid template code is refused at load, naming the
   line and the cause.
 - The names a template reads are parsed by the renderer's own environment.

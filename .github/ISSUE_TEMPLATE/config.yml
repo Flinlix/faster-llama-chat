@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/Flinlix/faster-llama-chat/security/advisories/new
+    url: https://github.com/Flinlix/llama-cpp-conversation/security/advisories/new
     about: Report a vulnerability privately, as SECURITY.md describes. Do not open a public issue.

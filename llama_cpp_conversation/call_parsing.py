@@ -3,7 +3,7 @@
 A call is read in the one shape the model's template writes it in: a JSON
 object, read by the keys the template names the function and its arguments
 with, or the delimiters recovered from that template. Nothing here runs
-anything; see :mod:`llama_chat.tools` for that half.
+anything; see :mod:`llama_cpp_conversation.tools` for that half.
 """
 
 from __future__ import annotations

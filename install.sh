@@ -63,9 +63,9 @@ CMAKE_ARGS="$CMAKE_ARGS" \
 CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
     "$PYTHON" -m pip install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
 
-# Install faster-llama-chat itself (editable) so `import llama_chat` and the demo work
+# Install llama-cpp-conversation itself (editable) so `import llama_cpp_conversation` and the demo work
 # without setting PYTHONPATH. Pass --dev to also install the test, development and documentation tools.
-echo "Installing faster-llama-chat (editable)..."
+echo "Installing llama-cpp-conversation (editable)..."
 if [ "$DEV" = 1 ]; then
     "$PYTHON" -m pip install -e ".[test,dev,docs]"
     # The checks before every push: hooks/pre-push.
@@ -81,7 +81,7 @@ import llama_cpp
 # The backend's own symbol resolution is the source of truth: constructing it
 # looks up every symbol the package calls, the cache edits included, and raises
 # if this build lacks one.
-from llama_chat._backend import Backend
+from llama_cpp_conversation._backend import Backend
 Backend()
 
 print("llama-cpp-python", llama_cpp.__version__)

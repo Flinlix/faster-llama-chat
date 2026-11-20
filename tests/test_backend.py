@@ -23,18 +23,18 @@ from types import SimpleNamespace
 import llama_cpp
 import pytest
 
-from llama_chat.template import CallBoundary
+from llama_cpp_conversation.template import CallBoundary
 
-import llama_chat
+import llama_cpp_conversation
 
-from llama_chat.addon_files import read_addon_file, with_model_sampling
-from llama_chat._backend import Backend
-from llama_chat.config import Config, KV_CACHE_TYPES, Sampling, generation_sampling
-from llama_chat.tokenizing import split_at_tags, tokenize_pieces
-from llama_chat.cache_context import CACHE_CONTEXT, CacheContext
-from llama_chat.generation import GenerationAccumulator
-from llama_chat.context import KVContext, _physical_cores
-from llama_chat.generation import generate
+from llama_cpp_conversation.addon_files import read_addon_file, with_model_sampling
+from llama_cpp_conversation._backend import Backend
+from llama_cpp_conversation.config import Config, KV_CACHE_TYPES, Sampling, generation_sampling
+from llama_cpp_conversation.tokenizing import split_at_tags, tokenize_pieces
+from llama_cpp_conversation.cache_context import CACHE_CONTEXT, CacheContext
+from llama_cpp_conversation.generation import GenerationAccumulator
+from llama_cpp_conversation.context import KVContext, _physical_cores
+from llama_cpp_conversation.generation import generate
 
 # Every sampling value set, as a generation is given them.
 SAMPLING = generation_sampling(Config(), None)
@@ -174,7 +174,7 @@ def test_a_build_whose_penalty_signature_differs_is_warned_about_not_refused(cap
     backend._init_penalties = _raises_type_error
     backend._penalties_take_vocab_size = False
 
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         backend.add_penalties(object(), "vocab", 64, 1.1, 0.0, 0.0)
     assert added == [] and any("penalties" in r.getMessage() for r in caplog.records)
 
@@ -195,7 +195,7 @@ def test_the_penalties_get_the_argument_list_this_build_takes(takes_vocab_size, 
 def test_a_bindings_argument_count_is_read_from_its_types_or_its_signature():
     from types import SimpleNamespace
 
-    from llama_chat._backend import _parameter_count
+    from llama_cpp_conversation._backend import _parameter_count
     assert _parameter_count(SimpleNamespace(argtypes=[1, 2, 3, 4, 5])) == 5
     assert _parameter_count(lambda a, b, c, d: None) == 4
 
@@ -208,9 +208,9 @@ def test_only_this_layer_names_llama_cpp():
     somewhere nobody thinks to look. Read as source rather than imported,
     because an import that has not run yet would not be found.
     """
-    package = Path(llama_chat.__file__).parent
+    package = Path(llama_cpp_conversation.__file__).parent
     reaching = sorted(f.name for f in package.glob("*.py")
-                      if f.name != "_backend.py" and "llama_cpp" in f.read_text())
+                      if f.name != "_backend.py" and re.search(r"\bllama_cpp\b", f.read_text()))
     assert reaching == [], (
         f"{reaching} name llama_cpp directly; the handle belongs in _backend.py")
 
@@ -221,11 +221,11 @@ def test_a_missing_engine_package_names_its_minimum_version_and_where_the_build_
     import sys
 
     floor = re.search(r'"llama-cpp-python>=([0-9.]+)"',
-                      (Path(llama_chat.__file__).parent.parent / "pyproject.toml").read_text())[1]
+                      (Path(llama_cpp_conversation.__file__).parent.parent / "pyproject.toml").read_text())[1]
     monkeypatch.setitem(sys.modules, "llama_cpp", None)
-    monkeypatch.delitem(sys.modules, "llama_chat._backend")
+    monkeypatch.delitem(sys.modules, "llama_cpp_conversation._backend")
     with pytest.raises(ImportError) as missing:
-        importlib.import_module("llama_chat._backend")
+        importlib.import_module("llama_cpp_conversation._backend")
     assert f"llama-cpp-python {floor} or later" in str(missing.value)
     assert "README's install section" in str(missing.value)
 
@@ -520,7 +520,7 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
         decode=lambda ctx, tokens, pos, *rest: performed.append(("decode", len(tokens), pos)),
         kv_clear=lambda ctx: performed.append(("clear",)), supports_gpu_offload=lambda: False,
     )
-    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    monkeypatch.setattr("llama_cpp_conversation.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
 
@@ -556,7 +556,7 @@ def test_a_full_micro_batch_warms_up_first_only_where_layers_run_on_a_gpu(
         kv_clear=lambda ctx: performed.append(("clear",)),
         supports_gpu_offload=lambda: offload,
     )
-    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    monkeypatch.setattr("llama_cpp_conversation.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
 
@@ -586,7 +586,7 @@ def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
         decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: True,
         free_context=lambda ctx: asked.setdefault("freed", []).append(ctx),
         free_model=lambda model: asked.setdefault("freed", []).append(model))
-    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    monkeypatch.setattr("llama_cpp_conversation.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
     context = KVContext(Config(model_path=str(model), **settings))
@@ -659,10 +659,10 @@ def _processor_topology(tmp_path, monkeypatch, cores_of: dict[int, tuple[int, in
         topology.mkdir(parents=True)
         (topology / "physical_package_id").write_text(f"{package}\n")
         (topology / "core_id").write_text(f"{core}\n")
-    monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "cpu")
-    monkeypatch.setattr("llama_chat.context._CGROUP", tmp_path / "cgroup")
-    monkeypatch.setattr("llama_chat.context._OWN_CGROUPS", tmp_path / "own-cgroups")
-    monkeypatch.setattr("llama_chat.context._PERFORMANCE_CPUS", tmp_path / "performance-cpus")
+    monkeypatch.setattr("llama_cpp_conversation.context._CPU_TOPOLOGY", tmp_path / "cpu")
+    monkeypatch.setattr("llama_cpp_conversation.context._CGROUP", tmp_path / "cgroup")
+    monkeypatch.setattr("llama_cpp_conversation.context._OWN_CGROUPS", tmp_path / "own-cgroups")
+    monkeypatch.setattr("llama_cpp_conversation.context._PERFORMANCE_CPUS", tmp_path / "performance-cpus")
     (tmp_path / "own-cgroups").write_text(own_cgroups)
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(cores_of), raising=False)
 
@@ -697,7 +697,7 @@ def test_where_the_system_lists_performance_cores_only_those_are_counted(
 def test_where_the_system_does_not_say_which_core_a_thread_runs_on_the_threads_past_four_pair_up(
         tmp_path, monkeypatch, threads, cores):
     _processor_topology(tmp_path, monkeypatch, {cpu: (0, cpu) for cpu in range(threads)})
-    monkeypatch.setattr("llama_chat.context._CPU_TOPOLOGY", tmp_path / "absent")
+    monkeypatch.setattr("llama_cpp_conversation.context._CPU_TOPOLOGY", tmp_path / "absent")
     assert _physical_cores() == cores
 
 
@@ -751,7 +751,7 @@ def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, mon
         can_shift=lambda ctx: True, kv_seq_rm=lambda ctx, seq, p0, p1: True,
         kv_seq_add=lambda ctx, seq, p0, p1, delta: None,
         decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: False)
-    monkeypatch.setattr("llama_chat.context.Backend", lambda: backend)
+    monkeypatch.setattr("llama_cpp_conversation.context.Backend", lambda: backend)
     model = tmp_path / "model.gguf"
     model.touch()
     context = KVContext(Config(model_path=str(model), context_size=32, max_batch_tokens=8,
@@ -766,7 +766,7 @@ def test_an_empty_opening_still_carries_the_beginning_of_the_conversation():
 
 
 def test_every_method_takes_the_arguments_the_written_boundary_lists():
-    from llama_chat.testing.fake_context import FakeContext
+    from llama_cpp_conversation.testing.fake_context import FakeContext
 
     def parameters(owner, name):
         member = inspect.getattr_static(owner, name, None)
@@ -780,7 +780,7 @@ def test_every_method_takes_the_arguments_the_written_boundary_lists():
 def _set_flash_attn(cparams, enable, llama_cpp=None):
     """Drive Backend._set_flash_attn with fakes, bypassing llama_cpp import."""
     from types import SimpleNamespace
-    from llama_chat._backend import Backend
+    from llama_cpp_conversation._backend import Backend
 
     Backend._set_flash_attn(SimpleNamespace(_llama_cpp=llama_cpp), cparams, enable)
 
@@ -788,7 +788,7 @@ def _set_flash_attn(cparams, enable, llama_cpp=None):
 def _set_kv_cache_on_gpu(cparams, enable):
     """Drive Backend._set_kv_cache_on_gpu with fakes, bypassing llama_cpp import."""
     from types import SimpleNamespace
-    from llama_chat._backend import Backend
+    from llama_cpp_conversation._backend import Backend
 
     Backend._set_kv_cache_on_gpu(SimpleNamespace(_llama_cpp=None), cparams, enable)
 
@@ -924,13 +924,13 @@ _DEBUG, _INFO, _WARN, _ERROR, _CONTINUATION = 1, 2, 3, 4, 5
 
 def _engine_records(caplog, *calls):
     """The records the engine's log calls become, as (level, text), each call made as the engine makes it."""
-    from llama_chat import _backend
+    from llama_cpp_conversation import _backend
     caplog.clear()
-    with caplog.at_level(logging.DEBUG, logger="llama_chat"):
+    with caplog.at_level(logging.DEBUG, logger="llama_cpp_conversation"):
         for level, text in calls:
             _backend._forward_engine_log(level, text.encode("utf-8"), None)
         _backend._forward_engine_log(_INFO, b"", None)      # ends a line left open
-    assert {r.name for r in caplog.records} <= {"llama_chat.engine"}
+    assert {r.name for r in caplog.records} <= {"llama_cpp_conversation.engine"}
     return [(r.levelno, r.getMessage()) for r in caplog.records]
 
 
@@ -966,7 +966,7 @@ def test_a_call_of_several_lines_is_a_record_per_line_and_an_open_line_ends_at_t
 
 
 def test_the_engine_logs_through_this_package_once_it_is_imported():
-    from llama_chat import _backend
+    from llama_cpp_conversation import _backend
     installed = llama_cpp.llama_log_callback()
     llama_cpp.llama_log_get(ctypes.byref(installed), ctypes.byref(ctypes.c_void_p()))
     assert (ctypes.cast(installed, ctypes.c_void_p).value
@@ -974,7 +974,7 @@ def test_the_engine_logs_through_this_package_once_it_is_imported():
 
 
 def test_the_engines_output_is_controlled_with_logging_and_no_setting():
-    from llama_chat import config
+    from llama_cpp_conversation import config
     assert "log_level" not in {f.name for f in fields(Config)}
     assert not hasattr(config, "LOG_LEVELS")
 
@@ -982,10 +982,10 @@ def test_the_engines_output_is_controlled_with_logging_and_no_setting():
 def test_the_guides_logging_example_shows_every_line_the_engine_writes(tmp_path):
     import subprocess
     import sys
-    guide = Path(llama_chat.__file__).parents[1] / "docs" / "guide" / "configuration.md"
+    guide = Path(llama_cpp_conversation.__file__).parents[1] / "docs" / "guide" / "configuration.md"
     example = re.search(r"\*\*Logging\.\*\*.*?```python\n(.*?)```", guide.read_text(encoding="utf-8"),
                         re.S).group(1)
-    script = example + ("from llama_chat import _backend\n"
+    script = example + ("from llama_cpp_conversation import _backend\n"
                         f"_backend._forward_engine_log({_DEBUG}, b'a debug line\\n', None)\n")
     ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                          cwd=tmp_path, check=True)
@@ -1012,7 +1012,7 @@ def _penalized_draws(sampling, histories, logits, monkeypatch, filtered: bool) -
     """The token the chain ``sampling`` asks for draws after each history, over ``logits``, with or without the filter before the penalties."""
     import random as _random
 
-    import llama_chat.context as context_module
+    import llama_cpp_conversation.context as context_module
     if not filtered:
         monkeypatch.setattr(context_module, "_candidates_before_penalties", lambda *args: None)
     ctx = object.__new__(KVContext)
@@ -1056,7 +1056,7 @@ def test_a_filter_before_penalties_that_only_lower_leaves_every_draw_as_it_was(
 
 
 def test_penalties_are_applied_to_the_likeliest_tokens_alone_only_where_they_only_lower():
-    import llama_chat.context as context_module
+    import llama_cpp_conversation.context as context_module
     sampling = generation_sampling(Config(), Sampling(
         temperature=0.8, top_k=40, top_p=0.95, min_p=0.0, repetition_penalty=1.1,
         presence_penalty=0.0, frequency_penalty=0.0, penalty_window_tokens=64))

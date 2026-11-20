@@ -4,13 +4,13 @@ import re
 import random
 import pytest
 
-from llama_chat.reply_text import ReplyText, reply_header
-from llama_chat.template import Reasoning
+from llama_cpp_conversation.reply_text import ReplyText, reply_header
+from llama_cpp_conversation.template import Reasoning
 
 
 # ----- stop-string scanning ------------------------------------------------
 def test_the_earliest_of_several_needles_is_found():
-    from llama_chat.reply_text import earliest
+    from llama_cpp_conversation.reply_text import earliest
 
     assert earliest("abcSTOPdef", ["STOP"]) == 3
     assert earliest("aXbYc", ["Y", "X"]) == 1          # earliest of several
@@ -105,7 +105,7 @@ def test_whitespace_opening_a_reply_without_a_thought_stays_the_answers():
 
 
 def test_a_stop_string_ends_the_answer_before_it_even_where_a_later_piece_holds_it_twice():
-    from llama_chat.reply_text import _AnswerStops
+    from llama_cpp_conversation.reply_text import _AnswerStops
     stops = _AnswerStops(["\n"])
     stops.feed("Hello")
     stops.feed("\n\nmore")
@@ -196,7 +196,7 @@ def test_the_thought_count_is_the_number_of_pieces_that_hold_part_of_a_thought()
 
 
 def test_a_place_inside_a_tag_moves_to_the_start_or_end_of_a_tag_around_it_and_any_other_place_stays():
-    from llama_chat.reply_text import _outside_tags
+    from llama_cpp_conversation.reply_text import _outside_tags
     rng = random.Random(3)
     for _ in range(4000):
         tags = tuple(rng.sample(["<|a|>", "<<", "ab", "|>"], rng.randint(1, 2)))

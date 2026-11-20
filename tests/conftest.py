@@ -12,10 +12,10 @@ import sys
 
 import pytest
 
-from llama_chat.errors import ArgumentTypeError, EngineError, InternalError, RefusalError
-from llama_chat.wrapper import ChatWrapper
+from llama_cpp_conversation.errors import ArgumentTypeError, EngineError, InternalError, RefusalError
+from llama_cpp_conversation.wrapper import ChatWrapper
 
-from llama_chat.testing.fake_context import RecordedTemplate
+from llama_cpp_conversation.testing.fake_context import RecordedTemplate
 from .internals import context_of, is_closed
 from .wrappers import (assert_cache_reads_as_rendered, assert_conversation_is_its_forms,
                        assert_kept_turns_hold_no_later_result)
@@ -41,19 +41,19 @@ _TIME_LIMIT_S = 60
 
 
 def pytest_configure(config):
-    """Have the library render each template through :class:`RecordedTemplate`, compiled once per text and each render counted; with ``LLAMA_CHAT_CHECK_EVERY_ACTION=1``, check every action's cache against a fresh begin; and keep nothing of Hypothesis's on disk."""
+    """Have the library render each template through :class:`RecordedTemplate`, compiled once per text and each render counted; with ``LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION=1``, check every action's cache against a fresh begin; and keep nothing of Hypothesis's on disk."""
     from hypothesis import configuration
     # A home it cannot write to: it then keeps neither examples nor what it read of the code.
     configuration.set_hypothesis_home_dir(os.devnull)
-    from llama_chat import resolved_template
+    from llama_cpp_conversation import resolved_template
     resolved_template.ModelTemplate = RecordedTemplate
-    if os.environ.get("LLAMA_CHAT_CHECK_EVERY_ACTION") == "1":
+    if os.environ.get("LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION") == "1":
         from dataclasses import replace
-        from llama_chat.rendered_cache import RenderedCache
+        from llama_cpp_conversation.rendered_cache import RenderedCache
         build = RenderedCache.__init__
 
         def checking(self, context, templates, settings):
-            from llama_chat.cache_check import _ReadsTokensOnly
+            from llama_cpp_conversation.cache_check import _ReadsTokensOnly
             checks = not isinstance(context, _ReadsTokensOnly)     # the fresh begin, not again
             build(self, context, templates, replace(settings, check_cache=checks))
         RenderedCache.__init__ = checking
@@ -68,7 +68,7 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Leave out the tests that count the library's work where every action is checked, which adds work of its own."""
-    if os.environ.get("LLAMA_CHAT_CHECK_EVERY_ACTION") != "1":
+    if os.environ.get("LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION") != "1":
         return
     skip = pytest.mark.skip(reason="counts the library's work, which the check adds to")
     for item in items:
@@ -124,7 +124,7 @@ def _every_library_error_says_what_went_wrong(monkeypatch):
             while maker.f_code.co_name == "__init__":     # a subclass's own, which builds on this one
                 maker = maker.f_back
             module = maker.f_globals.get("__name__", "")
-            if module.startswith("llama_chat.") and not module.startswith("llama_chat.testing"):
+            if module.startswith("llama_cpp_conversation.") and not module.startswith("llama_cpp_conversation.testing"):
                 made.append(self)
         monkeypatch.setattr(kind, "__init__", recording)
     yield
@@ -137,7 +137,7 @@ def _every_library_error_says_what_went_wrong(monkeypatch):
 @pytest.fixture
 def clock(monkeypatch):
     """The time a template that reads the clock is rendered at, a minute before midnight until a test moves it."""
-    from llama_chat import model_template
+    from llama_cpp_conversation import model_template
     today = [datetime.datetime(2026, 11, 7, 23, 59)]
 
     class _Clock:

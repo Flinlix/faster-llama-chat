@@ -178,7 +178,7 @@ class ModelTemplate:
         Args:
             generation_prompt: Append the prompt a reply is generated after.
             reasoning: Turn the template's reasoning switch on or off, as
-                :func:`~llama_chat.template_extract.reasoning_switch` reads it,
+                :func:`~llama_cpp_conversation.template_extract.reasoning_switch` reads it,
                 or on at the effort level a text names. ``None`` leaves it unset.
             variables: Further template variables, by name, each in place of
                 the switch's own value where it names the switch.

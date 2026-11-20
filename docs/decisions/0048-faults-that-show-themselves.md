@@ -24,7 +24,7 @@ that never ended, on a turn a reply cap cut inside a call.
   and decodes nothing: right before a generation, where they must be equal,
   and once the work after a reply has ended, where they may differ in length
   but in no shared token. What it finds after a reply is raised by the next
-  action. `LLAMA_CHAT_CHECK_EVERY_ACTION=1` turns it on for every wrapper of
+  action. `LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION=1` turns it on for every wrapper of
   the suite.
 - **Random sequences by Hypothesis**, whose database is off and whose home is
   the null device, so nothing is kept on disk; a failure prints the blob that
@@ -35,10 +35,10 @@ that never ended, on a turn a reply cap cut inside a call.
 - **Lint and type checks are tests** (ruff with E, F, W and B; mypy with
   optional values checked). `DrawnSampling`, every value set, is the only
   sampling a generation takes.
-- **Real model files** are named by the environment: `LLAMA_CHAT_TEST_MODELS`,
-  and `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND`, a shell command that prints the
+- **Real model files** are named by the environment: `LLAMA_CPP_CONVERSATION_TEST_MODELS`,
+  and `LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND`, a shell command that prints the
   MiB the process `{pid}` holds on the GPU. On an Nvidia card:
-  `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND='nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits | awk -F", " "\$1=={pid}{print \$2}"'`.
+  `LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND='nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits | awk -F", " "\$1=={pid}{print \$2}"'`.
   Each runs 120 turns with `check_cache` on, cuts and begins again, and bounds
   growth after 30 turns to 64 MiB of RAM and 16 MiB of GPU memory.
 - **Before each push**, `hooks/pre-push` refuses a working tree that differs

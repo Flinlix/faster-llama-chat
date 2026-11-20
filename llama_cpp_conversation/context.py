@@ -3,7 +3,7 @@
 Owns the model and the context, reads the sampling the model's GGUF
 recommends, and builds each generation's sampler. What the cache should hold
 is decided by the caller, and how a generation goes on by
-:mod:`llama_chat.generation`.
+:mod:`llama_cpp_conversation.generation`.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# faster-llama-chat
+# llama-cpp-conversation
 
 --8<-- "README.md:lead"
 
@@ -10,7 +10,7 @@
 
 Both use the same cache operations; the policy differs.
 
-| | llama.cpp's server | faster-llama-chat |
+| | llama.cpp's server | llama-cpp-conversation |
 |------|------|------|
 | what is removed | a fixed token count from `n_keep`, which can cut inside a message or a tag | whole exchanges, from a user turn to the next one, so the cache always holds turns the template writes |
 | the system prompt | `--keep N`, a hand-counted offset | pinned, never evicted |

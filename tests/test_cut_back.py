@@ -5,19 +5,19 @@ import pytest
 from tests import internals
 from tests.chat_messages import opened, Result, tool_turn
 
-from llama_chat.config import Config
-from llama_chat.resolved_template import ResolvedTemplate
-from llama_chat.tools import ToolSpec, ToolCall
-from llama_chat.wrapper import ChatWrapper
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.resolved_template import ResolvedTemplate
+from llama_cpp_conversation.tools import ToolSpec, ToolCall
+from llama_cpp_conversation.wrapper import ChatWrapper
 from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS, WEATHER
-from llama_chat.testing.fake_context import FakeContext, ScriptedCall
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import token_id_range
-from llama_chat.testing.invented_templates import PLAIN, TOOLS
+from llama_cpp_conversation.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
                             reasoning_wrapper, rendered_reply, rows, ask_through_a_tool_call)
-from llama_chat import OutOfOrderError, ContextOverflowError, TemplateRefusedError
-from llama_chat.errors import InvalidArgumentError
-from llama_chat.tool_registry import ToolRegistry
+from llama_cpp_conversation import OutOfOrderError, ContextOverflowError, TemplateRefusedError
+from llama_cpp_conversation.errors import InvalidArgumentError
+from llama_cpp_conversation.tool_registry import ToolRegistry
 def _without_restore(fake):
     class Wrapped:
         def __getattr__(self, name):
@@ -302,7 +302,7 @@ def test_a_cache_context_whose_list_of_tags_leaves_one_out_is_refused_at_load_na
 
 def test_a_reply_cut_to_nothing_after_its_call_keeps_neither_its_text_nor_the_result_in_the_turn():
     """The cut searches for the call's closing only before the reply's own text, which may spell it."""
-    from llama_chat.tool_registry import ToolRegistry
+    from llama_cpp_conversation.tool_registry import ToolRegistry
     registry = ToolRegistry()
     registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
     wrapper, fake = tool_wrapper(context_size=2048, writes_tags=False)

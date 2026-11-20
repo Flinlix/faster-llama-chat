@@ -16,7 +16,7 @@ from hypothesis import HealthCheck, assume, note, settings, strategies as st
 from hypothesis.stateful import (RuleBasedStateMachine, initialize, invariant, precondition, rule,
                                  run_state_machine_as_test)
 
-from llama_chat.addon_files import template_fingerprint
+from llama_cpp_conversation.addon_files import template_fingerprint
 from tests.sequence_run import KINDS, SequenceRun, _known
 
 # Each run draws its choices from the test's own source, so that nothing is saved between
@@ -26,7 +26,7 @@ _SHARED = dict(database=None, deadline=None, print_blob=True,
                                       HealthCheck.filter_too_much])
 # A run of the suite: the same sequences every time. A slow run: new ones every time.
 _EVERY_RUN = settings(max_examples=40, stateful_step_count=12, derandomize=True, **_SHARED)
-_SLOW_RUN = settings(max_examples=int(os.environ.get("LLAMA_CHAT_SLOW_EXAMPLES", "1500")),
+_SLOW_RUN = settings(max_examples=int(os.environ.get("LLAMA_CPP_CONVERSATION_SLOW_EXAMPLES", "1500")),
                      stateful_step_count=24, **_SHARED)
 
 

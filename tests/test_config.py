@@ -8,7 +8,7 @@ import pytest
 
 from tests.chat_messages import opened
 
-from llama_chat.config import (KV_CACHE_TYPES, UNQUANTIZED_KV_CACHE_TYPE, Config,
+from llama_cpp_conversation.config import (KV_CACHE_TYPES, UNQUANTIZED_KV_CACHE_TYPE, Config,
                                InvalidSettingError, Sampling, with_request_sampling)
 
 
@@ -129,7 +129,7 @@ def test_a_whole_number_is_taken_where_a_fraction_is():
 @pytest.mark.parametrize("name", ["max_reply_tokens", "max_thought_tokens"])
 @pytest.mark.parametrize("cap", ["10", 2.5, True, 0])
 def test_a_request_cap_of_another_type_or_allowing_nothing_is_refused(cap, name):
-    from llama_chat.config import ensure_token_cap
+    from llama_cpp_conversation.config import ensure_token_cap
     with pytest.raises(InvalidSettingError, match=name):
         ensure_token_cap(cap, name)
     with pytest.raises(InvalidSettingError, match=name):
@@ -151,7 +151,7 @@ def test_an_eviction_threshold_that_rounds_to_nothing_is_refused():
 
 @pytest.mark.parametrize("model_path", [None, "", "no-such-model.gguf"])
 def test_a_model_path_that_names_no_file_is_a_refused_setting(tmp_path, model_path):
-    from llama_chat import ChatWrapper
+    from llama_cpp_conversation import ChatWrapper
     path = model_path and str(tmp_path / model_path)
     with pytest.raises(InvalidSettingError) as refused:
         ChatWrapper(Config(model_path=path))
@@ -160,9 +160,9 @@ def test_a_model_path_that_names_no_file_is_a_refused_setting(tmp_path, model_pa
 
 @pytest.mark.parametrize("cap", [0, -1])
 def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
-    from llama_chat import ChatWrapper
-    from llama_chat.testing.fake_context import FakeContext
-    from llama_chat.testing.invented_templates import PLAIN
+    from llama_cpp_conversation import ChatWrapper
+    from llama_cpp_conversation.testing.fake_context import FakeContext
+    from llama_cpp_conversation.testing.invented_templates import PLAIN
     wrapper = ChatWrapper(Config(context_size=400), context=FakeContext(PLAIN))
     wrapper.begin(opened("s"))
     with pytest.raises(InvalidSettingError) as refused:
@@ -173,7 +173,7 @@ def test_a_request_cap_that_allows_no_token_is_refused_where_it_is_given(cap):
 
 
 def test_how_far_an_eviction_drops_without_a_shift_is_fixed_and_no_setting():
-    from llama_chat.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
+    from llama_cpp_conversation.eviction import EVICT_TO_FRACTION_WITHOUT_SHIFT
     assert "evict_to_fraction_without_shift" not in {f.name for f in fields(Config)}
     assert 0.0 < EVICT_TO_FRACTION_WITHOUT_SHIFT <= 1.0
 
@@ -218,7 +218,7 @@ def test_a_request_is_refused_exactly_as_the_configuration_refuses_it(bad):
     (dict(evict_above_fraction=0.0), "evict_above_fraction"),
     (dict(min_reply_tokens=5000), "min_reply_tokens")])
 def test_a_refused_setting_names_its_field_as_data(settings, field):
-    from llama_chat import InvalidSettingError
+    from llama_cpp_conversation import InvalidSettingError
     with pytest.raises(InvalidSettingError) as refused:
         Config(**settings)
     assert refused.value.field == field and isinstance(refused.value, ValueError)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from llama_chat.tools import ToolCall
+from llama_cpp_conversation.tools import ToolCall
 
 
 @dataclass(frozen=True)
@@ -74,8 +74,8 @@ def opened(system_prompt: str, messages=()) -> list[dict]:
     as JSON, and a result without the id of its call answers the oldest
     call still owed one, its value written as JSON.
     """
-    from llama_chat.messages import call_id
-    from llama_chat.tools import result_text
+    from llama_cpp_conversation.messages import call_id
+    from llama_cpp_conversation.tools import result_text
     messages = list(messages)
     taken = {c.get("id") for m in messages if isinstance(m, dict) for c in m.get("tool_calls") or ()}
     numbers = (n for n in range(10 ** 6) if call_id(n) not in taken)

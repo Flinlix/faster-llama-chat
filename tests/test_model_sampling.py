@@ -5,12 +5,12 @@ import re
 
 import pytest
 
-from llama_chat import addon_files
-from llama_chat.addon_files import (
+from llama_cpp_conversation import addon_files
+from llama_cpp_conversation.addon_files import (
     DEFAULT_SAMPLING, SHIPPED_ADDONS, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
-from llama_chat import InvalidSettingError
-from llama_chat.config import Config
+from llama_cpp_conversation import InvalidSettingError
+from llama_cpp_conversation.config import Config
 from tests.chat_templates import STEMS, expected, fixture
 
 _TEMPLATE = "{{ messages }}"
@@ -93,7 +93,7 @@ def test_a_file_next_to_the_model_that_does_not_name_its_template_is_not_used(
     (tmp_path / "shipped" / "family.json").write_text(json.dumps(
         {"templates": [template_fingerprint(_TEMPLATE)], "sampling": {"top_p": 0.8}}))
     model = _own_file(tmp_path, contents)
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         assert addon_file(model, _TEMPLATE)["sampling"] == {"top_p": 0.8}
     assert len(caplog.records) == 1 and why in caplog.records[0].getMessage()
     assert str(tmp_path / "m.json") in caplog.records[0].getMessage()
@@ -108,7 +108,7 @@ def test_a_file_next_to_the_model_that_is_not_json_is_refused_naming_it(tmp_path
 
 def test_a_file_next_to_a_model_without_a_template_is_not_used(tmp_path, caplog):
     model = _own_file(tmp_path, {"templates": ["0" * 64], "sampling": {"top_p": 0.5}})
-    with caplog.at_level("WARNING", logger="llama_chat"):
+    with caplog.at_level("WARNING", logger="llama_cpp_conversation"):
         assert addon_file(model, None)["sampling"] == {}
     assert "ships no chat template" in caplog.records[0].getMessage()
 
@@ -264,8 +264,8 @@ def test_a_reasoning_on_that_names_no_variable_is_refused_naming_the_file(tmp_pa
 
 def test_an_add_on_file_naming_levels_for_a_template_that_tells_its_own_apart_is_refused_at_load(tmp_path):
     from tests.chat_templates import STEMS, expected, fixture
-    from llama_chat import ChatWrapper
-    from llama_chat.testing.fake_context import FakeContext
+    from llama_cpp_conversation import ChatWrapper
+    from llama_cpp_conversation.testing.fake_context import FakeContext
     # A template whose levels come from itself, not from a shipped file.
     stem = next(stem for stem in sorted(STEMS) if expected(fixture(stem), "reasoning_levels")
                 and not addon_file(None, fixture(stem)["chat_template"])["reasoning_levels"])

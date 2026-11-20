@@ -56,7 +56,7 @@ class Reply:
             Reported whatever became of them, so a call that was refused rather
             than run still says what the model asked for, and one that could
             not be read or was cut short is reported with that
-            :attr:`~llama_chat.tools.ToolCall.status`.
+            :attr:`~llama_cpp_conversation.tools.ToolCall.status`.
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran without the token that opens a call. Always
             ``False`` where no call was asked for.
@@ -121,7 +121,7 @@ class Report:
             generated turns it was given.
         generated_turns_ignored: Whether generated turns ``begin`` was given
             went unused: another model's, or ones changed since
-            :meth:`~llama_chat.wrapper.ChatWrapper.conversation` gave them
+            :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.conversation` gave them
             out, whose turns are written as the template writes them.
         tool_results_cut: The calls whose result was cut to fit, with a note
             telling the model how much was kept.

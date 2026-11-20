@@ -121,7 +121,7 @@ class Library:
     """The library's wrapper as one side."""
 
     def __init__(self, model_path: str, context: int, sampling: dict):
-        from llama_chat import ChatWrapper, Config
+        from llama_cpp_conversation import ChatWrapper, Config
         started = time.perf_counter()
         self.chat = ChatWrapper(Config(model_path=model_path, context_size=context, **sampling))
         self.load_s = time.perf_counter() - started

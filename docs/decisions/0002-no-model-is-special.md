@@ -17,13 +17,14 @@ one model, and it hides whether the general path works.
   is a kind of template any model may have. Only what is known from one model
   alone goes into that model's add-on file.
 - No file names a model, a family or a vendor, except the model's own files (a
-  test template in `tests/templates/`, an add-on file in `llama_chat/addons/`),
-  the decision records, the README's install section, `install.sh` and
-  `pyproject.toml`. llama.cpp and llama-cpp-python may be named anywhere.
+  test template in `tests/templates/`, an add-on file in
+  `llama_cpp_conversation/addons/`), the decision records, the README's install
+  section, `install.sh` and `pyproject.toml`. llama.cpp and llama-cpp-python
+  may be named anywhere.
 - The tests name no model either, and write no tag of a real template. A test
   chooses its templates by what they do, from properties stated in each test
   template's file (0047). Real model files are named by the environment
-  (`LLAMA_CHAT_TEST_MODELS`), never in the tree.
+  (`LLAMA_CPP_CONVERSATION_TEST_MODELS`), never in the tree.
 - `tests/test_neutral.py` enforces this over every text file of the project,
   except hidden folders, `__pycache__`, `*.egg-info` and the result files a
   mutation run writes (names beginning `mutmut-`). It reads the families,

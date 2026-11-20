@@ -22,7 +22,7 @@ while read -r local_ref local_sha _remote_ref _remote_sha; do
 done
 PYTHON="${PYTHON:-python}"
 "$PYTHON" -m pytest -q -p no:cacheprovider -n auto
-LLAMA_CHAT_SLOW_EXAMPLES=200 "$PYTHON" -m pytest -q -p no:cacheprovider -m slow tests/test_sequences.py
+LLAMA_CPP_CONVERSATION_SLOW_EXAMPLES=200 "$PYTHON" -m pytest -q -p no:cacheprovider -m slow tests/test_sequences.py
 site="$(mktemp -d)"
 trap 'rm -rf "$site"' EXIT
 "$PYTHON" -m mkdocs build --strict --quiet --site-dir "$site"

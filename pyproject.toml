@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "faster-llama-chat"
+name = "llama-cpp-conversation"
 version = "3.0.0"
 description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict the oldest exchanges."
 readme = "README.md"
@@ -32,10 +32,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Flinlix/faster-llama-chat"
-Documentation = "https://flinlix.github.io/faster-llama-chat/"
-Source = "https://github.com/Flinlix/faster-llama-chat"
-Issues = "https://github.com/Flinlix/faster-llama-chat/issues"
+Homepage = "https://github.com/Flinlix/llama-cpp-conversation"
+Documentation = "https://flinlix.github.io/llama-cpp-conversation/"
+Source = "https://github.com/Flinlix/llama-cpp-conversation"
+Issues = "https://github.com/Flinlix/llama-cpp-conversation/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7,<10", "pytest-xdist>=3,<4", "hypothesis>=6,<7"]
@@ -43,10 +43,10 @@ dev = ["mypy>=1,<3", "ruff>=0.5,<0.18", "mutmut>=3,<4"]
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10", "mkdocstrings[python]>=0.26,<2"]
 
 [tool.setuptools.packages.find]
-include = ["llama_chat*"]
+include = ["llama_cpp_conversation*"]
 
 [tool.setuptools.package-data]
-llama_chat = ["addons/*.json", "py.typed"]
+llama_cpp_conversation = ["addons/*.json", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -59,17 +59,17 @@ lint.select = ["E", "F", "W", "B"]
 lint.ignore = ["E501", "B905"]
 
 [tool.mypy]
-packages = ["llama_chat"]
+packages = ["llama_cpp_conversation"]
 # The engine's bindings ship no types.
 ignore_missing_imports = true
 
 [tool.mutmut]
 # A run now and then, for hours: python -m tests.mutation_run, then mutmut results.
-source_paths = ["llama_chat/"]
+source_paths = ["llama_cpp_conversation/"]
 # The protocol a cache context answers, which the library reads by its method names, and the
 # engine's own modules, which only a real model runs.
-do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py",
-                 "llama_chat/context.py", "llama_chat/testing/*"]
+do_not_mutate = ["llama_cpp_conversation/cache_context.py", "llama_cpp_conversation/_backend.py",
+                 "llama_cpp_conversation/context.py", "llama_cpp_conversation/testing/*"]
 # What the tests read besides the code.
 also_copy = ["README.md", "AGENTS.md", "CLAUDE.md", "docs", "pyproject.toml", "install.sh",
              "LICENSE", "NOTICE", "examples", "hooks"]

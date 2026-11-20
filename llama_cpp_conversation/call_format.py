@@ -41,7 +41,7 @@ def extract_tool_fragments(render: Render, fragments: TemplateFragments,
     """Recover what a template wraps a generated tool call in.
 
     Args:
-        render: As :func:`~llama_chat.template_extract.extract_fragments`.
+        render: As :func:`~llama_cpp_conversation.template_extract.extract_fragments`.
         fragments: The recovered turn tags.
         tags: The texts of the model's own tags, where a tag ends.
 
@@ -116,7 +116,7 @@ def extract_call_body(render: Render, call_open: str,
     See docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md.
 
     Args:
-        render: As :func:`~llama_chat.template_extract.extract_fragments`.
+        render: As :func:`~llama_cpp_conversation.template_extract.extract_fragments`.
         call_open: The recovered opening, tag and lead-in together.
         close_tag: The control token that ends a call, on its own; not the
             recovered ``call_close``, which carries the body's own ending in

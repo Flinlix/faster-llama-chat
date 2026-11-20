@@ -75,7 +75,7 @@ class _EngineLog:
             self._logger.log(self._level, line)
 
 
-_engine_log = _EngineLog(logging.getLogger("llama_chat.engine"))
+_engine_log = _EngineLog(logging.getLogger("llama_cpp_conversation.engine"))
 
 
 @llama_cpp.llama_log_callback

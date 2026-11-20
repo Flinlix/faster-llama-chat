@@ -24,7 +24,7 @@ _RESULTS = _ROOT / "mutants"
 _STATS = _RESULTS / "mutmut-stats.json"
 _FINGERPRINTS = _RESULTS / "mutmut-test-fingerprints.json"
 # Test code the tests share: every file in the tests folder but a test module, and the library's testing package.
-_SHARED = (_TESTS, _ROOT / "llama_chat" / "testing")
+_SHARED = (_TESTS, _ROOT / "llama_cpp_conversation" / "testing")
 _MUTANT_MARK = "__mutmut_"
 
 

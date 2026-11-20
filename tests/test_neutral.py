@@ -1,7 +1,7 @@
 """No file but a model file names a model, family or vendor, or writes a tag of a real template.
 
 A model file is a test template or what its file says of it, in
-``tests/templates/``, or an add-on file in ``llama_chat/addons/``. The other
+``tests/templates/``, or an add-on file in ``llama_cpp_conversation/addons/``. The other
 exemptions are listed below.
 """
 
@@ -13,12 +13,12 @@ from typing import NamedTuple
 
 import pytest
 
-from llama_chat.addon_files import template_fingerprint
+from llama_cpp_conversation.addon_files import template_fingerprint
 
 from .chat_templates import STEMS, expected, fixture
 
 _ROOT = Path(__file__).parent.parent
-_PACKAGE = _ROOT / "llama_chat"
+_PACKAGE = _ROOT / "llama_cpp_conversation"
 _ADDONS = sorted((_PACKAGE / "addons").glob("*.json"))
 
 # Folders of model files and of the decision records, and files that may name a model: the
@@ -33,7 +33,7 @@ _INSTALL_SECTION = re.compile(r"(?ms)^## Install$.*?(?=^## )")
 _SUPPORTED_SECTION = re.compile(r"(?ms)^## Supported models$.*?(?=^## )")
 
 # The library's and its engine's own names, which hold a family's letters.
-_OWN_NAMES = ("faster-llama-chat", "llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
+_OWN_NAMES = ("llama-cpp-conversation", "llama-cpp-python", "llama_cpp_conversation", "llama.cpp", "llama_cpp")
 _OWN_NAME = re.compile("|".join(map(re.escape, _OWN_NAMES)), re.IGNORECASE)
 # The engine's module, its tests, the benchmark that runs the engine's own chat interface and
 # the script that reads a model file's vocabulary, which name the engine's functions: the
@@ -238,7 +238,7 @@ def test_a_file_writes_no_tag_of_a_real_template(path):
 
 
 def test_the_invented_templates_tags_are_no_real_templates():
-    from llama_chat.testing.invented_templates import INVENTED
+    from llama_cpp_conversation.testing.invented_templates import INVENTED
     invented = {tag for template in INVENTED.values() for tag in template["tags"]}
     assert invented and not invented & _template_tags()
 

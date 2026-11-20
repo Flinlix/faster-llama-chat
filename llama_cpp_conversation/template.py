@@ -206,7 +206,7 @@ class Reasoning:
         past_keeps_thought: Whether the template writes a past reply's thought
             into the conversation, rather than leaving it out.
         past_thought_form: Which of
-            :data:`~llama_chat.messages.THOUGHT_FORMS` the template reads a
+            :data:`~llama_cpp_conversation.messages.THOUGHT_FORMS` the template reads a
             past reply's thought in, where it keeps one.
         can_turn_off: Whether the template's switch writes a reply without
             reasoning otherwise than one with it.

@@ -1,11 +1,11 @@
-# faster-llama-chat
+# llama-cpp-conversation
 
 ## Rules
 
-faster-llama-chat keeps a chat model's conversation in its cache exactly as the
-model's own template writes it, decodes only what changed, for any model that
-ships a template, and refuses where it would have to guess. Each rule names the
-tests that try to break it.
+llama-cpp-conversation keeps a chat model's conversation in its cache exactly
+as the model's own template writes it, decodes only what changed, for any model
+that ships a template, and refuses where it would have to guess. Each rule
+names the tests that try to break it.
 
 1. **The cache is the template's render, token for token.** Every model whose
    GGUF ships a chat template is encoded as that template renders it, without
@@ -41,11 +41,11 @@ tests that try to break it.
      naming where it stands.
 3. **No model is special.** What a model needs beyond its chat template comes
    from a small JSON add-on file: the one next to the GGUF with its name, or
-   one shipped in `llama_chat/addons/` and matched by the template's
+   one shipped in `llama_cpp_conversation/addons/` and matched by the template's
    fingerprint. It fills in only what the template cannot tell, except a call
    format it names, which wins. No file names a model, a family or a vendor,
    except the model's own files (a test template in `tests/templates/`, an
-   add-on file in `llama_chat/addons/`), the decision records in
+   add-on file in `llama_cpp_conversation/addons/`), the decision records in
    `docs/decisions/`, the README's install section and its list of supported
    models, and the install files (`install.sh`, `pyproject.toml`); llama.cpp
    and llama-cpp-python may be named in any file.
@@ -145,8 +145,8 @@ In an environment where this package is installed editable with its `test`,
 ```
 python -m pytest -q -n auto   # everything needing no model: rules, lint, types, prose, contract
 python -m pytest -q -m slow   # many new random sequences of actions
-python -m pytest -q -m gpu    # real model files named in LLAMA_CHAT_TEST_MODELS
-LLAMA_CHAT_CHECK_EVERY_ACTION=1 python -m pytest -q -n auto   # every wrapper checked against a fresh begin
+python -m pytest -q -m gpu    # real model files named in LLAMA_CPP_CONVERSATION_TEST_MODELS
+LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION=1 python -m pytest -q -n auto   # every wrapper checked against a fresh begin
 mkdocs build --strict         # the documentation site
 ```
 

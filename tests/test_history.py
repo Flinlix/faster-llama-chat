@@ -5,27 +5,27 @@ import json
 
 import pytest
 
-from llama_chat.config import Config
-from llama_chat.errors import ContextOverflowError, InvalidArgumentError, TemplateRefusedError
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall, ToolSpec
-from llama_chat.wrapper import ChatWrapper
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.errors import ContextOverflowError, InvalidArgumentError, TemplateRefusedError
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall, ToolSpec
+from llama_cpp_conversation.wrapper import ChatWrapper
 from tests import internals
 from tests.chat_messages import Result, tool_turn, opened, after_system
-from llama_chat.testing.fake_context import FakeContext, ScriptedCall
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import pending_calls_held
-from llama_chat.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_KEEPING_THOUGHTS, TOOLS,
+from llama_cpp_conversation.testing.invented_templates import (CALL_TAGS, PLAIN, REASONING_KEEPING_THOUGHTS, TOOLS,
                                       TOOLS_CLOSING_OPEN_TURNS, JSON_TOOLS, REFUSES_A_TEXT,
                                       REFUSES_TWO_USER_TURNS)
 
 from tests.wrappers import (add_tools, begun_wrapper, tool_wrapper, unbegun_tool_wrapper,
                             weather_registry, rows, ask_through_a_tool_call, with_check_first)
 from tests.chat_templates import STEMS, WEATHER, fixture
-from llama_chat.history_forms import (completions_messages, generated_turn_records, read_messages,
+from llama_cpp_conversation.history_forms import (completions_messages, generated_turn_records, read_messages,
                                       with_generated_turns)
-from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL, THOUGHT_KEY
-from llama_chat.rendering import GeneratedTurn
-from llama_chat.result_cutting import cut_result
+from llama_cpp_conversation.messages import GENERATED_TURN, UNREADABLE_CALL, THOUGHT_KEY
+from llama_cpp_conversation.rendering import GeneratedTurn
+from llama_cpp_conversation.result_cutting import cut_result
 
 
 # ----- beginning again from conversation() ---------------------------------
@@ -309,7 +309,7 @@ def test_a_call_left_without_a_result_before_a_later_question_stays_in_its_place
 
 def test_a_call_after_beginning_again_takes_no_id_an_evicted_call_had():
     """Within one wrapper no two calls share an id, a call the model makes after a begin included."""
-    from llama_chat.testing.invented_templates import TOOLS
+    from llama_cpp_conversation.testing.invented_templates import TOOLS
     registry = weather_registry()
     fake = FakeContext(TOOLS)
     w = ChatWrapper(Config(context_size=2048, evict_above_fraction=0.9, max_history_exchanges=1),
@@ -412,7 +412,7 @@ def test_generated_turns_not_as_a_conversation_gives_them_are_refused_naming_the
 
 def test_a_begin_takes_back_a_conversation_whose_result_was_cut_and_cuts_a_long_one_itself():
     """A begin gives the newest exchange the room a running conversation gives it."""
-    from llama_chat.testing.invented_templates import JSON_TOOLS
+    from llama_cpp_conversation.testing.invented_templates import JSON_TOOLS
     clock = ToolSpec("clock", "time", {"type": "object", "properties": {}})
     fake = FakeContext(JSON_TOOLS)
     w = ChatWrapper(Config(context_size=600), context=fake)
@@ -539,7 +539,7 @@ def test_a_reply_that_ran_to_the_end_of_the_context_begins_again():
 
 def test_two_questions_in_a_row_are_joined_at_a_begin_where_the_template_writes_no_two():
     """As a running conversation joins them, so a history kept with both, as a server keeps it, begins again."""
-    from llama_chat.testing.invented_templates import REFUSES_TWO_USER_TURNS
+    from llama_cpp_conversation.testing.invented_templates import REFUSES_TWO_USER_TURNS
     w = ChatWrapper(Config(context_size=500), context=FakeContext(REFUSES_TWO_USER_TURNS, gen_tokens=3))
     report = w.begin(opened("s", [{"role": "user", "content": "eins"},
                                   {"role": "user", "content": "zwei"}]))
@@ -551,9 +551,9 @@ def test_two_questions_in_a_row_are_joined_at_a_begin_where_the_template_writes_
 
 def test_two_turns_kept_as_generated_around_questions_joined_are_one_record():
     """A record that joins two questions takes in the turn kept before them, the branch that merges records."""
-    from llama_chat.history_forms import generated_turn_records
-    from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL
-    from llama_chat.rendering import GeneratedTurn
+    from llama_cpp_conversation.history_forms import generated_turn_records
+    from llama_cpp_conversation.messages import GENERATED_TURN, UNREADABLE_CALL
+    from llama_cpp_conversation.rendering import GeneratedTurn
     unreadable = {"id": "u", "type": "function", UNREADABLE_CALL: True,
                   "function": {"name": "unknown", "arguments": {}}}
     called = {"id": "c", "type": "function", "function": {"name": "f", "arguments": {}}}
@@ -574,8 +574,8 @@ def test_two_turns_kept_as_generated_around_questions_joined_are_one_record():
     lambda turn: turn.update(start=-1),
 ], ids=["tokens as text", "span past the messages", "start before them"])
 def test_a_kept_turn_broken_in_one_field_is_refused_naming_generated_turns(broken):
-    from llama_chat.errors import InvalidArgumentError
-    from llama_chat.history_forms import ensure_generated_turns
+    from llama_cpp_conversation.errors import InvalidArgumentError
+    from llama_cpp_conversation.history_forms import ensure_generated_turns
     from tests.wrappers import weather_registry
     wrapper, fake = tool_wrapper(context_size=2048)
     registry = weather_registry()

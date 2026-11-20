@@ -25,7 +25,7 @@ it rejected. The dated log the records were written from is kept as
 | [0016](0016-the-warm-up-at-load.md) | Loading warms the engine | One micro-batch where layers run on a GPU, then two tokens and one. |
 | [0017](0017-unset-thread-counts-follow-the-physical-cores.md) | Unset thread counts are one per physical core | Affinity, performance cores and CPU quotas respected; prefill follows decode. |
 | [0018](0018-engine-log-output-through-python-logging.md) | The engine's log output goes through Python's logging | One callback maps llama.cpp's levels; each level means one thing across the library. |
-| [0019](0019-engine-binding-floor-and-packaging.md) | llama-cpp-python 0.3.23 is the floor; the package installs as faster-llama-chat | One current name per symbol; the penalties signature read; Python 3.11. |
+| [0019](0019-engine-binding-floor-and-packaging.md) | llama-cpp-python 0.3.23 is the floor; the package installs as llama-cpp-conversation | One current name per symbol; the penalties signature read; Python 3.11. |
 | [0020](0020-the-cache-context-protocol.md) | A cache context is one protocol, checked once where it is adopted | Two halves, an engine-neutral generation loop, token ids in a fixed range, load probes. |
 | [0021](0021-one-owner-brings-the-cache-to-its-target.md) | One object brings the cache to a target built from the render alone | `CacheSync.hold`, versions, repair, and a left-out prompt stretch shifted out. |
 | [0022](0022-eviction-drops-whole-oldest-exchanges.md) | Eviction drops whole oldest exchanges, never the system turn | Two triggers, shift edit and K-shift ordering, strategy chosen at load, count searched. |
@@ -62,3 +62,4 @@ it rejected. The dated log the records were written from is kept as
 | [0053](0053-dependencies-are-bounded-to-what-is-checked.md) | Dependencies are bounded to the releases the checks are run on | `jinja2` on the 3.1 line from 3.1.6; the tools below their next major version. |
 | [0054](0054-what-is-public-and-what-a-version-promises.md) | What is public, and what a version number promises | A compatibility page; every public signature listed and compared by a test. |
 | [0055](0055-measured-against-llama-cpp-pythons-own-chat.md) | Measured against llama-cpp-python's own chat interface | Later questions wait about half as long; the chat runs on where the plain one fills up. |
+| [0056](0056-the-project-is-named-llama-cpp-conversation.md) | The project is named llama-cpp-conversation | One name for the repository, the distribution, the import and the site. |

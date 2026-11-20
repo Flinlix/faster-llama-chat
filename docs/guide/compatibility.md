@@ -5,13 +5,13 @@ number says about it.
 
 ## What is public
 
-- Every name `llama_chat` exports, with its signature, as the
+- Every name `llama_cpp_conversation` exports, with its signature, as the
   [API reference](../reference.md) lists them.
-- `llama_chat.testing`: `FakeContext` and the invented templates,
+- `llama_cpp_conversation.testing`: `FakeContext` and the invented templates,
   for tests of code that drives a `ChatWrapper`.
 - What `conversation()` returns and `begin` takes, the add-on file format,
   and the cache context protocol (`CacheContext`).
-- The logger names `llama_chat` and `llama_chat.engine`.
+- The logger names `llama_cpp_conversation` and `llama_cpp_conversation.engine`.
 
 Everything else is not public: every other module and name, names that begin
 with an underscore, the text of log lines and error messages (their type is

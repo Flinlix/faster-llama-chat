@@ -136,7 +136,7 @@ class Eviction:
         return cause if self.record(n_before, cause) else None
 
     def record(self, n_before: int, cause: EvictionCause) -> int:
-        """Record in the state the history messages that went since it held ``n_before``, and ``cause``, one of :data:`~llama_chat.reply.EVICTION_CAUSES`, as why; how many went."""
+        """Record in the state the history messages that went since it held ``n_before``, and ``cause``, one of :data:`~llama_cpp_conversation.reply.EVICTION_CAUSES`, as why; how many went."""
         n_gone = n_before - history_count(self._state.messages)
         if n_gone:
             self._state.changes.n_evicted += n_gone

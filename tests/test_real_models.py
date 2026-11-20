@@ -1,11 +1,11 @@
 """Long conversations on real model files: the cache is checked against a fresh render after every action, and memory stops growing.
 
 The model files are named by the environment, never here:
-``LLAMA_CHAT_TEST_MODELS`` holds their paths, separated as the system separates
+``LLAMA_CPP_CONVERSATION_TEST_MODELS`` holds their paths, separated as the system separates
 paths. Without it every test here is skipped. GPU memory is measured by
-``LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND``, a shell command that prints the MiB the
+``LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND``, a shell command that prints the MiB the
 process ``{pid}`` holds on the GPU; without it only RAM is bounded.
-``LLAMA_CHAT_TEST_GPU_LAYERS`` sets the layers to offload, all by default. Run
+``LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS`` sets the layers to offload, all by default. Run
 with ``-m gpu``.
 """
 
@@ -14,9 +14,9 @@ import subprocess
 
 import pytest
 
-from llama_chat import ChatWrapper, Config, ToolRegistry
+from llama_cpp_conversation import ChatWrapper, Config, ToolRegistry
 
-_MODELS = [path for path in os.environ.get("LLAMA_CHAT_TEST_MODELS", "").split(os.pathsep) if path]
+_MODELS = [path for path in os.environ.get("LLAMA_CPP_CONVERSATION_TEST_MODELS", "").split(os.pathsep) if path]
 # The turns of each conversation, the first of them to fill the bounded memories before
 # growth is measured.
 _TURNS, _WARM_UP_TURNS = 120, 30
@@ -24,10 +24,10 @@ _TURNS, _WARM_UP_TURNS = 120, 30
 # reaching their bound; on the GPU, nothing.
 _MAX_RAM_GROWTH_MIB, _MAX_GPU_GROWTH_MIB = 64, 16
 _CONTEXT_TOKENS, _REPLY_TOKENS = 4096, 48
-_GPU_LAYERS = int(os.environ.get("LLAMA_CHAT_TEST_GPU_LAYERS", "-1"))
+_GPU_LAYERS = int(os.environ.get("LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS", "-1"))
 
 pytestmark = [pytest.mark.gpu,
-              pytest.mark.skipif(not _MODELS, reason="LLAMA_CHAT_TEST_MODELS names no model file")]
+              pytest.mark.skipif(not _MODELS, reason="LLAMA_CPP_CONVERSATION_TEST_MODELS names no model file")]
 
 
 def _ram_mib() -> float:
@@ -35,7 +35,7 @@ def _ram_mib() -> float:
         return next(int(line.split()[1]) / 1024 for line in status if line.startswith("VmRSS:"))
 
 
-_GPU_MEMORY_COMMAND = os.environ.get("LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND")
+_GPU_MEMORY_COMMAND = os.environ.get("LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND")
 
 
 def _gpu_mib() -> int | None:

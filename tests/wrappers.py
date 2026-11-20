@@ -5,20 +5,20 @@ import json
 import os
 import re
 
-from llama_chat.config import Config
-from llama_chat.history_forms import (answer_in_order, ensure_generated_turns, read_messages,
+from llama_cpp_conversation.config import Config
+from llama_cpp_conversation.history_forms import (answer_in_order, ensure_generated_turns, read_messages,
                                       with_generated_turns, without_unreadable)
-from llama_chat.messages import GENERATED_TURN, UNREADABLE_CALL, result_message
-from llama_chat.rendering import generated_turns_in
-from llama_chat.tokenizing import split_at_tags
-from llama_chat.tool_registry import ToolRegistry
-from llama_chat.tools import ToolCall
+from llama_cpp_conversation.messages import GENERATED_TURN, UNREADABLE_CALL, result_message
+from llama_cpp_conversation.rendering import generated_turns_in
+from llama_cpp_conversation.tokenizing import split_at_tags
+from llama_cpp_conversation.tool_registry import ToolRegistry
+from llama_cpp_conversation.tools import ToolCall
 from tests.chat_messages import opened
-from llama_chat.wrapper import ChatWrapper
+from llama_cpp_conversation.wrapper import ChatWrapper
 from tests import internals
 from tests.chat_templates import in_each_thought_form
-from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import PLAIN, REASONING, TOOLS
+from llama_cpp_conversation.testing.fake_context import FakeContext
+from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 
 
 def tool_wrapper(context_size=512, template=None, **kw):
@@ -56,7 +56,7 @@ def held_renders(context, messages, tools=None, reasoning=False,
     comes as a pair: the text, and where in it each message's own texts stand,
     as ``(start, end, indexes)``.
     """
-    from llama_chat.render_checks import STAND_IN as _STAND_IN
+    from llama_cpp_conversation.render_checks import STAND_IN as _STAND_IN
 
     def render(messages, prompt):
         if not typed:

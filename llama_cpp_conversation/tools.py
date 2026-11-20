@@ -1,7 +1,7 @@
 """What a tool is declared as, and what a model's call to one holds.
 
-Running calls is :mod:`llama_chat.tool_registry`'s, and reading a call back
-from what the model wrote is :mod:`llama_chat.call_parsing`'s. See
+Running calls is :mod:`llama_cpp_conversation.tool_registry`'s, and reading a call back
+from what the model wrote is :mod:`llama_cpp_conversation.call_parsing`'s. See
 docs/decisions/0038-a-call-is-read-only-where-all-its-text-is-read.md.
 """
 

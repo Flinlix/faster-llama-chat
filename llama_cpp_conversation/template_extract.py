@@ -6,7 +6,7 @@ the template that produced it. Two things come out:
 * :func:`extract_fragments`: the tags wrapped around each role's content.
 * :func:`extract_reasoning`: how a thought is marked and reasoning turned on.
 
-How a call is written is recovered by :mod:`llama_chat.call_format`. No model's
+How a call is written is recovered by :mod:`llama_cpp_conversation.call_format`. No model's
 format is written down here, and where a comparison proves nothing the answer
 is ``None`` rather than a guess.
 
@@ -282,11 +282,11 @@ def _past_thought(render: Render, found_in: str | None) -> dict:
     """Whether a past reply keeps its thought once a later turn follows, and the form it is read in.
 
     Tried in ``found_in``, the form the thought's tags were read from, first,
-    then in each other of :data:`~llama_chat.messages.THOUGHT_FORMS`; not at
+    then in each other of :data:`~llama_cpp_conversation.messages.THOUGHT_FORMS`; not at
     all where the tags were read from no reply.
 
     Returns:
-        The fields of :class:`~llama_chat.template.Reasoning` that say so.
+        The fields of :class:`~llama_cpp_conversation.template.Reasoning` that say so.
     """
     if found_in is None:
         return {}

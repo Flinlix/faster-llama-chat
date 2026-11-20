@@ -36,7 +36,7 @@ A family not covered yet gets a test template: the file
    cause (rule 2): where that cause is right, the family is not supported.
 4. What the template cannot tell, such as the sampling the model's card
    recommends or a call format, goes into an add-on file in
-   `llama_chat/addons/`, matched by the template's fingerprint
+   `llama_cpp_conversation/addons/`, matched by the template's fingerprint
    (rule 3, and the [add-on file guide](docs/guide/add-on-files.md)).
 5. Add the family's row to the README's table of supported models, in its
    alphabetical place. `tests/test_neutral.py` compares the table with the

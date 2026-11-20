@@ -1,6 +1,6 @@
 """One model's chat template as a conversation uses it: its renders, the prompt a reply follows, and its calls read, with what a load read of it in one record.
 
-See :mod:`llama_chat.template_reading` for what a load reads and checks.
+See :mod:`llama_cpp_conversation.template_reading` for what a load reads and checks.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class ResolvedTemplate:
             must be a level the template takes.
 
     Raises:
-        TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
+        TypeError: If ``context`` does not answer :class:`~llama_cpp_conversation.cache_context.ModelReader`.
         ValueError: If the template cannot be recovered, if it fails
             validation against the model, if ``reasoning_on`` writes the
             prompt as reasoning off does, or if ``reasoning_levels`` names a
@@ -167,7 +167,7 @@ class ResolvedTemplate:
         return max(before_answer) + 1 + self.properties.n_closing_tokens
 
     def reply_header(self, reasoning: bool | str = False) -> tuple[str, str] | None:
-        """The start and end of a header naming a reply's reader, as :func:`~llama_chat.reply_text.reply_header` reads them, worked out once for each reasoning mode."""
+        """The start and end of a header naming a reply's reader, as :func:`~llama_cpp_conversation.reply_text.reply_header` reads them, worked out once for each reasoning mode."""
         mode = bool(reasoning)          # a level reasons with the prompt reasoning on writes
         if mode not in self._reply_headers:
             properties = self.properties
@@ -224,7 +224,7 @@ class ResolvedTemplate:
         """The calls in what a model generated between a call's opening and its closing.
 
         ``parameters`` is the parameter schema of each declared tool, by its
-        name, as :func:`~llama_chat.call_parsing.parse_calls` reads it.
+        name, as :func:`~llama_cpp_conversation.call_parsing.parse_calls` reads it.
 
         Raises:
             ValueError: If the text is not a call this model's format reads.
@@ -341,7 +341,7 @@ def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
 
 @dataclasses.dataclass(frozen=True)
 class Capabilities:
-    """What :meth:`~llama_chat.wrapper.ChatWrapper.begin` accepts for one kind of conversation, settled when the model loads.
+    """What :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.begin` accepts for one kind of conversation, settled when the model loads.
 
     Attributes:
         can_call_tools: Tools can be used every step of the way: the template
@@ -389,7 +389,7 @@ class ResolvedTemplates:
             templates; see :class:`ResolvedTemplate`.
 
     Raises:
-        TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
+        TypeError: If ``context`` does not answer :class:`~llama_cpp_conversation.cache_context.ModelReader`.
         ValueError: If the default template cannot be recovered, or fails
             validation against the model.
     """
