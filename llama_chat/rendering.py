@@ -66,7 +66,7 @@ class RenderInputs(Protocol):
     """What a conversation's renders are made of besides its messages."""
 
     tools: list[ToolSpec]
-    reasoning: bool
+    reasoning: bool | str
 
 
 class ConversationRendering:
@@ -387,7 +387,8 @@ class ConversationRendering:
 
     def tag_from(self, text: str, at: int, split: SplitRender | None = None) -> int | None:
         """Where the first tag at or after ``at`` begins, before the next own text of ``split`` where given."""
-        end = next((s for s, _ in split.own if s >= at), len(text)) if split else len(text)
+        own = split.own_from(at) if split else None
+        end = len(text) if own is None else own
         pieces = split_at_tags(self._reader, text[at:end])
         if pieces is None:
             return None

@@ -13,6 +13,8 @@ placed by a marker render".
 
 from __future__ import annotations
 
+import bisect
+import functools
 import json
 import re
 from collections.abc import Callable
@@ -45,13 +47,27 @@ class SplitRender:
     contents: tuple[tuple[int, int] | None, ...]
     call_ends: tuple[int | None, ...]
 
+    @functools.cached_property
+    def _own_starts(self) -> list[int]:
+        return [own_start for own_start, _ in self.own]
+
+    @functools.cached_property
+    def _own_ends(self) -> list[int]:
+        return [own_end for _, own_end in self.own]
+
+    def own_from(self, at: int) -> int | None:
+        """Where the first text of the caller's own that begins at or after ``at`` begins; ``None`` where none does."""
+        found = bisect.bisect_left(self._own_starts, at)
+        return self._own_starts[found] if found < len(self._own_starts) else None
+
     def pieces(self, start: int = 0, end: int | None = None) -> list[tuple[str, bool]]:
         """The render from ``start`` to ``end`` in pieces, each marked whether it is the caller's own."""
         end = len(self.text) if end is None else end
         pieces, at = [], start
-        for own_start, own_end in self.own:
-            if own_end <= start or own_start >= end:
-                continue
+        # The pieces are in order and apart, so the first that ends after ``start`` is found at once.
+        for own_start, own_end in self.own[bisect.bisect_right(self._own_ends, start):]:
+            if own_start >= end:
+                break
             own_start, own_end = max(own_start, start), min(own_end, end)
             pieces += [(self.text[at:own_start], False), (self.text[own_start:own_end], True)]
             at = own_end
