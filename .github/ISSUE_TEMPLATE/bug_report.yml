@@ -1,0 +1,40 @@
+name: Bug report
+description: The library did something it should not, or refused something it should take.
+labels: [bug]
+body:
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Paste the error with its traceback.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: A script that shows it
+      description: The shortest script that shows the problem, with the messages it passes.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      description: The GGUF file and where it was downloaded from, for example a Hugging Face repository.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: "The output of: python -c \"import importlib.metadata as m; print(m.version('faster-llama-chat'), m.version('llama-cpp-python'))\", your Python version and operating system, and whether the model runs on a GPU (gpu_layers)."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Optional. The library's log at DEBUG level, as the documentation's logging example shows.
+      render: text

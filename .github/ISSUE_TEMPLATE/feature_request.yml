@@ -1,0 +1,17 @@
+name: Feature request
+description: Something the library should do that it does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do
+      description: The task, and what stops you from doing it with the library now.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How it could look
+      description: Optional. The call you would like to make, and what it would return.
+      render: python
