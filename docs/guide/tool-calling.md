@@ -36,7 +36,8 @@ with chat.reply("What is the weather in Munich?", tool_call_policy="yield") as s
             chat.inject_tool_result(event.id, registry.call(event))
         else:
             print(event, end="", flush=True)
-rest = chat.reply().finish()        # the turn stays open until this, and keeps "yield"
+if chat.awaits_reply:                # a call was answered: the turn waits for the rest
+    rest = chat.reply().finish()    # and keeps "yield"
 ```
 
 A call never appears in the reply text, though its tokens reach the cache,
@@ -127,18 +128,17 @@ arguments that do not fit, a tool that raised, a spent `max_calls`. Each says
 that the call failed, why, and `try again` where a call the model writes next
 is read, else `do not call again`, as under `"refuse"`, once `max_calls` is
 spent, or after the third call in a row that could not be read, under every
-policy. A result that a registered tool returns as a dict carrying
-`error` counts as a failure too, and so does one that JSON cannot write, `NaN`
-and infinity included. A result handed to `inject_tool_result` is told the
-same way, a dict carrying `error` included; one that JSON cannot write is
-answered with the same `unwritable_result` failure, and a warning on the
-logger `llama_chat` says so. A call is read only where all of its text is
+policy. A result that a registered tool returns as a dict carrying `error`
+counts as a failure too, and so does one that JSON cannot write, `NaN` and
+infinity included. A result handed to `inject_tool_result` is told the same
+way, a dict carrying `error` included; one that JSON cannot write is answered
+with the same `unwritable_result` failure, and a warning on the logger
+`llama_chat` says so. A call is read only where all of its text is
 read: text left after it, a blank pair or a key written twice makes it
 unreadable. Each call of a batch is judged on its own, so one entry that is no
-call is told so in its place while the others are answered.
-A call whose arguments are no object, such as a list or `null`, or nest
-deeper than 100 levels of lists and objects, is unreadable, and its tool does
-not run.
+call is told so in its place while the others are answered. A call whose
+arguments are no object, such as a list or `null`, or nest deeper than 100
+levels of lists and objects, is unreadable, and its tool does not run.
 
 **A turn grows towards `context_size`** as it calls, since an eviction would
 cut into the turn being written. A result too long for what is left, with
