@@ -41,8 +41,10 @@ that never ended, on a turn a reply cap cut inside a call.
   `LLAMA_CHAT_TEST_GPU_MEMORY_COMMAND='nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits | awk -F", " "\$1=={pid}{print \$2}"'`.
   Each runs 120 turns with `check_cache` on, cuts and begins again, and bounds
   growth after 30 turns to 64 MiB of RAM and 16 MiB of GPU memory.
-- **Before each push**, `hooks/pre-push` runs the suite and 200 new sequences;
-  `install.sh --dev` sets it as the checkout's hooks folder.
+- **Before each push**, `hooks/pre-push` refuses a working tree that differs
+  from the commit, since the tests read the working tree, then runs the suite,
+  200 new sequences and the strict site build; `install.sh --dev` sets it as
+  the checkout's hooks folder.
 - **Mutation testing** by mutmut leaves out the cache-context protocol (the
   library reads its method names) and the engine modules (only a real model
   runs them).

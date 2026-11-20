@@ -30,8 +30,9 @@ command that prints the MiB the process `{pid}` holds on the GPU, bounds GPU
 memory too; the decision record
 [Faults show themselves](../decisions/0048-faults-that-show-themselves.md) holds one.
 
-`./install.sh --dev` switches on `hooks/pre-push`, which refuses a push the
-suite and a shorter slow run do not pass. Mutation testing,
+`./install.sh --dev` switches on `hooks/pre-push`, which refuses a push while
+the working tree holds changes not committed, and a push the suite, a shorter
+slow run or the strict site build does not pass. Mutation testing,
 `python -m tests.mutation_run` and then `mutmut results`, changes the code on
 purpose and lists each change no test noticed; it runs for hours, and writes its
 copies and results to `mutants/`. A later run tests again what changed since: a
