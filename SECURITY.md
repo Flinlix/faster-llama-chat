@@ -25,3 +25,15 @@ that shows the problem, and the shortest script that reproduces it.
 - **Message text** never becomes a tag: a tag typed into a message stays text.
   A message that the cache holds as a template's control token is a
   vulnerability.
+- **Saved turns** (`generated_turns` in what `conversation()` returns) are
+  trusted input: their tokens go into the cache as they stand, tags included,
+  so whoever can change them can write any turn before the model. A
+  conversation that passed through hands you do not trust is begun again from
+  its messages alone.
+- **The model file** is read by llama.cpp, which parses it and runs its
+  weights. Load only model files you trust; a fault in llama.cpp's own parser
+  is reported to llama.cpp.
+- **The add-on file next to a model file** is read as data, but what it
+  states (sampling, the call format, how reasoning is switched)
+  changes what the model is given and how its calls are read. It is trusted as
+  the model file is.
