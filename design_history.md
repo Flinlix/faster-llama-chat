@@ -6511,3 +6511,310 @@ reply; one template renders it several times around tool turns). They change
 how renders are reused and are measured again in the benchmark that follows.
 The neutrality test was not given a list of common model names: such a list
 would itself name vendors in a file rule 3 keeps free of them.
+
+## 2026-11-19: The speed findings, built
+
+The user's picks on the benchmark round's findings (528.1 to 528.22). What
+was measured before is in the entry above; the measurements after the
+changes are at the end of this one.
+
+### The unified cache
+
+528.1.3A. The engine's context is created with `kv_unified`. With it the
+engine computes attention over the cache's rows, so that a layer with a
+sliding window reads only its window, while the cache keeps its full size
+and can still shift. Measured before the change, engine alone, at 6,000
+tokens deep: 103.4 tokens/s on the GPU without it, 118.6 with it (the
+windowed cache, which cannot shift, gave 117.3); on the processor 16.3 and
+17.9. Memory use is the same. Rejected: the windowed cache itself, which
+cannot shift, so that every drop decodes the history again (528.15B, left).
+
+### A value the maker does not state takes llama.cpp's default
+
+528.3.2C, and the user's revision of 265.3: "a value the maker does not
+state uses llama.cpp's default". 265.3 merged the model's sampling value by
+value and switched every value no source stated off (`top_k` 0, `top_p` 1,
+`min_p` 0, `temperature` 1), keeping llama.cpp's defaults only for a model
+that stated none. Now each value no source states takes llama.cpp's
+default (`temperature` 0.8, `top_k` 40, `top_p` 0.95, `min_p` 0.05,
+penalties off, window 64) whatever the others are. What it buys: the six
+shipped add-on files without a `top_k` no longer sort the whole vocabulary
+for every token, 1 to 2 ms per token (measured by an agent). What it
+changes: those models sample with `top_k` 40 and `min_p` 0.05 where their
+makers state neither.
+
+### Penalties applied to the likeliest tokens alone
+
+528.2.3A. Where a repetition, presence or frequency penalty is on and every
+penalty only lowers a token's logit (`repetition_penalty` at least 1,
+`presence_penalty` and `frequency_penalty` at least 0), the chain first keeps
+the `top_k + window` likeliest tokens (one plus the window under greedy
+decoding). The penalties lower at most the window's tokens, so the `top_k`
+the later stage keeps are among those, and every draw is the same; a test
+draws with and without the filter over seeded histories and compares, and
+fails for a filter one window too tight. Measured by an agent: the penalty
+stage over a 262,000-word vocabulary from 2.2 ms to 0.18 ms per token. Where
+a penalty raises a logit or `top_k` is off, the chain is as before.
+
+### A token's text shown before its decode, on the processor alone
+
+528.4.3B. Where a decode returns only once it is done (`decode_blocks`, new
+in the cache-context protocol: on the processor alone, `gpu_layers=0` or a
+build without GPU support), generation yields a token's text first and
+decodes the token before its next draw, which needs its logits, or before
+the stream ends or is closed. On a GPU a decode only queues the work, so
+nothing is gained there and the order stays. Rule 1 holds at every point the
+library reads the cache: a token shown is in the cache before the stream
+yields again. The failure sweep runs on both orders (the stand-in's
+`decode_blocks`).
+
+### A thought cap
+
+528.5.3A. `max_thought_tokens`, in `Config` and per reply, closes a thought
+that has taken that many tokens with the template's closing tag, as the room
+for the answer already does; `None`, the default, sets none. The cap counts
+the tokens drawn inside one thought; each thought, in a generation or in the
+next one after a tool's result, is capped on its own.
+
+### Effort levels
+
+528.6.2B and the user's question on it: "pass the specific settings through,
+as they are defined in the template; `"default"` uses the default and None
+no thinking". `begin(reasoning=...)` takes `None` (no reasoning, the
+template's own off), `"default"` (the template's own way) or an effort
+level, given to the template as `reasoning_effort` over every other
+variable. `True` and `False` are refused: one value per meaning. The levels
+are read when the model loads, from the texts the template holds: each one
+the template writes otherwise than an effort it does not know, with the
+generation prompt reasoning on writes, is a level; `"none"` is the switch's
+off and no level. A template that writes any effort it is given into the
+prompt as it is tells no level apart; its add-on file names them
+(`reasoning_levels`, the shipped one for gpt-oss: low, medium, high, as its
+model card names them). A level that keeps a different generation prompt is
+not offered, since the library reads one prompt per reasoning mode. (The
+form `begin` takes them in was changed the next day; see "Reasoning and its
+level, two parameters".)
+
+### No GPU layers means no GPU
+
+528.8.2B: "no gpu layers should mean exactly that". With `gpu_layers=0` the
+model is loaded with an empty device list, so that llama.cpp uses no GPU at
+all; before, it still sent every batch of 32 tokens or more to a visible
+card (measured: prompt reading 594 tokens/s on the processor alone, 2,100
+to 3,600 with the card helping) and the first long prompt after load
+stalled about 0.6 s. 528.7.2A: `gpu_layers` defaults to `-1`, all layers,
+as llama.cpp does; a model larger than the card fails at load with the
+engine's cause.
+
+### A full batch warms the GPU at load: one micro-batch
+
+528.9.2A, revising "A full batch warms the GPU at load". The warm-up decodes
+one micro-batch (`micro_batch_tokens`, else llama.cpp's 512) where it decoded
+`max_batch_tokens`, since the engine computes a batch a micro-batch at a
+time and the first micro-batch is what prepares it; about 0.26 s less per
+load (estimated by an agent). The vocabulary scan for the model's
+fingerprint writes every token into one buffer.
+
+### A state before a reply only where the reply is written again
+
+528.11.2A, deciding between the entries of 2026-11-13 (not saved) and
+2026-11-15 (saved). On a cache that can neither shift nor cut, the state
+where a reply's turn begins is kept only where the template writes a past
+reply otherwise than the cache holds it after the reply, which takes the
+cache back there after every reply: reasoning on, or a template whose past
+reply does not stand as its generation prompt left it (read at load,
+`writes_reply_as_prompted`). Elsewhere no state is saved before the first
+word, 23 to 65 ms per question on such models (from the 2026-11-13
+entry). What it costs: a shortened reply there decodes the newest question
+again, from the state where its exchange begins.
+
+### Saved states reuse their buffers
+
+528.12.2A. A state is saved into a buffer that no state the library keeps
+still refers to, of its size, where one is there; at most one such spare is
+kept. Writing into memory already mapped is faster than mapping a new
+buffer: an agent measured 31.5 ms for 64 MB into a new buffer and 5.1 ms
+into a kept one.
+
+### What the template leaves out of a past reply is shifted out
+
+528.13.3A. A template that writes an empty thought into the prompt but
+leaves it out of a past reply made the cache cut there after every reply
+and decode the reply again. Where the cache can shift, the stretch between
+where the cache and the render part and where the reply begins is now
+removed and the rest shifted, as an eviction does, wherever that stretch
+lies within the prompt the template wrote before the reply (no message's
+text) and the cache goes on as the render does after it. The cache's tokens
+are the render exactly (rule 1); the reply's entries were computed with
+the empty stretch in view, the same kind of reuse a drop accepts, which the
+user accepted for stretches that hold no message text.
+
+### The begin's search, seeded
+
+528.16.2A. The search for the newest history that fits starts from the
+count of exchanges the cache holds, and the second search, under the
+smaller bound, from what the first kept. It keeps what it kept before
+whatever count it starts from, under lengths that grow with the history; a
+test checks that over random histories and every start.
+
+### Tag checks remembered
+
+528.17.2A. The tokenizer the renders use remembers each token's text and
+whether it is a tag, at most one entry per token of the vocabulary. An agent
+measured a begin with 20 tools from 121 to 45 ms on the stand-in.
+
+### The sandbox's answers remembered
+
+528.18.2A. The sandbox decides whether a template may read an attribute
+from the kind of object and the attribute's name alone, in the Jinja
+release the library runs on (3.1); its answer is remembered per kind and
+name. A test compares the remembered answers with Jinja's own over objects
+of every kind the checks treat apart, in both orders, and fails on another
+Jinja release, which must be checked before it is let in. Renders 1.0 to
+2.0 times faster (measured by an agent).
+
+### Twelve small ones
+
+528.19.13A:
+
+- A template that reads the clock no longer renders its opening on every
+  action to see whether the date moved: the opening's render notes each form
+  it wrote the clock in and what it wrote, and is rendered again only once
+  one of them reads otherwise now.
+- An action copies the cache's token list once instead of three times.
+- `generated_turns()` finds each turn's messages through an index, linear
+  instead of quadratic in the tool turns.
+- The caller's text spans of a render are searched by bisection.
+- The render checks of the last four openings are kept, so going back to one
+  renders none of them again (not for a template that reads the clock).
+- A call's closing tag is decoded without logits, which no draw reads, since
+  a result follows; the cache notes that the newest decode kept none.
+- What an interrupt left undecoded is decoded with what the next action adds,
+  in one batch, where the cache can shift or cut; a cache that goes back to
+  saved states is brought up first, so that its states are saved where they
+  are pinned (measured: otherwise 28 tokens more decoded in one test).
+- A template whose rest after a drop is written otherwise only around turns
+  that called tools drops to half only where the conversation holds one.
+- The opening's second state, a few tokens after the first, is not kept.
+- The thread for the work after a reply takes no lock where an action did
+  that work first.
+- Only performance cores are counted where the system lists them apart.
+- A long decode watched for a cancel runs in parts of one micro-batch, at
+  least 512 tokens, so that a larger `micro_batch_tokens` keeps its speed.
+
+### Conversations switched away from are kept
+
+528.21.2A, with the user's "when the RAM limit is set to 0, disable the
+feature". `kept_conversation_bytes` bounds the host RAM the caches of
+conversations a begin switched away from may take; the default 0 keeps
+none. Where a begin leaves more than 256 tokens of the cache behind, the
+whole cache is saved (`save_whole_state`, new in the protocol) with its
+tokens; where a kept one shares more than 256 tokens more of the new
+conversation than the cache does, it is restored instead, and what differs
+from it decoded. The oldest kept goes first; one that alone exceeds the
+bound is not kept. Only a begin keeps or switches; an eviction never does.
+
+### Measured after the changes
+
+The same benchmark as before (Gemma 4 26B A4B Q4_K_M with every layer on an
+RTX 3090; Gemma 4 E2B Q4_K_M on an 8-core i9-9900K with `gpu_layers=0`,
+which now uses no card), context 8192, before and after:
+
+| | before | after |
+|---|---|---|
+| GPU, first word, short question | 31 to 38 ms | 28 to 34 ms |
+| GPU, first word, 20 to 40 replies into a long chat | 64 to 69 ms | 43 to 44 ms |
+| GPU, generation 20 to 40 replies in | 119 to 127 tokens/s | 131 tokens/s |
+| GPU, filled to the drop threshold: first word / generation | 56 ms / 111.5 tokens/s | 34 ms / 129.1 tokens/s |
+| GPU, load with the file in memory | 3.4 s | 3.2 s |
+| CPU, first word, short question | 104 to 110 ms | 64 to 67 ms |
+| CPU, first word, 20 to 40 replies in | 187 to 203 ms | 127 to 145 ms |
+| CPU, generation 20 to 40 replies in | 19.1 to 22.0 tokens/s | 22.3 to 23.2 tokens/s |
+| CPU, filled to the drop threshold: first word / generation | 197 ms / 19.3 tokens/s | 142 ms / 21.1 tokens/s |
+
+The CPU's tokens per second on a short reply read slightly lower after
+(24.3 against 25.6): the rate is taken from the first word on, which now
+comes one decode earlier, so one decode more falls in the interval; the
+reply's total time is the same.
+
+Multi-token prediction (528.22.3A, measured, not built): llama.cpp's own
+speculative example, greedy, one prompt, with the prediction files the
+model repositories ship (`mtp-*.gguf`): Gemma 4 26B on the GPU 205 to 209
+tokens/s with 2 to 4 drafted tokens (60 to 71% accepted), against 146 for
+the engine alone without sampling; Gemma 4 E2B on the processor 38.2
+tokens/s with 3 drafted (38% accepted), against 25.4.
+
+### After one review of these changes
+
+- Going back to a kept conversation took the entry at the index it had
+  before the cache left was kept, which keeping may shift by dropping the
+  oldest: another conversation's state was restored. The entry is taken out
+  first now; a test goes back among four conversations under a bound of two
+  and a half states, on every kind of cache.
+- A cache that can neither shift nor cut takes a kept conversation only where
+  all of it is the new one's start; otherwise it would cut, cannot, and
+  decode everything again after the restore.
+- The prompt range a past reply's left-out stretch is searched in was given
+  in the positions of the generation's start, which a drop before the decode
+  ahead moved: from the first drop on, every reply was decoded again (83
+  tokens against 3 in the reviewer's run). The cache memory keeps the range
+  now, moves it down with every removal before it and forgets it with any
+  other change there; a test runs past the drop threshold.
+- The clock's reading is noted as the render writes it, not after it, so a
+  minute that turns meanwhile cannot leave the opening unchecked.
+- The reference count of a buffer no state holds is read from the
+  interpreter at import instead of being fixed at 3.
+- A whole state is not saved again for a cache at least as long as one whose
+  state did not fit the bound; a library error while saving is raised.
+- Each thought is capped on its own; `"default"` is no level, as `"none"` is
+  not; docs that said otherwise are corrected.
+- The failure sweep covers a begin that keeps the cache it leaves and one
+  that takes a kept one back, failing at each step: the conversation stays
+  as it was and the cache reads as its render. The random sequences do not
+  draw a bound for kept conversations, which would change the order of the
+  draws the kept failing sequences replay.
+
+### Reasoning and its level, two parameters
+
+2026-11-20, the user's pick after 534.1.9 showed that `"default"` reserved a
+word a level could hold: "none of the 2 parameters means thinking off, only
+reasoning=True means default, both settings (with reasoning=True) set the
+level". `begin` takes `reasoning` (`True` or `False`, the default off) and
+`reasoning_level` (`None` for the template's own, or one of
+`reasoning_levels`); a level without `reasoning=True` is refused, naming
+`reasoning_level`. No word is reserved any more: a template's level named
+`"default"` is a level like any other. Only `"none"`, which the reasoning
+switch turns reasoning off with, is never a level. `conversation()` gives
+both back. Rejected: one parameter with a reserved word (what 528.6 built),
+and a marker object in its place, which `conversation()` could not give as
+plain JSON. The server passes a request's level on where the model knows it
+(535.5A).
+
+### After a second review
+
+- A cache that can neither shift nor cut keeps no conversation: going back
+  restored the whole cache but not the partial states it goes back to, so the
+  next change near its end decoded everything again (2,299 tokens against 36
+  in the reviewer's run). Keeping those states with each conversation was the
+  alternative; it is left until such a model needs it.
+- A thought the cap closes no longer uses up the closing the answer's room
+  writes, so a later thought in the same generation is still closed in time
+  (rule 11).
+- The bound on kept conversations holds once they are kept; while one is
+  saved it takes its own size beside them, as `Config` and the README now say.
+- Where the clock reads otherwise but the opening renders alike, the reading
+  it was rendered at is noted, so later actions compare with it.
+- The note of the prompt range survives the decode again of the last token a
+  generation without logits begins with.
+- An add-on file's `reasoning_levels` that the template does not take as
+  levels is refused at load with the cause (rule 2), where it was dropped.
+- The server names a refused level as the request's `reasoning_effort`, and
+  falls back to the model's own way where a new conversation's template does
+  not know the level the conversation reasoned at.
+
+### Not done this round
+
+528.20.2A asked for the three render-speed items left from the review
+(521.15 to 521.17). They change how renders are reused on the core path and
+none of them concerns the models the user runs; they are carried to the next
+round as a decision rather than built in a hurry beside the rest.

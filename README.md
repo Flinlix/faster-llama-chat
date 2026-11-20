@@ -111,18 +111,22 @@ print(reply.text, reply.stop_reason)
 
 A `ReplyStream` yields text deltas; its `reply` is the `Reply` once the stream
 has ended of its own accord, and `finish()` reads it to its end and returns
-that. Each token reaches the cache before its text is yielded, so closing a
-stream early records exactly what the cache holds. An abandoned stream holds
+that. Each token reaches the cache before the stream yields the next text or
+ends, so closing a stream early records exactly what the cache holds. Where the
+model runs on the processor alone (`gpu_layers=0`, or a build without GPU
+support), a token's text is yielded first and the token decoded right after,
+so each word shows one decode step sooner. An abandoned stream holds
 the wrapper's lock until it is collected: read it to its end, close it, or use
 it in a `with`. To stop a generation from another thread, pass
 `cancel=threading.Event()` and set it; the reply ends within one token with
 `stop_reason == "interrupted"`. Set before the reply's first word, while its
-question is decoded too, which stops within 512 tokens, it ends the request
+question is decoded too, which stops within one part of the decode (512 tokens,
+or `micro_batch_tokens` where that is more), it ends the request
 with nothing changed: no question is added and no older exchange is dropped.
 After a tool's result, set before the next first word, it leaves the turn
 open with its results, for `reply()` to go on with. Set while registered
 tools run, it runs no later call of that round: the calls that ran keep their
-results, the rest stay owed. It also stops, within 512 tokens, the decode the
+results, the rest stay owed. It also stops, within one such part, the decode the
 reply before left for the next action, and the wait for a reply another
 thread holds, which then ends at once with nothing changed. A tool that reads
 the stream of the reply running it is refused with an `OutOfOrderError`, told
@@ -156,9 +160,9 @@ later is dropped; with `tool_timeout_s=None` it runs on the reply's thread.
 
 | doing what | call |
 |------|------|
-| starting, starting again, or changing the tools or the reasoning | `begin(messages=None, tools=None, *, reasoning=False, generated_turns=None)` |
+| starting, starting again, or changing the tools or the reasoning | `begin(messages=None, tools=None, *, reasoning=False, reasoning_level=None, generated_turns=None)` |
 | adding context | `inject(text, role="user")` |
-| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, stop=None, cancel=None, sampling=None)` |
+| asking | `reply(text=None, *, tool_call_policy=None, max_calls=None, max_reply_tokens=None, max_thought_tokens=None, stop=None, cancel=None, sampling=None)` |
 | answering a call yourself | `inject_tool_result(call_id, result)`, then `reply()` |
 | shortening the newest reply to what was heard | `truncate_last_reply(keep_text)` |
 | reading the conversation back | `conversation()` |
@@ -252,7 +256,7 @@ names: `messages` (the Chat Completions messages `begin` takes, the system
 message first, with `"reasoning_content"` where the template keeps a reply's
 thought, a reply that only calls with `null` content, and each call's
 arguments as compact JSON), `tools` (`None` where the conversation declares
-none), `reasoning` and `generated_turns` (each turn the model generated with a
+none), `reasoning`, `reasoning_level` and `generated_turns` (each turn the model generated with a
 call, as its tokens and its own messages, for the same model; see [Keeping a
 conversation](#keeping-a-conversation)), so `begin(**chat.conversation())`
 begins again as it was. Whatever `begin` takes without leaving anything out,
@@ -265,8 +269,8 @@ all of it as the newest finished change left it.
 answer something: a question, or a turn whose results are all in.
 `capabilities(tools=False)` and `capabilities(tools=True)` each give a
 `Capabilities` record of what `begin` accepts for a conversation begun without
-tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning`
-and `can_take_system_prompt`. Both are settled when the model loads, never
+tools or with them: `can_call_tools`, `can_reason`, `can_turn_off_reasoning`,
+`can_take_system_prompt` and `reasoning_levels`. Both are settled when the model loads, never
 change, and are safe from any thread. `total_tokens`, `turn_open` and
 `pending_calls` are safe from any thread, as `conversation()` is: each is read
 as the newest finished change left it, so a count read while a reply streams is
@@ -589,9 +593,18 @@ reply.n_reasoning_tokens    # about how many tokens the thought took
 
 Reasoning is chosen per conversation, at `begin`, and changed by beginning
 again with the conversation, because a template may switch it in the system
-turn. `capabilities(tools=...).can_reason` says whether `begin` accepts
+turn. `reasoning=False`, the default, asks for none; `reasoning=True` for the
+template's own way of reasoning; and `reasoning=True` with an effort level,
+such as `reasoning_level="low"`, for that level, where the template knows it.
+A level without `reasoning=True` is refused, naming `reasoning_level`.
+`capabilities(tools=...).can_reason` says whether `begin` accepts
 `reasoning=True`, which it does where the template marks a thought and its
-prompt with reasoning on leaves that thought open. Reasoning
+prompt with reasoning on leaves that thought open, and `reasoning_levels` lists
+the levels `reasoning_level` takes. They are the levels the template tells apart,
+read from the template when the model loads, each one writing the prompt
+reasoning on writes; where the template writes any level it is given as it is,
+the levels are those the model's [add-on file](#add-on-files) names. A level
+the template does not know is refused, naming `reasoning_level`. Reasoning
 off is the template's own off: `can_turn_off_reasoning` in the same record says whether the
 template has one. Where it has none, as on a template that always reasons, a
 conversation begun without reasoning is written as the template writes it,
@@ -694,12 +707,10 @@ or was given a cache context of your own.
 
 The eight marked "the model's" take, unless set, the model's own
 recommendation, value by value: its [add-on file](#add-on-files)'s first,
-then what its GGUF states for a value the file leaves out, then switched off
-(`temperature` 1, `top_k` 0, `top_p` 1, `min_p` 0, `repetition_penalty` 1,
-`presence_penalty` and `frequency_penalty` 0), with `penalty_window_tokens`
-at llama.cpp's default of 64. A model for which neither
-states any value, or only `penalty_window_tokens`, runs at llama.cpp's
-defaults. A penalty window the GGUF states as `-1`, which llama.cpp reads as
+then what its GGUF states for a value the file leaves out, then llama.cpp's
+default (`temperature` 0.8, `top_k` 40, `top_p` 0.95, `min_p` 0.05,
+`repetition_penalty` 1, `presence_penalty` and `frequency_penalty` 0,
+`penalty_window_tokens` 64). A penalty window the GGUF states as `-1`, which llama.cpp reads as
 the whole context, is taken as `context_size`. Any other value the GGUF states
 that `Config` would refuse stops the load with a `ValueError` naming the GGUF
 as its source, unless `Config` or the add-on file replaces it.
@@ -715,6 +726,7 @@ value `Config` refuses.
 | `evict_above_fraction` | `0.75` | the fraction of `context_size` above which the oldest exchanges are evicted, in `(0, 1]` |
 | `max_history_exchanges` | `None` | a second eviction trigger: the most exchanges kept, at least `1`. An exchange is one user message and everything after it up to the next, the unit an eviction drops; what a history holds before its first user message counts as one more. The question of a `reply` may open one exchange more while its reply runs, and the oldest is dropped once the reply ends, so that no eviction for this limit delays a reply |
 | `max_reply_tokens` | `None` | cap on the tokens of one reply, every generation of it together, a thought included; `None` sets none, so a reply may run until the context is full |
+| `max_thought_tokens` | `None` | the most tokens one thought may take; a thought that reaches it is closed as the template closes one, and the answer follows; `None` sets no cap; `reply(max_thought_tokens=...)` sets it for one request |
 | `min_reply_tokens` | `32` | the room a reply keeps: a `begin` that leaves less beside a short question is refused with `ContextOverflowError`, and a longer question is cut to leave it; never less than the shortest reply that holds an answer takes, which is all `0` keeps |
 
 **Replies**
@@ -731,7 +743,7 @@ value `Config` refuses.
 
 | field | default | meaning |
 |------|------|------|
-| `gpu_layers` | `0` | layers offloaded to the GPU: `-1` for all, else at least `0` |
+| `gpu_layers` | `-1` | layers offloaded to the GPU: `-1` for all, else at least `0`; `0` uses no GPU at all, the processor alone running every step |
 | `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
 | `decode_threads` | `None` | CPU threads for generating a reply, a token at a time, at least `1`; `None` uses one per physical core of the processors the process may run on, at most as many as its CPU quota allows |
 | `prefill_threads` | `None` | CPU threads for prefill, the decode of tokens the cache is given (a question, or what is decoded again), at least `1`; `None` means as many as `decode_threads`, and so one per physical core where that is not set either |
@@ -739,6 +751,7 @@ value `Config` refuses.
 | `micro_batch_tokens` | `None` | most tokens the engine computes at once, at most `max_batch_tokens`; `None` leaves the engine's default. A larger one can read a long prefill faster and takes more memory on the device |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
+| `kept_conversation_bytes` | `0` | the most host RAM, in bytes, the caches of conversations a `begin` switched away from may take once kept, so that going back to one decodes only what changed since; the oldest goes first, and while one is saved it takes its own size beside them; only a cache that can shift or cut keeps any; `0` keeps none |
 | `check_cache` | `False` | for finding faults: after the work after every reply and before every generation, compare the cache with a fresh begin of its conversation, and raise `InternalError` where they differ; each check renders and tokenizes the whole conversation |
 
 `ChatWrapper` also takes, outside `Config` because neither is a value to
@@ -793,7 +806,8 @@ anything else in it is refused with an error naming the file.
  "source": "where the values come from",
  "sampling": {"temperature": 0.6, "top_k": 20, "top_p": 0.95},
  "call": {"opening": "...", "name_close": "...", "closing": "..."},
- "reasoning_on": {"reasoning_effort": "high"}}
+ "reasoning_on": {"reasoning_effort": "high"},
+ "reasoning_levels": ["low", "medium", "high"]}
 ```
 
 `sampling` sets any of the eight model sampling fields, `presence_penalty`,
@@ -816,6 +830,12 @@ does not reason although it writes something of its own for `"none"`. A
 template whose prompt with reasoning on closes the thought at once is read as
 unable to reason. `reasoning_on` is refused at load where it writes the prompt
 as reasoning off does.
+`reasoning_levels` names the effort levels `begin(reasoning_level=...)` takes, for a
+template that writes any `reasoning_effort` it is given into the prompt as it
+is, so that the template itself tells no level apart. Each one is checked when
+the model loads, as a level read from a template is; a file that names a level
+the template does not take as one, or names levels for a template that tells
+its own apart, is refused at load with the cause.
 
 ## A model without a usable template
 
@@ -879,7 +899,14 @@ its one token, and `token_text` spells that token as the text holds it. A
 reply is generated by the library's own loop through four steps:
 `sampled_tokens` draws, `decode_generated` decodes what the generation adds,
 and `ends_generation` and `token_bytes` read a drawn token, so a call is told
-apart and a reply ends the same on every context.
+apart and a reply ends the same on every context; a call's closing tag is
+decoded with `prefill` asking for no logits, since a result follows it, not a
+draw. `decode_blocks` says
+whether `decode_generated` returns only once the decode is done; where it
+does, each token's text is yielded before the token is decoded.
+`save_whole_state` and `restore_whole_state` keep and put back everything the
+cache holds, for `kept_conversation_bytes`; a context that cannot may raise
+`RuntimeError` from the first, and no conversation is then kept.
 `chat_template_text` takes a `template_name`: `None` for the default template,
 else the name of a further one the model ships, such as `TOOL_USE_TEMPLATE`
 from `llama_chat`; a name the model ships no template of answers `None`. A
