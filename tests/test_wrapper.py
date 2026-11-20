@@ -393,8 +393,7 @@ def test_the_cache_rests_under_the_threshold_after_a_generation():
 def test_turn_closes_after_the_eviction_not_before():
     # An eviction's K-shift lands on whatever decodes next, so the closer is
     # decoded last and carries it instead of the next generation's prefill.
-    # The assertion is what pins that ordering. See design_history.md,
-    # "How eviction works".
+    # The assertion is what pins that ordering. See docs/decisions/0022-eviction-drops-whole-oldest-exchanges.md.
     fake = FakeContext(PLAIN, gen_tokens=2)
     w = ChatWrapper(Config(context_size=400, evict_above_fraction=0.35), context=fake)
     w.begin(opened("s"))
@@ -451,12 +450,14 @@ def test_every_member_of_the_cache_context_protocol_says_what_a_caller_relies_on
     assert undocumented == []
 
 
-def test_the_readme_imports_only_exported_names_and_names_every_one():
-    """Every name a caller is told to take from the package is exported, and every export is told of."""
+def test_the_documentation_imports_only_exported_names_and_names_every_one():
+    """Every name the README and the guides tell a caller to take from the package is exported, and every export is told of."""
     import re
     from pathlib import Path
     import llama_chat
-    readme = (Path(llama_chat.__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    root = Path(llama_chat.__file__).parents[1]
+    readme = "\n".join(path.read_text(encoding="utf-8") for path in
+                       [root / "README.md", *sorted((root / "docs" / "guide").glob("*.md"))])
     told = set(re.findall(r"`(\w+)`,? from `(llama_chat[\w.]*)`", readme))
     for module, imported in re.findall(r"from (llama_chat[\w.]*) import ([\w, ]+)", readme):
         told |= {(name.strip(), module) for name in imported.split(",")}
@@ -1092,6 +1093,23 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
 # clock. Code that serves only some templates is never among them; a function new to a plain
 # reply fails the test below until it is judged to serve every template and listed here.
 _PLAIN_REPLY_CODE = {
+    "cache_holding.py": {
+        "CacheHolding._made_for_now",
+        "CacheHolding._newest_exchanges_at",
+        "CacheHolding._note_prompt",
+        "CacheHolding._reply_opening",
+        "CacheHolding._with_older_pinned",
+        "CacheHolding.is_current",
+        "CacheHolding.moves_declarations",
+        "CacheHolding.note_ahead",
+        "CacheHolding.pin_the_reply",
+        "CacheHolding.render_ahead",
+        "CacheHolding.reply_kept_from_its_start",
+        "CacheHolding.splice",
+        "CacheHolding.sync",
+        "CacheHolding.sync.<locals>.<genexpr>",
+        "CacheHolding.sync.<locals>.<lambda>",
+    },
     "cache_sync.py": {
         "CacheSync._bring_up",
         "CacheSync._brought_up_end",
@@ -1124,6 +1142,16 @@ _PLAIN_REPLY_CODE = {
         "_as_text.<locals>.<genexpr>",
         "_dropped_stretch_end",
     },
+    "cache_targets.py": {
+        "CacheTargets.length",
+        "CacheTargets.view",
+        "CacheTargets.view_target",
+        "CacheTargets.view_target.<locals>.<genexpr>",
+        "CacheTargets.view_target.<locals>.at",
+        "CacheTargets.window_after",
+        "CacheTargets.window_of",
+        "closes_turn",
+    },
     "config.py": {
         "Config.__post_init__",
         "Config.evict_above_tokens",
@@ -1141,9 +1169,11 @@ _PLAIN_REPLY_CODE = {
         "goes_on_from",
         "goes_on_from.<locals>.<genexpr>",
     },
+    "errors.py": {
+        "_raising_library_errors.<locals>.guarded",
+    },
     "eviction.py": {
         "Eviction._exchanges_over",
-        "Eviction.keeps_the_rest",
         "Eviction.drop_bound",
         "Eviction.drop_oldest_exchange",
         "Eviction.drop_oldest_exchange.<locals>.<genexpr>",
@@ -1151,12 +1181,10 @@ _PLAIN_REPLY_CODE = {
         "Eviction.drop_while_over.<locals>.length",
         "Eviction.drop_while_over.<locals>.too_many",
         "Eviction.exchanges_after_drop",
+        "Eviction.keeps_the_rest",
         "Eviction.record",
         "Eviction.too_many",
         "Eviction.with_a_short_question",
-    },
-    "errors.py": {
-        "_raising_library_errors.<locals>.guarded",
     },
     "generation.py": {
         "AnswerGuard.thought_limit",
@@ -1164,15 +1192,30 @@ _PLAIN_REPLY_CODE = {
         "_Draws.__init__.<locals>.<lambda>",
         "_Draws.close",
         "_Draws.next",
-        "_sample_into.<locals>.decode_shown",
-        "_sample_into.<locals>.ends_here",
         "_TextBuffer.__init__",
         "_TextBuffer.__len__",
         "_TextBuffer.append",
         "_TextBuffer.emit",
         "_append",
         "_sample_into",
+        "_sample_into.<locals>.decode_shown",
+        "_sample_into.<locals>.ends_here",
         "generate",
+    },
+    "kept_turns.py": {
+        "KeptTurns.drop_unplaceable",
+    },
+    "loop_variant.py": {
+        "LoopVariant.__init__",
+        "LoopVariant.passes",
+    },
+    "message_admission.py": {
+        "MessageAdmission.cut_to_fit",
+        "MessageAdmission.cut_to_fit.<locals>.fits",
+        "MessageAdmission.cut_to_fit.<locals>.kept",
+        "MessageAdmission.ensure_writes",
+        "MessageAdmission.length_alone",
+        "MessageAdmission.make_way_for",
     },
     "messages.py": {
         "ensure_role",
@@ -1181,6 +1224,7 @@ _PLAIN_REPLY_CODE = {
         "history_count",
         "history_count.<locals>.<genexpr>",
         "system_part",
+        "unanswered",
     },
     "model_template.py": {
         "ModelTemplate._rendered",
@@ -1203,55 +1247,26 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._answer_guard",
         "RenderedCache._append_reply",
         "RenderedCache._ask",
-        "RenderedCache._cut_to_fit",
-        "RenderedCache._cut_to_fit.<locals>.fits",
-        "RenderedCache._cut_to_fit.<locals>.kept",
         "RenderedCache._drop_in_windows",
         "RenderedCache._drop_over_after_a_reply",
-        "RenderedCache._drop_unplaceable",
         "RenderedCache._drop_while_over",
         "RenderedCache._ends_on_result",
-        "RenderedCache._ensure_writes",
         "RenderedCache._generation_room",
         "RenderedCache._holds_thought_tags",
-        "RenderedCache._is_current",
         "RenderedCache._joins_questions",
-        "RenderedCache._length",
-        "RenderedCache._length_alone",
-        "RenderedCache._made_for_now",
-        "RenderedCache._make_way_for",
         "RenderedCache._max_prompt_tokens",
-        "RenderedCache._moves_declarations",
         "RenderedCache._newest_exchange",
-        "RenderedCache._newest_exchanges_at",
-        "RenderedCache._note_ahead",
-        "RenderedCache._note_prompt",
-        "RenderedCache._pin_the_reply",
         "RenderedCache._publish",
         "RenderedCache._publishing",
         "RenderedCache._question_room",
         "RenderedCache._read_calls",
         "RenderedCache._record_generated",
-        "RenderedCache._render_ahead",
-        "RenderedCache._reply_kept_from_its_start",
-        "RenderedCache._reply_opening",
         "RenderedCache._settle",
         "RenderedCache._settle.<locals>.<lambda>",
-        "RenderedCache._splice",
-        "RenderedCache._sync",
-        "RenderedCache._sync.<locals>.<genexpr>",
-        "RenderedCache._sync.<locals>.<lambda>",
         "RenderedCache._system_part",
         "RenderedCache._take_back_unwritten",
         "RenderedCache._take_evicted_after_reply",
         "RenderedCache._turn_end_test",
-        "RenderedCache._view",
-        "RenderedCache._view_target",
-        "RenderedCache._view_target.<locals>.<genexpr>",
-        "RenderedCache._view_target.<locals>.at",
-        "RenderedCache._window_after",
-        "RenderedCache._window_of",
-        "RenderedCache._with_older_pinned",
         "RenderedCache._writes",
         "RenderedCache.add",
         "RenderedCache.ask",
@@ -1280,13 +1295,11 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.turn_budget",
         "RenderedCache.turn_open",
         "RenderedCache.turn_policy",
-        "_closes_turn",
         "_ensure_begun",
         "_ensure_can_reply",
         "_ensure_ready",
         "_refused_as_the_text",
         "_reported_calls",
-        "_unanswered",
     },
     "rendering.py": {
         "ConversationRendering._as_given",
@@ -1323,6 +1336,25 @@ _PLAIN_REPLY_CODE = {
         "ReplyStream.__iter__",
         "ReplyStream.__next__",
         "ReplyStream.finish",
+    },
+    "reply_rounds.py": {
+        "CallBudget.__post_init__",
+        "ReplyRounds._template",
+        "ReplyRounds.generate",
+        "ReplyRounds.open_turn_text",
+        "ReplyRounds.read_generation",
+        "ReplyRounds.reply_cap",
+        "ReplyRounds.reply_cap.<locals>.<genexpr>",
+        "ReplyRounds.until_answered",
+        "ReplyRounds.until_answered.<locals>.<genexpr>",
+        "ReplyRounds.until_answered.<locals>.may_call_after_unreadable",
+        "ReplyRounds.until_answered.<locals>.tokens_left",
+        "ReplyRounds.until_answered.<locals>.tokens_left.<locals>.<genexpr>",
+        "_sum_generations",
+        "_sum_generations.<locals>.<genexpr>",
+        "answerable",
+        "explain_failure",
+        "parting",
     },
     "reply_text.py": {
         "ReplyText.__init__",
@@ -1394,6 +1426,10 @@ _PLAIN_REPLY_CODE = {
         "tokenize_pieces.<locals>.end_plain",
         "tokenize_pieces.<locals>.tokenize",
     },
+    "tools.py": {
+        "ensure_readable",
+        "lone_surrogate_at",
+    },
     "windows.py": {
         "Windows._drop_in",
         "Windows._remove_dropped",
@@ -1402,53 +1438,28 @@ _PLAIN_REPLY_CODE = {
         "Windows.ahead",
         "Windows.drop_in",
     },
-    "tools.py": {
-        "ensure_readable",
-        "lone_surrogate_at",
-    },
     "wrapper.py": {
         "ChatWrapper._acquire",
-        "ChatWrapper._watch_unread_reply",
         "ChatWrapper._ensure_not_holding",
         "ChatWrapper._ensure_open",
-        "ChatWrapper._generate",
-        "ChatWrapper._generate_until_answered",
-        "ChatWrapper._generate_until_answered.<locals>.<genexpr>",
-        "ChatWrapper._generate_until_answered.<locals>.may_call_after_unreadable",
-        "ChatWrapper._generate_until_answered.<locals>.tokens_left",
-        "ChatWrapper._generate_until_answered.<locals>.tokens_left.<locals>.<genexpr>",
         "ChatWrapper._held",
         "ChatWrapper._keep_turn",
         "ChatWrapper._noting_each_reader",
-        "ChatWrapper._open_turn_text",
         "ChatWrapper._policy_for",
-        "ChatWrapper._read_generation",
-        "ChatWrapper._reply_cap",
-        "ChatWrapper._reply_cap.<locals>.<genexpr>",
         "ChatWrapper._replying",
         "ChatWrapper._replying.<locals>.<lambda>",
         "ChatWrapper._settle_due_work",
         "ChatWrapper._start_settling",
-        "ChatWrapper._template",
+        "ChatWrapper._watch_unread_reply",
         "ChatWrapper.inject",
         "ChatWrapper.reply",
         "ChatWrapper.reply.<locals>.<lambda>",
-        "_CallBudget.__post_init__",
         "_Waiting.__enter__",
         "_Waiting.__exit__",
-        "_answerable",
         "_ensure_cancel_and_sampling",
         "_ensure_max_calls_runs",
-        "_explain_failure",
-        "_parting",
         "_policy_of",
         "_stop_texts",
-        "_sum_generations",
-        "_sum_generations.<locals>.<genexpr>",
-    },
-    "loop_variant.py": {
-        "LoopVariant.__init__",
-        "LoopVariant.passes",
     },
 }
 

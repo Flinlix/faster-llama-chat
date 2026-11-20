@@ -112,17 +112,17 @@ def test_a_reply_whose_turn_never_closes_stops_instead_of_running_on():
     wrapper.begin(opened("s"))
     # Every generation an unreadable call the turn goes on after, each costing no token.
     fake.replies = [ScriptedCall("fn:nonsense with no name")] * 50
-    real = wrapper._read_generation
+    real = wrapper._rounds.read_generation
 
     def free_tokens(deltas, after):
         reply = yield from real(deltas, after)
         from dataclasses import replace
         return replace(reply, n_generated_tokens=0)
 
-    wrapper._read_generation = free_tokens
+    wrapper._rounds.read_generation = free_tokens
     with pytest.raises(InternalError, match="made no progress"):
         wrapper.reply("wie spät?", tool_call_policy="refuse").finish()
-    del wrapper._read_generation
+    del wrapper._rounds.read_generation
     fake.replies = ["Zwölf."]
     assert wrapper.reply("Und jetzt?").finish().text == "Zwölf."
 

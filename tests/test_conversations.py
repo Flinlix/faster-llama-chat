@@ -1174,11 +1174,11 @@ def test_a_conversation_that_runs_past_midnight_follows_the_clock_decoding_it_ag
 @pytest.mark.counts_work
 def test_the_checks_of_what_renders_allow_run_again_after_a_declaration_and_when_the_clock_moves(
         stem, system, clock, monkeypatch):
-    from llama_chat import rendered_cache
+    from llama_chat import opening_checks
     checked = []
     for name in ("ensure_history_stays_written", "windows_are_exact"):
-        check = getattr(rendered_cache, name)
-        monkeypatch.setattr(rendered_cache, name,
+        check = getattr(opening_checks, name)
+        monkeypatch.setattr(opening_checks, name,
                             lambda *args, check=check, name=name: (checked.append(name),
                                                                    check(*args))[1])
     run = _dated_run(stem, system)

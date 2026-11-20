@@ -109,7 +109,7 @@ def done_after_the_newest_reply(wrapper) -> tuple[int, int]:
 def leaves_a_drop(wrapper) -> bool:
     """Whether the work after the newest reply is still to do and will drop history: the conversation is over ``evict_above_tokens``."""
     conversation = wrapper._conversation
-    return conversation.settle_due and conversation._length(
+    return conversation.settle_due and conversation._targets.length(
         conversation.messages, generation_prompt=False) > wrapper.config.evict_above_tokens
 
 

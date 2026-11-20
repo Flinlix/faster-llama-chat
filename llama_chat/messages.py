@@ -142,8 +142,7 @@ def history_count(messages: list[dict]) -> int:
 def exchange_starts(messages: list[dict]) -> list[int]:
     """Where each exchange begins: every user message, where kept history may open.
 
-    See design_history.md, "Structure review: what changed and why", its
-    point "Eviction removes whole exchanges".
+    See docs/decisions/0022-eviction-drops-whole-oldest-exchanges.md.
     """
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 
@@ -157,3 +156,20 @@ def exchange_count(messages: list[dict]) -> int:
 def system_part(messages: list[dict]) -> list[dict]:
     """The system message ``messages`` open with, alone in a list, or an empty list where they open otherwise."""
     return [m for m in messages[:1] if m["role"] == "system"]
+
+
+def unanswered(messages: list[dict]) -> list[tuple[ToolCall, str]]:
+    """The calls of the newest turn that no result after them answers yet."""
+    calling = None
+    for i in range(len(messages) - 1, -1, -1):          # back to the newest call, at most
+        if messages[i].get("tool_calls"):
+            calling = i
+            break
+        if messages[i]["role"] != "tool":
+            return []                   # a message after the newest call: nothing is owed
+    if calling is None:
+        return []
+    answered = len(messages) - calling - 1
+    return [(ToolCall("", {}, c["id"], "unreadable") if UNREADABLE_CALL in c else
+             ToolCall(c["function"]["name"], copy.deepcopy(c["function"]["arguments"]), c["id"]),
+             c["id"]) for c in messages[calling]["tool_calls"][answered:]]

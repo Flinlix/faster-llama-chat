@@ -11,6 +11,7 @@ import pytest
 from llama_chat.config import generation_sampling
 from llama_chat import (EngineError, InternalError, TOOL_CALL_POLICIES, ChatWrapper, Config, ContextOverflowError,
                         TemplateRefusedError, eviction, rendered_cache)
+from llama_chat.kept_turns import KeptTurns
 from llama_chat.rendered_cache import RenderedCache
 from llama_chat.rendering import ConversationRendering
 from llama_chat.tool_registry import ToolRegistry
@@ -607,11 +608,12 @@ def test_the_token_count_and_the_open_turn_read_from_another_thread_are_a_finish
 
 
 @pytest.mark.parametrize("fault", [RuntimeError, KeyboardInterrupt])
-@pytest.mark.parametrize("ending, step", [("answer", "_holds_thought_tags"),
-                                          ("call", "_drop_unplaceable"),
-                                          ("going on after a result", "_drop_unplaceable")])
+@pytest.mark.parametrize("ending, owner, step", [
+    ("answer", RenderedCache, "_holds_thought_tags"),
+    ("call", KeptTurns, "drop_unplaceable"),
+    ("going on after a result", KeptTurns, "drop_unplaceable")])
 def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypatch, fault, ending,
-                                                                       step):
+                                                                       owner, step):
     w, fake = tool_wrapper()
     w.begin(opened("persona"), tools=weather_registry().specs())
     w.reply("eins").finish()
@@ -620,7 +622,7 @@ def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypat
         list(w.reply("Wetter?", tool_call_policy="yield"))
         w.inject_tool_result(w.pending_calls[0].id, "sonnig")
     before = _state(w)
-    recorded = getattr(rendered_cache.RenderedCache, step)
+    recorded = getattr(owner, step)
     failing = iter([True])
 
     def recording(self, *args):
@@ -628,7 +630,7 @@ def test_a_reply_whose_recording_fails_is_taken_back_with_its_question(monkeypat
             raise fault("recording failed")
         return recorded(self, *args)
 
-    monkeypatch.setattr(rendered_cache.RenderedCache, step, recording)
+    monkeypatch.setattr(owner, step, recording)
     fake.call_script = ['fn:weather{"city": "Bonn"}'] if ending == "call" else []
     with pytest.raises(fault, match="recording failed"):
         w.reply(None if ending == "going on after a result" else "zwei",

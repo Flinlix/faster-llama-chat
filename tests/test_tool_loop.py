@@ -15,7 +15,7 @@ from llama_chat.tool_registry import ToolRegistry
 from llama_chat.tools import ToolCall, ToolSpec, result_text
 from llama_chat import (ChatWrapper, ContextOverflowError, InternalError, OutOfOrderError,
                         UnsupportedError)
-from llama_chat.wrapper import MAX_UNREADABLE_CALLS_IN_A_ROW
+from llama_chat.reply_rounds import MAX_UNREADABLE_CALLS_IN_A_ROW
 from tests.chat_messages import Result, tool_turn, opened, after_system
 from tests.chat_templates import STEMS, WEATHER, expected, fixture
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall, written_call
