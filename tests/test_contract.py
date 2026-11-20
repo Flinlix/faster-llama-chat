@@ -1,20 +1,16 @@
 """The project's contract and what it names agree: every file a rule is verified by exists, the rules are numbered in order, and every rule a file cites by number is one of them.
 
-The contract is ``CLAUDE.md`` at the project's root; where a checkout has
-none, these tests are skipped.
+The contract is ``AGENTS.md`` at the project's root.
 """
 
 import re
 from pathlib import Path
 
-import pytest
 
 _ROOT = Path(__file__).parent.parent
-_CONTRACT = _ROOT / "CLAUDE.md"
+_CONTRACT = _ROOT / "AGENTS.md"
 # Folders a tool writes, which hold copies of the project's files.
-_BUILT = {"mutants", "build", "dist", "__pycache__"}
-
-pytestmark = pytest.mark.skipif(not _CONTRACT.exists(), reason="this checkout holds no contract")
+_BUILT = {"mutants", "build", "dist", "site", "__pycache__"}
 
 
 def _rules() -> dict[int, str]:
