@@ -46,3 +46,48 @@ the wrapper closes raises that it is closed once it is read. A
 tool runs on a thread of its own, and one that has not returned within
 `tool_timeout_s` is answered with a `tool_timeout` failure, and what it returns
 later is dropped; with `tool_timeout_s=None` it runs on the reply's thread.
+
+## From asyncio
+
+Every action blocks its thread until it is done, and waits while another
+action holds the lock, so an event loop calls them through a thread of its
+own. A whole reply:
+
+```python
+import asyncio
+
+async def ask(chat, question: str) -> str:
+    reply = await asyncio.to_thread(lambda: chat.reply(question).finish())
+    return reply.text
+```
+
+A reply streamed to an asynchronous reader, stopped when the reader goes away:
+the stream is made and read on one worker thread, which hands each text to
+the event loop, and leaving the loop sets the reply's `cancel`, which ends it
+within one token.
+
+```python
+import asyncio
+import threading
+
+async def stream(chat, question: str):
+    loop = asyncio.get_running_loop()
+    pieces: asyncio.Queue = asyncio.Queue()
+    cancel = threading.Event()
+
+    def generate():
+        try:
+            with chat.reply(question, cancel=cancel) as reply:
+                for text in reply:
+                    loop.call_soon_threadsafe(pieces.put_nowait, text)
+        finally:
+            loop.call_soon_threadsafe(pieces.put_nowait, None)
+
+    worker = asyncio.ensure_future(asyncio.to_thread(generate))
+    try:
+        while (text := await pieces.get()) is not None:
+            yield text
+    finally:
+        cancel.set()
+        await worker              # raises what the reply raised
+```
