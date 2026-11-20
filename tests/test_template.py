@@ -201,3 +201,31 @@ def test_a_split_where_the_template_drops_a_repeated_text_is_refused():
     render = _render_marking_repeated_questions(drops_repeated=True)
     with pytest.raises(TemplateRefusedError, match="text in its place"):
         split_render(render, _ASKED_TWICE, lambda text: text, reads_clock=False)
+
+
+def test_the_sandbox_answers_each_attribute_as_jinja_does_by_the_kind_of_object_and_the_name():
+    import collections
+    import types
+
+    import jinja2
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    from llama_chat.model_template import _RememberingSandbox
+    # The answer is read off the object's type and the attribute's name in this Jinja release;
+    # a release that reads more must be checked again before it is let in.
+    assert jinja2.__version__.startswith("3.1.")
+
+    def function():
+        yield 1
+
+    objects = [{}, [], set(), "text", 3, 2.5, None, True, (1,), collections.deque(),
+               collections.OrderedDict(), function, function(), str, type, types.SimpleNamespace(),
+               (lambda: 0).__code__, object(), [].append, "x".upper]
+    names = ["append", "clear", "keys", "items", "upper", "mro", "__class__", "_private",
+             "__globals__", "gi_frame", "pop", "update", "format", "real", "__init__", "startswith"]
+    plain, remembering = ImmutableSandboxedEnvironment(), _RememberingSandbox()
+    for order in (objects, objects[::-1]):
+        for obj in order:
+            for name in names:
+                assert remembering.is_safe_attribute(obj, name, None) == \
+                    plain.is_safe_attribute(obj, name, None), (obj, name)

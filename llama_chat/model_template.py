@@ -12,7 +12,7 @@ import jinja2
 import jinja2.ext
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from .template_extract import reasoning_switch
+from .template_extract import EFFORT_VARIABLE, reasoning_switch
 
 
 # The template variables the renderer sets for every template itself, so that no
@@ -50,22 +50,28 @@ _RENDERED_ON: contextvars.ContextVar[datetime | None] = contextvars.ContextVar(
     "rendered_on", default=None)
 
 
-# Where a render is watched, each form it writes the clock in.
-_FORMS_WRITTEN: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+# Where a render is watched, each form it writes the clock in, with what it wrote.
+_FORMS_WRITTEN: contextvars.ContextVar[list[tuple[str, str]] | None] = contextvars.ContextVar(
     "forms_written", default=None)
 
 
 def _strftime_now(form: str) -> str:
+    text = clock_text(form)
     written = _FORMS_WRITTEN.get()
     if written is not None:
-        written.append(form)
+        written.append((form, text))
+    return text
+
+
+def clock_text(form: str) -> str:
+    """What a render on this thread now writes the clock as in ``form``."""
     return (_RENDERED_ON.get() or datetime.now()).strftime(form)
 
 
 @contextlib.contextmanager
 def clock_forms_written():
-    """Collect, on this thread, each form a render meanwhile writes the clock in."""
-    written: list[str] = []
+    """Collect, on this thread, each form a render meanwhile writes the clock in, with what it wrote."""
+    written: list[tuple[str, str]] = []
     token = _FORMS_WRITTEN.set(written)
     try:
         yield written
@@ -90,9 +96,27 @@ def moments_of_this_year() -> list[datetime]:
             if moment.year == first.year]
 
 
+class _RememberingSandbox(ImmutableSandboxedEnvironment):
+    """The immutable sandbox, its answer on each attribute remembered by the kind of object it is read on and the attribute's name, the only two things that answer depends on.
+
+    See design_history.md, "The sandbox's answers remembered".
+    """
+
+    def __init__(self, **options) -> None:
+        super().__init__(**options)
+        self._safe: dict[tuple[type, str], bool] = {}
+
+    def is_safe_attribute(self, obj, attr: str, value) -> bool:
+        key = (type(obj), attr)
+        safe = self._safe.get(key)
+        if safe is None:
+            safe = self._safe[key] = super().is_safe_attribute(obj, attr, value)
+        return safe
+
+
 def _environment() -> jinja2.Environment:
     """The environment chat templates are written for: sandboxed, blocks trimmed, ``tojson`` writing JSON as chat templates expect."""
-    environment = ImmutableSandboxedEnvironment(
+    environment = _RememberingSandbox(
         loader=jinja2.BaseLoader(), trim_blocks=True, lstrip_blocks=True,
         extensions=[_GenerationBlock, jinja2.ext.loopcontrols])
     environment.filters["tojson"] = _tojson
@@ -121,6 +145,13 @@ def names_read(text: str) -> frozenset[str]:
                      if node.ctx == "load")
 
 
+def texts_held(text: str) -> tuple[str, ...]:
+    """Every text the template ``text`` holds as a constant, in the order it holds them."""
+    parsed = _environment().parse(text)
+    return tuple(node.value for node in parsed.find_all(jinja2.nodes.Const)
+                 if isinstance(node.value, str))
+
+
 class ModelTemplate:
     """The chat template a model ships, and renders of it.
 
@@ -140,36 +171,42 @@ class ModelTemplate:
             self._rendered(messages, generation_prompt, variables))
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
-               generation_prompt: bool = False, reasoning: bool | None = None,
+               generation_prompt: bool = False, reasoning: bool | str | None = None,
                variables: Mapping[str, object] | None = None) -> str | None:
         """``messages`` as the template writes them, or ``None`` where it refuses that shape.
 
         Args:
             generation_prompt: Append the prompt a reply is generated after.
             reasoning: Turn the template's reasoning switch on or off, as
-                :func:`~llama_chat.template_extract.reasoning_switch` reads it.
-                ``None`` leaves it unset.
+                :func:`~llama_chat.template_extract.reasoning_switch` reads it,
+                or on at the effort level a text names. ``None`` leaves it unset.
             variables: Further template variables, by name, each in place of
                 the switch's own value where it names the switch.
         """
         try:
-            return self._rendered(messages, generation_prompt,
-                                  {"tools": tools, **self._switch(reasoning), **(variables or {})})
+            return self._rendered(messages, generation_prompt, self._variables(tools, reasoning,
+                                                                                variables))
         except Exception:
             return None
 
     def refusal_reason(self, messages: list[dict], tools: list[dict] | None = None, *,
-                       generation_prompt: bool = False, reasoning: bool | None = None,
+                       generation_prompt: bool = False, reasoning: bool | str | None = None,
                        variables: Mapping[str, object] | None = None) -> str | None:
         """What the template itself says where it refuses to write ``messages``, through its ``raise_exception``; ``None`` where it says nothing or writes them."""
         try:
-            self._rendered(messages, generation_prompt,
-                           {"tools": tools, **self._switch(reasoning), **(variables or {})})
+            self._rendered(messages, generation_prompt, self._variables(tools, reasoning, variables))
         except TemplateRaised as refused:
             return str(refused)
         except Exception:
             return None
         return None
+
+    def _variables(self, tools, reasoning, variables) -> dict:
+        """Every template variable a render is given: the tools, the switch, ``variables`` over it, and an effort level over all."""
+        given = {"tools": tools, **self._switch(reasoning), **(variables or {})}
+        if isinstance(reasoning, str):
+            given[EFFORT_VARIABLE] = reasoning
+        return given
 
     def _rendered(self, messages: list[dict], generation_prompt: bool, variables: dict) -> str:
         """The render, raising where the template does."""
