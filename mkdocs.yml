@@ -1,4 +1,5 @@
 site_name: faster-llama-chat
+site_url: https://flinlix.github.io/faster-llama-chat/
 site_description: A KV-cache managing chat library for llama.cpp
 repo_url: https://github.com/Flinlix/faster-llama-chat
 edit_uri: edit/main/docs/
@@ -49,6 +50,7 @@ nav:
       - A model without a usable template: guide/without-a-template.md
       - Your own cache context: guide/cache-context.md
       - Verify: guide/verify.md
+      - Compatibility: guide/compatibility.md
   - API reference: reference.md
   - Decisions: decisions/README.md
 not_in_nav: |

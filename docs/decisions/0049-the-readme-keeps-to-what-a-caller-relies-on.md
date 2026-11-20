@@ -35,13 +35,18 @@ Both drifted from the code and from each other.
 - The README's quick start and the demo use the public interface alone and run
   on every test template: each injects a question and answers it with
   `reply()`, a test running the same steps on every template.
+- Every Python example in the README and the guides runs as written in
+  `tests/test_examples.py`, on the stand-in model in place of a model file,
+  the examples of one page in order as a reader runs them (2026-11-20).
 
 ## Consequences
 
 - A reader of the README meets only promises; a reader of the code finds the
   reason one pointer away.
-- The README's links point to the files on GitHub, so that they work on GitHub
-  and in a checkout alike.
+- The README's links point to the documentation site on GitHub Pages, built
+  from `main` after every push, so that they work wherever the README is read
+  (2026-11-20; they pointed to the files on GitHub before the site was
+  hosted).
 - The tests that read the documentation (the exported names, the logging
   example) read the README and the guides together.
 

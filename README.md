@@ -20,7 +20,7 @@ comes from a small JSON add-on file.
 
 The [documentation](#documentation) has a guide per task and the API
 reference. The reasons behind each design choice are in the
-[decision records](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/decisions/README.md).
+[decision records](https://flinlix.github.io/faster-llama-chat/decisions/).
 
 ## Why
 
@@ -35,6 +35,9 @@ start shifts every later token's position and invalidates the whole cached
 prefix, so every turn decodes in full. The library edits the cache in place
 instead: it removes the oldest exchange's tokens and shifts the survivors'
 positions down, so kept messages are never processed again.
+The comparison with llama-cpp-python's own chat interface, measured on one
+machine, is in its
+[decision record](https://flinlix.github.io/faster-llama-chat/decisions/0055-measured-against-llama-cpp-pythons-own-chat/).
 <!-- --8<-- [end:why] -->
 
 ## Install
@@ -70,8 +73,8 @@ pip install -e .                    # or -e ".[test,dev,docs]" with those tools
 git config core.hooksPath hooks     # with them: the checks before every push
 ```
 
-It installs as `faster-llama-chat` and is imported as `llama_chat`.
-<!-- --8<-- [end:install] -->
+It installs as `faster-llama-chat` and is imported as
+`llama_chat`. <!-- --8<-- [end:install] -->
 
 ## Quick start
 
@@ -104,7 +107,7 @@ print(reply.text, reply.stop_reason)
 <!-- --8<-- [end:quick-start] -->
 
 How a reply streams, how to stop one, and how the wrapper behaves across
-threads: [Streams, cancelling and threads](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/streams-and-threads.md).
+threads: [Streams, cancelling and threads](https://flinlix.github.io/faster-llama-chat/guide/streams-and-threads/).
 
 ## Supported models
 
@@ -171,15 +174,16 @@ the same way, and refused with its cause where it cannot be.
 
 ## Documentation
 
-- [What to call, by task](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/actions.md)
-- [Streams, cancelling and threads](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/streams-and-threads.md)
-- [Tool calling](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/tool-calling.md)
-- [Reasoning](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/reasoning.md)
-- [Keeping a conversation](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/keeping-a-conversation.md)
-- [Configuration](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/configuration.md)
-- [Add-on files](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/add-on-files.md)
-- [A model without a usable template](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/without-a-template.md)
-- [Your own cache context](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/cache-context.md)
-- [Verify](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/guide/verify.md)
-- [API reference](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/reference.md)
-- [Decision records](https://github.com/Flinlix/faster-llama-chat/blob/main/docs/decisions/README.md)
+- [What to call, by task](https://flinlix.github.io/faster-llama-chat/guide/actions/)
+- [Streams, cancelling and threads](https://flinlix.github.io/faster-llama-chat/guide/streams-and-threads/)
+- [Tool calling](https://flinlix.github.io/faster-llama-chat/guide/tool-calling/)
+- [Reasoning](https://flinlix.github.io/faster-llama-chat/guide/reasoning/)
+- [Keeping a conversation](https://flinlix.github.io/faster-llama-chat/guide/keeping-a-conversation/)
+- [Configuration](https://flinlix.github.io/faster-llama-chat/guide/configuration/)
+- [Add-on files](https://flinlix.github.io/faster-llama-chat/guide/add-on-files/)
+- [A model without a usable template](https://flinlix.github.io/faster-llama-chat/guide/without-a-template/)
+- [Your own cache context](https://flinlix.github.io/faster-llama-chat/guide/cache-context/)
+- [Verify](https://flinlix.github.io/faster-llama-chat/guide/verify/)
+- [Compatibility](https://flinlix.github.io/faster-llama-chat/guide/compatibility/)
+- [API reference](https://flinlix.github.io/faster-llama-chat/reference/)
+- [Decision records](https://flinlix.github.io/faster-llama-chat/decisions/)
