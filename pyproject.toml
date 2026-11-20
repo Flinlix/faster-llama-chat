@@ -1,18 +1,25 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "faster-llama-chat"
-version = "2.0.0"
+version = "3.0.0"
 description = "A KV-cache managing chat wrapper around llama.cpp: prefill as little as possible, evict the oldest exchanges."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Felix Lindenmeier" }]
+keywords = ["llama.cpp", "llm", "chat", "kv-cache", "gguf", "tool-calling", "inference"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.11"
 dependencies = [
@@ -23,15 +30,22 @@ dependencies = [
     "jinja2>=3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Flinlix/faster-llama-chat"
+Documentation = "https://github.com/Flinlix/faster-llama-chat/tree/main/docs"
+Source = "https://github.com/Flinlix/faster-llama-chat"
+Issues = "https://github.com/Flinlix/faster-llama-chat/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-xdist>=3", "hypothesis>=6"]
 dev = ["mypy>=1", "ruff>=0.5", "mutmut>=3"]
+docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
 
 [tool.setuptools.packages.find]
 include = ["llama_chat*"]
 
 [tool.setuptools.package-data]
-llama_chat = ["addons/*.json"]
+llama_chat = ["addons/*.json", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -56,7 +70,7 @@ source_paths = ["llama_chat/"]
 do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py", "llama_chat/context.py",
                  "llama_chat/testing/*"]
 # What the tests read besides the code.
-also_copy = ["README.md", "design_history.md", "CLAUDE.md", "pyproject.toml", "install.sh",
+also_copy = ["README.md", "AGENTS.md", "CLAUDE.md", "docs", "pyproject.toml", "install.sh",
              "LICENSE", "NOTICE", "examples", "hooks"]
 # A test that bounds its processor time runs slower under mutation than it allows; one that
 # reads the source, or traces its functions by name, reads the mutation tool's rewritten copy.
