@@ -119,7 +119,8 @@ def streamed(stream):
     total = time.perf_counter() - started
     reply = stream.reply
     gen = reply.n_generated_tokens if reply else 0
-    rate = gen / (total - first) if first is not None and total > first and gen > 1 else None
+    # The tokens after the first, over the time after the first text, as compare.py counts them.
+    rate = (gen - 1) / (total - first) if first is not None and total > first and gen > 1 else None
     return {"ttft_s": None if first is None else round(first, 4), "reply_s": round(total, 4),
             "generated": gen, "prefilled": reply.n_prefilled_tokens if reply else None,
             "prompt_tokens": reply.n_prompt_tokens if reply else None,

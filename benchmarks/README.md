@@ -25,6 +25,8 @@ python benchmarks/compare.py long library path/to/model.gguf long-library.jsonl 
 Run one script at a time, and each side of a comparison in its own process,
 so that every run has the machine to itself. Give both sides the same
 sampling with `--sampling '{"temperature": 1.0, "top_k": 64, "seed": 1234}'`;
-without it, each side uses its own defaults. The plain side counts streamed
+it takes `temperature`, `top_k`, `top_p`, `min_p` and `seed`, the values both
+sides take, and refuses any other. Without it, each side uses its own
+defaults. The plain side counts streamed
 pieces as tokens, which is close but not exact. For a template that refuses a
 system prompt, pass `--no-system-prompt`; `actions.py` leaves it out on its own.

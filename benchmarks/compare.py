@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 
 SYSTEM = "You are a helpful, concise assistant."
+# The sampling values both sides take; the plain side takes the seed when it loads.
+SHARED_SAMPLING = ("temperature", "top_k", "top_p", "min_p")
 QUESTIONS = [
     "What is the capital of France, and why did it become the capital?",
     "Why is the sky blue? Explain it to a twelve-year-old.",
@@ -150,7 +152,7 @@ class Plain:
         self.llm = Llama(model_path=model_path, n_ctx=context, n_gpu_layers=-1, verbose=False,
                          flash_attn=True, seed=sampling.get("seed", 1234))
         self.load_s = time.perf_counter() - started
-        self.sampling = {k: v for k, v in sampling.items() if k in ("temperature", "top_k", "top_p", "min_p")}
+        self.sampling = {k: v for k, v in sampling.items() if k in SHARED_SAMPLING}
         self.messages: list[dict] = []
 
     def begin(self, messages: list[dict]) -> float:
@@ -263,6 +265,10 @@ def main() -> None:
     parser.add_argument("--sampling", type=json.loads, default={"seed": 1234},
                         help='the same sampling for both sides, as JSON: {"temperature": 1.0, ...}')
     arguments = parser.parse_args()
+    unshared = sorted(set(arguments.sampling) - set(SHARED_SAMPLING) - {"seed"})
+    if unshared:
+        parser.error(f"--sampling: {', '.join(unshared)} would apply to one side only; "
+                     f"both take {', '.join(SHARED_SAMPLING)} and seed")
     from llama_cpp import Llama
     vocabulary = Llama(model_path=arguments.model_path, vocab_only=True, verbose=False)
 
