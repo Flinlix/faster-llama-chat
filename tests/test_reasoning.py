@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from tests.chat_messages import opened
+from tests.chat_templates import STEMS
 
 from llama_chat.addon_files import template_fingerprint
 from llama_chat.config import Config
@@ -188,7 +189,7 @@ def test_a_resumed_reply_goes_on_where_the_result_wrapping_ends_it(reasoning):
     """Nothing is added after the result: the template's wrapping ends the turn as it ends it."""
     w, fake = reasoning_wrapper(reasoning, gen_text="ok", gen_tokens=2)
     fake.call_script.append("fn:uhr{}")
-    w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})], reasoning=reasoning)
+    w.begin(opened("s"), tools=[ToolSpec("uhr", "", {})], reasoning=bool(reasoning))
     for event in w.reply("wie spät?", tool_call_policy="yield"):
         call = event
     w.inject_tool_result(call.id, "12:00")
@@ -398,3 +399,88 @@ def test_streaming_a_long_thought_takes_time_in_proportion_to_it():
     timed(500)                                  # warmed up
     # Four times the thought takes about four times as long, not sixteen times.
     assert timed(8000) < 8 * timed(2000)
+
+
+@pytest.mark.parametrize("where", ["config", "reply"])
+def test_a_thought_cap_closes_the_thought_there_and_the_reply_still_answers(where):
+    thought = "<thought>" + "x" * 60 + "</thought>Antwort."
+    config = Config(context_size=500, evict_above_fraction=1.0,
+                    max_thought_tokens=5 if where == "config" else None)
+    w, fake = reasoning_wrapper(config=config, gen_text=thought, gen_tokens=len(thought))
+    reply = w.reply("hi", **({"max_thought_tokens": 5} if where == "reply" else {})).finish()
+    assert reply.thought == "x" * 5
+    # The scripted model writes on as it was going to; all of it after the closing is answer.
+    assert reply.text == "x" * 55 + "</thought>Antwort."
+
+
+# ----- effort levels ---------------------------------------------------------------
+def _levelled_wrapper(stem: str):
+    from tests.chat_templates import fixture
+    fake = FakeContext(fixture(stem), ["Antwort."])
+    return ChatWrapper(Config(context_size=8192), context=fake), fake
+
+
+def _levels(stem: str) -> tuple[str, ...]:
+    return _levelled_wrapper(stem)[0].capabilities(tools=False).reasoning_levels
+
+
+def _stems_with_levels():
+    from tests.chat_templates import STEMS
+    return [stem for stem in sorted(STEMS) if _levels(stem)]
+
+
+_WITH_LEVELS = _stems_with_levels()
+
+
+@pytest.mark.parametrize("stem", sorted(STEMS))
+def test_the_levels_are_those_the_templates_file_states(stem):
+    """Read from the template where it tells levels apart, else from the add-on file shipped for it."""
+    from tests.chat_templates import expected, fixture
+    assert _levels(stem) == tuple(expected(fixture(stem), "reasoning_levels"))
+
+
+@pytest.mark.parametrize("stem", _WITH_LEVELS)
+def test_a_conversation_at_each_level_is_written_with_it_and_begins_again_at_it(stem):
+    held = {}
+    for level in _levels(stem):
+        w, fake = _levelled_wrapper(stem)
+        w.begin(opened("s"), reasoning=True, reasoning_level=level)
+        w.reply("Frage?").finish()
+        saved = w.conversation()
+        assert (saved["reasoning"], saved["reasoning_level"]) == (True, level)
+        w.begin(**saved)
+        assert w.conversation() == saved
+        held[level] = fake.text_of(fake.cache)
+    # A level the template writes otherwise than another is held otherwise too.
+    assert len(set(held.values())) > 1
+
+
+def test_a_level_the_template_does_not_know_or_one_without_reasoning_is_refused_by_name_and_changes_nothing():
+    from llama_chat.errors import InvalidArgumentError, UnsupportedError
+    stem = _WITH_LEVELS[0]
+    w, _fake = _levelled_wrapper(stem)
+    w.begin(opened("s"), reasoning=True)
+    before = w.conversation()
+    known = ", ".join(map(repr, _levels(stem)))
+    with pytest.raises(UnsupportedError, match=re.escape(known)) as refused:
+        w.begin(opened("s"), reasoning=True, reasoning_level="QQnolevel")
+    assert refused.value.field == "reasoning_level"
+    with pytest.raises(InvalidArgumentError) as refused:
+        w.begin(opened("s"), reasoning_level=_levels(stem)[0])
+    assert refused.value.field == "reasoning_level"
+    assert w.conversation() == before
+
+
+def test_a_template_without_levels_reasons_as_it_does_by_default_or_not_at_all():
+    from llama_chat.errors import UnsupportedError
+    from tests.chat_templates import STEMS, expected, fixture
+    stem = next(stem for stem in sorted(STEMS)
+                if fixture(stem)["can_reason"] and not expected(fixture(stem), "reasoning_levels"))
+    w, _fake = _levelled_wrapper(stem)
+    assert w.capabilities(tools=False).reasoning_levels == ()
+    w.begin(opened("s"), reasoning=True)
+    assert (w.conversation()["reasoning"], w.conversation()["reasoning_level"]) == (True, None)
+    w.begin(opened("s"), reasoning=False)
+    assert w.conversation()["reasoning"] is False
+    with pytest.raises(UnsupportedError):
+        w.begin(opened("s"), reasoning=True, reasoning_level="high")

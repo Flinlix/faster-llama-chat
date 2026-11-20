@@ -38,6 +38,7 @@ _UNSTATED = {
     "chat_format": None,                # the name the template's chat format goes by
     "ends_generation": [],              # the tags beside its end-of-sequence tag that end a generation in the engine
     "call_marks": None,                 # what a call opens and closes with in a render, and whether those are tags
+    "reasoning_levels": [],             # the effort levels it reasons at besides its own default
     "call_follows_text": False,         # a call may follow text in a reply
     "writes_arguments_as_json": False,  # a call's arguments are written as one JSON object
     "writes_text_and_number_alike": False,  # a text that reads as a number is written as the number is

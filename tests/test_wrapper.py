@@ -1093,9 +1093,6 @@ def test_an_injected_message_far_below_the_limit_is_counted_alone_and_one_at_the
 # reply fails the test below until it is judged to serve every template and listed here.
 _PLAIN_REPLY_CODE = {
     "cache_sync.py": {
-        "_as_text",
-        "_as_text.<locals>.<genexpr>",
-        "_dropped_stretch_end",
         "CacheSync._bring_up",
         "CacheSync._brought_up_end",
         "CacheSync._can_cut",
@@ -1112,6 +1109,7 @@ _PLAIN_REPLY_CODE = {
         "CacheSync.decode",
         "CacheSync.generate",
         "CacheSync.hold",
+        "CacheSync.is_behind",
         "CacheSync.is_current",
         "CacheSync.is_known",
         "CacheSync.keeps_saved_states",
@@ -1121,13 +1119,16 @@ _PLAIN_REPLY_CODE = {
         "CacheSync.repair",
         "CacheSync.rest",
         "CacheSync.tokens",
+        "_as_text",
+        "_as_text.<locals>.<genexpr>",
+        "_dropped_stretch_end",
     },
     "config.py": {
         "Config.__post_init__",
         "Config.evict_above_tokens",
         "Sampling.__post_init__",
         "_is_of_kind",
-        "ensure_reply_cap",
+        "ensure_token_cap",
         "ensure_types",
         "ensure_types.<locals>.<genexpr>",
         "generation_sampling",
@@ -1141,7 +1142,7 @@ _PLAIN_REPLY_CODE = {
     },
     "eviction.py": {
         "Eviction._exchanges_over",
-        "Eviction._keeps_the_rest",
+        "Eviction.keeps_the_rest",
         "Eviction.drop_bound",
         "Eviction.drop_oldest_exchange",
         "Eviction.drop_oldest_exchange.<locals>.<genexpr>",
@@ -1162,6 +1163,7 @@ _PLAIN_REPLY_CODE = {
         "_Draws.__init__.<locals>.<lambda>",
         "_Draws.close",
         "_Draws.next",
+        "_sample_into.<locals>.decode_shown",
         "_sample_into.<locals>.ends_here",
         "_TextBuffer.__init__",
         "_TextBuffer.__len__",
@@ -1181,7 +1183,9 @@ _PLAIN_REPLY_CODE = {
     },
     "model_template.py": {
         "ModelTemplate._rendered",
+        "ModelTemplate._variables",
         "ModelTemplate.render",
+        "_RememberingSandbox.is_safe_attribute",
     },
     "publishing.py": {
         "published",
@@ -1191,25 +1195,23 @@ _PLAIN_REPLY_CODE = {
         "question_splices",
     },
     "rendered_cache.py": {
-        "RenderedCache._window_after",
-        "RenderedCache._with_older_pinned",
+        "RenderedCache.__init__.<locals>.<lambda>",
+        "RenderedCache._acting",
+        "RenderedCache._action",
+        "RenderedCache._after_reply",
         "RenderedCache._answer_guard",
+        "RenderedCache._append_reply",
+        "RenderedCache._ask",
         "RenderedCache._cut_to_fit",
         "RenderedCache._cut_to_fit.<locals>.fits",
         "RenderedCache._cut_to_fit.<locals>.kept",
-        "RenderedCache.generation.<locals>.<lambda>",
-        "RenderedCache.__init__.<locals>.<lambda>",
-        "RenderedCache._action",
-        "RenderedCache._acting",
-        "RenderedCache._after_reply",
-        "RenderedCache._append_reply",
-        "RenderedCache._ask",
         "RenderedCache._drop_in_windows",
         "RenderedCache._drop_over_after_a_reply",
         "RenderedCache._drop_unplaceable",
         "RenderedCache._drop_while_over",
         "RenderedCache._ends_on_result",
         "RenderedCache._ensure_writes",
+        "RenderedCache._generation_room",
         "RenderedCache._holds_thought_tags",
         "RenderedCache._is_current",
         "RenderedCache._joins_questions",
@@ -1218,8 +1220,6 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._made_for_now",
         "RenderedCache._make_way_for",
         "RenderedCache._max_prompt_tokens",
-        "RenderedCache._question_room",
-        "RenderedCache._generation_room",
         "RenderedCache._moves_declarations",
         "RenderedCache._newest_exchange",
         "RenderedCache._newest_exchanges_at",
@@ -1228,9 +1228,11 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._pin_the_reply",
         "RenderedCache._publish",
         "RenderedCache._publishing",
+        "RenderedCache._question_room",
         "RenderedCache._read_calls",
         "RenderedCache._record_generated",
         "RenderedCache._render_ahead",
+        "RenderedCache._reply_kept_from_its_start",
         "RenderedCache._reply_opening",
         "RenderedCache._settle",
         "RenderedCache._settle.<locals>.<lambda>",
@@ -1246,7 +1248,9 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache._view_target",
         "RenderedCache._view_target.<locals>.<genexpr>",
         "RenderedCache._view_target.<locals>.at",
+        "RenderedCache._window_after",
         "RenderedCache._window_of",
+        "RenderedCache._with_older_pinned",
         "RenderedCache._writes",
         "RenderedCache.add",
         "RenderedCache.ask",
@@ -1256,6 +1260,7 @@ _PLAIN_REPLY_CODE = {
         "RenderedCache.forget_told",
         "RenderedCache.generate",
         "RenderedCache.generation",
+        "RenderedCache.generation.<locals>.<lambda>",
         "RenderedCache.newest_role",
         "RenderedCache.open_attempt",
         "RenderedCache.pending_calls",
@@ -1353,14 +1358,17 @@ _PLAIN_REPLY_CODE = {
         "common_prefix_length.<locals>.<genexpr>",
     },
     "split_render.py": {
-        "_split_of",
-        "_split_of.<locals>.<genexpr>",
+        "SplitRender._own_ends",
+        "SplitRender._own_starts",
+        "SplitRender.own_from",
         "SplitRender.pieces",
         "_forms",
         "_marked",
         "_marked.<locals>.mark",
         "_marked.<locals>.mark_descriptions",
         "_placed",
+        "_split_of",
+        "_split_of.<locals>.<genexpr>",
         "_walk",
         "_walk.<locals>.matched_from",
         "_walk.<locals>.matched_from.<locals>.<genexpr>",
@@ -2053,9 +2061,12 @@ def test_naming_the_refused_message_of_a_long_history_renders_a_few_parts_of_it_
 
 
 @pytest.mark.counts_work
-def test_a_cache_that_can_neither_shift_nor_cut_saves_one_state_for_a_question_before_its_first_word():
-    """A saved state is a copy of the whole cache, so a question keeps one, where its text ends."""
-    fake = FakeContext(PLAIN, gen_tokens=5, can_shift=False)
+@pytest.mark.parametrize("rewrites", [False, True])
+def test_a_cache_that_can_neither_shift_nor_cut_saves_a_state_before_a_first_word_only_where_the_reply_is_written_again(
+        rewrites):
+    """A saved state is a copy of the whole cache, so a question keeps one, where its text ends, only where the template writes a past reply otherwise than it was prompted, which takes the cache back there after the reply."""
+    from llama_chat.testing.invented_templates import REASONING
+    fake = FakeContext(REASONING if rewrites else PLAIN, gen_tokens=5, can_shift=False)
     w = ChatWrapper(Config(context_size=4000, evict_above_fraction=0.9), context=fake)
     w.begin(opened("s" * 300))
     for n in range(3):
@@ -2066,5 +2077,5 @@ def test_a_cache_that_can_neither_shift_nor_cut_saves_one_state_for_a_question_b
     fake.save_state = lambda: saved.append(len(fake.cache)) or saving()
     stream = w.reply("Noch eine Frage?")
     next(stream)
-    assert len(saved) == 1, saved
+    assert len(saved) == (1 if rewrites else 0), saved
     stream.finish()

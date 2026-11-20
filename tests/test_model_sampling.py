@@ -7,7 +7,7 @@ import pytest
 
 from llama_chat import addon_files
 from llama_chat.addon_files import (
-    DEFAULT_SAMPLING, SHIPPED_ADDONS, UNSTATED_SAMPLING, addon_file, read_addon_file,
+    DEFAULT_SAMPLING, SHIPPED_ADDONS, addon_file, read_addon_file,
     template_fingerprint, with_model_sampling)
 from llama_chat import InvalidSettingError
 from llama_chat.config import Config
@@ -35,11 +35,11 @@ def _addon(sampling: dict) -> dict:
     return {"templates": [], "sampling": sampling, "call": {}, "reasoning_on": {}}
 
 
-def test_each_value_comes_from_the_add_on_file_else_the_gguf_else_is_switched_off():
+def test_each_value_comes_from_the_add_on_file_else_the_gguf_else_the_engines_default():
     config = with_model_sampling(Config(), {"temperature": 0.6, "top_p": 0.9, "min_p": 0.02},
                                  _addon({"temperature": 0.3, "top_k": 7}))
     assert (config.temperature, config.top_k, config.top_p, config.min_p,
-            config.repetition_penalty) == (0.3, 7, 0.9, 0.02, UNSTATED_SAMPLING["repetition_penalty"])
+            config.repetition_penalty) == (0.3, 7, 0.9, 0.02, DEFAULT_SAMPLING["repetition_penalty"])
 
 
 def test_the_gguf_alone_or_the_add_on_file_alone_is_taken_as_it_states():
@@ -48,7 +48,7 @@ def test_the_gguf_alone_or_the_add_on_file_alone_is_taken_as_it_states():
     from_file = with_model_sampling(Config(), {}, _addon(stated))
     assert from_gguf == from_file
     assert (from_file.temperature, from_file.top_k, from_file.top_p) == (
-        0.6, -1, UNSTATED_SAMPLING["top_p"])
+        0.6, -1, DEFAULT_SAMPLING["top_p"])
 
 
 def test_a_model_that_recommends_nothing_runs_at_the_engines_defaults():
@@ -56,11 +56,11 @@ def test_a_model_that_recommends_nothing_runs_at_the_engines_defaults():
     assert {name: getattr(config, name) for name in DEFAULT_SAMPLING} == DEFAULT_SAMPLING
 
 
-def test_what_a_recommendation_leaves_out_stays_switched_off(tmp_path):
+def test_what_a_recommendation_leaves_out_takes_the_engines_default(tmp_path):
     config = with_model_sampling(
         Config(model_path=str(tmp_path / "m.gguf")),
         {"temperature": 1.0, "top_k": 64, "top_p": 0.95}, addon_file(tmp_path / "m.gguf", None))
-    assert (config.min_p, config.repetition_penalty) == (UNSTATED_SAMPLING["min_p"], 1.0)
+    assert (config.min_p, config.repetition_penalty) == (DEFAULT_SAMPLING["min_p"], 1.0)
 
 
 def test_a_shipped_file_applies_to_the_template_it_names(tmp_path, monkeypatch):
@@ -260,3 +260,18 @@ def test_a_reasoning_on_that_names_no_variable_is_refused_naming_the_file(tmp_pa
                                  "reasoning_on": reasoning_on})
     with pytest.raises(ValueError, match=r"m\.json: reasoning_on"):
         addon_file(model, _TEMPLATE)
+
+
+def test_an_add_on_file_naming_levels_for_a_template_that_tells_its_own_apart_is_refused_at_load(tmp_path):
+    from tests.chat_templates import STEMS, expected, fixture
+    from llama_chat import ChatWrapper
+    from llama_chat.testing.fake_context import FakeContext
+    # A template whose levels come from itself, not from a shipped file.
+    stem = next(stem for stem in sorted(STEMS) if expected(fixture(stem), "reasoning_levels")
+                and not addon_file(None, fixture(stem)["chat_template"])["reasoning_levels"])
+    template = fixture(stem)["chat_template"]
+    model = tmp_path / "m.gguf"
+    (tmp_path / "m.json").write_text(json.dumps({"templates": [template_fingerprint(template)],
+                                                  "reasoning_levels": ["QQlevel"]}))
+    with pytest.raises(ValueError, match="reasoning_levels"):
+        ChatWrapper(Config(model_path=str(model)), context=FakeContext(fixture(stem)))

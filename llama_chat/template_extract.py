@@ -16,6 +16,8 @@ A pure function of the render callable, so it is testable without a model.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Iterable, Sequence
 from typing import Callable
 
 from .messages import THOUGHT_FORMS, calling_message, with_thought_as
@@ -24,6 +26,8 @@ from .tools import ToolCall
 
 # The variables chat templates share for the reasoning switch, a flag and an effort.
 _SWITCH_NAMES = ("enable_thinking", "reasoning_effort")
+# The variable an effort level is given to a template in.
+EFFORT_VARIABLE = _SWITCH_NAMES[1]
 
 # Message content, one per role, a second user turn, and a thought. These and the
 # probe texts below are plain alphanumerics: they survive Jinja `| trim` and are
@@ -45,7 +49,7 @@ Render = Callable[..., "str | None"]
 
 
 def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | None], dict]:
-    """The template variables that turn reasoning on or off, as a render reads them.
+    """The template variables that turn reasoning on or off, as a render reads them; an effort level turns it on.
 
     ``enable_thinking``, the variable chat templates share for it, where it
     changes the render; else ``reasoning_effort``, where ``"none"`` changes
@@ -75,6 +79,48 @@ def reasoning_switch(render_variables: Callable[..., str]) -> Callable[[bool | N
             found = {}, effort_off
     on, off = found or (flag_on, flag_off)
     return lambda reasoning: {} if reasoning is None else on if reasoning else off
+
+
+# An effort no template knows, which tells a template that writes the effort as it is given.
+_UNKNOWN_LEVEL = "QQLEVEL"
+# What a text among a template's constants looks like to be taken for an effort level.
+_LEVEL_SHAPE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,19}")
+# The effort the reasoning switch turns reasoning off with, which is no level.
+_NO_LEVELS = ("none",)
+
+
+def reasoning_levels(render_levelled: Callable[[list, str | bool], "str | None"],
+                     constants: Iterable[str], listed: Sequence[str]) -> tuple[str, ...]:
+    """The effort levels a conversation can reason at, each one the template writes otherwise than an effort it does not know, with the generation prompt reasoning on writes.
+
+    A template that writes the effort it is given as it is tells no level
+    apart: ``listed``, what the model's add-on file names, are its levels.
+    Otherwise they are those of ``constants``, the texts the template holds,
+    that it tells apart so.
+
+    Args:
+        render_levelled: Renders messages with the generation prompt, with
+            reasoning on at the level given, or at the template's own where
+            given ``True``; ``None`` where the template refuses.
+    """
+    probe = [{"role": "system", "content": _SYS}, {"role": "user", "content": USER_SENTINEL}]
+    default = render_levelled(probe, True)
+    if default is None:
+        return ()
+    unknown = render_levelled(probe, _UNKNOWN_LEVEL)
+    writes_as_given = unknown is not None and _UNKNOWN_LEVEL in unknown
+    candidates = listed if writes_as_given else [
+        text for text in dict.fromkeys(constants) if _LEVEL_SHAPE.fullmatch(text)]
+    prompt = default.split(USER_SENTINEL, 1)[-1]
+    levels = []
+    for level in candidates:
+        if level in _NO_LEVELS:
+            continue
+        rendered = render_levelled(probe, level)
+        if rendered is not None and rendered != unknown \
+                and rendered.split(USER_SENTINEL, 1)[-1] == prompt:
+            levels.append(level)
+    return tuple(levels)
 
 
 def refusing(render: Render) -> Render:

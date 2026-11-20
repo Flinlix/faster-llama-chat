@@ -10,13 +10,23 @@ from .reply import EvictionCause
 from .tools import ToolCall, ToolSpec
 
 
+def reasoning_switch(reasoning: bool, level: str | None) -> bool | str:
+    """The switch a conversation's renders take for ``reasoning`` and ``reasoning_level`` as ``begin`` takes them: off, on as the template's own, or on at the effort level named."""
+    return level if reasoning and level is not None else reasoning
+
+
+def reasoning_asked(switch: bool | str) -> tuple[bool, str | None]:
+    """``reasoning`` and ``reasoning_level`` as ``begin`` took them, for the ``switch`` :func:`reasoning_switch` made of them."""
+    return bool(switch), switch if isinstance(switch, str) else None
+
+
 @dataclass(frozen=True, eq=False)
 class MadeFor:
     """The conversation and the cache a record made ahead was made for, which it is used with only while they stay."""
 
     messages: tuple[dict, ...]
     tools: tuple[ToolSpec, ...]
-    reasoning: bool
+    reasoning: bool | str
     opening: str | None
     cache_version: int
 
@@ -67,6 +77,8 @@ class RenderChecks:
     """What the template's renders allow, as the system turn, the declarations and the clock leave them; worked out again whenever one of those changes."""
 
     opening: str | None = None            # how the conversation opens, to see a clock move on
+    # Each form the opening wrote the clock in, with what it wrote; empty where it wrote none.
+    clock_read: tuple[tuple[str, str], ...] = ()
     windows: bool = False                 # whether windows of the conversation stand for its render
     splice_probe: str | None = None       # what a question's render after one exchange is compared with
     repeats_alike: bool = True            # whether a repeated question is written as any other
@@ -78,8 +90,10 @@ class RenderChecks:
     # What the system turn and a one-character question take, with the generation prompt.
     with_a_short_question: int = 0
     # Whether the exchanges after the oldest are written as before once it goes, so that
-    # a cache that shifts keeps them.
+    # a cache that shifts keeps them; and whether they are where turns that called tools are
+    # among them.
     rest_stays: bool = True
+    rest_stays_around_calls: bool = True
 
 
 @dataclass
@@ -91,7 +105,7 @@ class ConversationState:
     # Whether it is written with the model's template for tools: begun with tools, or
     # declaring some. True wherever ``tools`` holds any.
     uses_tool_template: bool = False
-    reasoning: bool = False
+    reasoning: bool | str = False
     # Where each placed generated turn starts in the cache.
     turns_at: dict[GeneratedTurn, int] = field(default_factory=dict)
     n_calls: int = 0
@@ -145,7 +159,7 @@ class Published:
     messages: tuple = ()                  # as the template is given them; never changed in place
     joins_questions: bool = False         # whether two questions in a row are written as one
     tools: tuple | None = None            # None where it is not written with the template for tools
-    reasoning: bool = False
+    reasoning: bool | str = False
     pending_calls: tuple = ()
     begun: bool = False
     turn_open: bool = False

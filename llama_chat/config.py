@@ -23,9 +23,7 @@ class Config:
     The eight model sampling fields, ``temperature`` to
     ``penalty_window_tokens``, left ``None`` take the model's own when it
     loads, value by value: its add-on file's, else what its GGUF states, else
-    switched off, the penalty window at llama.cpp's default length; where
-    neither states any but the penalty window, llama.cpp's defaults. See the
-    README, "Configuration".
+    llama.cpp's default. See the README, "Configuration".
 
     Attributes:
         model_path: Path to the GGUF model file. Loading refuses without one.
@@ -60,6 +58,10 @@ class Config:
         max_reply_tokens: Cap on the tokens of one reply, every generation
             of it together, a thought included. ``None`` sets none, so a reply may run until the context is full;
             generation never crosses ``context_size`` either way.
+        max_thought_tokens: The most tokens one thought may take; a thought
+            that reaches it is closed as the template closes one, and the
+            answer follows. ``None`` sets no such cap; otherwise at least
+            ``1``. Only a model whose template marks a thought is affected.
         min_reply_tokens: The room a reply keeps: a ``begin`` that leaves
             less beside a short question, and a reply going on with an open
             turn that would leave less, is refused with
@@ -92,7 +94,9 @@ class Config:
             ends it at once. ``None`` waits until the stream is read on,
             closed or collected; otherwise above ``0``.
         gpu_layers: Layers to offload to GPU: ``-1`` for all of them, else
-            at least ``0``, ``0`` for a CPU-only build.
+            at least ``0``. ``0`` uses no GPU at all, the processor alone
+            running every step; on a build without GPU support every value
+            runs on the processor.
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
@@ -120,6 +124,12 @@ class Config:
             Every one of them but ``UNQUANTIZED_KV_CACHE_TYPE``, the default,
             requires flash attention, so is refused with
             ``flash_attention=False``.
+        kept_conversation_bytes: The most host RAM, in bytes, the caches of
+            conversations a ``begin`` switched away from may take once kept,
+            so that going back to one decodes only what changed since; the
+            oldest goes first, and while one is saved it takes its own size
+            beside them. Only a cache that can shift or cut keeps any. At
+            least ``0``; ``0`` keeps none.
         check_cache: Check, right before every generation and once the work
             after a reply has ended, that the cache holds what a fresh begin
             of its conversation holds. A fault found before a generation
@@ -149,6 +159,7 @@ class Config:
     evict_above_fraction: float = 0.75
     max_history_exchanges: int | None = None
     max_reply_tokens: int | None = None
+    max_thought_tokens: int | None = None
     min_reply_tokens: int = 32
 
     # Replies
@@ -161,7 +172,7 @@ class Config:
 
     # Backend / hardware
 
-    gpu_layers: int = 0
+    gpu_layers: int = -1
     kv_cache_on_gpu: bool = True
     decode_threads: int | None = None
     prefill_threads: int | None = None
@@ -169,6 +180,7 @@ class Config:
     micro_batch_tokens: int | None = None
     flash_attention: bool | None = None
     kv_cache_type: str = UNQUANTIZED_KV_CACHE_TYPE
+    kept_conversation_bytes: int = 0
 
     # Checking
 
@@ -205,7 +217,11 @@ class Config:
             if getattr(self, name) is not None and getattr(self, name) < 1:
                 raise InvalidSettingError(
                     name, f"{name} must be None or >= 1 (None sets it from the processors)")
-        ensure_reply_cap(self.max_reply_tokens)
+        ensure_token_cap(self.max_reply_tokens, "max_reply_tokens")
+        ensure_token_cap(self.max_thought_tokens, "max_thought_tokens")
+        if self.kept_conversation_bytes < 0:
+            raise InvalidSettingError("kept_conversation_bytes",
+                                      "kept_conversation_bytes must be >= 0 (0 keeps none)")
         if self.min_reply_tokens < 0:
             raise InvalidSettingError("min_reply_tokens", "min_reply_tokens must be >= 0")
         if self.min_reply_tokens >= self.context_size:
@@ -291,17 +307,16 @@ def _is_of_kind(value, kind: str) -> bool:
     return isinstance(value, str)
 
 
-def ensure_reply_cap(max_reply_tokens: int | None) -> None:
-    """Refuse a cap on a reply's tokens that allows none.
+def ensure_token_cap(tokens: int | None, name: str) -> None:
+    """Refuse a cap on tokens that allows none, naming the setting ``name``.
 
     Raises:
-        InvalidSettingError: If ``max_reply_tokens`` is neither ``None`` nor a positive int.
+        InvalidSettingError: If ``tokens`` is neither ``None`` nor a positive int.
     """
-    if max_reply_tokens is not None and (not _is_of_kind(max_reply_tokens, "int")
-                                         or max_reply_tokens <= 0):
+    if tokens is not None and (not _is_of_kind(tokens, "int") or tokens <= 0):
         raise InvalidSettingError(
-            "max_reply_tokens", f"max_reply_tokens must be None or a whole number of at least 1 "
-                                f"(None sets no cap), not {max_reply_tokens!r}")
+            name, f"{name} must be None or a whole number of at least 1 (None sets no cap), "
+                  f"not {tokens!r}")
 
 
 @dataclass(frozen=True)

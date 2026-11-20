@@ -30,7 +30,7 @@ def test_a_conversation_begin_accepts_answers_a_question_of_any_length(
     can = wrapper.capabilities(tools=False)
     try:
         wrapper.begin(opened("s" * system if can.can_take_system_prompt else ""),
-                      reasoning=reasoning and can.can_reason)
+                      reasoning=bool(reasoning and can.can_reason))
     except ContextOverflowError:
         return                          # refused at begin, with its cause: never ready
     reply = wrapper.reply("x" * question + " Frage?").finish()

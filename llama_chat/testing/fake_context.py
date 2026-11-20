@@ -9,6 +9,7 @@ model is a script.
 
 from __future__ import annotations
 
+import array
 import functools
 import hashlib
 import itertools
@@ -189,6 +190,8 @@ class FakeContext:
         can_shift: Whether the cache takes an eviction's shift.
         can_cut_tail: Whether a cache that cannot shift takes a cut at its
             end.
+        decode_blocks: Whether a decode is taken to return only once it is
+            done, so that a generation shows a token's text before decoding it.
         tokens_spell_text: Whether a generated token is its character's own,
             as the tokenizer would give it; otherwise an id no tokenization
             gives, as a model that generates a word in other pieces than its
@@ -204,6 +207,7 @@ class FakeContext:
 
     def __init__(self, fixture: dict, replies=(), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
+                 decode_blocks: bool = False,
                  tokens_spell_text: bool = True, writes_tags: bool = False,
                  extra_tags: tuple[str, ...] = (), merges: bool = False) -> None:
         self._fixture = fixture
@@ -231,6 +235,7 @@ class FakeContext:
         self.cache: list[int] = []
         self.can_shift = can_shift
         self.can_cut_tail = can_cut_tail
+        self.decode_blocks = decode_blocks
         self.context_size = 1 << 20      # no limit of its own: the config's is the one tested
         # What the model generates.
         self.call_script: list[str] = []
@@ -350,7 +355,7 @@ class FakeContext:
 
     def stated_render(self, messages, tools=None, *, generation_prompt=False, reasoning=False,
                       for_tools: bool | None = None):
-        """The render with the variables the fixture states for ``reasoning``, none of them read off the template, and not recorded.
+        """The render with the variables the fixture states for ``reasoning``, and an effort level it names, none of them read off the template, and not recorded.
 
         A conversation begun with tools, which ``for_tools`` says and which
         ``tools`` decides where it is ``None``, is written with the fixture's
@@ -360,8 +365,11 @@ class FakeContext:
         model = self._models.get(TOOL_USE_TEMPLATE if for_tools else None, self._model)
         if model is not self._model and tools is None:
             tools = []              # a template for tools is given a list of them, as the library gives one
+        variables = dict(self._stated["on" if reasoning else "off"])
+        if isinstance(reasoning, str):
+            variables["reasoning_effort"] = reasoning   # an effort level, in the variable templates share
         return model.render(messages, tools, generation_prompt=generation_prompt,
-                            reasoning=None, variables=self._stated["on" if reasoning else "off"])
+                            reasoning=None, variables=variables)
 
     def chat_template_text(self, template_name: str | None = None) -> str | None:
         return self._texts.get(template_name)
@@ -395,6 +403,14 @@ class FakeContext:
         assert len(state) == pos
         self.cache = list(state)
         self.edits.append(("restore", pos))
+
+    def save_whole_state(self):
+        self.saved_states += 1
+        return array.array("q", self.cache).tobytes()
+
+    def restore_whole_state(self, state) -> None:
+        self.cache = list(array.array("q", state))
+        self.edits.append(("restore whole", len(self.cache)))
 
     def remove_from(self, pos: int) -> None:
         assert self.can_shift or self.can_cut_tail, "a cache that cannot cut was cut"

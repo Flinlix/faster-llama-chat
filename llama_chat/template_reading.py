@@ -144,9 +144,17 @@ class TemplateReader:
             can_write_results=self._can_write_results, reasoning=self._reasoning,
             can_reason=self._can_reason, n_closing_tokens=self._n_closing_tokens,
             tag_texts=self._tag_texts,
+            writes_reply_as_prompted=self._writes_reply_as_prompted(),
             writes_two_user_turns=writes_two_user_turns(
                 lambda messages, prompt: self._model_render(
                     messages, generation_prompt=prompt, variables=self._variables)))
+
+    def _writes_reply_as_prompted(self) -> bool:
+        """Whether, with reasoning off, a past reply stands where its question's generation prompt left it, as the text it was generated as: the cache then never goes back behind it."""
+        prompted = self._render([{"role": "user", "content": _PROMPT}], generation_prompt=True,
+                                reasoning=False)
+        past = self._render(list(_PAST_REPLY), reasoning=False)
+        return prompted is not None and past is not None and past.startswith(prompted + _NEXT)
 
     def _generation_prompt(self, reasoning: bool) -> str:
         """The generation prompt a reply is sampled after, in the reasoning mode given."""
@@ -633,6 +641,9 @@ class TemplateProperties:
         can_reason: A conversation can be asked to reason.
         n_closing_tokens: Tokens the closing after a reply takes at most.
         tag_texts: The texts of the model's own tags.
+        writes_reply_as_prompted: With reasoning off, a past reply stands as
+            its question's generation prompt left it, as the text it was
+            generated as.
         writes_two_user_turns: The template writes two questions in a row.
     """
 
@@ -657,6 +668,7 @@ class TemplateProperties:
     can_reason: bool
     n_closing_tokens: int
     tag_texts: tuple[str, ...]
+    writes_reply_as_prompted: bool
     writes_two_user_turns: bool
 
     @property

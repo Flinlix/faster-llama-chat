@@ -9,7 +9,7 @@ from llama_chat.template import CallBoundary
 from llama_chat.wrapper import ChatWrapper
 from tests.chat_messages import opened, after_system
 from llama_chat.testing.fake_context import FakeContext
-from llama_chat.testing.invented_templates import TOOLS
+from llama_chat.testing.invented_templates import PLAIN, TOOLS
 from tests.wrappers import rows
 
 # Every sampling value set, as a generation is given them.
@@ -26,6 +26,7 @@ def _generating(pieces: dict, order: list, eog: int | None = None):
 
     sampled = iter(order)
     ctx = object.__new__(KVContext)
+    ctx._decode_blocks = False
     ctx._backend = SimpleNamespace(
         sample=lambda sampler, ctx: next(sampled),
         is_eog=lambda vocab, token: token == eog,
@@ -280,3 +281,64 @@ def test_a_thought_is_closed_for_the_answer_exactly_where_it_is_still_open_at_th
     guard = AnswerGuard(thought_tags=tags, thought_closing=(2,), answer_room_tokens=2)
     _, acc = _drawn_generation(pieces, order, set(), CallBoundary(), guard)
     assert acc.token_ids == (order[:5] + [2] + order[5:7] if open_at_the_limit else order)
+
+
+@pytest.mark.parametrize("closes_early", [False, True])
+def test_where_a_decode_blocks_each_token_is_shown_before_it_is_decoded_and_decoded_before_the_next(
+        closes_early):
+    fake = FakeContext(PLAIN, ["Hallo Welt"], decode_blocks=True)
+    chat = ChatWrapper(Config(), context=fake)
+    chat.begin([{"role": "system", "content": "S"}])
+    stream = chat.reply("Frage")
+    held = []
+    for delta in stream:
+        held.append((delta, fake.text_of(fake.cache)))
+        if closes_early and len(held) == 3:
+            stream.close()
+            break
+    # Each piece reached the reader while the cache did not hold it yet.
+    assert all(not cache.endswith("".join(d for d, _ in held[:i + 1]))
+               for i, (_, cache) in enumerate(held))
+    # Before the next piece, or once the stream ended, it did.
+    assert all(held[i + 1][1].endswith("".join(d for d, _ in held[:i + 1]))
+               for i in range(len(held) - 1))
+    chat.wait_idle(timeout_s=5)
+    assert "".join(d for d, _ in held) in fake.text_of(fake.cache)
+
+
+@pytest.mark.parametrize("cap, closed_at", [(1, 2), (3, 4), (6, 7), (20, None), (None, None)])
+def test_a_thought_that_reaches_its_cap_is_closed_there_and_the_answer_follows(cap, closed_at):
+    # The opening tag is the thought's first token; ``cap`` tokens inside it pass before the
+    # closing, token 2, is written in place of the next draw.
+    pieces = {0: b"<thought>", 1: b"a", 2: b"</thought>", 3: b"b"}
+    order = [0, 1, 1, 1, 1, 1, 1, 1, 3, 3]
+    guard = AnswerGuard(thought_tags=("<thought>", "</thought>"), thought_closing=(2,),
+                        max_thought_tokens=cap)
+    text, acc = _drawn_generation(pieces, order, set(), CallBoundary(), guard)
+    if closed_at is None:
+        assert 2 not in acc.token_ids
+    else:
+        assert acc.token_ids[:closed_at + 1] == order[:closed_at] + [2]
+        assert acc.token_ids[closed_at + 1:] == order[closed_at:len(acc.token_ids) - 1]
+
+
+def test_each_thought_of_a_generation_is_capped_on_its_own():
+    pieces = {0: b"<thought>", 1: b"a", 2: b"</thought>", 3: b"b"}
+    order = [0, 1, 1, 1, 3, 0, 1, 1, 1, 1, 3, 3]
+    guard = AnswerGuard(thought_tags=("<thought>", "</thought>"), thought_closing=(2,),
+                        max_thought_tokens=2)
+    _, acc = _drawn_generation(pieces, order, set(), CallBoundary(), guard)
+    # Two tokens into each thought its closing is written: once for each of the two.
+    assert acc.token_ids.count(2) == 2
+    first, second = (i for i, token in enumerate(acc.token_ids) if token == 2)
+    assert acc.token_ids[first - 2:first] == [1, 1] and acc.token_ids[second - 2:second] == [1, 1]
+
+
+def test_a_thought_the_cap_closed_leaves_the_rooms_closing_for_a_later_thought():
+    pieces = {0: b"<thought>", 1: b"a", 2: b"</thought>", 3: b"b"}
+    order = ([0] + [1] * 25 + [3, 0] + [1] * 60)[:40]
+    guard = AnswerGuard(thought_tags=("<thought>", "</thought>"), thought_closing=(2,),
+                        answer_room_tokens=10, max_thought_tokens=20)
+    _, acc = _drawn_generation(pieces, order, set(), CallBoundary(), guard)
+    # The first thought is closed at its cap; the second at the room the answer keeps.
+    assert acc.token_ids.count(2) == 2

@@ -312,7 +312,7 @@ def _checked_with_reasoning(reasoning):
     def checked():
         fake = FakeContext(REASONING, gen_tokens=len(THOUGHTFUL), gen_text=THOUGHTFUL)
         wrapper = ChatWrapper(Config(context_size=1024, check_cache=True), context=fake)
-        wrapper.begin(opened("s"), reasoning=reasoning)
+        wrapper.begin(opened("s"), reasoning=bool(reasoning))
         wrapper.reply("Wie geht es?").finish()
         return wrapper
     return checked

@@ -430,7 +430,7 @@ def reasoning_wrapper(reasoning=True, config=None, template=REASONING, **fake_kw
     fake = FakeContext(template, **fake_kw)
     w = ChatWrapper(config or Config(context_size=500, evict_above_fraction=1.0),
                     context=fake)
-    w.begin(opened("s"), reasoning=reasoning)
+    w.begin(opened("s"), reasoning=bool(reasoning))
     return w, fake
 
 

@@ -23,16 +23,11 @@ SHIPPED_ADDONS = Path(__file__).parent / "addons"
 SAMPLING_FIELDS = ("temperature", "top_k", "top_p", "min_p", "repetition_penalty",
                    "presence_penalty", "frequency_penalty", "penalty_window_tokens")
 CALL_FIELDS = ("opening", "name_close", "closing")
-_FILE_KEYS = {"templates", "source", "sampling", "call", "reasoning_on"}
-# llama.cpp's own defaults, for a model that recommends nothing.
+_FILE_KEYS = {"templates", "source", "sampling", "call", "reasoning_on", "reasoning_levels"}
+# llama.cpp's own defaults, which a value no source states takes.
 DEFAULT_SAMPLING = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
                     "penalty_window_tokens": 64}
-# What a field no source states stands at, where another field but the penalty window
-# is stated: switched off, and the penalty window at the engine's default length.
-UNSTATED_SAMPLING = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0,
-                     "repetition_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0,
-                     "penalty_window_tokens": 64}
 
 
 def template_fingerprint(template: str) -> str:
@@ -41,7 +36,7 @@ def template_fingerprint(template: str) -> str:
 
 
 def addon_file(model_path: str | None, template: str | None) -> dict:
-    """A model's add-on file, with ``sampling``, ``call`` and ``reasoning_on`` always present, possibly empty.
+    """A model's add-on file, with ``sampling``, ``call``, ``reasoning_on`` and ``reasoning_levels`` always present, possibly empty.
 
     The file beside the model, with its name and ``.json``, if it names the
     model's template; else a file in :data:`SHIPPED_ADDONS` that names it.
@@ -98,7 +93,8 @@ def read_addon_file(path: Path | None) -> dict:
             not follow the add-on file format.
     """
     if path is None:
-        return {"templates": [], "sampling": {}, "call": {}, "reasoning_on": {}}
+        return {"templates": [], "sampling": {}, "call": {}, "reasoning_on": {},
+                "reasoning_levels": []}
     try:
         found = json.loads(path.read_text())
     except ValueError as error:
@@ -136,17 +132,22 @@ def read_addon_file(path: Path | None) -> dict:
         if value is None or not isinstance(value, (str, bool, int, float)):
             raise ValueError(f"{path}: reasoning_on gives {name} as {json.dumps(value)}; give "
                              "it a text, a number, true or false")
+    levels = found.get("reasoning_levels", [])
+    if not isinstance(levels, list) or "reasoning_levels" in found and not levels \
+            or not all(isinstance(level, str) and level and level != "none" for level in levels):
+        raise ValueError(f"{path}: reasoning_levels must be a list naming the effort levels "
+                         "the template writes as it is given them, each as text other than "
+                         "\"none\", which turns reasoning off")
     return {"templates": templates, "sampling": sampling, "call": call,
-            "reasoning_on": reasoning_on}
+            "reasoning_on": reasoning_on, "reasoning_levels": levels}
 
 
 def with_model_sampling(config: Config, recommended: Mapping[str, float],
                         addon: dict) -> Config:
     """``config`` with each sampling field it leaves unset taken from the model.
 
-    Each field takes the add-on file's value, else the model's own, else is
-    switched off. A model that states no value other than the penalty window
-    runs at llama.cpp's defaults.
+    Each field takes the add-on file's value, else the model's own, else
+    llama.cpp's default.
 
     Args:
         recommended: The sampling the model states for itself, as
@@ -167,8 +168,7 @@ def with_model_sampling(config: Config, recommended: Mapping[str, float],
         if name in recommended and name not in addon["sampling"]:
             _ensure_recommendation_taken(name, recommended[name])
     stated = {**recommended, **addon["sampling"]}
-    rest = UNSTATED_SAMPLING if set(stated) - {"penalty_window_tokens"} else DEFAULT_SAMPLING
-    return replace(config, **{name: stated.get(name, rest[name]) for name in unset})
+    return replace(config, **{name: stated.get(name, DEFAULT_SAMPLING[name]) for name in unset})
 
 
 def _ensure_recommendation_taken(name: str, value) -> None:

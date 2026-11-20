@@ -70,8 +70,8 @@ def uses_tool_template(wrapper) -> bool:
     return wrapper._conversation._state.uses_tool_template
 
 
-def reasons(wrapper) -> bool:
-    """Whether the conversation was begun reasoning."""
+def reasons(wrapper) -> bool | str:
+    """Whether the conversation was begun reasoning, or the effort level it reasons at."""
     return wrapper._conversation.reasoning
 
 
@@ -107,8 +107,8 @@ def done_after_the_newest_reply(wrapper) -> tuple[int, int]:
 
 
 def keeps_the_rest_after_a_drop(wrapper) -> bool:
-    """Whether the template writes the exchanges after the oldest as before once it goes."""
-    return wrapper._conversation._state.checks.rest_stays
+    """Whether the cache keeps the exchanges after the oldest once it goes: it shifts, and the template writes them as before, around the conversation's turns that called tools too."""
+    return wrapper._conversation._eviction.keeps_the_rest
 
 
 def renders_tool_turns_in_windows(wrapper) -> bool:

@@ -33,7 +33,7 @@ from .conversation_state import (Ahead, Anchor, Changes, ConversationState, Made
 from .history_forms import (answer_in_order, completions_messages, intact_records, joined_question,
                             read_messages, with_generated_turns, with_questions_joined,
                             without_unreadable)
-from .model_template import clock_forms_written, moments_of_this_year, rendered_on
+from .model_template import clock_forms_written, clock_text, moments_of_this_year, rendered_on
 from .messages import (GENERATED_TURN, QUESTION_CUT_MARK, UNKNOWN_FUNCTION, UNREADABLE_CALL, calling_message,
                        exchange_count, exchange_starts, history_count, next_call_number,
                        result_message, system_part)
@@ -81,7 +81,7 @@ class RenderedCache:
         self._context = context
         self._templates = templates
         self._config = config
-        self._memory = CacheSync(context)
+        self._memory = CacheSync(context, config.micro_batch_tokens, config.kept_conversation_bytes)
         # Each template's answer guard, by the template's identity, the template kept alive with it.
         self._guards: dict[int, tuple[ResolvedTemplate, AnswerGuard]] = {}
         # What a short question needs on the longest date, by the opening and year it was measured for.
@@ -96,6 +96,8 @@ class RenderedCache:
         # Where the newest generation's turn starts in the cache, and whether it went on
         # with an open turn; left as they are by a failed action.
         self._generation: tuple[int, bool] = (0, False)
+        # The render checks of the openings worked out last, oldest first.
+        self._checks_made: dict[tuple[str, int], RenderChecks] = {}
         # The conversation and the cache as the open attempt found them, until its reply is
         # recorded, and as the newest request that asked a question found them.
         self._attempt: Snapshot | None = None
@@ -179,8 +181,8 @@ class RenderedCache:
         return self._state.begun
 
     @property
-    def reasoning(self) -> bool:
-        """Whether the conversation reasons, as it was begun."""
+    def reasoning(self) -> bool | str:
+        """Whether the conversation reasons, or the effort level it reasons at, as it was begun."""
         return self._state.reasoning
 
     @property
@@ -257,7 +259,7 @@ class RenderedCache:
         return self._state.prompt_text
 
     # ----- beginning ------------------------------------------------------------------
-    def start(self, history: list, tools: list[ToolSpec] | None, reasoning: bool,
+    def start(self, history: list, tools: list[ToolSpec] | None, reasoning: bool | str,
               generated_turns: dict | None, unreadable_result: dict) -> None:
         """Begin again from ``history``, Chat Completions messages, the newest of them that fit in half the context kept.
 
@@ -339,7 +341,7 @@ class RenderedCache:
                     and self._rendering.split(self._state.messages, self._ends_on_result()) is None:
                 raise self._refused_history(self._state.messages)
             if not opened_alike:
-                self._state.checks = self._render_checks()
+                self._state.checks = self._remembered_render_checks()
             if asks and not any(m["role"] == "user" for m in self._state.messages):
                 needed = self._length(self._state.messages, False)
                 raise ContextOverflowError(
@@ -385,7 +387,7 @@ class RenderedCache:
             # Compared with what the cache holds, which is decoded again only from where they
             # differ, a stretch it holds no longer removed.
             if self.pending_calls:
-                self._sync(self._settled_while_owed(), logits=False, dropped=True)
+                self._sync(self._settled_while_owed(), logits=False, dropped=True, begins=True)
             elif self._state.messages and self._state.messages[-1]["role"] in ("user", "tool"):
                 prompt_target = self._prompted()
                 opening = self._prompt_text_start(prompt_target.tokens)
@@ -393,11 +395,11 @@ class RenderedCache:
                     # A state saved before the template's text a reply follows, which a cache
                     # that cannot be cut goes back to where what follows is written otherwise.
                     self._sync(Target(prompt_target.tokens[:opening], prompt_target.turns_at),
-                               logits=False, dropped=True)
+                               logits=False, dropped=True, begins=True)
                     self._memory.rest()
-                self._sync(prompt_target, dropped=True)
+                self._sync(prompt_target, dropped=True, begins=True)
             else:
-                self._render_ahead(dropped=True)
+                self._render_ahead(dropped=True, begins=True)
             self._memory.rest()
             self._state.begun = True
             self._log_begin(sum(m["role"] != "system" for m in history), generated_turns)
@@ -435,15 +437,19 @@ class RenderedCache:
     def _keep_newest_history(self, cached: list[dict]) -> None:
         """Keep the newest of the history being begun that fits under the eviction threshold where the cache holds the oldest of it already, as a conversation this one goes on with, else within half the context; the rest is recorded as evicted."""
         given, limit = list(self._state.messages), self._config.evict_above_tokens
+        # Each search starts from a count near its answer: what the cache holds, then what fits
+        # under the threshold, which a smaller bound never exceeds.
+        start_from = exchange_count(cached) if cached else None
         if cached:
-            self._eviction.keep_newest_history(limit, self._refused_history)
+            start_from = self._eviction.keep_newest_history(limit, self._refused_history,
+                                                            start_from)
             history = [_without_turn(m) for m in self._state.messages if m["role"] != "system"]
             if _goes_on_from(history, cached):
                 self._eviction.record(history_count(given), "room")
                 return
             self._state.messages[:] = given
         self._eviction.keep_newest_history(min(limit, self._config.context_size // 2),
-                                           self._refused_history)
+                                           self._refused_history, start_from)
         self._eviction.record(history_count(given), "half_context")
 
     def _usable_turns(self, generated_turns: dict | None) -> list[dict]:
@@ -954,13 +960,20 @@ class RenderedCache:
             # the few tokens of the generation prompt again rather than save the cache twice.
             end = len(target.tokens)
             start = self._state.prompt_start
-            self._memory.pin([start if 0 < start <= end else end], _THE_REPLY)
+            self._memory.pin([start if 0 < start <= end else end] if self._reply_kept_from_its_start
+                             else [], _THE_REPLY)
         return target
 
     def _pin_the_reply(self, opening: list[int], tokens: list[int], end: int) -> None:
         """Keep a state where the reply after ``tokens``, decoded to ``end``, begins, so that a reply written again, or shortened, decodes only itself and its opening."""
         starts = end - len(opening) if opening and tokens[-len(opening):] == opening else end
-        self._memory.pin([starts if end - len(tokens) < starts else end], _THE_REPLY)
+        self._memory.pin([starts if end - len(tokens) < starts else end]
+                         if self._reply_kept_from_its_start else [], _THE_REPLY)
+
+    @property
+    def _reply_kept_from_its_start(self) -> bool:
+        """Whether a state is kept where the reply begins: only where the template writes a past reply otherwise than it was generated, which takes the cache back there after every reply. See design_history.md, "A state before a reply only where the reply is written again"."""
+        return bool(self.reasoning) or not self.template.properties.writes_reply_as_prompted
 
     # ----- generating -------------------------------------------------------------------
     def generate(self, max_generated_tokens: int, generated: GenerationAccumulator, **options):
@@ -978,6 +991,10 @@ class RenderedCache:
         self._state.results_cut = []
         self._generation = (min(self._state.prompt_start, len(self._memory.tokens)),
                             self.turn_open)
+        if self._reply_kept_from_its_start and self._context.can_shift:
+            # The prompt the template wrote before the reply, which holds no message's text,
+            # where the template may leave part of it out of the past reply.
+            self._memory.note_template_written(self._generation[0], len(self._memory.tokens))
         return self._memory.generate(self._generation_room(max_generated_tokens), generated,
                                      **options)
 
@@ -998,7 +1015,8 @@ class RenderedCache:
                    cancel: threading.Event | None, sampling, unreadable_result: dict,
                    on_started: Callable[[], None] | None,
                    on_reply: Callable[[Reply], None],
-                   answers_first: Sequence[tuple[str, object]] = ()) -> Generator[str, None, Reply]:
+                   answers_first: Sequence[tuple[str, object]] = (),
+                   max_thought_tokens: int | None = None) -> Generator[str, None, Reply]:
         """Generate one reply from the cache's end, stream what it shows, and record what it left, as a Reply.
 
         Without ``text``, it goes on with the open turn, adding no message of
@@ -1014,6 +1032,7 @@ class RenderedCache:
         Args:
             text, stop, cancel: As :meth:`~llama_chat.wrapper.ChatWrapper.reply`.
             max_generated_tokens: The cap on this generation's tokens.
+            max_thought_tokens: The cap on a thought's tokens, ``None`` for none.
             sampling: Every value the generation draws with.
             recognizes_calls: ``False`` leaves a call the model writes as text,
                 so this generation cannot end on a call.
@@ -1078,7 +1097,8 @@ class RenderedCache:
                 ends_turn=self._turn_end_test(reply_text, generated),
                 boundary=replace(template.call_boundary(recognizes_calls, withhold),
                                  starts_in_thought=reply_text.opens_in_thought),
-                guard=self._answer_guard(template), answer_so_far=lambda: reply_text.answer)
+                guard=replace(self._answer_guard(template), max_thought_tokens=max_thought_tokens),
+                answer_so_far=lambda: reply_text.answer)
             if on_started is not None:
                 on_started()
         except BaseException:
@@ -1698,8 +1718,27 @@ class RenderedCache:
         split = self._rendering.split(asked, generation_prompt=True)
         run = self._rendering.run_start(split, len(asked) - 1, 0) if split is not None else None
         if run is not None:
-            places.add(len(self._rendering.target(asked, True, upto=run).tokens))
+            ahead = len(self._rendering.target(asked, True, upto=run).tokens)
+            # Not kept within a few tokens of the opening's state, from which going back there
+            # decodes them instead.
+            if ahead - min(places) > _NEAR_STATE_TOKENS:
+                places.add(ahead)
         self._memory.pin(sorted(places), "opening")
+
+    def _remembered_render_checks(self) -> RenderChecks:
+        """:meth:`_render_checks`, kept for the few openings worked out last, where the template does not read the clock, so that going back to one of them renders nothing."""
+        if self.template.properties.reads_clock:
+            return self._render_checks()
+        key = (json.dumps([self._system_part(), [spec.as_declaration() for spec in self._state.tools],
+                           self._state.reasoning], sort_keys=True, default=str),
+               id(self.template))
+        checks = self._checks_made.pop(key, None)
+        if checks is None:
+            checks = self._render_checks()
+        self._checks_made[key] = checks                 # the newest last
+        if len(self._checks_made) > _CHECKS_KEPT:      # one more than kept, at most
+            del self._checks_made[next(iter(self._checks_made))]
+        return checks
 
     def _render_checks(self) -> RenderChecks:
         """What the template's renders allow, as the system turn, the declarations and the clock now leave them.
@@ -1717,8 +1756,11 @@ class RenderedCache:
         windows = (not self._moves_declarations()
                    and windows_are_exact(render, system, self._rendering.tag_from))
         calls = self.template.properties.can_call_tools
+        with clock_forms_written() as forms:
+            opening = self._rendering.opening_render(system)
         return RenderChecks(
-            opening=self._rendering.opening_render(system),
+            opening=opening,
+            clock_read=tuple(dict.fromkeys(forms)),
             windows=windows,
             # Only a template that calls tools is asked.
             tool_windows=windows and calls and windows_are_exact(
@@ -1727,13 +1769,13 @@ class RenderedCache:
             splice_probe=splice_probe(render, system),
             repeats_alike=repeated_question_written_alike(render, system),
             with_a_short_question=self._eviction.with_a_short_question(),
-            rest_stays=rest_stays_after_a_drop(render, system) and not (
-                calls and not rest_stays_after_a_drop(
-                    render, system, tool_exchanges(tools[0].name if tools else "probe"))),
+            rest_stays=rest_stays_after_a_drop(render, system),
+            rest_stays_around_calls=not calls or rest_stays_after_a_drop(
+                render, system, tool_exchanges(tools[0].name if tools else "probe")),
             # Without the steps tool calling needs, no turn keeps a call, and the template is
             # not asked.
             tool_turns_stay=self.template.properties.can_call_tools and tool_turns_stay_written(
-                render, system, tools[0].name if tools else "probe", thought=self._state.reasoning))
+                render, system, tools[0].name if tools else "probe", thought=bool(self._state.reasoning)))
 
     def _ensure_writes(self, role: str, text: str, generation_prompt: bool) -> None:
         """Refuse a ``role`` message the template would not write next.
@@ -1766,6 +1808,11 @@ class RenderedCache:
                     f"question but {bound} {limit}; {remedy}, or {RAISE_THE_ROOM}",
                     needed, limit)
 
+    def _clock_reads_as_before(self) -> bool:
+        """Whether the clock reads now, in each form the opening wrote it in, as it did when the opening was rendered; a render that wrote none is rendered again to know."""
+        read = self._state.checks.clock_read
+        return bool(read) and all(clock_text(form) == text for form, text in read)
+
     def _with_a_short_question_on_any_date(self) -> int:
         """What the conversation takes with no history and the shortest question, on the day of this year whose date the template writes longest."""
         if not self.template.properties.reads_clock:
@@ -1776,12 +1823,12 @@ class RenderedCache:
         if self._longest_opening is not None and self._longest_opening[0] == key:
             return self._longest_opening[1]
         self._rendering.forget_renders()
-        with clock_forms_written() as forms:
+        with clock_forms_written() as written:
             longest = self._eviction.with_a_short_question()
         # The day whose date and time, in every form the template writes them in, take the
         # most tokens, whatever the language of the clock's names; and each month's last day,
         # for a template that names the months itself.
-        forms = sorted(set(forms))
+        forms = sorted({form for form, _text in written})
         day = max(moments, key=lambda moment: sum(
             len(self._context.tokenize(moment.strftime(form), parse_special=False))
             for form in forms))
@@ -1884,8 +1931,8 @@ class RenderedCache:
                                             newest_too=True) or dropped
         return dropped
 
-    def _render_ahead(self, dropped: bool = False) -> None:
-        """Decode the render for the next question up to where the question goes."""
+    def _render_ahead(self, dropped: bool = False, begins: bool = False) -> None:
+        """Decode the render for the next question up to where the question goes; ``begins`` where a begin writes it."""
         messages = self._state.messages + [{"role": "user", "content": STAND_IN}]
         view = self._view(messages, generation_prompt=True)
         split = view.split if view is not None else None
@@ -1895,14 +1942,14 @@ class RenderedCache:
         if run is not None and view is not None and split is not None:
             before = self._view_target(view, upto=run)
             if len(before.tokens) <= self._config.context_size:
-                self._sync(before, logits=False, dropped=dropped)
+                self._sync(before, logits=False, dropped=dropped, begins=begins)
                 self._note_ahead(split, run)
                 return
         # The next question will be rendered when it comes.
         if self._state.messages and self._rendering.split(self._state.messages, False) is None:
             return
         self._sync(self._target_of(self._state.messages, generation_prompt=False),
-                   logits=False, dropped=dropped)
+                   logits=False, dropped=dropped, begins=begins)
 
     def _system_part(self) -> list[dict]:
         return system_part(self._state.messages)
@@ -2026,13 +2073,16 @@ class RenderedCache:
         return messages if found is None else system_part(messages) + messages[found[0]:]
 
     # ----- the cache against the target -----------------------------------------
-    def _sync(self, target: Target, *, logits: bool = True, dropped: bool = False) -> None:
+    def _sync(self, target: Target, *, logits: bool = True, dropped: bool = False,
+              begins: bool = False) -> None:
         """Make the cache hold ``target``, and note where its generated turns begin there.
 
         Args:
             logits: A generation follows the decode at once.
             dropped: Exchanges were dropped, so that the target may go on as
                 the cache does after a stretch.
+            begins: A begin writes the target, so that the cache may be one
+                kept from another conversation.
         """
         if self._memory.keeps_saved_states:
             # States there let a change to the newest exchanges decode only those exchanges.
@@ -2045,7 +2095,8 @@ class RenderedCache:
         moves = self._moves_declarations()
         # The anchors before the first token the target changes still stand.
         same = self._memory.hold(target.tokens, want_logits=logits,
-                                 find_dropped_stretch=dropped or moves, rest_at_cut=moves)
+                                 find_dropped_stretch=dropped or moves, rest_at_cut=moves,
+                                 begins=begins)
         self._state.turns_at = target.turns_at
         messages = self._state.messages
         new = {index: Anchor(messages[index], index, at, tuple(
@@ -2141,7 +2192,7 @@ class RenderedCache:
         """Drop the oldest exchanges as :meth:`Windows.drop_in` does, each checked against a render of the oldest two and removed from the cache, where a window of the newest stands for the rest; whether any went."""
         # A cache that cannot shift decodes the rest again after a drop, which costs more
         # than the render; it drops as far as the whole render says, once.
-        if not self._state.checks.rest_stays or not self._context.can_shift:
+        if not self._eviction.keeps_the_rest:
             return False
         view = self._view(self._state.messages, generation_prompt)
         if view is None or not view.base:
@@ -2210,18 +2261,32 @@ class RenderedCache:
         whole = list(self._memory.tokens)
         if not finishes_what_was_left:
             self._memory.forget_undecoded()
-        self._memory.repair()
-        if self._state.begun and self.template.properties.reads_clock:
-            opening = self._rendering.opening_render(self._system_part())
-            if opening != self._state.checks.opening:
+        if not (finishes_what_was_left and self._memory.is_behind
+                and (self._context.can_shift or self._context.can_cut_tail)):
+            # What an interrupt left undecoded is otherwise decoded with what the action adds,
+            # in one batch; a cache that goes back to saved states is brought up first, so that
+            # the states it keeps are saved where they are pinned.
+            self._memory.repair()
+        if self._state.begun and self.template.properties.reads_clock \
+                and not self._clock_reads_as_before():
+            with clock_forms_written() as written:
+                opening = self._rendering.opening_render(self._system_part())
+            if opening == self._state.checks.opening:
+                # Written alike, the reading it was written at is noted, so the next action
+                # compares with it.
+                self._state.checks = replace(self._state.checks,
+                                             clock_read=tuple(dict.fromkeys(written)))
+            else:
                 # What was rendered ahead holds the old date, say; it is rendered whole now.
                 self._state.checks = self._render_checks()
                 self._state.anchors = ()
                 self._pin_opening()
         saved = self._state.copied()
-        held = whole if len(whole) > len(self._memory.tokens) else list(self._memory.tokens)
+        # The copy made above serves unless the bring-up changed what the cache holds.
+        held = whole if len(whole) > len(self._memory.tokens) or whole == self._memory.tokens \
+            else list(self._memory.tokens)
         # Whether the cache held everything it is to hold as the action began.
-        was_current = self._memory.is_current and held == list(self._memory.tokens)
+        was_current = self._memory.is_current and held == self._memory.tokens
         with self._publishing():
             try:
                 yield
@@ -2341,6 +2406,10 @@ def _no_room_once_dropped(needed: int, limit: int, remedy: str) -> ContextOverfl
 _NEWEST_EXCHANGES = "newest exchanges"
 # What the states it keeps where the newest reply begins and where its generation starts are for.
 _THE_REPLY = "the reply"
+# How many openings' render checks are kept.
+_CHECKS_KEPT = 4
+# How many tokens after a kept state another is not kept, being decoded from it instead.
+_NEAR_STATE_TOKENS = 32
 
 # What a call still owed is told when a question closes its turn.
 _NOT_RUN = {"error": "not_run", "message": "the call was not run: the user asked something new"}

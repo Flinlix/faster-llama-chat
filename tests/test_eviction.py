@@ -683,3 +683,101 @@ def test_an_injected_reply_is_refused_exactly_where_it_and_the_newest_exchange_r
             assert fits, (n, needed)
         outcomes.add(needed - config.evict_above_tokens)
     assert {-1, 0, 1} <= outcomes
+
+
+def _leave_out_the_end_of_their_prompt() -> list[str]:
+    """The test templates whose prompt before a reply, reasoning off, ends with what a past reply leaves out, as the fixture's own renders show."""
+    from tests.chat_templates import STEMS, fixture
+    found = []
+    for stem in sorted(STEMS):
+        fake = FakeContext(fixture(stem))
+        question = [{"role": "user", "content": "QQASK"}]
+        prompted = fake.stated_render(question, generation_prompt=True)
+        past = fake.stated_render(question + [{"role": "assistant", "content": "QQANSWER"},
+                                              {"role": "user", "content": "QQNEXT"}])
+        if prompted is None or past is None or past.startswith(prompted + "QQANSWER"):
+            continue
+        if not any(past.startswith(prompted[:cut] + "QQANSWER") for cut in range(len(prompted))):
+            continue
+        # Only where the prompt leaves the reply to answer at once, not inside a thought it opens.
+        chat = ChatWrapper(Config(), context=FakeContext(fixture(stem), ["QQANSWER"]))
+        chat.begin()
+        if chat.reply("QQASK").finish().text == "QQANSWER":
+            found.append(stem)
+    return found
+
+
+@pytest.mark.parametrize("stem", _leave_out_the_end_of_their_prompt())
+def test_what_the_past_reply_leaves_out_of_its_prompt_is_shifted_out_not_the_reply_decoded_again(stem):
+    from tests.chat_templates import fixture
+    answer = "Eine lange Antwort mit vielen Worten, die nicht noch einmal gelesen werden soll."
+    fake = FakeContext(fixture(stem), [answer], writes_tags=True)
+    w = ChatWrapper(Config(context_size=4096), context=fake)
+    w.begin(opened("s"))
+    calls_before, edits_before = len(fake.prefill_calls), len(fake.edits)
+    w.reply("Frage?").finish()
+    assert w.wait_idle(timeout_s=5)
+    question, *after_reply = fake.prefill_calls[calls_before:]
+    # The stretch goes in one shift; what is decoded after the reply is the closing and the next
+    # question's opening, far less than the reply.
+    assert [e[0] for e in fake.edits[edits_before:]] == ["shift"]
+    assert sum(n for _, n, _ in after_reply) < len(answer) // 4
+
+
+def test_the_history_kept_at_a_begin_is_the_same_whatever_count_the_search_starts_from():
+    from types import SimpleNamespace
+    rng = random.Random(5)
+    for _ in range(300):
+        sizes = [rng.randint(1, 60) for _ in range(rng.randint(1, 40))]
+        messages = [{"role": "system", "content": "s"}]
+        for size in sizes:
+            messages += [{"role": "user", "content": "q" * size},
+                         {"role": "assistant", "content": "a" * rng.randint(0, 30)}]
+        rendering = SimpleNamespace(
+            split=lambda kept, prompt: True,
+            length=lambda kept, generation_prompt: sum(len(m["content"]) for m in kept))
+        bound = rng.randint(1, 1500)
+        kept = []
+        for start_from in (None, *range(1, len(sizes) + 2)):
+            state = ConversationState(messages=list(messages))
+            eviction = Eviction(rendering, Config(), True, state)
+            count = eviction.keep_newest_history(bound, lambda m: ValueError(), start_from)
+            kept.append((count, state.messages))
+        assert all(k == kept[0] for k in kept)
+
+
+def test_a_template_that_writes_the_rest_otherwise_only_around_tool_turns_keeps_it_where_none_is_held():
+    from tests.chat_templates import STEMS, fixture
+    from llama_chat.render_checks import rest_stays_after_a_drop, tool_exchanges
+    for stem in sorted(STEMS):
+        fake = FakeContext(fixture(stem))
+        w = ChatWrapper(Config(), context=fake)
+        render = lambda messages, prompt, fake=fake: fake.stated_render(  # noqa: E731
+            messages, generation_prompt=prompt)
+        if not (rest_stays_after_a_drop(render, [])
+                and not rest_stays_after_a_drop(render, [], tool_exchanges("probe"))):
+            continue
+        w.begin(opened("s"), tools=[])
+        assert internals.keeps_the_rest_after_a_drop(w), stem
+        return
+    raise AssertionError("no test template writes the rest otherwise only around tool turns")
+
+
+@pytest.mark.parametrize("stem", _leave_out_the_end_of_their_prompt())
+def test_what_the_past_reply_leaves_out_of_its_prompt_is_shifted_out_after_drops_too(stem):
+    """Rule 4 and the shift together: once old exchanges are dropped, the stretch still goes in a shift, and the reply is never decoded again."""
+    from tests.chat_templates import fixture
+    answer = "Eine lange Antwort mit vielen Worten, die nicht noch einmal gelesen werden soll."
+    fake = FakeContext(fixture(stem), [answer] * 40, writes_tags=True)
+    w = ChatWrapper(Config(context_size=1500, evict_above_fraction=0.6), context=fake)
+    w.begin(opened("s"))
+    evicted, after_each = 0, []
+    for n in range(30):
+        calls = len(fake.prefill_calls)
+        reply = w.reply(f"Frage {n}?").finish()
+        assert w.wait_idle(timeout_s=5)
+        evicted += reply.n_evicted_messages
+        question, *after_reply = fake.prefill_calls[calls:]
+        after_each.append(sum(count for _, count, _ in after_reply))
+    assert evicted, "the conversation never reached its threshold"
+    assert max(after_each) < len(answer) // 4, after_each

@@ -29,7 +29,8 @@ INVENTED = {"tools": invented.TOOLS, "json tools": invented.JSON_TOOLS,
             "a template of their own": invented.TOOLS_IN_A_TEMPLATE_OF_THEIR_OWN}
 REAL = sorted(STEMS)
 TEMPLATES = sorted(INVENTED) + REAL
-CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False)]
+CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False),
+          dict(can_shift=True, decode_blocks=True)]
 KINDS = ("question", "reply", "result", "inject", "truncate", "begin", "wait")
 
 REGISTRY = ToolRegistry()
@@ -224,12 +225,16 @@ class SequenceRun:
         can = wrapper.capabilities(tools=calls)
         system = ([{"role": "system", "content": draw.choice(["Be brief.", "", "Du bist hilfreich. " * 5])}]
                   if can.can_take_system_prompt and draw.random() < 0.85 else [])
-        reasoning = can.can_reason and draw.random() < 0.4
+        # One draw decides the reasoning and its level, so that sequences kept from before replay alike.
+        chance = draw.random() if can.can_reason else 1.0
+        levels = (None,) + can.reasoning_levels
+        reasoning, level = chance < 0.4, levels[min(int(chance / 0.4 * len(levels)), len(levels) - 1)]
+        level = level if reasoning else None
         history = ([{"role": "user", "content": "alt"}, {"role": "assistant", "content": "älter"}]
                    if draw.random() < 0.4 else [])
         try:
             wrapper.begin(system + history, tools=REGISTRY.specs() if calls else None,
-                          reasoning=reasoning)
+                          reasoning=reasoning, reasoning_level=level)
         except ContextOverflowError:
             return False
         return True
@@ -426,6 +431,7 @@ class SequenceRun:
         elif edit == "other reasoning":
             if wrapper.capabilities(tools=saved["tools"] is not None).can_reason:
                 arguments["reasoning"] = not saved["reasoning"]
+                arguments["reasoning_level"] = None
         if draw.random() < 0.25:
             arguments["generated_turns"] = None
         arguments["messages"] = system + history

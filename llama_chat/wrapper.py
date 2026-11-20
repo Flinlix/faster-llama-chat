@@ -22,8 +22,9 @@ from dataclasses import dataclass, field, replace
 
 from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
-from .config import Config, DrawnSampling, Sampling, ensure_reply_cap, generation_sampling
+from .config import Config, DrawnSampling, Sampling, ensure_token_cap, generation_sampling
 from .context import KVContext
+from .conversation_state import reasoning_switch
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_generated_turns, read_messages
 from .rendered_cache import RenderedCache
@@ -110,7 +111,8 @@ class ChatWrapper:
             addon = addon_file(config.model_path, self._context.chat_template_text())
             self._config = with_model_sampling(
                 config, self._context.recommended_sampling(), addon)
-            self._templates = ResolvedTemplates(self._context, addon["call"], addon["reasoning_on"])
+            self._templates = ResolvedTemplates(self._context, addon["call"], addon["reasoning_on"],
+                                                addon["reasoning_levels"])
             if any(self._templates.capabilities(tools).can_call_tools for tools in (False, True)):
                 # Worked out now, so that the first turn kept as generated does not wait for it.
                 self._context.model_fingerprint()
@@ -152,7 +154,8 @@ class ChatWrapper:
 
     def begin(self, messages: list[dict] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
-              reasoning: bool = False, generated_turns: dict | None = None) -> Report:
+              reasoning: bool = False, reasoning_level: str | None = None,
+              generated_turns: dict | None = None) -> Report:
         """Begin the conversation, or begin it again: prefill the system prompt and recent history, decoding only where they differ from what the cache holds.
 
         Every other action refuses until this has run, because only this
@@ -208,6 +211,9 @@ class ChatWrapper:
                 whether it has an off. It belongs to the conversation, and
                 changes as the tools do. Every reply's thought is kept out of
                 what it yields, either way.
+            reasoning_level: With ``reasoning``, the effort level the model
+                reasons at, one of the ``reasoning_levels``
+                :meth:`capabilities` lists; ``None`` for the template's own.
             generated_turns: What :meth:`conversation` gave beside the
                 messages: each turn the model generated with a call, as its
                 tokens and its messages as the conversation held them. On
@@ -243,9 +249,10 @@ class ChatWrapper:
             UnsupportedError: If ``tools`` names anything, or the history
                 holds a call or a result, and the template this conversation is
                 written with cannot call tools; if ``reasoning`` is asked and
-                that template cannot reason; or if a system message is given
+                that template cannot reason, or ``reasoning_level`` names a
+                level it does not know; or if a system message is given
                 and the template moves a system prompt with later questions. Its ``field`` names the parameter:
-                ``tools``, ``messages`` or ``reasoning``.
+                ``tools``, ``messages``, ``reasoning`` or ``reasoning_level``.
                 :meth:`capabilities` says beforehand what is accepted.
             InvalidArgumentError: If a message holds a key its role does not
                 take here, such as ``name``, a list of content parts or a role
@@ -263,6 +270,13 @@ class ChatWrapper:
         """
         ensure_generated_turns(generated_turns)
         _ensure_bool(reasoning, "reasoning")
+        if reasoning_level is not None and not isinstance(reasoning_level, str):
+            raise ArgumentTypeError(f"reasoning_level must be None or one of the reasoning_levels "
+                                    f"capabilities() lists, not {reasoning_level!r}")
+        if reasoning_level is not None and not reasoning:
+            raise InvalidArgumentError("reasoning_level", "a reasoning level is given only with "
+                                       "reasoning=True; without it the model does not reason")
+        switch = reasoning_switch(reasoning, reasoning_level)
         if messages is not None and (isinstance(messages, (str, bytes, dict))
                                      or not isinstance(messages, Iterable)):
             raise ArgumentTypeError(f"messages must be a list of chat message dictionaries, the system "
@@ -292,14 +306,14 @@ class ChatWrapper:
             and messages[0].get("role") == "system"
         self._templates.ensure_accepts(
             uses_tools, tools_field="tools" if specs else "messages" if calls else None,
-            reasoning=reasoning, system_prompt_field="messages" if opens_on_system else None)
+            reasoning=switch, system_prompt_field="messages" if opens_on_system else None)
         read_messages(messages)
         with self._held():
             self._ensure_open()
             self._conversation.forget_told()    # changes of earlier actions are told already
             # A begin leaves no turn a reply started, so a call it could not read is answered
             # as one in a turn that runs no call.
-            self._conversation.start(messages, specs, reasoning, generated_turns,
+            self._conversation.start(messages, specs, switch, generated_turns,
                                      _explain_failure(_UNREADABLE, may_call_again=False))
             # A turn the history leaves open was started by no reply.
             self._conversation.turn_policy = None
@@ -368,6 +382,7 @@ class ChatWrapper:
               tool_call_policy: ToolCallPolicy | ToolRegistry | None = None,
               max_calls: int | None = None,
               max_reply_tokens: int | None = None,
+              max_thought_tokens: int | None = None,
               stop: str | Iterable[str] | None = None,
               cancel: threading.Event | None = None,
               sampling: Sampling | None = None) -> ReplyStream:
@@ -433,6 +448,8 @@ class ChatWrapper:
             max_reply_tokens: This request's cap on the tokens of the reply,
                 every generation of it together, a thought included, in place
                 of the config's.
+            max_thought_tokens: This request's cap on the tokens of each
+                thought, in place of the config's.
             stop: Texts that end the answer, matched against the answer
                 only; a single ``str`` is one such text, any other iterable
                 holds them. Read when this is called, so a later change to
@@ -442,7 +459,8 @@ class ChatWrapper:
                 Set while registered tools run, it runs no later call of the
                 round, those not run staying owed; set before the reply's first
                 word, it also stops the wait for a reply another thread holds
-                and the decode the reply before left, within 512 tokens.
+                and the decode the reply before left, within 512 tokens, or
+                ``micro_batch_tokens`` where that is more.
             sampling: This request's own sampling settings, in place of the
                 config's for the fields it sets.
 
@@ -492,9 +510,10 @@ class ChatWrapper:
                 ``stop`` is neither a ``str`` nor an iterable of ``str``,
                 ``cancel`` has no ``is_set``, or ``sampling`` is neither
                 ``None`` nor a :class:`~llama_chat.config.Sampling`.
-            InvalidSettingError: At once, if ``max_reply_tokens`` is no whole
-                number of at least 1, or ``max_calls`` no whole number of at
-                least 0, as their config fields are refused.
+            InvalidSettingError: At once, if ``max_reply_tokens`` or
+                ``max_thought_tokens`` is no whole number of at least 1, or
+                ``max_calls`` no whole number of at least 0, as their config
+                fields are refused.
             ContextOverflowError: Only where too little room remains for the
                 reply to go on with an open turn; a question is cut to fit
                 instead, one injected earlier cut again where the system
@@ -504,12 +523,15 @@ class ChatWrapper:
         """
         if text is not None:
             ensure_text(text, "the request's text")
-        ensure_reply_cap(max_reply_tokens)
+        ensure_token_cap(max_reply_tokens, "max_reply_tokens")
+        ensure_token_cap(max_thought_tokens, "max_thought_tokens")
         stop_texts = _stop_texts(stop)
         _ensure_cancel_and_sampling(cancel, sampling)
         # This stream's newest generation's Reply, which the stream reads where it is closed early.
         newest: dict[str, Reply] = {}
         options = dict(max_reply_tokens=max_reply_tokens, stop=stop_texts, cancel=cancel,
+                       max_thought_tokens=(self._config.max_thought_tokens
+                                           if max_thought_tokens is None else max_thought_tokens),
                        sampling=generation_sampling(self._config, sampling),
                        on_reply=lambda reply: newest.update(reply=reply))
         if tool_call_policy is not None and not isinstance(tool_call_policy, (str, ToolRegistry)):
@@ -595,11 +617,12 @@ class ChatWrapper:
     def _settle_when_free(self) -> None:
         """Do the work a reply left, holding the wrapper, leaving a long decode to an action that waits for it; where the wrapper stays held longer than :data:`_AFTER_REPLY_WAIT_S`, the next action does that work."""
         time.sleep(_AFTER_REPLY_PAUSE_S)    # the reader first takes in the stream's end
-        if not self._lock.acquire(timeout=_AFTER_REPLY_WAIT_S):
+        # An action that took the wrapper meanwhile did the work first; it is not waited for.
+        if not self._conversation.settle_due or not self._lock.acquire(timeout=_AFTER_REPLY_WAIT_S):
             return
         self._holder = threading.current_thread()
         try:
-            if not self._closed:
+            if not self._closed and self._conversation.settle_due:
                 self._conversation.settle(self._waiting)
         except Exception:
             _log.warning("the work after a reply failed; the next action decodes the cache "
@@ -1257,6 +1280,7 @@ class ChatWrapper:
     def _generate(self, text: str | None, *, recognizes_calls: bool, may_call_again: bool,
                   max_reply_tokens: int | None, stop: tuple[str, ...],
                   cancel: threading.Event | None, sampling: DrawnSampling,
+                  max_thought_tokens: int | None,
                   on_reply: Callable[[Reply], None], withhold: bool = False,
                   on_started: Callable[[], None] | None = None) -> Generator[str, None, Reply]:
         """One generation, as :meth:`~llama_chat.rendered_cache.RenderedCache.generation` runs it; the lock must be held.
@@ -1265,6 +1289,7 @@ class ChatWrapper:
             text, stop, cancel: As :meth:`reply`.
             max_reply_tokens: The cap on this generation's tokens, ``None``
                 for the config's.
+            max_thought_tokens: The cap on a thought's tokens, ``None`` for none.
             may_call_again: Whether a call is read again after a call this
                 generation writes that cannot be read, which the answer to
                 that call tells the model.
@@ -1285,7 +1310,7 @@ class ChatWrapper:
         generation = self._conversation.generation(
             text, recognizes_calls=recognizes_calls, withhold=withhold,
             max_generated_tokens=self._reply_cap(max_reply_tokens), stop=stop, cancel=cancel,
-            sampling=sampling, unreadable_result=_explain_failure(_UNREADABLE, may_call_again),
+            sampling=sampling, max_thought_tokens=max_thought_tokens, unreadable_result=_explain_failure(_UNREADABLE, may_call_again),
             on_started=on_started, on_reply=on_reply, answers_first=answers_first)
         return (yield from generation)
 

@@ -13,7 +13,8 @@ import pytest
 from llama_chat import (ChatWrapper, Config, ContextOverflowError, InternalError, ToolRegistry,
                         ToolSpec)
 from llama_chat.errors import (LIBRARY_ERRORS, ArgumentTypeError, InvalidArgumentError,
-                               InvalidSettingError, OutOfOrderError, raising_library_errors_only)
+                               InvalidSettingError, OutOfOrderError, UnsupportedError,
+                               raising_library_errors_only)
 from llama_chat.rendered_cache import RenderedCache
 from tests.chat_messages import after_system, opened
 from llama_chat.testing.fake_context import FakeContext, ScriptedCall
@@ -90,6 +91,12 @@ def _refusals():
         ("capabilities-not-a-switch", lambda w: w.capabilities(tools="no"), ArgumentTypeError, None),
         ("reasoning-not-a-switch", lambda w: w.begin(opened("s"), reasoning="yes"),
          ArgumentTypeError, None),
+        ("reasoning-level-not-a-text", lambda w: w.begin(opened("s"), reasoning=True, reasoning_level=3),
+         ArgumentTypeError, None),
+        ("reasoning-level-unknown", lambda w: w.begin(opened("s"), reasoning=True, reasoning_level="yes"),
+         UnsupportedError, None),
+        ("reasoning-level-without-reasoning", lambda w: w.begin(opened("s"), reasoning_level="low"),
+         InvalidArgumentError, "reasoning_level"),
         ("reply-cap-not-whole", lambda w: w.reply("a", max_reply_tokens=1.5),
          InvalidSettingError, "max_reply_tokens"),
     ]

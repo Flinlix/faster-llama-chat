@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sized
 from typing import Protocol
 
 import contextlib
@@ -10,6 +11,7 @@ import logging
 import threading
 
 from .cache_context import CacheContext
+from .errors import InternalError
 from .generation import GenerationAccumulator
 from .generation import generate
 from .sequences import common_prefix_length
@@ -17,8 +19,15 @@ from .loop_variant import LoopVariant
 
 # Maps a token id to one character, so token lists search as strings.
 _TOKEN_OFFSET = 0x10000
-# At most how many tokens a long decode runs on after a cancel is set, where one is watched.
+# The fewest tokens a part of a long decode watched for a cancel holds; a larger micro-batch is
+# a part, so that the parts keep the batch's speed.
 _CANCEL_PART_TOKENS = 512
+# How many tokens a cache must hold beyond what a begin keeps of it to be kept, and how many more
+# of a begin's target a kept cache must hold than the cache does to be switched to.
+_WORTH_KEEPING_TOKENS = 256
+# How far the cache must go on as the target after a stretch the template wrote, for that
+# stretch alone to be shifted out.
+_LEFT_OUT_MATCH_TOKENS = 32
 # An interrupt that stands set.
 _ALWAYS_SET = threading.Event()
 _ALWAYS_SET.set()
@@ -45,8 +54,15 @@ class CacheSync:
     "How eviction works".
     """
 
-    def __init__(self, context: CacheContext) -> None:
+    def __init__(self, context: CacheContext, micro_batch_tokens: int | None = None,
+                 kept_conversation_bytes: int = 0) -> None:
         self._context = context
+        # Where the cache holds only what the template wrote before a reply, until it changes there.
+        self._template_written: tuple[int, int] | None = None
+        # The caches of conversations switched away from, where any may be kept.
+        self._kept = _KeptCaches(kept_conversation_bytes) if kept_conversation_bytes else None
+        # A long decode watched for a cancel runs in parts of a micro-batch, at least the floor.
+        self._part_tokens = max(_CANCEL_PART_TOKENS, micro_batch_tokens or 0)
         self._tokens: list[int] = []
         self._valid = 0                 # how many of the tokens the cache holds, from position 0
         self._end: int | None = 0       # how many it holds in all; None where unknown
@@ -143,19 +159,66 @@ class CacheSync:
                 self._tokens += out.token_ids
                 self._end = self._valid = len(self._tokens)
                 self._end += out.cached_beyond
-                self._logits = bool(out.token_ids)
+                self._logits = bool(out.token_ids) and out.ends_with_logits
                 if out.cached_beyond:
                     self.cut_to(len(self._tokens))
             else:
                 self._tokens += out.token_ids
 
+    def _switch_for(self, target: list[int], same: int) -> int:
+        """Keep the cache where ``target`` leaves most of it, and hold a kept one instead where that shares more of ``target``; how much of ``target`` the cache then holds. See design_history.md, "Conversations switched away from are kept"."""
+        store = self._kept
+        assert store is not None, "a switch is asked only where caches are kept"
+        kept = store.longest_start(target)
+        switches = kept is not None and kept[1] > same + _WORTH_KEEPING_TOKENS
+        # Taken out before the cache is kept beside the rest, which may drop the oldest.
+        taken = store.take(kept[0]) if switches and kept is not None else None
+        if len(self._tokens) - same > _WORTH_KEEPING_TOKENS and self.is_current \
+                and store.may_keep(len(self._tokens)):
+            try:
+                store.keep(list(self._tokens), self._context.save_whole_state())
+            except InternalError:
+                raise
+            except RuntimeError:
+                pass                    # kept or not, the conversation goes on as it would
+        if taken is None:
+            return same
+        tokens, state = taken
+        self.version += 1
+        self._rest_states, self._pinned, self._at_cuts = [], {}, []
+        self._template_written = None
+        self._logits = False
+        try:
+            self._context.restore_whole_state(state)
+        except BaseException:
+            self._end = None            # decoded whole from nothing at the next bring-up
+            raise
+        self._tokens = tokens
+        self._end = self._valid = len(tokens)
+        return common_prefix_length(tokens, target)
+
+    def note_template_written(self, start: int, end: int) -> None:
+        """Note that the cache holds from ``start`` to ``end`` only what the template wrote, no message's text, such as the prompt a reply is generated after: the next :meth:`hold` shifts out a stretch within it that its target leaves out, where the cache can shift. It moves with every removal before it and is forgotten with any other change there."""
+        self._template_written = (start, end)
+
+    @property
+    def is_behind(self) -> bool:
+        """Whether the cache holds the start of :attr:`tokens` exactly and only lacks the rest, as a decode an interrupt stopped leaves it."""
+        return self._end is not None and self._end == self._valid < len(self._tokens)
+
     def remove(self, start: int, end: int) -> None:
         """Take the tokens from ``start`` to ``end`` out, those after them moving down."""
         if start >= end:
             return
+        if self.is_behind and start < self._valid and self._context.can_shift:
+            self._bring_up(want_logits=False)       # what it holds is shifted, not decoded again
         total = len(self._tokens)
         del self._tokens[start:end]
         self.version += 1
+        if self._template_written is not None:
+            lo, hi = self._template_written
+            self._template_written = ((lo - (end - start), hi - (end - start)) if end <= lo
+                                      else (lo, hi) if start >= hi else None)
         self._forget_states_after(start)
         self._logits = False
         if self._end == self._valid == total and self._context.can_shift:
@@ -174,6 +237,8 @@ class CacheSync:
             return
         if pos < len(self._tokens):
             self.version += 1
+        if self._template_written is not None and pos < self._template_written[1]:
+            self._template_written = None
         del self._tokens[pos:]
         self._forget_states_after(pos)
         self._logits = False
@@ -187,7 +252,8 @@ class CacheSync:
             self._end = pos
 
     def hold(self, target: list[int], *, want_logits: bool = False,
-             find_dropped_stretch: bool = False, rest_at_cut: bool = False) -> int:
+             find_dropped_stretch: bool = False, rest_at_cut: bool = False,
+             begins: bool = False) -> int:
         """Make the cache hold ``target``: a stretch it no longer holds removed, everything from the first difference decoded; how many of its tokens it held already, before any stretch was removed.
 
         Args:
@@ -197,14 +263,29 @@ class CacheSync:
                 removed, the rest shifted, instead of decoded again.
             rest_at_cut: Rest where the cache is cut, before the rest is
                 decoded, so that a cache that cannot cut can go back there.
+            begins: The target is a conversation a begin writes, which may be
+                another than the cache holds: the cache is kept where the target
+                leaves most of it, and a kept one held where it serves better.
         """
         same = held = common_prefix_length(self._tokens, target)
+        if begins and self._kept is not None and self._can_cut:
+            # A cache that goes back to saved states keeps none: what it saved is the
+            # conversation's, and going back without them would decode it all again.
+            same = self._switch_for(target, same)
         changes = same < len(self._tokens)     # more than an append
+        found = None
         if find_dropped_stretch and same < len(self._tokens):
             found = _dropped_stretch_end(self._tokens, target, same)
-            if found is not None:
-                self.remove(same, found)
-                same = common_prefix_length(self._tokens, target)
+        template_written, self._template_written = self._template_written, None
+        if found is None and changes and template_written is not None and self._context.can_shift \
+                and template_written[0] <= same < template_written[1]:
+            # What the template wrote before a reply and leaves out once the reply is past, such
+            # as an empty thought, is shifted out rather than the reply decoded again. See
+            # design_history.md, "What the template leaves out of a past reply is shifted out".
+            found = _left_out_stretch_end(self._tokens, target, same, template_written[1])
+        if found is not None:
+            self.remove(same, found)
+            same = common_prefix_length(self._tokens, target)
         self.cut_to(same)
         if rest_at_cut:
             self.rest()
@@ -221,13 +302,14 @@ class CacheSync:
         same = common_prefix_length(self._tokens, tokens)
         self._tokens = list(tokens)
         self.version += 1
+        self._template_written = None
         self._valid = min(self._valid, same)
         self._forget_states_after(same)
         self._logits = False
 
     def forget_undecoded(self) -> None:
         """Forget the tokens the cache was left behind, where it holds those before them exactly, as a decode an interrupt stopped leaves it."""
-        if self._end is not None and self._end == self._valid < len(self._tokens):
+        if self.is_behind:
             self.cut_to(self._valid)
 
     @contextlib.contextmanager
@@ -323,8 +405,8 @@ class CacheSync:
         if self.cancel is not None and self.cancel.is_set():
             raise Cancelled("cancelled before the decode")
         watched = [event for event in (self.cancel, self.interrupt) if event is not None]
-        if watched and len(tokens) > _CANCEL_PART_TOKENS:
-            for at in range(0, len(tokens), _CANCEL_PART_TOKENS):
+        if watched and len(tokens) > self._part_tokens:
+            for at in range(0, len(tokens), self._part_tokens):
                 if at and self.cancel is not None and self.cancel.is_set():
                     raise Cancelled("cancelled during the decode")
                 if at and self._interrupted:
@@ -333,7 +415,7 @@ class CacheSync:
                         self._tokens += tokens[at:]
                     self._logits = False
                     return
-                part = tokens[at:at + _CANCEL_PART_TOKENS]
+                part = tokens[at:at + self._part_tokens]
                 self._decode_at_end(part, want_logits and at + len(part) == len(tokens),
                                     appended)
             return
@@ -383,10 +465,11 @@ class CacheSync:
 
     def _decode_again_with_logits(self) -> None:
         """Decode the last token again, so that the next token can be drawn after it."""
-        last = self._tokens[-1]
+        last, written = self._tokens[-1], self._template_written
         self.cut_to(len(self._tokens) - 1)
         self._bring_up(want_logits=False)
         self._decode_at_end([last], want_logits=True)
+        self._template_written = written           # the same tokens, decoded again
 
     def _reset_to_nothing(self) -> None:
         self._context.reset()
@@ -432,6 +515,61 @@ def _dropped_stretch_end(held: list[int], target: list[int], start: int) -> int 
             best, best_length = at, length
         at = memory.find(probe, at + 1)
     return best
+
+
+class _KeptCaches:
+    """The caches of conversations switched away from, each as its tokens and its whole state, oldest first, together within ``bound_bytes``."""
+
+    def __init__(self, bound_bytes: int) -> None:
+        self._bound = bound_bytes
+        self._kept: list[tuple[list[int], Sized]] = []
+        # The fewest tokens a cache held whose state alone took more than the bound.
+        self._too_large: int | None = None
+
+    def longest_start(self, target: list[int]) -> tuple[int, int] | None:
+        """Which kept cache shares the longest start with ``target``, and how long that start is; ``None`` where none is kept."""
+        shared = [(common_prefix_length(tokens, target), at)
+                  for at, (tokens, _state) in enumerate(self._kept)]
+        if not shared:
+            return None
+        length, at = max(shared)
+        return at, length
+
+    def may_keep(self, n_tokens: int) -> bool:
+        """Whether a cache of ``n_tokens`` may fit the bound: none as long as one that held no more did not."""
+        return self._too_large is None or n_tokens < self._too_large
+
+    def take(self, at: int) -> tuple[list[int], Sized]:
+        """The kept cache ``at``, which is kept no longer."""
+        return self._kept.pop(at)
+
+    def keep(self, tokens: list[int], state) -> None:
+        """Keep ``state``, saved while the cache held ``tokens``, the oldest going while all of them take more than the bound; none that alone takes more."""
+        if len(state) > self._bound:
+            self._too_large = len(tokens) if self._too_large is None else min(self._too_large,
+                                                                                len(tokens))
+            return
+        self._kept.append((tokens, state))
+        total = sum(len(kept) for _tokens, kept in self._kept)
+        dropping_variant = LoopVariant("keeping the caches within their bound")
+        while total > self._bound:
+            dropping_variant.passes(len(self._kept))
+            total -= len(self._kept.pop(0)[1])
+
+
+def _left_out_stretch_end(held: list[int], target: list[int], start: int, last: int) -> int | None:
+    """Where ``held`` goes on as ``target`` does from ``start``, a stretch ending at ``last`` at the latest left out; ``None`` where it does nowhere.
+
+    ``held`` must go on as ``target`` for as long as either goes on, up to
+    :data:`_LEFT_OUT_MATCH_TOKENS`.
+    """
+    wanted = target[start:start + _LEFT_OUT_MATCH_TOKENS]
+    for end in range(start + 1, min(last, len(held)) + 1):
+        after = held[end:end + _LEFT_OUT_MATCH_TOKENS]
+        if after and after == wanted[:len(after)] and (len(after) == len(wanted)
+                                                       or end + len(after) == len(held)):
+            return end
+    return None
 
 
 def _as_text(tokens) -> str:

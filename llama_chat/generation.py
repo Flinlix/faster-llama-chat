@@ -24,11 +24,14 @@ from .loop_variant import LoopVariant
 class GenerationAccumulator:
     """What one generation has produced so far, filled as tokens stream in.
 
-    Every token is decoded into the cache before its text is yielded, so a
-    caller that abandons the stream still reads exactly what reached the cache.
+    Every token is decoded into the cache before the stream yields the next
+    text or ends; where the context's decode blocks, its own text is yielded
+    first. A caller that abandons the stream still reads exactly what reached
+    the cache.
 
     Attributes:
-        token_ids: Every token decoded into the cache.
+        token_ids: Every token the generation took, each in the cache by
+            the time the stream yields again or ends.
         text_pieces: Visible reply text so far, as it was yielded; :attr:`text`
             joins it.
         stop_reason: One of :data:`~llama_chat.reply.STOP_REASONS`.
@@ -43,6 +46,8 @@ class GenerationAccumulator:
             the call is then dropped.
         tag_spans: Where each of the model's own tags it wrote stands in the
             visible text, as its start and end there.
+        ends_with_logits: Whether the newest token decoded kept its logits;
+            a call's closing does not, since what follows it is a result.
     """
 
     token_ids: list[int] = field(default_factory=list)
@@ -52,6 +57,7 @@ class GenerationAccumulator:
     cached_beyond: int = 0
     cut_inside_call: bool = False
     tag_spans: list[tuple[int, int]] = field(default_factory=list)
+    ends_with_logits: bool = True
 
     @property
     def text(self) -> str:
@@ -138,6 +144,8 @@ class AnswerGuard:
             reaches the rest of the generation's room, at most half of it,
             beside its closing, is closed with ``thought_closing``; ``None``
             keeps none.
+        max_thought_tokens: A thought that has taken this many tokens is
+            closed with ``thought_closing``; ``None`` for no such cap.
     """
 
     end_tokens: tuple[int, ...] = ()
@@ -145,6 +153,7 @@ class AnswerGuard:
     thought_tags: tuple[str, ...] = ()
     thought_closing: tuple[int, ...] = ()
     answer_room_tokens: int | None = None
+    max_thought_tokens: int | None = None
 
     def thought_limit(self, max_generated_tokens: int) -> int | None:
         """How many tokens of a generation of at most ``max_generated_tokens`` may pass before a thought still open is closed; ``None`` for no limit."""
@@ -263,6 +272,10 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
     thinking = (_ThoughtState(*guard.thought_tags, boundary.starts_in_thought)
                 if len(guard.thought_tags) == 2 else None)
     thought_limit = guard.thought_limit(max_generated_tokens)
+    # A thought's own cap, where its closing can be written.
+    thought_cap = guard.max_thought_tokens if thinking is not None and guard.thought_closing \
+        else None
+    thought_tokens = 0                  # tokens drawn inside a thought
     answer_tokens = 0                   # draws made since the answer holds text
     floor = guard.min_answer_tokens if answer_so_far is not None else None
     closing_thought: list[int] = []     # the closing still to be written in place of draws
@@ -270,7 +283,20 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
     def ends_here(token: int) -> bool:
         return context.ends_generation(token) or (ends_turn is not None and ends_turn(token))
 
+    # Where a decode returns only once done, a token's text is shown first and the token
+    # decoded before the next draw, which needs its logits.
+    shows_first = context.decode_blocks
+    shown: list[int] = []               # the token shown and not decoded yet
+
+    def decode_shown() -> None:
+        nonlocal pos
+        if shown:
+            context.decode_generated(shown, pos)
+            pos += len(shown)
+            shown.clear()
+
     for _ in range(max(0, max_generated_tokens)):
+        decode_shown()
         if cancel is not None and cancel.is_set():
             generated.stop_reason = "interrupted"
             break
@@ -278,11 +304,17 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
             generated.stop_reason = "token_limit"
             break
         in_thought = thinking is not None and thinking.inside
-        if in_thought and call is None and not closing_thought and thought_limit is not None \
-                and len(generated.token_ids) >= thought_limit:
+        room_closes = thought_limit is not None and len(generated.token_ids) >= thought_limit
+        if in_thought and call is None and not closing_thought and (
+                room_closes or thought_cap is not None and thought_tokens >= thought_cap):
             closing_thought = list(guard.thought_closing)
-            thought_limit = None            # one closing per generation
+            if room_closes:
+                thought_limit = None        # the room's closing comes once per generation
         forced = bool(closing_thought)
+        if in_thought and not forced:
+            thought_tokens += 1
+        elif not in_thought:
+            thought_tokens = 0              # each thought is capped on its own
         if forced:
             tok = closing_thought.pop(0)
         else:
@@ -304,7 +336,9 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
                 closing = [call_close]
             else:
                 closing = context.tokenize(close_written, add_special=False, parse_special=True)
-            context.decode_generated(closing, pos)
+            # A result follows a call, not a draw: no logits are kept.
+            context.prefill(closing, pos, want_logits=False)
+            generated.ends_with_logits = False
             pos += len(closing)
             generated.token_ids.extend(closing)
             generated.stop_reason = "tool_call"
@@ -313,10 +347,19 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
         if ends and not closes_call:
             generated.stop_reason = "end_of_turn"
             break
-        # Cache, then record, then surface: this order is what keeps
-        # token_ids equal to the cache across an early close.
-        context.decode_generated([tok], pos)
-        pos += 1
+        # Cache, then record, then surface: this order is what keeps token_ids equal to the
+        # cache across an early close. A token shown first is decoded before the stream yields
+        # anything else or ends, an early close included.
+        if call is not None and tok == call_close:
+            # A result follows a call its tag closes, not a draw: no logits are kept.
+            context.prefill([tok], pos, want_logits=False)
+            generated.ends_with_logits = False
+            pos += 1
+        elif shows_first:
+            shown.append(tok)
+        else:
+            context.decode_generated([tok], pos)
+            pos += 1
         generated.token_ids.append(tok)
         piece = decoder.decode(context.token_bytes(tok))
         if call is None and thinking is not None:
@@ -372,6 +415,7 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
                     call = [visible.since(mark_at + len(open_text))]
                     call_tail = call[0]
                 else:
+                    decode_shown()          # the cut below counts it as cached
                     generated.stop_reason = "end_of_turn"
                     ended_at_text, withheld_call = True, opens_call
                     # Its tokens leave the reply, and the caller cuts them
@@ -410,11 +454,13 @@ def _sample_into(context: CacheContext, draws: _Draws, start_pos: int,
                 yield delta
             except GeneratorExit:
                 generated.stop_reason = "interrupted"
+                decode_shown()
                 raise
         if ended_at_text:
             break
     else:
         generated.stop_reason = "token_limit"
+    decode_shown()
     generated.cut_inside_call = withheld_call or (call is not None
                                                   and generated.stop_reason != "tool_call")
 

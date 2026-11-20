@@ -128,7 +128,7 @@ class _Run:
         self.renders.append(len(self.context.rendered))
 
     def begin(self, history=(), tools=None):
-        return self.chat.begin(opened(self.system, list(history)), tools=tools, reasoning=self.reasoning).n_kept_messages
+        return self.chat.begin(opened(self.system, list(history)), tools=tools, reasoning=bool(self.reasoning)).n_kept_messages
 
     def render(self, messages, tools=None):
         system = [{"role": "system", "content": self.system}] if self.system else []
@@ -1023,7 +1023,7 @@ def test_beginning_again_from_the_conversation_gives_the_same_conversation(stem,
             {"role": "user", "content": "Never mind."}])
         # Written as given where the template writes a call without its result, else closed
         # as the question closes it live.
-        run.chat.begin(given, tools=saved["tools"], reasoning=reasoning)
+        run.chat.begin(given, tools=saved["tools"], reasoning=bool(reasoning))
         _assert_begins_again_the_same(run.chat)
         run.chat.reply().finish()
         _assert_begins_again_the_same(run.chat)
@@ -2160,7 +2160,7 @@ def test_a_question_that_fills_all_the_room_a_system_prompt_leaves_still_gets_an
         if writes != "the answer alone":
             context.replies = [_written_before_the_answer(chat, reasoning) + "Antwort"]
         try:
-            chat.begin(opened("s" * system_length), reasoning=reasoning)
+            chat.begin(opened("s" * system_length), reasoning=bool(reasoning))
         except ContextOverflowError:
             return None
         return chat
@@ -2263,7 +2263,8 @@ def test_a_history_that_keeps_a_turn_open_before_a_question_begins_as_the_questi
     record = called + [{"role": "user", "content": QUESTIONS[0]},
                        {"role": "assistant", "content": ANSWERS[0]}]
     kept = _Run(stem)
-    report = kept.chat.begin(opened(kept.system, record), tools=[WEATHER], reasoning=kept.reasoning)
+    report = kept.chat.begin(opened(kept.system, record), tools=[WEATHER],
+                             reasoning=bool(kept.reasoning))
 
     def said(messages):
         return [(m["role"], m.get("content") or "", [c["function"]["name"] for c in m.get("tool_calls") or ()])
@@ -2798,7 +2799,7 @@ def test_a_reply_settled_on_a_cache_that_saves_states_decodes_nothing_of_its_que
 @pytest.mark.counts_work
 @pytest.mark.parametrize("stem", _EVERY)
 def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_its_turn_began(stem):
-    """One state is saved per reply, where its question's text ends: the end of that turn and the generation prompt are decoded again with the shortened reply, and nothing before them."""
+    """One state is saved per reply, where its question's text ends, where the template writes a past reply otherwise than it was prompted: the end of that turn and the generation prompt are decoded again with the shortened reply, and nothing before them. Where it writes the reply as prompted, none is: the newest question is decoded again too, from the state where its exchange begins."""
     run = _Run(stem, context_size=16384, replies=_ANSWERS, **_COST_CACHES["saves states"])
     _settled_after(run, ["First question?", "Second question?", "Third question?"])
     prompted = run.seen_tokens[-1]          # the cache as the newest reply's generation began
@@ -2811,8 +2812,12 @@ def test_a_shortened_reply_on_a_cache_that_saves_states_decodes_only_from_where_
     if after[:len(prompted)] != prompted:
         return      # the template writes the past reply after other text than its generation prompt
     # The state is kept where the question's text ends: its turn's end and the prompt follow.
-    opening = run.context.tokenize(run.template.properties.fragments.user_suffix
+    fragments = run.template.properties.fragments
+    opening = run.context.tokenize(fragments.user_suffix
                                    + run.template.generation_prompt(run.reasoning), parse_special=True)
+    if not run.reasoning and run.template.properties.writes_reply_as_prompted:
+        opening += run.context.tokenize(fragments.user_prefix + "Third question?",
+                                        parse_special=True)
     assert decoded <= len(after) - len(prompted) + len(opening)
 
 
@@ -3396,3 +3401,53 @@ def test_a_cache_that_cannot_shift_decodes_its_conversation_again_at_most_every_
         decodes_again.append(fake.total_prefilled() - before > exchange * 4 // 3)
     assert not any(one and the_next for one, the_next in zip(decodes_again, decodes_again[1:])), \
         decodes_again
+
+
+@pytest.mark.parametrize("kept_bytes, decoded_again", [(0, True), (1 << 30, False)])
+def test_going_back_to_a_conversation_switched_away_from_decodes_it_again_only_where_none_is_kept(
+        kept_bytes, decoded_again):
+    """A conversation a begin leaves is kept within the bound, and one begun again from it holds it at once; with no room kept, it is decoded again."""
+    from llama_chat.testing.invented_templates import PLAIN
+    fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.")
+    chat = ChatWrapper(Config(context_size=8192, kept_conversation_bytes=kept_bytes), context=fake)
+    long = [m for n in range(20) for m in ({"role": "user", "content": f"Frage {n} " + "x" * 40},
+                                           {"role": "assistant", "content": "Antwort " + "y" * 40})]
+    chat.begin(opened("Eins", long))
+    first = chat.conversation()
+    chat.reply("Weiter?").finish()
+    first = chat.conversation()
+    chat.begin(opened("Zwei, ganz anders", [{"role": "user", "content": "Hallo?"}]))
+    chat.reply().finish()
+    before = fake.total_prefilled()
+    chat.begin(**first)
+    again = fake.total_prefilled() - before
+    assert (again > 1000) == decoded_again, again
+    chat.reply("Und jetzt?").finish()
+
+
+@pytest.mark.parametrize("cache", [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True),
+                                   dict(can_shift=False)], ids=["shifts", "cuts", "saves states"])
+def test_going_back_to_one_of_several_kept_conversations_holds_that_one_when_the_bound_drops_the_oldest(
+        cache):
+    """The bound holds two kept caches: keeping a third drops the oldest, and the one gone back to is the one held, the cache reading as its render."""
+    from llama_chat.testing.invented_templates import PLAIN
+
+    def history(name):
+        return opened(name, [m for n in range(20) for m in (
+            {"role": "user", "content": f"{name} {n} " + "x" * 40},
+            {"role": "assistant", "content": "Antwort " + "y" * 40})])
+
+    fake = FakeContext(PLAIN, gen_tokens=4, gen_text="Gut.", **cache)
+    state_bytes = 8 * 2300                  # the stand-in keeps eight bytes per token
+    chat = ChatWrapper(Config(context_size=8192, kept_conversation_bytes=int(state_bytes * 2.5)),
+                       context=fake)
+    saved = {}
+    for name in ("Eins", "Zwei", "Drei", "Vier"):
+        chat.begin(history(name))
+        chat.reply("Weiter?").finish()
+        saved[name] = chat.conversation()
+    for name in ("Zwei", "Drei", "Eins", "Vier", "Drei"):
+        chat.begin(**saved[name])
+        assert_cache_reads_as_rendered(chat, fake)
+        chat.reply("Und?").finish()
+        saved[name] = chat.conversation()

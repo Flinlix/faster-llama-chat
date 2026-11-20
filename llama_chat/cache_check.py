@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .conversation_state import reasoning_switch
 from .errors import InternalError
 
 # How many times the conversation's context the fresh begin is given, so that it keeps the
@@ -26,6 +27,7 @@ class _ReadsTokensOnly:
     def __init__(self, context, context_size: int) -> None:
         self._context, self.context_size = context, context_size
         self.can_shift, self.can_cut_tail = context.can_shift, context.can_cut_tail
+        self.decode_blocks = False      # it decodes nothing
 
     def tokenize(self, text: str, add_special: bool = False, parse_special: bool = False):
         return self._context.tokenize(text, add_special, parse_special)
@@ -79,6 +81,12 @@ class _ReadsTokensOnly:
     def restore_state(self, state, pos: int) -> None:
         pass
 
+    def save_whole_state(self):
+        return b""
+
+    def restore_whole_state(self, state) -> None:
+        pass
+
     def sampled_tokens(self, sampling, withheld_tokens):
         raise InternalError("the cache check generates nothing")
 
@@ -104,7 +112,8 @@ def check_cache(held: list[int], conversation: dict, unreadable_result: dict | N
     fresh_config = replace(config, context_size=room, evict_above_fraction=1.0,
                            max_history_exchanges=None, check_cache=False)
     fresh = build(_ReadsTokensOnly(context, room), templates, fresh_config)
-    fresh.start(conversation["messages"], conversation["tools"], conversation["reasoning"],
+    fresh.start(conversation["messages"], conversation["tools"],
+                reasoning_switch(conversation["reasoning"], conversation["reasoning_level"]),
                 conversation["generated_turns"], unreadable_result)
     wanted = fresh.prompted_tokens() if prompted else fresh.held_tokens()
     shared = min(len(held), len(wanted))

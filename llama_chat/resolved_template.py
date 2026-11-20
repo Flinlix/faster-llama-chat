@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from .cache_context import MODEL_READER, TOOL_USE_TEMPLATE, ensure_answers
 from .call_parsing import parse_calls
 from .errors import InvalidArgumentError, UnsupportedError
 from .messages import calling_message, with_thought_as
-from .model_template import ModelTemplate
+from .model_template import ModelTemplate, names_read, texts_held
 from .reply_text import begins_in_thought, reply_header
 from .template import CallBoundary, shared_tags_length
+from .template_extract import EFFORT_VARIABLE
+from .template_extract import reasoning_levels as reasoning_levels_read
 from .template_reading import TemplateProperties, TemplateReader
 from .tools import ToolCall
 
@@ -38,17 +40,22 @@ class ResolvedTemplate:
         reasoning_on: The template variables the model's add-on file says
             turn reasoning on, each over the switch the template shows; empty
             or ``None`` where it says nothing.
+        reasoning_levels: The effort levels the add-on file names, for a
+            template that writes the effort it is given as it is; each one
+            must be a level the template takes.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
         ValueError: If the template cannot be recovered, if it fails
-            validation against the model, or if ``reasoning_on`` writes the
-            prompt as reasoning off does.
+            validation against the model, if ``reasoning_on`` writes the
+            prompt as reasoning off does, or if ``reasoning_levels`` names a
+            level the template does not take as one.
     """
 
     def __init__(self, context, addon_call: Mapping[str, str] | None = None, *,
                  template_name: str | None = None,
-                 reasoning_on: Mapping[str, object] | None = None) -> None:
+                 reasoning_on: Mapping[str, object] | None = None,
+                 reasoning_levels: Sequence[str] = ()) -> None:
         ensure_answers(context, MODEL_READER)
         text = context.chat_template_text(template_name)
         if text is None:
@@ -63,6 +70,19 @@ class ResolvedTemplate:
                                                 dict(reasoning_on or {}))
         self.properties: TemplateProperties = TemplateReader(
             context, model, self._model_render, addon_call, reasoning_on).properties
+        # The effort levels a conversation may reason at, read where the template reads an effort.
+        self.reasoning_levels = reasoning_levels_read(
+            lambda messages, level: self._model_render(
+                messages, generation_prompt=True, reasoning=level,
+                variables=self.properties.declaration_variables),
+            texts_held(text), reasoning_levels) if self.properties.can_reason and (
+                EFFORT_VARIABLE in names_read(text) or reasoning_levels) else ()
+        if reasoning_levels and tuple(reasoning_levels) != self.reasoning_levels:
+            raise ValueError(
+                f"the add-on file's reasoning_levels names {list(reasoning_levels)}, but this "
+                f"template takes {list(self.reasoning_levels) or 'none'} as levels: a template "
+                "that tells its levels apart itself, or one that writes a level with another "
+                "generation prompt, takes none from the file")
         self._reply_headers: dict[bool, tuple[str, str] | None] = {}
         self.n_shortest_answer_tokens = self._shortest_answer_tokens(context)
         boundary = self.properties.boundary
@@ -81,7 +101,7 @@ class ResolvedTemplate:
         self._read_back: dict[str, bool] = {}
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, *,
-               generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
+               generation_prompt: bool = False, reasoning: bool | str | None = None) -> str | None:
         """``messages`` as the model's template writes them, ``None`` where it refuses that shape.
 
         A reply's thought, held under ``reasoning_content``, is handed to the
@@ -92,7 +112,7 @@ class ResolvedTemplate:
                                   variables=self.properties.declaration_variables)
 
     def refusal_reason(self, messages: list[dict], tools: list[dict] | None = None, *,
-                       generation_prompt: bool = False, reasoning: bool | None = None) -> str | None:
+                       generation_prompt: bool = False, reasoning: bool | str | None = None) -> str | None:
         """What the template itself says where :meth:`render` refuses ``messages``; ``None`` where it says nothing."""
         return self._model_refusal(self._as_template_reads(messages), tools,
                                    generation_prompt=generation_prompt, reasoning=reasoning,
@@ -118,7 +138,7 @@ class ResolvedTemplate:
                                    "thought at once, so it cannot be asked for reasoning; an "
                                    "add-on file's reasoning_on can name what turns it on")
 
-    def generation_prompt(self, reasoning: bool = False) -> str:
+    def generation_prompt(self, reasoning: bool | str = False) -> str:
         """The generation prompt a reply is sampled after, in the reasoning mode given.
 
         Raises:
@@ -146,15 +166,16 @@ class ResolvedTemplate:
             before_answer.append(written)
         return max(before_answer) + 1 + self.properties.n_closing_tokens
 
-    def reply_header(self, reasoning: bool = False) -> tuple[str, str] | None:
+    def reply_header(self, reasoning: bool | str = False) -> tuple[str, str] | None:
         """The start and end of a header naming a reply's reader, as :func:`~llama_chat.reply_text.reply_header` reads them, worked out once for each reasoning mode."""
-        if reasoning not in self._reply_headers:
+        mode = bool(reasoning)          # a level reasons with the prompt reasoning on writes
+        if mode not in self._reply_headers:
             properties = self.properties
-            self._reply_headers[reasoning] = reply_header(
-                self.answer_opening(reasoning), properties.reasoning, properties.tag_texts)
-        return self._reply_headers[reasoning]
+            self._reply_headers[mode] = reply_header(
+                self.answer_opening(mode), properties.reasoning, properties.tag_texts)
+        return self._reply_headers[mode]
 
-    def answer_opening(self, reasoning: bool = False) -> str:
+    def answer_opening(self, reasoning: bool | str = False) -> str:
         """What a past reply's tag holds that the generation prompt leaves to the model.
 
         Raises:
@@ -332,6 +353,10 @@ class Capabilities:
             ``"unreadable_tool_call"``, but nothing runnable comes out of it.
         can_reason: ``reasoning=True`` is accepted: the template marks a
             thought, and its prompt with reasoning on leaves the thought open.
+        reasoning_levels: The effort levels ``reasoning_level`` may name:
+            those the template tells apart, or, where it writes the effort it
+            is given as it is, those the model's add-on file names; empty
+            where it knows none.
         can_turn_off_reasoning: A conversation begun without reasoning is
             answered without it, as the template's own off writes it; true
             where the template marks no thought. Where a template that marks
@@ -345,6 +370,7 @@ class Capabilities:
     can_reason: bool
     can_turn_off_reasoning: bool
     can_take_system_prompt: bool
+    reasoning_levels: tuple[str, ...]
 
 
 class ResolvedTemplates:
@@ -359,6 +385,8 @@ class ResolvedTemplates:
             both templates; see :class:`ResolvedTemplate`.
         reasoning_on: What the add-on file says turns reasoning on, for both
             templates; see :class:`ResolvedTemplate`.
+        reasoning_levels: The effort levels the add-on file names, for both
+            templates; see :class:`ResolvedTemplate`.
 
     Raises:
         TypeError: If ``context`` does not answer :class:`~llama_chat.cache_context.ModelReader`.
@@ -367,15 +395,18 @@ class ResolvedTemplates:
     """
 
     def __init__(self, context, addon_call: Mapping[str, str] | None = None,
-                 reasoning_on: Mapping[str, object] | None = None) -> None:
-        self._default = ResolvedTemplate(context, addon_call, reasoning_on=reasoning_on)
+                 reasoning_on: Mapping[str, object] | None = None,
+                 reasoning_levels: Sequence[str] = ()) -> None:
+        self._default = ResolvedTemplate(context, addon_call, reasoning_on=reasoning_on,
+                                         reasoning_levels=reasoning_levels)
         self._for_tools = self._default
         self._tools_refused: str | None = None     # why the template for tools is not used
         if context.chat_template_text(TOOL_USE_TEMPLATE) is not None:
             try:
                 self._for_tools = ResolvedTemplate(context, addon_call,
                                                    template_name=TOOL_USE_TEMPLATE,
-                                                   reasoning_on=reasoning_on)
+                                                   reasoning_on=reasoning_on,
+                                                   reasoning_levels=reasoning_levels)
             except ValueError as refused:
                 self._tools_refused = str(refused)
                 _log.warning("the model's template for tools cannot be used, so no "
@@ -386,12 +417,12 @@ class ResolvedTemplates:
         return self._for_tools if uses_tools else self._default
 
     def ensure_accepts(self, uses_tools: bool, *, tools_field: str | None = None,
-                       reasoning: bool = False, system_prompt_field: str | None = None) -> None:
+                       reasoning: bool | str = False, system_prompt_field: str | None = None) -> None:
         """Refuse what a conversation written with :meth:`for_conversation` of ``uses_tools`` cannot take, exactly where :meth:`capabilities` says it does not.
 
         Args:
             tools_field: The parameter that names tools or holds a call, where one does.
-            reasoning: Whether reasoning is asked for.
+            reasoning: Whether reasoning is asked for, or the effort level it is asked at.
             system_prompt_field: The parameter a system prompt comes with, where one does.
 
         Raises:
@@ -405,6 +436,12 @@ class ResolvedTemplates:
             template.ensure_tools_usable(tools_field)
         if reasoning and not capabilities.can_reason:
             template.ensure_can_reason()
+        if isinstance(reasoning, str) and reasoning not in capabilities.reasoning_levels:
+            known = (f"it knows {', '.join(map(repr, capabilities.reasoning_levels))}"
+                     if capabilities.reasoning_levels else "it knows none")
+            raise UnsupportedError(
+                "reasoning_level", f"this model's template knows no reasoning level "
+                f"{reasoning!r}; {known}, and reasoning_level=None reasons as it does by default")
         if system_prompt_field is not None and not capabilities.can_take_system_prompt:
             raise UnsupportedError(
                 system_prompt_field,
@@ -415,6 +452,7 @@ class ResolvedTemplates:
     def capabilities(self, uses_tools: bool) -> Capabilities:
         """What a conversation written with :meth:`for_conversation` of ``uses_tools`` accepts."""
         properties = self.for_conversation(uses_tools).properties
+        template = self.for_conversation(uses_tools)
         return Capabilities(properties.can_call_tools and self._tools_refused is None,
                             properties.can_reason, properties.can_turn_off_reasoning,
-                            properties.can_take_system_prompt)
+                            properties.can_take_system_prompt, template.reasoning_levels)

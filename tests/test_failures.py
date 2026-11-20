@@ -81,6 +81,17 @@ class _Flaky(FakeContext):
             raise EngineError("the cache refused the saved state")
         super().restore_state(state, pos)
 
+    def save_whole_state(self):
+        if self._fails():
+            raise EngineError("the cache refused to save its state")
+        return super().save_whole_state()
+
+    def restore_whole_state(self, state):
+        if self._fails():
+            self.cache = self.cache[:len(self.cache) // 2]      # left as no saved point holds it
+            raise EngineError("the cache refused the saved state")
+        super().restore_whole_state(state)
+
     def sampled_tokens(self, *args, **kwargs):
         if self.fail == "generate":
             self.fail = None
@@ -101,7 +112,10 @@ def _flaky(**kw):
 _CALL, _CALLED = "fn:uhr{}", ToolCall("uhr", {})
 _CALENDAR = ToolSpec("kalender", "Die Termine.", {"type": "object", "properties": {}})
 _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
-           "neither": dict(can_shift=False, can_cut_tail=False)}
+           "neither": dict(can_shift=False, can_cut_tail=False),
+           # Each token's text shown before it is decoded, as on the processor alone.
+           "shifts, shown first": dict(can_shift=True, decode_blocks=True),
+           "neither, shown first": dict(can_shift=False, can_cut_tail=False, decode_blocks=True)}
 _CLOCK = ToolRegistry()
 _CLOCK.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
 
@@ -110,7 +124,7 @@ def _begin(*history):
     """A step that begins the conversation on ``history``, a clock its one tool."""
     def begin(w, fake):
         w.begin(opened("persona", list(history)), tools=_CLOCK.specs(),
-                reasoning=getattr(fake, "reasons", False))
+                reasoning=bool(getattr(fake, "reasons", False)))
     return begin
 
 
@@ -1318,7 +1332,7 @@ def test_a_refusal_carries_what_the_template_says_where_it_refuses_only_as_the_c
     """The template's cause is read with the tools, the reasoning switch and the declaration variable the conversation renders with."""
     fake = FakeContext(_REFUSING[given])
     w = ChatWrapper(Config(context_size=1024), context=fake)
-    w.begin(opened("s"), tools=weather_registry().specs(), reasoning=given == "reasoning")
+    w.begin(opened("s"), tools=weather_registry().specs(), reasoning=bool(given == "reasoning"))
     with pytest.raises(TemplateRefusedError, match="the template says: this word is not written"):
         w.inject("verboten")
 
@@ -1340,3 +1354,48 @@ def test_a_refused_history_carries_the_template_s_cause_for_the_refused_message_
     assert refused.value.field == "messages"
     assert "the user message 'refused' where it stands" in message
     assert "this text is refused" in message and "not written last" not in message
+
+
+@pytest.mark.parametrize("cache", sorted(_CACHES))
+@pytest.mark.parametrize("goes_back", [False, True], ids=["switching away", "going back"])
+def test_a_begin_that_keeps_or_takes_back_a_conversation_failing_at_any_point_changes_nothing(
+        cache, goes_back):
+    """Rule 6 on the kept conversations: a begin that saves the cache it leaves, or restores one kept, failing at any point leaves the conversation as it was and the cache usable."""
+    def history(name):
+        return opened(name, [m for n in range(12) for m in (
+            {"role": "user", "content": f"{name} {n} " + "x" * 30},
+            {"role": "assistant", "content": "Antwort " + "y" * 30})])
+
+    def prepared():
+        fake = _Flaky(PLAIN, gen_tokens=5, gen_text="Gern.", **_CACHES[cache])
+        w = ChatWrapper(Config(context_size=4096, kept_conversation_bytes=1 << 24), context=fake)
+        w.begin(history("Eins"))
+        first = w.conversation()
+        if goes_back:
+            w.begin(history("Zwei"))
+        fake.operations = 0
+        return w, fake, first
+
+    w, fake, first = prepared()
+    target = first if goes_back else w.conversation() | {"messages": history("Zwei")}
+    saved = fake.saved_states
+    w.begin(**target)
+    points = fake.operations
+    # The begin swept saves the cache it leaves, and going back restores the one kept; a cache
+    # that goes back to saved states keeps none.
+    keeps = _CACHES[cache].get("can_shift") or _CACHES[cache].get("can_cut_tail")
+    assert (fake.saved_states > saved) == bool(keeps) or not keeps
+    assert any(edit[0] == "restore whole" for edit in fake.edits) == (goes_back and bool(keeps))
+    for at in range(points):
+        w, fake, first = prepared()
+        before = w.conversation()
+        fake.fail_at = at
+        try:
+            w.begin(**target)
+        except RuntimeError:
+            assert w.conversation() == before, at
+        else:
+            assert w.conversation()["messages"] == target["messages"], at
+        w.reply("Und jetzt?").finish()
+        assert_cache_reads_as_rendered(w, fake)
+        w.close()

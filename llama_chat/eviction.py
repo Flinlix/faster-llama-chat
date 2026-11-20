@@ -44,16 +44,21 @@ class Eviction:
                                       + [{"role": "user", "content": QUESTION_CUT_MARK + "?"}],
                                       generation_prompt=True)
 
-    def keep_newest_history(self, bound: int,
-                            refused: Callable[[list[dict]], Exception]) -> None:
-        """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest; what went is the caller's to record.
+    def keep_newest_history(self, bound: int, refused: Callable[[list[dict]], Exception],
+                            start_from: int | None = None) -> int:
+        """Keep of a history to begin with the newest exchanges that render within ``bound``, and at least the newest; how many were kept, what went being the caller's to record.
+
+        Args:
+            start_from: How many are tried first, such as as many as a search
+                before kept or the cache holds; what is kept is the same
+                whatever it is.
 
         Raises:
             Exception: What ``refused`` makes of the messages the template refuses to write.
         """
         first = len(system_part(self._state.messages))
         if len(self._state.messages) == first:
-            return
+            return 0
         opens = [first] + [i for i in exchange_starts(self._state.messages) if i > first]
 
         def length(count: int) -> int:
@@ -71,13 +76,20 @@ class Eviction:
                  + len(str(m.get(THOUGHT_KEY) or "")) for m in self._state.messages]
         chars = lambda count: sum(sizes[opens[-count]:]) or 1         # noqa: E731
         kept, more, jumped = 1, min(2, everything), False
+        grows = True
+        if start_from is not None and 1 < start_from < everything:
+            # Where the count tried first fits, the search grows from it; else it halves below it.
+            if fits(start_from):
+                kept, more = start_from, min(start_from * 2, everything)
+            else:
+                more, grows = start_from, False
         growing_variant = LoopVariant("growing the history kept")
-        while True:
+        while grows:
             growing_variant.passes((everything - kept, int(more == everything)))
             measured = length(more)
             if measured <= bound:
                 if more == everything:
-                    return
+                    return everything
                 kept = more
                 # Where the whole would fit at the rate measured per character, it is tried
                 # next, once; where it does not, doubling goes on.
@@ -94,6 +106,7 @@ class Eviction:
             middle = (kept + more) // 2
             kept, more = (middle, more) if fits(middle) else (kept, middle)
         self._state.messages[:] = self._state.messages[:first] + self._state.messages[opens[-kept]:]
+        return kept
 
     def drop_while_over(self, limit: int, generation_prompt: bool, newest_too: bool = False,
                         tokens_only: bool = False, beside_open_turn: bool = False) -> str | None:
@@ -185,7 +198,7 @@ class Eviction:
         turn alone goes past that, what the open turn takes with the system turn
         and that fraction of the room after them.
         """
-        if self._keeps_the_rest:
+        if self.keeps_the_rest:
             return limit
         system = min(self.with_a_short_question(), limit)
         bound = system + int((limit - system) * EVICT_TO_FRACTION_WITHOUT_SHIFT)
@@ -205,14 +218,17 @@ class Eviction:
         once the oldest exchange goes, that fraction of them, at least one.
         """
         limit = self._config.max_history_exchanges
-        if limit is None or self._keeps_the_rest:
+        if limit is None or self.keeps_the_rest:
             return limit
         return min(limit, max(1, int(limit * EVICT_TO_FRACTION_WITHOUT_SHIFT)))
 
     @property
-    def _keeps_the_rest(self) -> bool:
-        """Whether the cache keeps the exchanges after the oldest when it goes: it shifts them, and the template writes them as before."""
-        return self._can_shift and self._state.checks.rest_stays
+    def keeps_the_rest(self) -> bool:
+        """Whether the cache keeps the exchanges after the oldest when it goes: it shifts them, and the template writes them as before, around the turns that called tools where the conversation holds any."""
+        checks = self._state.checks
+        return self._can_shift and checks.rest_stays and (
+            checks.rest_stays_around_calls or not any(
+                m["role"] == "tool" or m.get("tool_calls") for m in self._state.messages))
 
     def too_many(self, most: int | None = None) -> bool:
         """Whether the history holds more exchanges than ``most``, by default ``max_history_exchanges``."""

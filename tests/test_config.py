@@ -91,10 +91,10 @@ _WRONG_TYPES = {
     "model_path": 3, "temperature": "hot", "top_k": 2.5, "top_p": "0.9", "min_p": True,
     "repetition_penalty": [1.1], "presence_penalty": "1.5", "frequency_penalty": [0.1],
     "penalty_window_tokens": 64.0, "seed": "7", "context_size": "4096",
-    "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64",
+    "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64", "max_thought_tokens": 8.5,
     "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
     "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
-    "micro_batch_tokens": 512.0,
+    "micro_batch_tokens": 512.0, "kept_conversation_bytes": 1.5,
     "flash_attention": "auto", "kv_cache_type": 8, "check_cache": "yes",
     "min_answer_tokens": 1.0, "answer_room_tokens": "1024", "max_calls": 2.5,
     "tool_timeout_s": "60", "unread_reply_timeout_s": [60],
@@ -126,11 +126,14 @@ def test_a_whole_number_is_taken_where_a_fraction_is():
     assert Config(temperature=1, top_p=1, evict_above_fraction=1).temperature == 1
 
 
-@pytest.mark.parametrize("cap", ["10", 2.5, True])
-def test_a_request_cap_of_another_type_is_refused(cap):
-    from llama_chat.config import ensure_reply_cap
-    with pytest.raises(InvalidSettingError, match="max_reply_tokens"):
-        ensure_reply_cap(cap)
+@pytest.mark.parametrize("name", ["max_reply_tokens", "max_thought_tokens"])
+@pytest.mark.parametrize("cap", ["10", 2.5, True, 0])
+def test_a_request_cap_of_another_type_or_allowing_nothing_is_refused(cap, name):
+    from llama_chat.config import ensure_token_cap
+    with pytest.raises(InvalidSettingError, match=name):
+        ensure_token_cap(cap, name)
+    with pytest.raises(InvalidSettingError, match=name):
+        Config(**{name: cap})
 
 
 # ----- configurations that could never work --------------------------------

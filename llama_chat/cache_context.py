@@ -77,6 +77,10 @@ class CacheContext(ModelReader, Protocol):
     def can_cut_tail(self) -> bool:
         """Whether :meth:`remove_from` may be called on a cache that cannot shift."""
 
+    @property
+    def decode_blocks(self) -> bool:
+        """Whether :meth:`decode_generated` returns only once the decode is done, so that a token's text shown before its decode reaches the reader sooner."""
+
     def reset(self) -> None:
         """Empty the cache."""
 
@@ -112,6 +116,15 @@ class CacheContext(ModelReader, Protocol):
 
     def restore_state(self, state, pos: int) -> None:
         """Put the cache back to ``state``, which :meth:`save_state` gave while it held ``pos`` tokens."""
+
+    def save_whole_state(self):
+        """Everything the cache holds, for :meth:`restore_whole_state`, as a buffer whose ``len`` is its size in bytes.
+
+        It may raise ``RuntimeError`` where saving fails this time.
+        """
+
+    def restore_whole_state(self, state) -> None:
+        """Put the cache back to ``state``, which :meth:`save_whole_state` gave, whatever it held before."""
 
     def close(self) -> None:
         """Free what the context holds; nothing is called on it afterwards."""

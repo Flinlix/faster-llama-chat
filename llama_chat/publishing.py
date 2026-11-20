@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable
 
-from .conversation_state import ConversationState, Published
+from .conversation_state import ConversationState, Published, reasoning_asked
 from .history_forms import completions_messages, generated_turn_records
 from .rendering import generated_turns_in
 from .tools import ToolCall
@@ -32,7 +32,8 @@ def conversation_of(published: Published) -> dict:
     """Everything ``begin`` takes to begin the conversation ``published`` holds again, by its parameter names, the caller's to change."""
     return {"messages": completions_messages(list(published.messages), published.joins_questions),
             "tools": None if published.tools is None else copy.deepcopy(list(published.tools)),
-            "reasoning": published.reasoning,
+            "reasoning": reasoning_asked(published.reasoning)[0],
+            "reasoning_level": reasoning_asked(published.reasoning)[1],
             "generated_turns": generated_turns_of(published)}
 
 
