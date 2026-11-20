@@ -36,13 +36,17 @@ class Anchor:
     """Where the cache holds the tag that opens the exchange after ``message``, the ``index``-th message, which windows of the newest exchanges are placed after.
 
     It stands while that message is still the ``index``-th and the generated turns
-    up to it are still ``kept``, by identity.
+    up to it are still ``kept``, by identity. ``written_under_a_repeat`` holds
+    where a question after it repeated the text of a message before it when the
+    cache up to it was written, so that a template that writes such a message
+    otherwise may have written the cache there for a conversation no longer held.
     """
 
     message: dict
     index: int
     at: int
     kept: tuple[GeneratedTurn, ...]
+    written_under_a_repeat: bool
 
 
 @dataclass

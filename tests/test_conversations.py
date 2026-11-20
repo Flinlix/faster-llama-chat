@@ -836,6 +836,17 @@ def test_exchanges_that_repeat_word_for_word_are_kept_as_many_as_fit(stem):
 
 
 @pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
+def test_a_question_whose_text_stops_repeating_an_earlier_one_has_the_earlier_one_written_again(stem):
+    """A template that writes a question otherwise while a later one repeats its text has it written again once the later one is joined by the next question."""
+    run = _Run(stem)
+    run.begin([{"role": "user", "content": QUESTIONS[0]}, {"role": "assistant", "content": ANSWERS[0]},
+               {"role": "user", "content": QUESTIONS[1]}, {"role": "assistant", "content": ANSWERS[1]},
+               {"role": "user", "content": QUESTIONS[0]}], tools=[WEATHER])
+    run.chat.reply(QUESTIONS[2]).finish()
+    assert_cache_reads_as_rendered(run.chat, run.context)
+
+
+@pytest.mark.parametrize("stem", _TOOL_TEMPLATES)
 def test_declarations_that_move_with_each_question_cost_a_cache_that_cannot_be_cut_one_exchange_more(stem):
     costs = {}
     for can_shift in (True, False):

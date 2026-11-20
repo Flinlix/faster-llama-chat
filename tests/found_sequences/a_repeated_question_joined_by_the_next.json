@@ -1,0 +1,195 @@
+{
+ "found": "2026-11-20",
+ "what": "a repeated question joined by the next, after which the earlier one is written otherwise again",
+ "draws": [
+  {
+   "template": "e4676cb56dffea7782fd3e2b577cfaf1e123537e6ef49b3ec7caa6c095c62272"
+  },
+  {
+   "option": 0
+  },
+  0.4335664818424952,
+  0.3356856789135474,
+  {
+   "option": 1
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 0
+  },
+  1.1754943508222875e-38,
+  0.8016244764146961,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.40867788129016486,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.34996949822011114,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  1.7903324616184922e-131,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.15177402656314865,
+  0.0,
+  0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.005,
+  0.4028404654590512,
+  0.362112961935688,
+  {
+   "option": 5
+  },
+  {
+   "option": 3
+  },
+  1.3086102261636637e-278,
+  0.5099548718696809,
+  {
+   "option": 3
+  },
+  {
+   "option": 1
+  },
+  0.0430480124100463,
+  0.6234164222026708,
+  {
+   "option": 2
+  },
+  {
+   "option": 5
+  },
+  {
+   "option": 0
+  },
+  0.6215989880986439,
+  23,
+  {
+   "option": 0
+  },
+  0.5517336714237695,
+  {
+   "option": 3
+  },
+  2.2250738585072014e-308,
+  {
+   "option": 1
+  },
+  0.3178710812267622,
+  0.457277752064488,
+  0.5844934345538999,
+  0.054567197926187035,
+  19,
+  2.2250738585e-313,
+  51,
+  {
+   "option": 3
+  },
+  {
+   "option": 1
+  },
+  4.759047839531731e-80
+ ],
+ "steps": [
+  "set_up",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_reply",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_wait",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules"
+ ]
+}

@@ -27,7 +27,12 @@ for most templates, so the rest can be taken from the cache.
     one (worked out only for a template that can call tools);
   - a question follows the anchor's reply, and the reply closed its turn;
   - no question after the anchor repeats a text before it, on a template that
-    writes a repeated question otherwise.
+    writes a repeated question otherwise, neither now nor when the cache up to
+    the anchor was written. A template that writes its declarations before
+    every question equal to the newest writes an earlier question otherwise
+    while a later one repeats it, and again otherwise once the later one is
+    joined by the next question; the anchor records whether such a repeat
+    stood when it was set (found by a random sequence on 2026-11-20).
   Where the tag the window opens with is not the one the cache holds there,
   the older anchor is tried, else the whole conversation is rendered.
 - Templates whose declarations move with the newest question use windows

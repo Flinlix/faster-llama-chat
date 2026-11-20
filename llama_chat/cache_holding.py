@@ -12,7 +12,7 @@ from .render_checks import STAND_IN, question_splices
 from .rendering import ConversationRendering, Target, generated_turns_in
 from .resolved_template import ResolvedTemplate
 from .split_render import SplitRender
-from .cache_targets import CacheTargets, closes_turn
+from .cache_targets import CacheTargets, closes_turn, repeats_before
 
 
 # What the states a cache that cannot be cut keeps where the newest exchanges begin are kept for.
@@ -142,8 +142,10 @@ class CacheHolding:
                                  begins=begins)
         self._state.turns_at = target.turns_at
         messages = self._state.messages
+        repeats_alike = self._state.checks.repeats_alike
         new = {index: Anchor(messages[index], index, at, tuple(
-                   turn for _, _, turn in generated_turns_in(messages[:index + 1])))
+                   turn for _, _, turn in generated_turns_in(messages[:index + 1])),
+                   not repeats_alike and repeats_before(messages, index + 1))
                for index, at in target.anchors
                if index < len(messages) and closes_turn(messages[index])}
         standing = {a.index: a for a in self._state.anchors
