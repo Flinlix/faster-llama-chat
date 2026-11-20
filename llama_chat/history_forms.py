@@ -402,6 +402,11 @@ def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[
     """
     kept, sources, _gone = _without_unreadable(messages, set(), joins_questions)
     portable = [_portable(_as_completions(message)) for message in kept]
+    # The kept messages each given message stands in, so that a turn finds its own at once.
+    owners: dict[int, list[int]] = {}
+    for k, source in enumerate(sources):
+        for given in source:
+            owners.setdefault(given, []).append(k)
     records: list[dict] = []
     for first, last, turn in generated_turns_in(messages):
         end = last
@@ -410,7 +415,7 @@ def generated_turn_records(messages: list[dict], joins_questions: bool) -> list[
             results_variant.passes(len(messages) - end)
             end += 1                # the results written so far in an open turn
         own = set(range(first, end + 1))
-        window = [k for k, source in enumerate(sources) if source & (own | {first - 1})]
+        window = sorted({k for given in own | {first - 1} for k in owners.get(given, ())})
         if not any(sources[k] & own for k in window) and window and window[-1] + 1 < len(kept):
             window.append(window[-1] + 1)
         if not window:
