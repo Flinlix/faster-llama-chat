@@ -5,7 +5,7 @@ rather than llama.cpp's answers: what counts as one of the model's own tags,
 and which cache edits are performed while loading rather than at the first
 eviction. The first is pinned here rather than through the fake context used
 everywhere else, which answers that question itself and so cannot test it. See
-design_history.md, "How a call's format is recovered".
+docs/decisions/0037-a-calls-format-is-recovered-from-the-templates-renders.md.
 """
 
 import ctypes
@@ -979,11 +979,12 @@ def test_the_engines_output_is_controlled_with_logging_and_no_setting():
     assert not hasattr(config, "LOG_LEVELS")
 
 
-def test_the_readmes_logging_example_shows_every_line_the_engine_writes(tmp_path):
+def test_the_guides_logging_example_shows_every_line_the_engine_writes(tmp_path):
     import subprocess
     import sys
-    readme = (Path(llama_chat.__file__).parents[1] / "README.md").read_text(encoding="utf-8")
-    example = re.search(r"\*\*Logging\.\*\*.*?```python\n(.*?)```", readme, re.S).group(1)
+    guide = Path(llama_chat.__file__).parents[1] / "docs" / "guide" / "configuration.md"
+    example = re.search(r"\*\*Logging\.\*\*.*?```python\n(.*?)```", guide.read_text(encoding="utf-8"),
+                        re.S).group(1)
     script = example + ("from llama_chat import _backend\n"
                         f"_backend._forward_engine_log({_DEBUG}, b'a debug line\\n', None)\n")
     ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,

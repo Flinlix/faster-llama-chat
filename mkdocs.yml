@@ -1,0 +1,56 @@
+site_name: faster-llama-chat
+site_description: A KV-cache managing chat library for llama.cpp
+repo_url: https://github.com/Flinlix/faster-llama-chat
+edit_uri: edit/main/docs/
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets: {base_path: ["."], check_paths: true}
+hooks:
+  - docs/hooks.py
+exclude_docs: |
+  hooks.py
+  __pycache__/
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            members_order: source
+            show_root_heading: true
+nav:
+  - Overview: index.md
+  - Install: install.md
+  - Guide:
+      - What to call, by task: guide/actions.md
+      - Streams, cancelling and threads: guide/streams-and-threads.md
+      - Tool calling: guide/tool-calling.md
+      - Reasoning: guide/reasoning.md
+      - Keeping a conversation: guide/keeping-a-conversation.md
+      - Configuration: guide/configuration.md
+      - Add-on files: guide/add-on-files.md
+      - A model without a usable template: guide/without-a-template.md
+      - Your own cache context: guide/cache-context.md
+      - Verify: guide/verify.md
+  - API reference: reference.md
+  - Decisions: decisions/README.md
+not_in_nav: |
+  /decisions/*.md
+  /decisions/archive/*.md

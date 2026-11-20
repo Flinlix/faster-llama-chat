@@ -4,7 +4,7 @@
 #   ./install.sh           auto-detect: CUDA if nvidia-smi is present, else CPU
 #   ./install.sh --cpu     force the native-CPU build
 #   ./install.sh --cuda    force the Nvidia GPU build
-#   add --dev to any of the above to also install test dependencies
+#   add --dev to any of the above to also install the test, development and documentation tools
 #
 # Why build from source: the prebuilt wheel targets a baseline instruction set and
 # ships no CUDA. GGML_NATIVE=ON compiles with -march=native so the CPU's own
@@ -51,10 +51,10 @@ CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
     "$PIP" install --no-binary llama-cpp-python --no-cache-dir "llama-cpp-python>=0.3.23"
 
 # Install faster-llama-chat itself (editable) so `import llama_chat` and the demo work
-# without setting PYTHONPATH. Pass --dev to also install test dependencies.
+# without setting PYTHONPATH. Pass --dev to also install the test, development and documentation tools.
 echo "Installing faster-llama-chat (editable)..."
 if [ "$DEV" = 1 ]; then
-    "$PIP" install -e ".[test,dev]"
+    "$PIP" install -e ".[test,dev,docs]"
     # The checks before every push: hooks/pre-push.
     git config core.hooksPath hooks
 else

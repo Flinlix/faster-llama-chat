@@ -21,21 +21,25 @@ _ROOT = Path(__file__).parent.parent
 _PACKAGE = _ROOT / "llama_chat"
 _ADDONS = sorted((_PACKAGE / "addons").glob("*.json"))
 
-# Folders of model files, and files that may name a model: the design history, and the
+# Folders of model files and of the decision records, and files that may name a model: the
 # files that install the engine, which name the build for a GPU's maker.
-_MODEL_FOLDERS = (Path(__file__).parent / "templates", _PACKAGE / "addons")
-_EXEMPT = {_ROOT / "design_history.md", _ROOT / "install.sh", _ROOT / "pyproject.toml"}
+_MODEL_FOLDERS = (Path(__file__).parent / "templates", _PACKAGE / "addons", _ROOT / "docs" / "decisions")
+_EXEMPT = {_ROOT / "install.sh", _ROOT / "pyproject.toml"}
 # The files a mutation run writes beside the copy of the project it runs the tests in.
 _MUTATION_RESULTS_PREFIX = "mutmut-"
-# The README's install section, which names what gets installed, up to the next section.
+# The README's sections that may name a model, each up to the next section: the install
+# section, which names what gets installed, and the list of supported models.
 _INSTALL_SECTION = re.compile(r"(?ms)^## Install$.*?(?=^## )")
+_SUPPORTED_SECTION = re.compile(r"(?ms)^## Supported models$.*?(?=^## )")
 
 # The library's and its engine's own names, which hold a family's letters.
 _OWN_NAMES = ("faster-llama-chat", "llama-cpp-python", "llama_chat", "llama.cpp", "llama_cpp")
 _OWN_NAME = re.compile("|".join(map(re.escape, _OWN_NAMES)), re.IGNORECASE)
-# The engine's module and its tests, which name the engine's functions: the words its
-# module's name begins with, alone or before an underscore.
-_ENGINE_FILES = {_PACKAGE / "_backend.py", Path(__file__).parent / "test_backend.py"}
+# The engine's module, its tests and the benchmark that runs the engine's own chat interface,
+# which name the engine's functions: the words its module's name begins with, alone or
+# before an underscore.
+_ENGINE_FILES = {_PACKAGE / "_backend.py", Path(__file__).parent / "test_backend.py",
+                 _ROOT / "benchmarks" / "compare.py"}
 _ENGINE_PREFIX = "llama_cpp".split("_")[0]
 
 
@@ -43,7 +47,7 @@ def _checked_files() -> list[Path]:
     """Every file of the project that is not hidden, built, exempt or a model file."""
     def skipped(path):
         parts = path.relative_to(_ROOT).parts
-        return (any(part.startswith(".") or part in ("__pycache__", "mutants")
+        return (any(part.startswith(".") or part in ("__pycache__", "mutants", "build", "dist", "site")
                     or part.endswith(".egg-info") for part in parts)
                 or path in _EXEMPT or any(folder in path.parents for folder in _MODEL_FOLDERS)
                 or (path.parent == _ROOT and path.name.startswith(_MUTATION_RESULTS_PREFIX)))
@@ -51,14 +55,16 @@ def _checked_files() -> list[Path]:
 
 
 def _checked_text(path: Path) -> str:
-    """The text of ``path`` that must name no model, the README without its install section."""
+    """The text of ``path`` that must name no model, the README without its install section and its list of supported models."""
     try:
         text = path.read_text()
     except UnicodeDecodeError:
         return ""                       # not text, so no name a reader sees
     if path == _ROOT / "README.md":
-        assert _INSTALL_SECTION.search(text), "the README's install section is no longer found"
-        text = _INSTALL_SECTION.sub("", text)
+        for section, name in ((_INSTALL_SECTION, "install section"),
+                              (_SUPPORTED_SECTION, "list of supported models")):
+            assert section.search(text), f"the README's {name} is no longer found"
+            text = section.sub("", text)
     return text
 
 
@@ -235,3 +241,18 @@ def test_the_invented_templates_tags_are_no_real_templates():
     from llama_chat.testing.invented_templates import INVENTED
     invented = {tag for template in INVENTED.values() for tag in template["tags"]}
     assert invented and not invented & _template_tags()
+
+
+def _supported_row(stem: str) -> str:
+    """The README's row for a test template: the model its source names, the source, and whether it reasons and calls tools."""
+    known = fixture(stem)
+    source = known["source"]
+    name = re.sub(r"(?i)[-_.]?gguf$", "", source.split("/", 1)[1])
+    marks = ["yes" if known.get(key) else "" for key in ("can_reason", "calls_tools")]
+    return f"| {name} | [{source}](https://huggingface.co/{source}) | {marks[0]} | {marks[1]} |"
+
+
+def test_the_readmes_list_of_supported_models_is_the_table_the_test_templates_give():
+    supported = _SUPPORTED_SECTION.search((_ROOT / "README.md").read_text()).group()
+    rows = [line for line in supported.splitlines() if line.startswith("| ") and "[" in line]
+    assert rows == sorted((_supported_row(stem) for stem in STEMS), key=str.lower)
