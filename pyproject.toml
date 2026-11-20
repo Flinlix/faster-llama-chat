@@ -15,7 +15,7 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3 :: Only",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -27,19 +27,20 @@ dependencies = [
     #   CPU:        CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python
     #   Nvidia GPU: CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python
     "llama-cpp-python>=0.3.23",
-    "jinja2>=3",
+    # The bounds of every dependency: docs/decisions/0053-dependencies-are-bounded-to-what-is-checked.md
+    "jinja2>=3.1.6,<3.2",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Flinlix/faster-llama-chat"
-Documentation = "https://github.com/Flinlix/faster-llama-chat/tree/main/docs"
+Documentation = "https://flinlix.github.io/faster-llama-chat/"
 Source = "https://github.com/Flinlix/faster-llama-chat"
 Issues = "https://github.com/Flinlix/faster-llama-chat/issues"
 
 [project.optional-dependencies]
-test = ["pytest>=7", "pytest-xdist>=3", "hypothesis>=6"]
-dev = ["mypy>=1", "ruff>=0.5", "mutmut>=3"]
-docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
+test = ["pytest>=7,<10", "pytest-xdist>=3,<4", "hypothesis>=6,<7"]
+dev = ["mypy>=1,<3", "ruff>=0.5,<0.18", "mutmut>=3,<4"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10", "mkdocstrings[python]>=0.26,<2"]
 
 [tool.setuptools.packages.find]
 include = ["llama_chat*"]
@@ -67,8 +68,8 @@ ignore_missing_imports = true
 source_paths = ["llama_chat/"]
 # The protocol a cache context answers, which the library reads by its method names, and the
 # engine's own modules, which only a real model runs.
-do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py", "llama_chat/context.py",
-                 "llama_chat/testing/*"]
+do_not_mutate = ["llama_chat/cache_context.py", "llama_chat/_backend.py",
+                 "llama_chat/context.py", "llama_chat/testing/*"]
 # What the tests read besides the code.
 also_copy = ["README.md", "AGENTS.md", "CLAUDE.md", "docs", "pyproject.toml", "install.sh",
              "LICENSE", "NOTICE", "examples", "hooks"]

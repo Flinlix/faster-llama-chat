@@ -59,3 +59,6 @@ it rejected. The dated log the records were written from is kept as
 | [0050](0050-decisions-are-kept-as-one-record-each.md) | Each decision is one record; the dated log is an archive | Records updated with the code; the old log kept unchanged. |
 | [0051](0051-releases-are-tagged-and-published-from-github.md) | A release is a version tag, released on GitHub | The tag must match `pyproject.toml`; the built package attached; `py.typed`. |
 | [0052](0052-the-conversation-is-split-into-collaborators-by-job.md) | The conversation and the wrapper hand each job to a collaborator | Six modules of one job each; the actions, the undo path and the lock stay. |
+| [0053](0053-dependencies-are-bounded-to-what-is-checked.md) | Dependencies are bounded to the releases the checks are run on | `jinja2` on the 3.1 line from 3.1.6; the tools below their next major version. |
+| [0054](0054-what-is-public-and-what-a-version-promises.md) | What is public, and what a version number promises | A compatibility page; every public signature listed and compared by a test. |
+| [0055](0055-measured-against-llama-cpp-pythons-own-chat.md) | Measured against llama-cpp-python's own chat interface | Later questions wait about half as long; the chat runs on where the plain one fills up. |
