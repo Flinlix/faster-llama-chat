@@ -126,11 +126,13 @@ def rendered_pieces(context, messages, declarations=None, *, generation_prompt: 
     in the order of the messages it comes from.
     """
     try:
-        return _rendered_pieces(context, messages, declarations, generation_prompt, reasoning,
-                                for_tools, owned, shares_equal_texts=False)
+        pieces = _rendered_pieces(context, messages, declarations, generation_prompt, reasoning,
+                                  for_tools, owned, shares_equal_texts=False)
     except AssertionError:
-        return _rendered_pieces(context, messages, declarations, generation_prompt, reasoning,
-                                for_tools, owned, shares_equal_texts=True)
+        pieces = None
+    return pieces if pieces is not None else _rendered_pieces(
+        context, messages, declarations, generation_prompt, reasoning, for_tools, owned,
+        shares_equal_texts=True)
 
 
 def _rendered_pieces(context, messages, declarations, generation_prompt, reasoning, for_tools,

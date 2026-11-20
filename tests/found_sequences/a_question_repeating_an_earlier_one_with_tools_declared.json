@@ -1,0 +1,219 @@
+{
+ "found": "2026-11-20",
+ "what": "a question repeating an earlier one, where the template writes the declarations before each",
+ "draws": [
+  {
+   "template": "e4676cb56dffea7782fd3e2b577cfaf1e123537e6ef49b3ec7caa6c095c62272"
+  },
+  {
+   "option": 0
+  },
+  0.4335664818424952,
+  0.3356856789135474,
+  {
+   "option": 1
+  },
+  {
+   "option": 2
+  },
+  {
+   "option": 0
+  },
+  1.1754943508222875e-38,
+  0.8016244764146961,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.40867788129016486,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.34996949822011114,
+  {
+   "option": 0
+  },
+  0.0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  1.7903324616184922e-131,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.15177402656314865,
+  0.0,
+  0,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  3,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  {
+   "option": 0
+  },
+  0.0,
+  0.005,
+  0.4028404654590512,
+  0.362112961935688,
+  {
+   "option": 5
+  },
+  {
+   "option": 3
+  },
+  1.3086102261636637e-278,
+  0.33344542861379267,
+  {
+   "option": 0
+  },
+  0.9447560469357336,
+  0.142872375812781,
+  56,
+  {
+   "option": 0
+  },
+  {
+   "option": 6
+  },
+  {
+   "option": 0
+  },
+  13,
+  {
+   "option": 6
+  },
+  0.005,
+  {
+   "option": 0
+  },
+  0.42036651230341265,
+  0.9402769803368046,
+  0.821181342965113,
+  0.1957829090372827,
+  0.05,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  1.0711014712871072e-155,
+  29,
+  0.0,
+  0,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  0.0,
+  53,
+  {
+   "option": 0
+  },
+  {
+   "option": 0
+  },
+  {
+   "option": 4
+  }
+ ],
+ "steps": [
+  "set_up",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_begin",
+  "keeps_the_rules",
+  "act_question",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "act_wait",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "ask_a_question",
+  "keeps_the_rules",
+  "act_inject",
+  "keeps_the_rules"
+ ]
+}
