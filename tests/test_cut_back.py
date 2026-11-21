@@ -10,7 +10,7 @@ from llama_cpp_conversation.resolved_template import ResolvedTemplate
 from llama_cpp_conversation.tools import ToolSpec, ToolCall
 from llama_cpp_conversation.wrapper import ChatWrapper
 from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS, WEATHER
-from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
+from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall, shipped_addon_call, written_call
 from tests.internals import token_id_range
 from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
@@ -483,6 +483,43 @@ def test_a_cut_whose_text_would_begin_inside_a_thought_after_the_answer_is_refus
     with pytest.raises(TemplateRefusedError) as refused:
         wrapper.truncate_last_reply(keep)
     assert refused.value.field == "keep_text"
+    assert wrapper.conversation() == before
+
+
+_REASONING_TOOL_STEMS = [stem for stem in STEMS
+                         if fixture(stem)["calls_tools"] and fixture(stem)["marks_thought"]]
+
+
+def _answered_on(stem: str, answer: str):
+    """A wrapper on the test template ``stem`` whose newest turn called a tool and then answered ``answer``, its tags generated as the model's own, and the template's thought marks."""
+    known = fixture(stem)
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    fake = FakeContext(known, writes_tags=True)
+    wrapper = ChatWrapper(Config(context_size=4096), context=fake)
+    wrapper.begin(opened("persona") if wrapper.capabilities(tools=True).can_take_system_prompt else [],
+                  tools=registry.specs())
+    call = shipped_addon_call(known["chat_template"])
+    fake.call_script = [("clock" + call["name_close"] + "{}") if call
+                        else written_call(None, fake, "clock", {})[1]]
+    fake.replies = [answer]
+    wrapper.reply("wie spät?", tool_call_policy=registry).finish()
+    return wrapper
+
+
+@pytest.mark.parametrize("stem", _REASONING_TOOL_STEMS)
+def test_on_every_template_a_cut_whose_text_would_begin_inside_a_thought_after_the_answer_is_refused(stem):
+    """The thought marks are found by their text, whatever tokens spell them."""
+    marks = ResolvedTemplate(FakeContext(fixture(stem))).properties.reasoning
+    if marks is None:
+        pytest.skip("the library reads no thought marks off this template")
+    wrapper = _answered_on(stem, f"Ja.{marks.thought_open.strip()}Ja.{marks.thought_close.strip()}")
+    before = wrapper.conversation()
+    content = before["messages"][-1]["content"] or ""
+    if not content.startswith("Ja"):
+        pytest.skip("the template shows this answer otherwise")
+    with pytest.raises(TemplateRefusedError):
+        wrapper.truncate_last_reply("Ja")
     assert wrapper.conversation() == before
 
 

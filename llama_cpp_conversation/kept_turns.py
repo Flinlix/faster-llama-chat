@@ -152,22 +152,17 @@ class KeptTurns:
         return GeneratedTurn(tokens, turn.span, turn.on_call)
 
     def _starts_in_a_thought(self, tokens: tuple[int, ...], pieces: list[bytes], length: int) -> bool:
-        """Whether the last ``length`` bytes of the joined ``pieces``, one per token of ``tokens``, begin inside a thought, which the reply's text hides."""
+        """Whether the last ``length`` bytes of the joined ``pieces``, one per token of ``tokens``, begin inside a thought, which the reply's text hides, as the tokens before them read."""
         marks = self._template().properties.reasoning
-        if marks is None:
+        if marks is None or not marks.thought_open.strip():
             return False
         held, start = 0, len(pieces)
         for index in reversed(range(len(pieces))):
             if held >= length:
                 break
             start, held = index, held + len(pieces[index])
-        for token in reversed(tokens[:start]):
-            spelled = self._context.token_bytes(token).decode(errors="replace")
-            if spelled == marks.thought_close:
-                return False
-            if spelled == marks.thought_open:
-                return True
-        return False
+        text = "".join(self._context.token_text(token) for token in tokens[:start])
+        return text.rfind(marks.thought_open.strip()) > text.rfind(marks.thought_close.strip())
 
     def generated_to_its_call(self, turn: GeneratedTurn, text: str, span: int) -> GeneratedTurn | None:
         """``turn``, ending the newest message, a reply of ``text``, as the turn of its first ``span`` messages, ending on its newest call: its generated tokens up to that call's closing; ``None`` where they cannot be told.
