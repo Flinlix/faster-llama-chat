@@ -11,6 +11,12 @@ saved = chat.conversation()
 chat.begin(**saved)
 ```
 
+What it returns is a `Conversation`, a typed dictionary: its messages are
+`ChatMessage`s, each call in them a `ChatToolCall` naming a `ChatFunction`,
+and its saved turns are `GeneratedTurns`. With these types, a type checker
+checks `begin(**saved)` against what the call takes. `begin` also takes a
+history of plain dictionaries, such as one read from JSON.
+
 A tool declared there is declared again, not registered: a request whose calls
 are to run is still handed its `ToolRegistry`.
 

@@ -21,6 +21,7 @@ from .addon_files import addon_file, with_model_sampling
 from .cache_context import CACHE_CONTEXT, ensure_answers, ensure_can_go_back
 from .config import Config, Sampling, ensure_token_cap, generation_sampling, model_file
 from .conversation_state import reasoning_switch
+from .conversation_types import ChatMessage, Conversation, GeneratedTurns
 from .messages import ensure_role, ensure_text
 from .history_forms import ensure_generated_turns, read_messages
 from .rendered_cache import RenderedCache
@@ -42,7 +43,7 @@ class ChatWrapper:
     """Stateful single-conversation chat over a cache context, with KV reuse.
 
     Once built, every public action raises only the library's own errors
-    (:data:`~llama_cpp_conversation.errors.LIBRARY_ERRORS`), each naming the argument and
+    (``LIBRARY_ERRORS`` in ``llama_cpp_conversation.errors``), each naming the argument and
     the cause; a refused action changes nothing, and a failed reply keeps only
     what it had produced.
     """
@@ -154,10 +155,10 @@ class ChatWrapper:
         self._rounds = ReplyRounds(self._conversation, self._templates, self._config,
                                    self._ensure_open, self._tool_threads, self._late_tool_threads)
 
-    def begin(self, messages: list[dict] | None = None,
+    def begin(self, messages: Iterable[ChatMessage | dict[str, Any]] | None = None,
               tools: Iterable[ToolSpec] | None = None, *,
               reasoning: bool = False, reasoning_level: str | None = None,
-              generated_turns: dict | None = None) -> Report:
+              generated_turns: GeneratedTurns | None = None) -> Report:
         """Begin the conversation, or begin it again: prefill the system prompt and recent history, decoding only where they differ from what the cache holds.
 
         Every other action refuses until this has run, because only this
@@ -229,8 +230,8 @@ class ChatWrapper:
                 what :meth:`conversation` gave. See docs/decisions/0029-two-history-forms.md.
 
         Returns:
-            What it changed beyond what was asked: how many of the messages
-            after the system message it kept and why it left the others out,
+            What it changed beyond what was asked. It holds how many of the
+            messages after the system message it kept and why it left the others out,
             the calls it left out, the results it cut, and the generated
             turns it restored. Each such change is also logged once, at
             ``INFO``, under the logger ``llama_cpp_conversation``.
@@ -285,7 +286,7 @@ class ChatWrapper:
         if tools is not None and not isinstance(tools, Iterable):
             raise ArgumentTypeError(f"tools must be a list of ToolSpec, such as ToolRegistry.specs() "
                             f"gives, not {tools!r}")
-        messages = list(messages or [])         # read once, a generator included
+        history: list[Any] = list(messages or [])    # read once, a generator included
         # Checked before the wrapper is taken, so that a begin refused for its own arguments
         # ends no reply its thread reads, and destroys no conversation it was to replace.
         specs = None if tools is None else list(tools)
@@ -297,24 +298,24 @@ class ChatWrapper:
                 self._templates.for_conversation(True).ensure_names_read_back(
                     [spec.name for spec in specs], "tools")
         uses_tools = specs is not None
-        calls = any(_calls_tools(item) for item in messages)
+        calls = any(_calls_tools(item) for item in history)
         if calls and not uses_tools and not self._templates.capabilities(False).can_call_tools \
                 and self._templates.capabilities(True).can_call_tools:
             raise UnsupportedError(
                 "messages", "this model reads a turn that called tools only in a "
                 "conversation begun with tools; pass tools, an empty list included")
-        opens_on_system = bool(messages) and isinstance(messages[0], dict) \
-            and messages[0].get("role") == "system"
+        opens_on_system = bool(history) and isinstance(history[0], dict) \
+            and history[0].get("role") == "system"
         self._templates.ensure_accepts(
             uses_tools, tools_field="tools" if specs else "messages" if calls else None,
             reasoning=switch, system_prompt_field="messages" if opens_on_system else None)
-        read_messages(messages)
+        read_messages(history)
         with self._held():
             self._ensure_open()
             self._conversation.forget_told()    # changes of earlier actions are told already
             # A begin leaves no turn a reply started, so a call it could not read is answered
             # as one in a turn that runs no call.
-            self._conversation.start(messages, specs, switch, generated_turns,
+            self._conversation.start(history, specs, switch, generated_turns,
                                      explain_failure(UNREADABLE, may_call_again=False))
             # A turn the history leaves open was started by no reply.
             self._conversation.turn_policy = None
@@ -343,9 +344,9 @@ class ChatWrapper:
                 :meth:`begin`'s, and a tool result :meth:`inject_tool_result`'s.
 
         Returns:
-            What it changed beyond what was asked: the history messages evicted
-            to make room, and why; a turn it
-            closed or a question it joined.
+            What it changed beyond what was asked. It holds the history
+            messages evicted to make room, and why, and a turn it closed or a
+            question it joined.
 
         Raises:
             ArgumentTypeError: If ``text`` is not a ``str``.
@@ -386,7 +387,7 @@ class ChatWrapper:
               max_thought_tokens: int | None = None,
               stop: str | Iterable[str] | None = None,
               cancel: threading.Event | None = None,
-              sampling: Sampling | None = None) -> ReplyStream:
+              sampling: Sampling | None = None) -> ReplyStream[str | ToolCall]:
         """Generate the reply, streaming it as it is generated.
 
         A conversation that cannot take the reply is refused at once, before a
@@ -706,9 +707,9 @@ class ChatWrapper:
                 tool's would be, and a warning is logged.
 
         Returns:
-            What it changed beyond what was asked: the history messages evicted
-            for it, the results cut to fit, and whether the turn closed for
-            want of room instead, its result dropped.
+            What it changed beyond what was asked. It holds the history
+            messages evicted for it, the results cut to fit, and whether the
+            turn closed for want of room instead, its result dropped.
 
         Raises:
             ArgumentTypeError: If ``call_id`` is no ``str``.
@@ -854,7 +855,7 @@ class ChatWrapper:
             self._lock.release()
         return True
 
-    def conversation(self) -> dict:
+    def conversation(self) -> Conversation:
         """Everything :meth:`begin` takes to begin the conversation the cache holds again, by its parameter names.
 
         ``messages``, ``tools``, ``reasoning`` and ``generated_turns``, so
@@ -885,7 +886,7 @@ class ChatWrapper:
         """
         return self._conversation.conversation()
 
-    def generated_turns(self) -> dict | None:
+    def generated_turns(self) -> GeneratedTurns | None:
         """What :meth:`conversation` gives as ``generated_turns``, without copying the messages; ``None`` where no turn is kept as generated.
 
         Each turn is found again by its messages wherever they stand, so a
@@ -907,7 +908,7 @@ class ChatWrapper:
 
     @property
     def turn_open(self) -> bool:
-        """Whether a reply is unfinished: a call is owed a result, or the results wait for the reply after them.
+        """Whether a reply is unfinished, because a call is owed a result or the results wait for the reply after them.
 
         True from a call until :meth:`reply` closes the turn, or a question
         closes it, or a result finds no room. While it is, only an assistant
@@ -919,7 +920,7 @@ class ChatWrapper:
 
     @property
     def awaits_reply(self) -> bool:
-        """Whether :meth:`reply` without text would answer something: the newest message is a question, or a turn's results are all in.
+        """Whether :meth:`reply` without text would answer something, because the newest message is a question or a turn's results are all in.
 
         Safe from any thread, as :meth:`conversation` is, and copies nothing.
         """

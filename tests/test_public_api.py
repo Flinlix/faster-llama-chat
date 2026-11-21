@@ -46,6 +46,11 @@ def _members(owner) -> list[str]:
 
 def _described(name: str, value) -> list[str]:
     """What a caller relies on of the public ``value`` named ``name``."""
+    if inspect.isclass(value) and hasattr(value, "__required_keys__"):
+        return [f"typed dictionary {name}"] + [
+            f"  key {key}: {inspect.formatannotation(kind)}"
+            + ("" if key in value.__required_keys__ else " (may be left out)")
+            for key, kind in value.__annotations__.items()]
     if inspect.isclass(value):
         bases = ", ".join(base.__name__ for base in value.__bases__ if base is not object)
         return [f"class {name}({bases})"] + _members(value)

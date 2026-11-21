@@ -22,6 +22,7 @@ from collections.abc import Callable, Generator, Sequence
 from typing import Any, cast
 from dataclasses import replace
 
+from .conversation_types import Conversation, GeneratedTurns
 from .generation import AnswerGuard, GenerationAccumulator
 from .cache_sync import CacheSync, Cancelled, Interrupt
 from .config import Config
@@ -121,7 +122,7 @@ class RenderedCache:
         """The conversation as the template is given it; not to be changed by the caller."""
         return self._state.messages
 
-    def conversation(self) -> dict:
+    def conversation(self) -> Conversation:
         """Everything ``begin`` takes to begin the conversation again, by its parameter names, from one publication, the caller's to change; safe to read unlocked."""
         return conversation_of(self._published)
 
@@ -133,7 +134,7 @@ class RenderedCache:
         """The tokens of the conversation with the generation prompt after it, as a reply now would be generated after."""
         return list(self._holding.prompted().tokens)
 
-    def generated_turns(self) -> dict | None:
+    def generated_turns(self) -> GeneratedTurns | None:
         """Each turn kept as generated, from one publication, as :meth:`start` takes them back; ``None`` where none is; safe to read unlocked."""
         return generated_turns_of(self._published)
 

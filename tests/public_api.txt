@@ -32,22 +32,35 @@ class Capabilities()
   field can_take_system_prompt: bool
   field reasoning_levels: tuple[str, ...]
   def __init__(self, can_call_tools: 'bool', can_reason: 'bool', can_turn_off_reasoning: 'bool', can_take_system_prompt: 'bool', reasoning_levels: 'tuple[str, ...]') -> None
+typed dictionary ChatFunction
+  key name: str
+  key arguments: str
+typed dictionary ChatMessage
+  key role: Required[str]
+  key content: str | None (may be left out)
+  key reasoning_content: str (may be left out)
+  key tool_calls: list[llama_cpp_conversation.conversation_types.ChatToolCall] (may be left out)
+  key tool_call_id: str (may be left out)
+typed dictionary ChatToolCall
+  key id: str
+  key type: Literal['function']
+  key function: llama_cpp_conversation.conversation_types.ChatFunction
 class ChatWrapper()
   def __enter__(self) -> 'ChatWrapper'
   def __exit__(self, *_) -> 'None'
   def __init__(self, config: 'Config | None' = None, context=None, *, on_load_progress: 'Callable[[float], None] | None' = None) -> 'None'
   property awaits_reply
-  def begin(self, messages: 'list[dict] | None' = None, tools: 'Iterable[ToolSpec] | None' = None, *, reasoning: 'bool' = False, reasoning_level: 'str | None' = None, generated_turns: 'dict | None' = None) -> 'Report'
+  def begin(self, messages: 'Iterable[ChatMessage | dict[str, Any]] | None' = None, tools: 'Iterable[ToolSpec] | None' = None, *, reasoning: 'bool' = False, reasoning_level: 'str | None' = None, generated_turns: 'GeneratedTurns | None' = None) -> 'Report'
   property can_shift
   def capabilities(self, *, tools: 'bool') -> 'Capabilities'
   def close(self) -> 'None'
   property config
-  def conversation(self) -> 'dict'
-  def generated_turns(self) -> 'dict | None'
+  def conversation(self) -> 'Conversation'
+  def generated_turns(self) -> 'GeneratedTurns | None'
   def inject(self, text: 'str', role: 'str' = 'user') -> 'Report'
   def inject_tool_result(self, call_id: 'str', result: 'object') -> 'Report'
   property pending_calls
-  def reply(self, text: 'str | None' = None, *, tool_call_policy: 'ToolCallPolicy | ToolRegistry | None' = None, max_calls: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, stop: 'str | Iterable[str] | None' = None, cancel: 'threading.Event | None' = None, sampling: 'Sampling | None' = None) -> 'ReplyStream'
+  def reply(self, text: 'str | None' = None, *, tool_call_policy: 'ToolCallPolicy | ToolRegistry | None' = None, max_calls: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, stop: 'str | Iterable[str] | None' = None, cancel: 'threading.Event | None' = None, sampling: 'Sampling | None' = None) -> 'ReplyStream[str | ToolCall]'
   property total_tokens
   def truncate_last_reply(self, keep_text: 'str') -> 'None'
   property turn_open
@@ -88,6 +101,12 @@ class Config()
   property evict_above_tokens
 class ContextOverflowError(RefusalError)
   def __init__(self, message: 'str', needed_tokens: 'int | None' = None, available_tokens: 'int | None' = None) -> 'None'
+typed dictionary Conversation
+  key messages: list[llama_cpp_conversation.conversation_types.ChatMessage]
+  key tools: list[llama_cpp_conversation.tools.ToolSpec] | None
+  key reasoning: bool
+  key reasoning_level: str | None
+  key generated_turns: dict[str, typing.Any] | None
 class DrawnSampling()
   field temperature: float
   field top_k: int
@@ -102,6 +121,7 @@ class DrawnSampling()
 EVICTION_CAUSES = ('room', 'exchange_limit', 'half_context')
 class EngineError(RuntimeError)
 EvictionCause = typing.Literal['room', 'exchange_limit', 'half_context']
+GeneratedTurns = dict[str, typing.Any]
 class InternalError(RuntimeError)
 class InvalidArgumentError(RefusalError)
   def __init__(self, field: 'str | None', message: 'str') -> 'None'

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .conversation_types import Conversation
 from .conversation_state import reasoning_switch
 from .errors import InternalError
 
@@ -94,7 +95,7 @@ class _ReadsTokensOnly:
         pass
 
 
-def check_cache(held: list[int], conversation: dict, unreadable_result: dict | None, context, templates,
+def check_cache(held: list[int], conversation: Conversation, unreadable_result: dict | None, context, templates,
                 config, build, *, prompted: bool) -> None:
     """Raise :class:`InternalError` where ``held``, the cache's tokens, disagree with a fresh begin of ``conversation``.
 

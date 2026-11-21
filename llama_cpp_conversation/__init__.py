@@ -21,6 +21,7 @@ argument spelling being recovered from that template.
 
 from .cache_context import TOOL_USE_TEMPLATE, CacheContext
 from .config import Config, DrawnSampling, Sampling
+from .conversation_types import ChatFunction, ChatMessage, ChatToolCall, Conversation, GeneratedTurns
 from .errors import (ArgumentTypeError, ContextOverflowError, EngineError, InternalError,
                      InvalidArgumentError, InvalidSettingError, OutOfOrderError, RefusalError,
                      TemplateRefusedError, UnsupportedError)
@@ -38,6 +39,11 @@ __all__ = [
     "Sampling",
     "DrawnSampling",
     "ChatWrapper",
+    "ChatMessage",
+    "ChatToolCall",
+    "ChatFunction",
+    "Conversation",
+    "GeneratedTurns",
     "RefusalError",
     "InvalidArgumentError",
     "UnsupportedError",
