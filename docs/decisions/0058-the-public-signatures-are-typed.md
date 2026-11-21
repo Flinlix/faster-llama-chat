@@ -19,10 +19,13 @@ check neither a history nor `begin(**chat.conversation())`.
   `ChatMessage` or of dictionaries, so that a history of plain dictionaries,
   read from JSON, type-checks as well; `reply()` gives a
   `ReplyStream[str | ToolCall]`.
-- `ChatMessage` holds only the keys `begin` takes: a text or `None` as the
-  content, the thought under `reasoning_content`, calls whose arguments are
-  JSON text, and a result's `tool_call_id`. A form `begin` refuses, such as a
-  list of content parts or a `name`, does not type-check either.
+- `ChatMessage` holds only the keys `begin` takes: one of the four roles, a
+  text or `None` as the content, both required, the thought under
+  `reasoning_content`, calls whose arguments are JSON text, and a result's
+  `tool_call_id`. A value typed as `ChatMessage` that holds a form `begin`
+  refuses, such as a list of content parts or a `name`, does not type-check;
+  a plain dictionary type-checks whatever it holds, and `begin` checks it when
+  it runs.
 - The types change nothing at run time: `begin` checks a history as before.
 - `tests/typed_caller.py`, a caller of the public interface, is checked with
   mypy's strict settings by `tests/test_static.py`: `begin(**conversation())`,

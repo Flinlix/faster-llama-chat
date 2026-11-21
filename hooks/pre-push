@@ -1,6 +1,6 @@
 #!/bin/sh
 # Refuse a push that the tests do not pass: the whole suite, new random sequences, the site build.
-# The tests read the working tree, so it must hold exactly the commit a pushed branch points to.
+# The tests read the working tree, so it must hold exactly the commit every pushed ref points to.
 # Run with the Python of the environment the package is installed in, or name it in PYTHON.
 set -e
 cd "$(git rev-parse --show-toplevel)"

@@ -118,9 +118,10 @@ run every conversation on; a template that differs from all of them is read
 the same way, and refused with its cause where it cannot be. "Reasoning" and
 "Tool calls" say what the template writes, which a model trained for
 something else may still not do; the last column names the day a long
-conversation was run on a model file with that template, and passed.
+conversation was run on a model file with that template, and passed, which
+need not be the model the row names.
 
-| Model | Template taken from | Reasoning | Tool calls | Run on a model file |
+| Model | Template taken from | Reasoning | Tool calls | Run on a model file with this template |
 |---|---|---|---|---|
 | DeepSeek-R1-0528-Qwen3-8B | [unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF](https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF) | yes | yes | 2026-11-20 |
 | DeepSeek-R1-Distill-Qwen-7B | [bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | yes |  |  |

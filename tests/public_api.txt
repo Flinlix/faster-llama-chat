@@ -36,8 +36,8 @@ typed dictionary ChatFunction
   key name: str
   key arguments: str
 typed dictionary ChatMessage
-  key role: Required[str]
-  key content: str | None (may be left out)
+  key role: Required[Literal['system', 'user', 'assistant', 'tool']]
+  key content: Required[str | None]
   key reasoning_content: str (may be left out)
   key tool_calls: list[llama_cpp_conversation.conversation_types.ChatToolCall] (may be left out)
   key tool_call_id: str (may be left out)
