@@ -42,7 +42,8 @@ def _gpu_mib() -> int | None:
     """The GPU memory this process holds, by the command the environment names; ``None`` without one."""
     if not _GPU_MEMORY_COMMAND:
         return None
-    printed = subprocess.run(_GPU_MEMORY_COMMAND.format(pid=os.getpid()), shell=True,
+    # Replaced as text: the command's own braces, such as awk's, are no placeholders.
+    printed = subprocess.run(_GPU_MEMORY_COMMAND.replace("{pid}", str(os.getpid())), shell=True,
                              capture_output=True, text=True, check=True).stdout
     return int(float(printed.split()[0])) if printed.split() else 0
 
@@ -66,7 +67,7 @@ def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model
         wrapper.begin(system if can.can_take_system_prompt else [],
                       tools=registry.specs() if can.can_call_tools else None)
         policy = registry if can.can_call_tools else None
-        measured = {}
+        measured = []                   # RAM and GPU memory after each turn past the warm-up
         for turn in range(_TURNS):
             question = ("What time is it?" if turn % 5 == 1 else
                         f"Tell me one fact about the number {turn}.")
@@ -76,13 +77,15 @@ def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model
             if turn % 11 == 5:
                 wrapper.begin(**wrapper.conversation())
             wrapper.wait_idle(timeout_s=30)
-            if turn == _WARM_UP_TURNS:
-                measured["start"] = (_ram_mib(), _gpu_mib())
+            if turn >= _WARM_UP_TURNS:
+                measured.append((_ram_mib(), _gpu_mib()))
         assert wrapper._conversation._found_fault is None, "check_cache found a fault"
-        ram, gpu = _ram_mib(), _gpu_mib()
-        start_ram, start_gpu = measured["start"]
-        assert ram - start_ram <= _MAX_RAM_GROWTH_MIB, f"RAM grew by {ram - start_ram:.0f} MiB"
-        if gpu is not None:
-            assert gpu - start_gpu <= _MAX_GPU_GROWTH_MIB, f"GPU memory grew by {gpu - start_gpu} MiB"
+        # Peaks, not single readings: a bounded memory swings, and only growth raises its peak.
+        early, late = measured[:_WARM_UP_TURNS], measured[-_WARM_UP_TURNS:]
+        grown_ram = max(ram for ram, _ in late) - max(ram for ram, _ in early)
+        assert grown_ram <= _MAX_RAM_GROWTH_MIB, f"RAM grew by {grown_ram:.0f} MiB"
+        if late[0][1] is not None:
+            grown_gpu = max(gpu for _, gpu in late) - max(gpu for _, gpu in early)
+            assert grown_gpu <= _MAX_GPU_GROWTH_MIB, f"GPU memory grew by {grown_gpu} MiB"
     finally:
         wrapper.close()
