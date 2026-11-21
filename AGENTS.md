@@ -42,7 +42,8 @@ names the tests that try to break it.
 3. **No model is special.** What a model needs beyond its chat template comes
    from a small JSON add-on file: the one next to the GGUF with its name, or
    one shipped in `llama_cpp_conversation/addons/` and matched by the template's
-   fingerprint. It fills in only what the template cannot tell, except a call
+   fingerprint. Behaviour particular to one model or family goes into its
+   add-on file wherever it can, even where code could detect it. It fills in only what the template cannot tell, except a call
    format it names, which wins. No file names a model, a family or a vendor,
    except the model's own files (a test template in `tests/templates/`, an
    add-on file in `llama_cpp_conversation/addons/`), the decision records in
