@@ -17,8 +17,9 @@ announcement, read 2026-11-20). Their successor, Zensical, reads an existing
   MyST, the API reference by autodoc with Google style docstrings read by
   napoleon, the Furo theme, and URLs of the form `guide/actions/`
   (`dirhtml`), the form the README links to.
-- `python -m sphinx -W --keep-going -b dirhtml docs site` builds it, every
-  warning an error; `hooks/pre-push` and the docs workflow run the same.
+- `python -m sphinx -W --keep-going -E -b dirhtml docs site` builds it, every
+  warning an error and every page read again; `hooks/pre-push` and the docs
+  workflow build the same into a fresh folder, where `-E` changes nothing.
 - Docstrings keep their Sphinx cross-references, which Sphinx reads itself,
   so the build hook is gone. A reference must name a documented member: the
   build runs nitpicky, so one that names nothing documented fails it, except
