@@ -509,6 +509,7 @@ def test_loading_ends_by_decoding_two_tokens_and_a_single_one_and_leaves_the_cac
     backend = SimpleNamespace(
         free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
+        window_size=lambda model: 0, keeps_running_state=lambda model: False,
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
         new_context=lambda *args, **kwargs: "ctx",
@@ -544,6 +545,7 @@ def test_a_full_micro_batch_warms_up_first_only_where_layers_run_on_a_gpu(
     backend = SimpleNamespace(
         free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
+        window_size=lambda model: 0, keeps_running_state=lambda model: False,
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
         new_context=lambda *args, **kwargs: "ctx",
@@ -575,12 +577,14 @@ def test_a_full_micro_batch_warms_up_first_only_where_layers_run_on_a_gpu(
 def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
     """What a model loaded under ``settings`` asks of the engine's context, by keyword."""
     asked, closes = {}, settings.pop("close", True)
+    running_state = settings.pop("running_state", False)
     backend = SimpleNamespace(
         load_model=lambda path, layers, progress: "model",
         metadata_value=lambda model, key: None,
         kv_cache_type_id=lambda name: 0,
         new_context=lambda *args, **kwargs: asked.update(kwargs) or "ctx",
         vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
+        window_size=lambda model: 512, keeps_running_state=lambda model: running_state,
         can_shift=lambda ctx: True,
         kv_seq_rm=lambda ctx, seq, p0, p1: True, kv_seq_add=lambda *args: None,
         decode=lambda *args: None, kv_clear=lambda ctx: None, supports_gpu_offload=lambda: True,
@@ -590,6 +594,7 @@ def _context_settings(tmp_path, monkeypatch, **settings) -> dict:
     model = tmp_path / "model.gguf"
     model.touch()
     context = KVContext(Config(model_path=str(model), **settings))
+    asked["checked_window_tokens"] = context._window_tokens
     if closes:
         context.close()
     del context
@@ -745,6 +750,7 @@ def test_a_ggufs_template_for_tools_is_read_beside_its_default_one(tmp_path, mon
     backend = SimpleNamespace(
         free_context=lambda ctx: None, free_model=lambda model: None,
         load_model=lambda path, layers, progress: "model",
+        window_size=lambda model: 0, keeps_running_state=lambda model: False,
         metadata_value=lambda model, key: stored.get(key),
         kv_cache_type_id=lambda name: 0, new_context=lambda *args, **kwargs: "ctx",
         vocab=lambda model: None, token_eos=lambda vocab: 2, eos_text=lambda vocab: "",
@@ -851,6 +857,57 @@ def test_the_batch_is_the_callers_and_the_micro_batch_the_engines_unless_set(
     assert created[0].n_batch == max_batch_tokens
     assert created[0].n_ubatch == (llama_cpp.llama_context_default_params().n_ubatch
                                    if micro_batch_tokens is None else micro_batch_tokens)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_a_window_layers_cache_is_full_size_unless_asked_compact(compact):
+    created = []
+    backend = Backend.__new__(Backend)
+    backend._llama_cpp = llama_cpp
+    backend._new_ctx = lambda model, cparams: created.append(cparams) or "ctx"
+    backend.new_context("model", 4096, None, 512, compact_window_cache=compact)
+    assert created[0].swa_full is not compact
+    assert created[0].kv_unified is True
+
+
+@pytest.mark.parametrize("window, oldest, pos, ends", [
+    (0, 900, 100, None),        # a full-size cache: any cut is exact
+    (512, 0, 1000, None),       # the window still reaches back from the cut
+    (512, 400, 1000, None),
+    (512, 488, 1000, None),     # the window the next token attends over, and one position more
+    (512, 489, 1000, 0),        # that window alone: emptied, one position stricter than needed
+    (512, 600, 1000, 0),        # the window lost positions the next token attends over
+    (512, 0, 100, None),        # a cut nearer the start than the window
+    (512, 600, 0, None),        # nothing kept, nothing to attend over
+    (512, -1, 30, 0),           # the window's layers hold nothing of what was kept
+])
+def test_a_cut_of_a_compact_window_cache_empties_it_where_the_window_no_longer_reaches_back(
+        window, oldest, pos, ends):
+    calls = []
+    ctx = object.__new__(KVContext)
+    ctx._engine_context = "ctx"
+    ctx._window_tokens = window
+    ctx._backend = SimpleNamespace(kv_seq_rm=lambda c, seq, p0, p1: calls.append(("rm", p0)) or True,
+                                   kv_seq_pos_min=lambda c, seq: oldest,
+                                   kv_clear=lambda c: calls.append(("clear",)))
+    assert ctx.remove_from(pos) == ends
+    assert calls == [("rm", pos)] + ([("clear",)] if ends == 0 else [])
+
+
+@pytest.mark.parametrize("compact, running_state, checked", [
+    (False, False, 0), (True, False, 512),
+    # Every cut such a cache takes lies within what its window layers keep beyond the window.
+    (False, True, 0), (True, True, 0)])
+def test_only_a_compact_window_cache_without_a_running_state_checks_its_cuts(
+        tmp_path, monkeypatch, compact, running_state, checked):
+    assert _context_settings(tmp_path, monkeypatch, compact_window_cache=compact,
+                             running_state=running_state)["checked_window_tokens"] == checked
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_a_load_hands_the_engine_the_window_cache_setting(tmp_path, monkeypatch, compact):
+    assert _context_settings(tmp_path, monkeypatch,
+                             compact_window_cache=compact)["compact_window_cache"] is compact
 
 
 @pytest.mark.parametrize("micro_batch_tokens", [None, 1024])

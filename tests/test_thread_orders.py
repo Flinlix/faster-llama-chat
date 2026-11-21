@@ -23,7 +23,7 @@ from tests.internals import held_tokens
 from tests.wrappers import assert_consistent
 
 _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
-           "saves states": dict(can_shift=False)}
+           "saves states": dict(can_shift=False), "keeps a window": dict(can_shift=False, can_cut_tail=True, window_tokens=24)}
 # Where the action meets the work: before it takes the wrapper, during its first or second
 # decode part, or after it has ended.
 _POINTS = ("before", "part 1", "part 2", "after")

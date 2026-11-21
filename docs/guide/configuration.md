@@ -64,6 +64,7 @@ value `Config` refuses.
 |------|------|------|
 | `gpu_layers` | `-1` | layers offloaded to the GPU: `-1` for all, else at least `0`; `0` uses no GPU at all, the processor alone running every step |
 | `kv_cache_on_gpu` | `True` | each layer's KV cache where that layer runs, in VRAM for the layers `gpu_layers` offloads; `False` keeps all of it in host RAM |
+| `compact_window_cache` | `False` | `True` gives each layer with a sliding window a cache of its window alone: much less memory, but a cache that cannot shift, so an eviction reads the history it keeps again; see [Memory or speed: the window cache](#memory-or-speed-the-window-cache). Changes nothing on a model without such layers |
 | `decode_threads` | `None` | CPU threads for generating a reply, a token at a time, at least `1`; `None` uses one per physical core of the processors the process may run on, at most as many as its CPU quota allows |
 | `prefill_threads` | `None` | CPU threads for prefill, the decode of tokens the cache is given (a question, or what is decoded again), at least `1`; `None` means as many as `decode_threads`, and so one per physical core where that is not set either |
 | `max_batch_tokens` | `2048` | most tokens in one decode; a longer prefill is split |
@@ -72,6 +73,52 @@ value `Config` refuses.
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
 | `kept_conversation_bytes` | `0` | the most host RAM, in bytes, the caches of conversations a `begin` switched away from may take once kept, so that going back to one decodes only what changed since; the oldest goes first, and while one is saved it takes its own size beside them; only a cache that can shift or cut keeps any; `0` keeps none |
 | `check_cache` | `False` | for finding faults: after the work after every reply and before every generation, compare the cache with a fresh begin of its conversation, and raise `InternalError` where they differ; each check renders and tokenizes the whole conversation |
+
+## Memory or speed: the window cache
+
+Some models attend over the whole conversation in a few layers and over a
+sliding window of the newest tokens in the rest. With
+`compact_window_cache=False`, the default, those window layers keep a cache of
+the whole context anyway, so the cache can shift: an eviction removes the
+oldest exchanges and moves the rest down in place, and costs almost nothing.
+With `compact_window_cache=True` they keep only their window, which takes much
+less memory on such a model, but the cache can no longer shift. An eviction
+then drops the history well below the eviction threshold and reads the
+conversation it keeps again from the start, every few turns rather than every
+turn.
+
+That reading happens in the work after a reply, while the reply is read or
+spoken, so the wait before the next first word does not change. These do:
+
+- An action that comes during that work waits for the rest of it. Shortening a
+  reply right after it ended, as when the listener interrupts speech at once,
+  is such an action.
+- Shortening a reply by more than the window layers keep beyond their window
+  (about one micro-batch) reads the whole conversation again within the call
+  that shortens it.
+- An eviction an action itself needs, because `max_history_exchanges` is
+  reached or a question does not fit, reads the kept history again before the
+  reply, as on any cache that cannot shift.
+- Going back to a kept conversation reads it again from the start wherever
+  the switch cuts back further than that, so `kept_conversation_bytes` saves
+  little with the compact cache.
+- A machine too slow to read the kept history again within the time an answer
+  takes to read or speak turns the work after a reply into a pause the next
+  question meets.
+
+The compact cache checks every cut and reads the conversation again where its
+window falls short. Where one action rewrites more than the compact cache
+keeps beyond its window, as where a long thought is removed from the reply
+before it, every such turn reads the conversation again, usually after the
+reply.
+
+Choose the compact cache where memory is short and the machine reads the kept
+history again in about a second, as a GPU does with a model that fits it; in a
+spoken conversation, the time the listener takes to say the next question
+covers the reading. Keep the full-size cache on a machine that reads slowly,
+such as a small board's processor, where it costs little memory anyway. The
+measurements behind this are in the decision record
+[A compact cache for sliding-window layers](../decisions/0059-a-compact-cache-for-sliding-window-layers.md).
 
 `ChatWrapper` also takes, outside `Config` because neither is a value to
 tune: `context=` (a [cache context of your own](cache-context.md)) and

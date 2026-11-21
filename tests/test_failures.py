@@ -60,7 +60,7 @@ class _Flaky(FakeContext):
     def remove_from(self, pos):
         if self._fails("cut"):
             raise EngineError("the cache refused to remove its tokens")
-        super().remove_from(pos)
+        return super().remove_from(pos)
 
     def apply_eviction(self, start, end):
         if self._fails():
@@ -116,7 +116,8 @@ _CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut
            "neither": dict(can_shift=False, can_cut_tail=False),
            # Each token's text shown before it is decoded, as on the processor alone.
            "shifts, shown first": dict(can_shift=True, decode_blocks=True),
-           "neither, shown first": dict(can_shift=False, can_cut_tail=False, decode_blocks=True)}
+           "neither, shown first": dict(can_shift=False, can_cut_tail=False, decode_blocks=True),
+           "keeps a window": dict(can_shift=False, can_cut_tail=True, window_tokens=24)}
 _CLOCK = ToolRegistry()
 _CLOCK.tool(lambda: "12:00", description="Die Zeit.", name="uhr")
 
@@ -1100,7 +1101,7 @@ class _FailingAfterADecode(FakeContext):
 
     def remove_from(self, pos):
         self._refuse()
-        super().remove_from(pos)
+        return super().remove_from(pos)
 
     def apply_eviction(self, start, end):
         self._refuse()
@@ -1201,7 +1202,7 @@ def test_every_draw_follows_a_decode_that_kept_the_logits_of_the_cache_as_it_end
 
         def remove_from(self, pos):
             self.fresh = False
-            super().remove_from(pos)
+            return super().remove_from(pos)
 
         def apply_eviction(self, start, end):
             self.fresh = False

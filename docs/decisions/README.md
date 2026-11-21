@@ -65,3 +65,4 @@ it rejected. The dated log the records were written from is kept as
 | [0056](0056-the-project-is-named-llama-cpp-conversation.md) | The project is named llama-cpp-conversation | One name for the repository, the distribution, the import and the site. |
 | [0057](0057-the-site-is-built-with-sphinx.md) | The documentation site is built with Sphinx | Every warning an error; the README's sections included; the theme's support for the old tool ends in 2027. |
 | [0058](0058-the-public-signatures-are-typed.md) | The public signatures are typed | Typed messages and conversation; a strictly checked caller in the tests. |
+| [0059](0059-a-compact-cache-for-sliding-window-layers.md) | A compact cache for sliding-window layers, chosen by the caller | Much less memory; an eviction reads the kept history again after a reply; off by default. |

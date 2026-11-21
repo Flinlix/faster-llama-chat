@@ -24,7 +24,8 @@ every run.
 
 The tests on real model files read their paths from `LLAMA_CPP_CONVERSATION_TEST_MODELS`,
 separated as the system separates paths, and offload `LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS`
-layers, all by default. Each runs a long conversation with `check_cache` on and
+layers, all by default; `LLAMA_CPP_CONVERSATION_TEST_COMPACT_WINDOW_CACHE=1` runs them with
+the compact window cache. Each runs a long conversation with `check_cache` on and
 bounds how much the process grows; `LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND`, a shell
 command that prints the MiB the process `{pid}` holds on the GPU, bounds GPU
 memory too; the decision record

@@ -101,6 +101,12 @@ class Config:
         kv_cache_on_gpu: ``True`` keeps each layer's KV cache where that
             layer runs, in VRAM for the layers ``gpu_layers`` offloads;
             ``False`` keeps all of it in host RAM. Ignored on a CPU-only build.
+        compact_window_cache: ``True`` gives each layer with a sliding window a
+            cache of its window alone, much less memory on a model with such
+            layers, but a cache that cannot shift: an eviction then reads the
+            history it keeps again, in the work after a reply. ``False``, the
+            default, keeps them full size, so an eviction shifts. Changes nothing
+            on a model without such layers.
         decode_threads: CPU threads for generating a reply, a token at a
             time, at least ``1``. ``None`` uses
             one per physical core of the processors the process may run on,
@@ -174,6 +180,7 @@ class Config:
 
     gpu_layers: int = -1
     kv_cache_on_gpu: bool = True
+    compact_window_cache: bool = False
     decode_threads: int | None = None
     prefill_threads: int | None = None
     max_batch_tokens: int = 2048

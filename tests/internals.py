@@ -8,6 +8,7 @@ import dataclasses
 import sys
 
 from llama_cpp_conversation.cache_sync import _TOKEN_OFFSET
+from llama_cpp_conversation.context import SEQ
 from llama_cpp_conversation import rendering
 from llama_cpp_conversation.template_reading import TemplateReader
 
@@ -45,6 +46,16 @@ def bring_cache_back(wrapper) -> None:
 def context_of(wrapper):
     """The cache context the wrapper runs on, the one it built where it was given none."""
     return wrapper._context
+
+
+def window_layers_reach(wrapper) -> tuple[int, int] | None:
+    """The positions the model's window layers attend over, and the oldest the engine's cache holds; ``None`` where the model has no such layers, or carries a running state, whose oldest position the engine reports instead."""
+    context = context_of(wrapper)
+    backend, model = context._backend, context._model
+    window = backend.window_size(model)
+    if not window or backend.keeps_running_state(model):
+        return None
+    return window, backend.kv_seq_pos_min(context._engine_context, SEQ)
 
 
 def is_closed(wrapper) -> bool:

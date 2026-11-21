@@ -14,7 +14,7 @@ class CacheContext(ModelReader, Protocol)
   def model_fingerprint(self) -> 'str'
   def prefill(self, token_ids: 'list[int]', start_pos: 'int', want_logits: 'bool') -> 'None'
   def recommended_sampling(self) -> 'Mapping[str, float]'
-  def remove_from(self, pos: 'int') -> 'None'
+  def remove_from(self, pos: 'int') -> 'int | None'
   def reset(self) -> 'None'
   def restore_state(self, state, pos: 'int') -> 'None'
   def restore_whole_state(self, state) -> 'None'
@@ -89,6 +89,7 @@ class Config()
   field unread_reply_timeout_s: float | None
   field gpu_layers: int
   field kv_cache_on_gpu: bool
+  field compact_window_cache: bool
   field decode_threads: int | None
   field prefill_threads: int | None
   field max_batch_tokens: int
@@ -97,7 +98,7 @@ class Config()
   field kv_cache_type: str
   field kept_conversation_bytes: int
   field check_cache: bool
-  def __init__(self, model_path: 'str | None' = None, temperature: 'float | None' = None, top_k: 'int | None' = None, top_p: 'float | None' = None, min_p: 'float | None' = None, repetition_penalty: 'float | None' = None, presence_penalty: 'float | None' = None, frequency_penalty: 'float | None' = None, penalty_window_tokens: 'int | None' = None, seed: 'int | None' = None, context_size: 'int' = 4096, evict_above_fraction: 'float' = 0.75, max_history_exchanges: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, min_reply_tokens: 'int' = 32, min_answer_tokens: 'int | None' = 1, answer_room_tokens: 'int | None' = 1024, max_calls: 'int | None' = 10, tool_timeout_s: 'float | None' = 60.0, unread_reply_timeout_s: 'float | None' = 10.0, gpu_layers: 'int' = -1, kv_cache_on_gpu: 'bool' = True, decode_threads: 'int | None' = None, prefill_threads: 'int | None' = None, max_batch_tokens: 'int' = 2048, micro_batch_tokens: 'int | None' = None, flash_attention: 'bool | None' = None, kv_cache_type: 'str' = 'f16', kept_conversation_bytes: 'int' = 0, check_cache: 'bool' = False) -> None
+  def __init__(self, model_path: 'str | None' = None, temperature: 'float | None' = None, top_k: 'int | None' = None, top_p: 'float | None' = None, min_p: 'float | None' = None, repetition_penalty: 'float | None' = None, presence_penalty: 'float | None' = None, frequency_penalty: 'float | None' = None, penalty_window_tokens: 'int | None' = None, seed: 'int | None' = None, context_size: 'int' = 4096, evict_above_fraction: 'float' = 0.75, max_history_exchanges: 'int | None' = None, max_reply_tokens: 'int | None' = None, max_thought_tokens: 'int | None' = None, min_reply_tokens: 'int' = 32, min_answer_tokens: 'int | None' = 1, answer_room_tokens: 'int | None' = 1024, max_calls: 'int | None' = 10, tool_timeout_s: 'float | None' = 60.0, unread_reply_timeout_s: 'float | None' = 10.0, gpu_layers: 'int' = -1, kv_cache_on_gpu: 'bool' = True, compact_window_cache: 'bool' = False, decode_threads: 'int | None' = None, prefill_threads: 'int | None' = None, max_batch_tokens: 'int' = 2048, micro_batch_tokens: 'int | None' = None, flash_attention: 'bool | None' = None, kv_cache_type: 'str' = 'f16', kept_conversation_bytes: 'int' = 0, check_cache: 'bool' = False) -> None
   property evict_above_tokens
 class ContextOverflowError(RefusalError)
   def __init__(self, message: 'str', needed_tokens: 'int | None' = None, available_tokens: 'int | None' = None) -> 'None'
@@ -208,7 +209,7 @@ class ToolSpec()
 class UnsupportedError(RefusalError)
   def __init__(self, field: 'str | None', message: 'str') -> 'None'
 class testing.FakeContext()
-  def __init__(self, fixture: 'dict', replies: 'Iterable[str | ScriptedCall]' = (), *, gen_tokens: 'int' = 5, gen_text: 'str' = 'reply', can_shift: 'bool' = True, can_cut_tail: 'bool' = False, decode_blocks: 'bool' = False, tokens_spell_text: 'bool' = True, writes_tags: 'bool' = False, extra_tags: 'tuple[str, ...]' = (), merges: 'bool' = False) -> 'None'
+  def __init__(self, fixture: 'dict', replies: 'Iterable[str | ScriptedCall]' = (), *, gen_tokens: 'int' = 5, gen_text: 'str' = 'reply', can_shift: 'bool' = True, can_cut_tail: 'bool' = False, decode_blocks: 'bool' = False, tokens_spell_text: 'bool' = True, writes_tags: 'bool' = False, extra_tags: 'tuple[str, ...]' = (), merges: 'bool' = False, window_tokens: 'int' = 0) -> 'None'
   def apply_eviction(self, start: 'int', end: 'int') -> 'None'
   def chat_template_text(self, template_name: 'str | None' = None) -> 'str | None'
   def close(self) -> 'None'
@@ -221,7 +222,7 @@ class testing.FakeContext()
   def model_fingerprint(self) -> 'str'
   def prefill(self, token_ids: 'list[int]', start_pos: 'int', want_logits: 'bool') -> 'None'
   def recommended_sampling(self) -> 'dict'
-  def remove_from(self, pos: 'int') -> 'None'
+  def remove_from(self, pos: 'int') -> 'int | None'
   property rendered
   def reset(self) -> 'None'
   def restore_state(self, state, pos: 'int') -> 'None'

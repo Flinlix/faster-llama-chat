@@ -104,8 +104,8 @@ class CacheContext(ModelReader, Protocol):
     def apply_eviction(self, start: int, end: int) -> None:
         """Remove the tokens from ``start`` to just before ``end``, those after them moving down."""
 
-    def remove_from(self, pos: int) -> None:
-        """Remove every cached token from ``pos`` to the end."""
+    def remove_from(self, pos: int) -> int | None:
+        """Remove every cached token from ``pos`` to the end; where the cache then holds less, as one that keeps only a window of positions may, where it now ends, else ``None``."""
 
     def save_state(self):
         """The cache's state as it is, for :meth:`restore_state`; ``None`` where the cache can never save one, which is read once where the context is adopted.

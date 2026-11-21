@@ -97,7 +97,7 @@ class _Run:
 
     def __init__(self, stem, context_size=4096, can_shift=True, replies=None, reasoning=False,
                  writes_tags=False, extra_tags=(), tokens_spell_text=True, can_cut_tail=False,
-                 guarded=False, answer_room_tokens=1024):
+                 guarded=False, answer_room_tokens=1024, window_tokens=0):
         self.fixture = _fixture(stem)
         self.reader = FakeContext(self.fixture)
         text = self.fixture["chat_template"]
@@ -107,7 +107,8 @@ class _Run:
         self.context = FakeContext(self.fixture, _as_generated(self.template, self.answers, reasoning),
                                    can_shift=can_shift, can_cut_tail=can_cut_tail,
                                    writes_tags=writes_tags, merges=_TOKENIZER["merges"],
-                                   extra_tags=extra_tags, tokens_spell_text=tokens_spell_text)
+                                   extra_tags=extra_tags, tokens_spell_text=tokens_spell_text,
+                                   window_tokens=window_tokens)
         # The answer guard is off but where a test is about it: the others script replies
         # that end at once or inside a thought, which it would not let end.
         self.chat = ChatWrapper(Config(context_size=context_size, evict_above_fraction=0.75,
@@ -2474,24 +2475,34 @@ def test_a_call_inside_a_thought_begun_again_from_the_conversation_goes_on_insid
 
 
 _COST_CACHES = {"shifts": dict(can_shift=True), "cuts": dict(can_shift=False, can_cut_tail=True),
-                "saves states": dict(can_shift=False)}
+                "saves states": dict(can_shift=False), "keeps a window": dict(can_shift=False, can_cut_tail=True, window_tokens=256)}
 
 
 def _costs(stem, cache, n_exchanges):
-    """What each action decodes, and how many messages the largest render it makes holds, by its name, after a begin from ``n_exchanges`` exchanges."""
+    """What each action decodes, how many messages the largest render it makes holds, and whether a cut left the window short, by its name, after a begin from ``n_exchanges`` exchanges."""
     run = _Run(stem, context_size=16384, replies=[f"Answer {i}." for i in range(40)],
                **_COST_CACHES[cache])
+    fell_short = [False]
+    cut = run.context.remove_from
+
+    def measured_cut(pos):
+        held = cut(pos)
+        fell_short[0] = fell_short[0] or held is not None
+        return held
+    run.context.remove_from = measured_cut
     calls = run.fixture["calls_tools"]
     run.begin([m for i in range(n_exchanges) for m in (
         {"role": "user", "content": f"Question {i}?"}, {"role": "assistant", "content": f"Answer {i}."})],
         tools=[WEATHER] if calls else None)
-    chat, decoded, largest = run.chat, {}, {}
+    chat, decoded, largest, short_of_window = run.chat, {}, {}, {}
 
     def measured(name, action):
         before, rendered = run.context.total_prefilled(), len(run.context.rendered)
+        fell_short[0] = False
         action()
         decoded[name] = run.context.total_prefilled() - before
         largest[name] = max(run.context.rendered[rendered:], default=0)
+        short_of_window[name] = fell_short[0]
 
     injected = {"role": "assistant", "content": "Said too."}
     if run.context.stated_render(_sent(chat) + [injected],
@@ -2526,19 +2537,19 @@ def _costs(stem, cache, n_exchanges):
     if calls and not internals.renders_tool_turns_in_windows(chat):
         largest = {name: n for name, n in largest.items() if list(largest).index(name)
                    < list(largest).index("call")}
-    return decoded, largest, windows
+    return decoded, largest, windows, short_of_window
 
 
 @pytest.mark.counts_work
 @pytest.mark.parametrize("cache", sorted(_COST_CACHES))
 @pytest.mark.parametrize("stem", _EVERY)
 def test_no_action_decodes_more_as_the_conversation_grows_on_any_cache(stem, cache):
-    """Rule 4 on every action and every kind of cache: what an action decodes does not grow with what came before it."""
-    (short, short_renders, _), (long, long_renders, windows) = (_costs(stem, cache, 6),
-                                                                _costs(stem, cache, 24))
+    """Rule 4 on every action and every kind of cache: what an action decodes does not grow with what came before it, except where a cut left a window cache short of its window."""
+    (short, short_renders, _, _), (long, long_renders, windows, short_of_window) = (
+        _costs(stem, cache, 6), _costs(stem, cache, 24))
     assert short.keys() == long.keys() and short_renders.keys() == long_renders.keys()
     assert {name: (short[name], long[name]) for name in short
-            if long[name] > short[name] + 8} == {}
+            if long[name] > short[name] + 8 and not short_of_window[name]} == {}
     # Nor does it render more of the conversation: the newest exchanges at most, where the
     # template writes them alike in a render of them alone.
     if windows:

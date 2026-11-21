@@ -56,6 +56,11 @@ def test_the_kv_cache_follows_the_model_by_default():
     assert Config().kv_cache_on_gpu is True
 
 
+def test_a_window_layers_cache_is_full_size_unless_asked_compact():
+    assert Config().compact_window_cache is False
+    assert Config(compact_window_cache=True).compact_window_cache is True
+
+
 @pytest.mark.parametrize("field,value", [
     ("max_batch_tokens", 0),
     ("micro_batch_tokens", 0),
@@ -92,7 +97,7 @@ _WRONG_TYPES = {
     "repetition_penalty": [1.1], "presence_penalty": "1.5", "frequency_penalty": [0.1],
     "penalty_window_tokens": 64.0, "seed": "7", "context_size": "4096",
     "evict_above_fraction": "0.75", "max_history_exchanges": 2.0, "max_reply_tokens": "64", "max_thought_tokens": 8.5,
-    "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1,
+    "min_reply_tokens": 32.5, "gpu_layers": "all", "kv_cache_on_gpu": 1, "compact_window_cache": "yes",
     "decode_threads": 4.0, "prefill_threads": "8", "max_batch_tokens": None,
     "micro_batch_tokens": 512.0, "kept_conversation_bytes": 1.5,
     "flash_attention": "auto", "kv_cache_type": 8, "check_cache": "yes",

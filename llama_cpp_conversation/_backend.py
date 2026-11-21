@@ -96,6 +96,7 @@ def _parameter_count(fn) -> int:
     return len(inspect.signature(fn).parameters)
 
 
+
 def _required_symbol(*names: str):
     """Return the first of ``names`` this build defines.
 
@@ -130,6 +131,10 @@ class Backend:
         self._mem_rm = _required_symbol("llama_memory_seq_rm")
         self._mem_add = _required_symbol("llama_memory_seq_add")
         self._mem_can_shift = _required_symbol("llama_memory_can_shift")
+        self._mem_pos_min = _required_symbol("llama_memory_seq_pos_min")
+        self._is_recurrent = _required_symbol("llama_model_is_recurrent")
+        self._is_hybrid = _required_symbol("llama_model_is_hybrid")
+        self._model_n_swa = _required_symbol("llama_model_n_swa")
         self._state_size = _required_symbol("llama_state_seq_get_size_ext")
         self._state_get = _required_symbol("llama_state_seq_get_data_ext")
         self._state_set = _required_symbol("llama_state_seq_set_data_ext")
@@ -194,7 +199,8 @@ class Backend:
     def new_context(self, model, n_ctx: int, n_threads: int | None, n_batch: int,
                     flash_attn: bool | None = None, type_k: int | None = None,
                     type_v: int | None = None, kv_cache_on_gpu: bool = True,
-                    n_threads_batch: int | None = None, n_ubatch: int | None = None):
+                    n_threads_batch: int | None = None, n_ubatch: int | None = None,
+                    compact_window_cache: bool = False):
         cparams = self._llama_cpp.llama_context_default_params()
         cparams.n_ctx = n_ctx
         cparams.n_batch = n_batch
@@ -210,6 +216,9 @@ class Backend:
         # One buffer for the sequence: attention over the cache's rows, so that a layer with a
         # window reads its window alone, while the cache still shifts. See docs/decisions/0014-engine-context-settings.md.
         cparams.kv_unified = True
+        # A window's layers hold their window alone, so the cache cannot shift. See
+        # docs/decisions/0059-a-compact-cache-for-sliding-window-layers.md.
+        cparams.swa_full = not compact_window_cache
         if type_k is not None:
             cparams.type_k = type_k
         if type_v is not None:
@@ -404,6 +413,18 @@ class Backend:
     def kv_seq_rm(self, ctx, seq: int, p0: int, p1: int) -> bool:
         """Remove positions ``[p0, p1)``; ``False`` where the cache refused."""
         return self._mem_rm(self._get_memory(ctx), seq, p0, p1) is not False
+
+    def kv_seq_pos_min(self, ctx, seq: int) -> int:
+        """The oldest position the cache holds for ``seq`` in every layer, ``-1`` where it holds none."""
+        return int(self._mem_pos_min(self._get_memory(ctx), seq))
+
+    def window_size(self, model) -> int:
+        """How many positions a layer with a sliding window attends over, the token's own included, ``0`` where the model has none."""
+        return int(self._model_n_swa(model))
+
+    def keeps_running_state(self, model) -> bool:
+        """Whether some of the model's layers carry a state from token to token instead of a cache of positions."""
+        return bool(self._is_recurrent(model) or self._is_hybrid(model))
 
     def kv_seq_add(self, ctx, seq: int, p0: int, p1: int, delta: int) -> None:
         self._mem_add(self._get_memory(ctx), seq, p0, p1, delta)

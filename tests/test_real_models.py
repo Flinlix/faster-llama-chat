@@ -1,12 +1,13 @@
-"""Long conversations on real model files: the cache is checked against a fresh render after every action, and memory stops growing.
+"""Long conversations on real model files: the cache is checked against a fresh render after every action, a compact window cache holds what the next token attends over, and memory stops growing.
 
 The model files are named by the environment, never here:
 ``LLAMA_CPP_CONVERSATION_TEST_MODELS`` holds their paths, separated as the system separates
 paths. Without it every test here is skipped. GPU memory is measured by
 ``LLAMA_CPP_CONVERSATION_TEST_GPU_MEMORY_COMMAND``, a shell command that prints the MiB the
 process ``{pid}`` holds on the GPU; without it only RAM is bounded.
-``LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS`` sets the layers to offload, all by default. Run
-with ``-m gpu``.
+``LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS`` sets the layers to offload, all by default, and
+``LLAMA_CPP_CONVERSATION_TEST_COMPACT_WINDOW_CACHE=1`` runs every file with the compact
+window cache. Run with ``-m gpu``.
 """
 
 import os
@@ -15,6 +16,7 @@ import subprocess
 import pytest
 
 from llama_cpp_conversation import ChatWrapper, Config, ToolRegistry
+from tests import internals
 
 _MODELS = [path for path in os.environ.get("LLAMA_CPP_CONVERSATION_TEST_MODELS", "").split(os.pathsep) if path]
 # The turns of each conversation, the first of them to fill the bounded memories before
@@ -25,6 +27,7 @@ _TURNS, _WARM_UP_TURNS = 120, 30
 _MAX_RAM_GROWTH_MIB, _MAX_GPU_GROWTH_MIB = 64, 16
 _CONTEXT_TOKENS, _REPLY_TOKENS = 4096, 48
 _GPU_LAYERS = int(os.environ.get("LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS", "-1"))
+_COMPACT_WINDOW_CACHE = os.environ.get("LLAMA_CPP_CONVERSATION_TEST_COMPACT_WINDOW_CACHE") == "1"
 
 pytestmark = [pytest.mark.gpu,
               pytest.mark.skipif(not _MODELS, reason="LLAMA_CPP_CONVERSATION_TEST_MODELS names no model file")]
@@ -55,11 +58,22 @@ def _clock_registry() -> ToolRegistry:
     return registry
 
 
+def _assert_the_window_layers_hold_the_window(wrapper, turn) -> None:
+    reach = internals.window_layers_reach(wrapper) if _COMPACT_WINDOW_CACHE else None
+    if reach is not None:
+        window, oldest = reach
+        held = len(internals.held_tokens(wrapper))
+        assert oldest <= max(0, held - window), (
+            f"turn {turn}: the window layers hold positions from {oldest} only, the next "
+            f"token attends back to {held - window + 1}")
+
+
 @pytest.mark.time_limit_s(3600)
 @pytest.mark.parametrize("model_path", _MODELS, ids=[os.path.basename(p) for p in _MODELS])
 def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model_path):
     wrapper = ChatWrapper(Config(model_path=model_path, context_size=_CONTEXT_TOKENS, gpu_layers=_GPU_LAYERS,
-                                 max_reply_tokens=_REPLY_TOKENS, seed=7, check_cache=True))
+                                 max_reply_tokens=_REPLY_TOKENS, seed=7, check_cache=True,
+                                 compact_window_cache=_COMPACT_WINDOW_CACHE))
     try:
         registry = _clock_registry()
         can = wrapper.capabilities(tools=True)
@@ -77,6 +91,7 @@ def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model
             if turn % 11 == 5:
                 wrapper.begin(**wrapper.conversation())
             wrapper.wait_idle(timeout_s=30)
+            _assert_the_window_layers_hold_the_window(wrapper, turn)
             if turn >= _WARM_UP_TURNS:
                 measured.append((_ram_mib(), _gpu_mib()))
         assert wrapper._conversation._found_fault is None, "check_cache found a fault"
@@ -89,3 +104,4 @@ def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model
             assert grown_gpu <= _MAX_GPU_GROWTH_MIB, f"GPU memory grew by {grown_gpu} MiB"
     finally:
         wrapper.close()
+

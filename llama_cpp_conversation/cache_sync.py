@@ -244,11 +244,12 @@ class CacheSync:
         self._valid = min(self._valid, pos)
         if self._end is not None and self._end > pos and self._can_cut:
             try:
-                self._context.remove_from(pos)
+                held = self._context.remove_from(pos)
             except BaseException:
                 self._end = None
                 raise
-            self._end = pos
+            self._end = pos if held is None else held
+            self._valid = min(self._valid, self._end)
 
     def hold(self, target: list[int], *, want_logits: bool = False,
              find_dropped_stretch: bool = False, rest_at_cut: bool = False,
@@ -397,11 +398,11 @@ class CacheSync:
         elif self._end > self._valid:
             if self._can_cut:
                 try:
-                    self._context.remove_from(self._valid)
+                    held = self._context.remove_from(self._valid)
                 except BaseException:
                     self._end = None
                     raise
-                self._end = self._valid
+                self._end = self._valid = self._valid if held is None else held
             elif not self._restore_to(self._valid):
                 self._reset_to_nothing()
         self._decode_at_end(self._tokens[self._valid:], want_logits, appended=True)

@@ -12,7 +12,8 @@ defaults departed from llama.cpp's without a reason, and one setting
 
 - The context is created with `kv_unified`: attention runs over the cache's
   rows, so a layer with a sliding window reads only its window, while the
-  cache keeps its full size and can still shift.
+  cache keeps its full size and can still shift, unless the caller asks for
+  the compact window cache (0059).
 - `kv_cache_type` defaults to `"f16"` and is always passed; `None` is not
   accepted.
 - `kv_cache_on_gpu` defaults to `True`, llama.cpp's `offload_kqv`: each

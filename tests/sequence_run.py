@@ -30,7 +30,8 @@ INVENTED = {"tools": invented.TOOLS, "json tools": invented.JSON_TOOLS,
 REAL = sorted(STEMS)
 TEMPLATES = sorted(INVENTED) + REAL
 CACHES = [dict(can_shift=True), dict(can_shift=False, can_cut_tail=True), dict(can_shift=False),
-          dict(can_shift=True, decode_blocks=True)]
+          dict(can_shift=True, decode_blocks=True),
+          dict(can_shift=False, can_cut_tail=True, window_tokens=24)]
 KINDS = ("question", "reply", "result", "inject", "truncate", "begin", "wait")
 
 REGISTRY = ToolRegistry()

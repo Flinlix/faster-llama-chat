@@ -61,6 +61,8 @@ class KVContext:
             build cannot perform one of the cache edits eviction rests on.
     """
 
+    _window_tokens = 0          # the window a cut checks the cache still holds, else 0
+
     def __init__(
         self, config: Config,
         on_load_progress: Callable[[float], None] | None = None,
@@ -80,8 +82,14 @@ class KVContext:
                 n_batch=config.max_batch_tokens, n_ubatch=config.micro_batch_tokens,
                 flash_attn=_flash_attention(config), type_k=kv_type, type_v=kv_type,
                 kv_cache_on_gpu=config.kv_cache_on_gpu,
+                compact_window_cache=config.compact_window_cache,
                 n_threads_batch=config.prefill_threads or config.decode_threads or cores)
             self._vocab = self._backend.vocab(self._model)
+            # A compact window cache forgets what lies outside its window, so a cut checks it;
+            # see docs/decisions/0059-a-compact-cache-for-sliding-window-layers.md.
+            self._window_tokens = (self._backend.window_size(self._model)
+                                   if config.compact_window_cache
+                                   and not self._backend.keeps_running_state(self._model) else 0)
             self._max_batch_tokens = config.max_batch_tokens
             self._decode_blocks = config.gpu_layers == 0 or not self._backend.supports_gpu_offload()
             self._settle_cache_edits()
@@ -253,10 +261,11 @@ class KVContext:
             RuntimeError: If the cache refuses the state or the cut after it.
         """
         self._backend.restore_state(self._engine_context, SEQ, state)
-        self.remove_from(pos)
+        held = self.remove_from(pos)
+        assert held is None, "a state saved at a position holds the window the next token there attends over"
 
-    def remove_from(self, pos: int) -> None:
-        """Remove every cached token from ``pos`` to the end of the sequence.
+    def remove_from(self, pos: int) -> int | None:
+        """Remove every cached token from ``pos`` to the end of the sequence; ``0``, the cache emptied, where a compact window cache no longer holds the window the next token at ``pos`` attends over, else ``None``.
 
         Raises:
             RuntimeError: If the cache refuses a partial removal.
@@ -264,6 +273,13 @@ class KVContext:
         if not self._backend.kv_seq_rm(self._engine_context, SEQ, pos, -1):
             raise EngineError(f"the cache refused to remove its tokens from {pos} on; the next "
                               "action decodes the conversation again")
+        if self._window_tokens and pos > 0:
+            # -1: the window's layers hold nothing of what was kept, which lies before their reach.
+            oldest = self._backend.kv_seq_pos_min(self._engine_context, SEQ)
+            if oldest < 0 or oldest > max(0, pos - self._window_tokens):
+                self._backend.kv_clear(self._engine_context)
+                return 0
+        return None
 
     # ----- the steps a generation takes ----------------------------------
     def sampled_tokens(self, sampling: DrawnSampling, withheld_tokens: tuple[int, ...]):

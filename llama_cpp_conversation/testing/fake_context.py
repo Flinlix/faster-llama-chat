@@ -204,13 +204,20 @@ class FakeContext:
             end need not fall where a text of the template's or the caller's
             ends; otherwise one token per character.
         extra_tags: Tags of the model's vocabulary its template never writes.
+        window_tokens: Where above ``0``, the cache keeps the positions of the
+            layers with a sliding window this far back and as many again, as a
+            compact window cache does: a cut that leaves the next position
+            without the window it attends over empties the cache and says so,
+            and a conversation saved whole comes back with its window as it
+            was. Takes a cache that cannot shift.
     """
 
     def __init__(self, fixture: dict, replies: Iterable[str | ScriptedCall] = (), *, gen_tokens: int = 5,
                  gen_text: str = "reply", can_shift: bool = True, can_cut_tail: bool = False,
                  decode_blocks: bool = False,
                  tokens_spell_text: bool = True, writes_tags: bool = False,
-                 extra_tags: tuple[str, ...] = (), merges: bool = False) -> None:
+                 extra_tags: tuple[str, ...] = (), merges: bool = False,
+                 window_tokens: int = 0) -> None:
         self._fixture = fixture
         self._template = fixture["chat_template"]
         # The default template under None, and the one for tools under its name, where given.
@@ -236,6 +243,9 @@ class FakeContext:
         self.cache: list[int] = []
         self.can_shift = can_shift
         self.can_cut_tail = can_cut_tail
+        assert not (window_tokens and can_shift), "a compact window cache cannot shift"
+        self.window_tokens = window_tokens
+        self._oldest_in_window = 0       # the oldest position the window's layers still hold
         self.decode_blocks = decode_blocks
         self.context_size = 1 << 20      # no limit of its own: the config's is the one tested
         # What the model generates.
@@ -386,7 +396,14 @@ class FakeContext:
     # ----- the cache ---------------------------------------------------------------
     def reset(self) -> None:
         self.cache = []
+        self._oldest_in_window = 0
         self.resets += 1
+
+    def _slide_window(self) -> None:
+        """Forget the window's positions that lie out of its reach after a decode."""
+        if self.window_tokens:
+            self._oldest_in_window = max(self._oldest_in_window,
+                                         len(self.cache) - 2 * self.window_tokens)
 
     def prefill(self, token_ids: list[int], start_pos: int, want_logits: bool) -> None:
         assert start_pos == len(self.cache), (
@@ -394,6 +411,7 @@ class FakeContext:
             "the wrapper re-prefilled existing context"
         )
         self.cache.extend(token_ids)
+        self._slide_window()
         self.prefill_calls.append((start_pos, len(token_ids), want_logits))
 
     def save_state(self):
@@ -407,17 +425,21 @@ class FakeContext:
 
     def save_whole_state(self):
         self.saved_states += 1
-        return array.array("q", self.cache).tobytes()
+        return array.array("q", [self._oldest_in_window, *self.cache]).tobytes()
 
     def restore_whole_state(self, state) -> None:
-        self.cache = list(array.array("q", state))
+        self._oldest_in_window, *self.cache = array.array("q", state)
         self.edits.append(("restore whole", len(self.cache)))
 
-    def remove_from(self, pos: int) -> None:
+    def remove_from(self, pos: int) -> int | None:
         assert self.can_shift or self.can_cut_tail, "a cache that cannot cut was cut"
         assert 0 <= pos <= len(self.cache)
         self.edits.append(("cut", pos))
         del self.cache[pos:]
+        if self.window_tokens and pos > 0 and self._oldest_in_window > max(0, pos - self.window_tokens):
+            self.reset()
+            return 0
+        return None
 
     def apply_eviction(self, start: int, end: int) -> None:
         assert self.can_shift, "a cache that cannot shift was shifted"
@@ -428,6 +450,7 @@ class FakeContext:
     def decode_generated(self, token_ids: list[int], start_pos: int) -> None:
         assert start_pos == len(self.cache), (start_pos, len(self.cache))
         self.cache.extend(token_ids)
+        self._slide_window()
 
     def close(self) -> None:
         pass

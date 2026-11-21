@@ -781,3 +781,54 @@ def test_what_the_past_reply_leaves_out_of_its_prompt_is_shifted_out_after_drops
         after_each.append(sum(count for _, count, _ in after_reply))
     assert evicted, "the conversation never reached its threshold"
     assert max(after_each) < len(answer) // 4, after_each
+
+
+@pytest.mark.parametrize("window_tokens", [8, 40])
+def test_a_cache_that_keeps_only_a_window_is_read_again_from_the_start_where_a_cut_leaves_it_short(window_tokens):
+    """A compact window cache that a trim cuts far back no longer holds the window its next token attends over: the library reads the conversation again from the start, and the cache holds what the wrapper holds it to be after every reply."""
+    fake = FakeContext(PLAIN, can_shift=False, can_cut_tail=True, window_tokens=window_tokens)
+    chat = ChatWrapper(Config(context_size=400, evict_above_fraction=0.75), context=fake)
+    chat.begin([{"role": "system", "content": "persona " * 8}])
+    emptied = 0
+    for turn in range(40):
+        before = fake.resets
+        chat.reply(f"Frage {turn} mit etwas mehr Text").finish()
+        chat.wait_idle(timeout_s=10)
+        emptied += fake.resets > before
+        assert fake.cache == internals.held_tokens(chat), turn
+    assert emptied, "no trim cut the cache far enough back to empty it"
+
+
+def test_a_cache_that_keeps_only_a_window_switches_back_to_a_kept_conversation_with_its_window():
+    """A conversation kept on a compact window cache comes back with the window it was saved with: the cut after the switch back finds it short, and the conversation is read again from the start."""
+    fake = FakeContext(PLAIN, can_shift=False, can_cut_tail=True, window_tokens=8)
+    chat = ChatWrapper(Config(context_size=4000, kept_conversation_bytes=1 << 20), context=fake)
+    chat.begin([{"role": "system", "content": "persona " * 40}])
+    for turn in range(6):
+        chat.reply(f"Frage {turn} mit etwas mehr Text").finish()
+    chat.wait_idle(timeout_s=10)
+    kept = chat.conversation()
+    chat.begin([{"role": "system", "content": "andere"}])
+    chat.wait_idle(timeout_s=10)
+    kept["messages"] = kept["messages"][:-2]        # the newest exchange goes: the switch back cuts
+    edits, resets = len(fake.edits), fake.resets
+    chat.begin(**kept)
+    chat.wait_idle(timeout_s=10)
+    assert [edit[0] for edit in fake.edits[edits:]] == ["restore whole", "cut"]
+    assert fake.resets == resets + 1
+    assert fake.cache == internals.held_tokens(chat)
+
+
+def test_a_cache_that_keeps_only_a_window_is_read_again_from_the_start_where_a_reply_is_shortened_far_back():
+    """Shortening a reply by more than the window keeps beyond it leaves the window short where the cache is brought up: the conversation is read again from the start."""
+    fake = FakeContext(PLAIN, can_shift=False, can_cut_tail=True, window_tokens=8,
+                       gen_tokens=60, gen_text="Eine lange Antwort, die weit ueber das Fenster reicht. ")
+    chat = ChatWrapper(Config(context_size=4000), context=fake)
+    chat.begin([{"role": "system", "content": "persona " * 8}])
+    reply = chat.reply("Erzaehl mir etwas").finish()
+    chat.wait_idle(timeout_s=10)
+    resets = fake.resets
+    chat.truncate_last_reply(reply.text[:3])
+    chat.wait_idle(timeout_s=10)
+    assert fake.resets == resets + 1
+    assert fake.cache == internals.held_tokens(chat)
