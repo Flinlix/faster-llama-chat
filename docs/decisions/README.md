@@ -63,3 +63,5 @@ it rejected. The dated log the records were written from is kept as
 | [0054](0054-what-is-public-and-what-a-version-promises.md) | What is public, and what a version number promises | A compatibility page; every public signature listed and compared by a test. |
 | [0055](0055-measured-against-llama-cpp-pythons-own-chat.md) | Measured against llama-cpp-python's own chat interface | Later questions wait about half as long; the chat runs on where the plain one fills up. |
 | [0056](0056-the-project-is-named-llama-cpp-conversation.md) | The project is named llama-cpp-conversation | One name for the repository, the distribution, the import and the site. |
+| [0057](0057-the-site-is-built-with-sphinx.md) | The documentation site is built with Sphinx | Every warning an error; the README's sections included; the theme's support for the old tool ends in 2027. |
+| [0058](0058-the-public-signatures-are-typed.md) | The public signatures are typed | Typed messages and conversation; a strictly checked caller in the tests. |

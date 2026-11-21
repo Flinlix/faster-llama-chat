@@ -48,7 +48,7 @@ class Reply:
             call's result counting as one, to bring the cache back inside both
             eviction limits; those evicted after the reply before, to make
             room for this request, included.
-        stop_reason: One of :data:`STOP_REASONS`: the reply's turn ended,
+        stop_reason: One of :data:`~llama_cpp_conversation.reply.STOP_REASONS`: the reply's turn ended,
             a stop string was met, the reply cap or the context ran out, ``cancel`` was
             set, a call was made, or a call was made that could not be read
             and whose failure could not be written for the model to read.
@@ -56,7 +56,7 @@ class Reply:
             Reported whatever became of them, so a call that was refused rather
             than run still says what the model asked for, and one that could
             not be read or was cut short is reported with that
-            :attr:`~llama_cpp_conversation.tools.ToolCall.status`.
+            ``ToolCall.status``.
         tool_limit_reached: Whether ``max_calls`` ran out, so the final
             generation ran without the token that opens a call. Always
             ``False`` where no call was asked for.
@@ -97,7 +97,7 @@ class Reply:
 
 
 EvictionCause = Literal["room", "exchange_limit", "half_context"]
-"""Why the oldest history went: the conversation no longer fit, the exchange limit was reached, or begin kept no more than half the context."""
+"""Why the oldest history went, because the conversation no longer fit, the exchange limit was reached, or begin kept no more than half the context."""
 EVICTION_CAUSES: tuple[str, ...] = get_args(EvictionCause)
 """Every :data:`EvictionCause`."""
 
@@ -110,7 +110,7 @@ class Report:
         n_evicted_messages: History messages that went, each call's result
             counting as one; for the first action after a reply, those that
             went after that reply too.
-        evicted_for: One of :data:`EVICTION_CAUSES`, why they went; ``None``
+        evicted_for: One of :data:`~llama_cpp_conversation.reply.EVICTION_CAUSES`, why they went; ``None``
             where none did.
         n_kept_messages: Of a history given to ``begin``, how many messages
             it kept; ``None`` for any other action.
@@ -121,7 +121,7 @@ class Report:
             generated turns it was given.
         generated_turns_ignored: Whether generated turns ``begin`` was given
             went unused: another model's, or ones changed since
-            :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.conversation` gave them
+            :meth:`~llama_cpp_conversation.ChatWrapper.conversation` gave them
             out, whose turns are written as the template writes them.
         tool_results_cut: The calls whose result was cut to fit, with a note
             telling the model how much was kept.

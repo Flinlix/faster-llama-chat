@@ -1,3 +1,6 @@
 # Install
 
---8<-- "README.md:install"
+```{include} ../README.md
+:start-after: <!-- start: install -->
+:end-before: <!-- end: install -->
+```

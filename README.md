@@ -1,6 +1,6 @@
 # llama-cpp-conversation: a KV-cache manager for llama.cpp
 
-<!-- --8<-- [start:lead] -->
+<!-- start: lead -->
 A Python chat library over llama.cpp whose goal is to **prefill as little as
 possible**. It keeps the KV cache alive across turns, decodes only what is new,
 and when the context fills it *removes the oldest exchanges and shifts the
@@ -16,15 +16,15 @@ waits only for its own tokens. Tool calls work on any model whose template
 describes them: the tags and the argument spelling are recovered from the
 template. What a template cannot tell, such as a model's recommended sampling,
 comes from a small JSON add-on file.
-<!-- --8<-- [end:lead] -->
+<!-- end: lead -->
 
 The [documentation](#documentation) has a guide per task and the API
 reference. The reasons behind each design choice are in the
-[decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/).
+[decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/README/).
 
 ## Why
 
-<!-- --8<-- [start:why] -->
+<!-- start: why -->
 1. **Minimum prefill:** only genuinely new tokens are processed; the cache from
    previous turns survives and is reused.
 2. **Rolling eviction:** when the context fills, the oldest exchanges are
@@ -38,11 +38,11 @@ positions down, so kept messages are never processed again.
 The comparison with llama-cpp-python's own chat interface, measured on one
 machine, is in its
 [decision record](https://flinlix.github.io/llama-cpp-conversation/decisions/0055-measured-against-llama-cpp-pythons-own-chat/).
-<!-- --8<-- [end:why] -->
+<!-- end: why -->
 
 ## Install
 
-<!-- --8<-- [start:install] -->
+<!-- start: install -->
 ```bash
 CMAKE_ARGS="-DGGML_NATIVE=ON" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/llama-cpp-conversation@v3.0.0"   # CPU
 CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-binary llama-cpp-python "git+https://github.com/Flinlix/llama-cpp-conversation@v3.0.0"     # Nvidia GPU
@@ -74,11 +74,12 @@ git config core.hooksPath hooks     # with them: the checks before every push
 ```
 
 It installs as `llama-cpp-conversation` and is imported as
-`llama_cpp_conversation`. <!-- --8<-- [end:install] -->
+`llama_cpp_conversation`.
+<!-- end: install -->
 
 ## Quick start
 
-<!-- --8<-- [start:quick-start] -->
+<!-- start: quick-start -->
 ```python
 from llama_cpp_conversation import ChatWrapper, Config
 
@@ -104,7 +105,7 @@ for delta in chat.reply():
 reply = chat.reply("Summarize the plan.").finish()    # or read it to its end at once
 print(reply.text, reply.stop_reason)
 ```
-<!-- --8<-- [end:quick-start] -->
+<!-- end: quick-start -->
 
 How a reply streams, how to stop one, and how the wrapper behaves across
 threads: [Streams, cancelling and threads](https://flinlix.github.io/llama-cpp-conversation/guide/streams-and-threads/).
@@ -114,63 +115,66 @@ threads: [Streams, cancelling and threads](https://flinlix.github.io/llama-cpp-c
 Any model whose GGUF file ships a chat template runs, and the library is not
 limited to the models below. They are the models whose templates the tests
 run every conversation on; a template that differs from all of them is read
-the same way, and refused with its cause where it cannot be.
+the same way, and refused with its cause where it cannot be. "Reasoning" and
+"Tool calls" say what the template writes, which a model trained for
+something else may still not do; the last column names the day a long
+conversation was run on a model file with that template, and passed.
 
-| Model | Template taken from | Reasoning | Tool calls |
-|---|---|---|---|
-| DeepSeek-R1-0528-Qwen3-8B | [unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF](https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF) | yes | yes |
-| DeepSeek-R1-Distill-Qwen-7B | [bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | yes |  |
-| DeepSeek-V4.1-Flash-1017 | [unsloth/DeepSeek-V4.1-Flash-1017-GGUF](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF) | yes | yes |
-| Devstral-Small-2-24B-Instruct-2512 | [unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF](https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF) |  | yes |
-| Dolphin3-Cyber-8B | [RavichandranJ/Dolphin3-Cyber-8B-GGUF](https://huggingface.co/RavichandranJ/Dolphin3-Cyber-8B-GGUF) |  |  |
-| Flint-abliterated | [orcarouter/Flint-abliterated-GGUF](https://huggingface.co/orcarouter/Flint-abliterated-GGUF) | yes | yes |
-| gemma-3-1b-it | [ggml-org/gemma-3-1b-it-GGUF](https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF) |  |  |
-| gemma-4-26B-A4B-it | [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | yes | yes |
-| GLM-4.7-Flash | [unsloth/GLM-4.7-Flash-GGUF](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | yes | yes |
-| GLM-5.3-Flash-Maya | [peasantsmith/GLM-5.3-Flash-Maya-GGUF](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF) | yes | yes |
-| gpt-oss-20b | [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) | yes | yes |
-| granite-4.2-8b | [ibm-granite/granite-4.2-8b-GGUF](https://huggingface.co/ibm-granite/granite-4.2-8b-GGUF) | yes | yes |
-| Hermes-2-Pro-Llama-3-8B | [NousResearch/Hermes-2-Pro-Llama-3-8B](https://huggingface.co/NousResearch/Hermes-2-Pro-Llama-3-8B) |  | yes |
-| Hy-Memory-30B-A3B | [rapatsky/Hy-Memory-30B-A3B-GGUF](https://huggingface.co/rapatsky/Hy-Memory-30B-A3B-GGUF) | yes | yes |
-| Hy-MT2-1.8B | [tencent/Hy-MT2-1.8B-GGUF](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) |  |  |
-| Hy3 | [AngelSlim/Hy3-GGUF](https://huggingface.co/AngelSlim/Hy3-GGUF) | yes | yes |
-| Hy4-preview | [AngelSlim/Hy4-preview-GGUF](https://huggingface.co/AngelSlim/Hy4-preview-GGUF) | yes | yes |
-| HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M | [rippertnt/HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M-GGUF](https://huggingface.co/rippertnt/HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M-GGUF) |  |  |
-| Inkling-Small | [unsloth/Inkling-Small-GGUF](https://huggingface.co/unsloth/Inkling-Small-GGUF) | yes |  |
-| Kimi-K3 | [unsloth/Kimi-K3-GGUF](https://huggingface.co/unsloth/Kimi-K3-GGUF) | yes | yes |
-| Laguna-XS-2.1-APEX | [mudler/Laguna-XS-2.1-APEX-GGUF](https://huggingface.co/mudler/Laguna-XS-2.1-APEX-GGUF) | yes | yes |
-| LFM2.5-24B-A2B-Uncensored | [AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF](https://huggingface.co/AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF) | yes | yes |
-| LFM3-Omni-2B | [LiquidAI/LFM3-Omni-2B-GGUF](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) | yes | yes |
-| Ling-3.0-tiny | [bartowski/Ling-3.0-tiny-GGUF](https://huggingface.co/bartowski/Ling-3.0-tiny-GGUF) | yes | yes |
-| Mage-VL-Cowork | [Hansda/Mage-VL-Cowork-GGUF](https://huggingface.co/Hansda/Mage-VL-Cowork-GGUF) | yes | yes |
-| microsoft_Phi-4-mini-instruct | [bartowski/microsoft_Phi-4-mini-instruct-GGUF](https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF) |  |  |
-| MiniCPM5-2B | [openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF) | yes | yes |
-| MiniMax-M3.1-Flash-abliterated | [orcarouter/MiniMax-M3.1-Flash-abliterated-GGUF](https://huggingface.co/orcarouter/MiniMax-M3.1-Flash-abliterated-GGUF) | yes | yes |
-| Ministral-3-8B-Instruct-2512 | [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) |  | yes |
-| Ministral-3-8B-Instruct-2512 | [unsloth/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/unsloth/Ministral-3-8B-Instruct-2512-GGUF) |  | yes |
-| Ministral-3-8B-Reasoning-2512 | [unsloth/Ministral-3-8B-Reasoning-2512-GGUF](https://huggingface.co/unsloth/Ministral-3-8B-Reasoning-2512-GGUF) | yes | yes |
-| Ministral-8B-Instruct-2410 | [bartowski/Ministral-8B-Instruct-2410-GGUF](https://huggingface.co/bartowski/Ministral-8B-Instruct-2410-GGUF) |  | yes |
-| Mistral-Large-4-1T-A52B | [unsloth/Mistral-Large-4-1T-A52B-GGUF](https://huggingface.co/unsloth/Mistral-Large-4-1T-A52B-GGUF) | yes | yes |
-| Mistral-Small-3.2-24B-Instruct-2506 | [unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF](https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF) |  | yes |
-| Muse-Glimmer-30B | [unsloth/Muse-Glimmer-30B-GGUF](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | yes | yes |
-| Nanbeige_Nanbeige4.3-33B | [bartowski/Nanbeige_Nanbeige4.3-33B-GGUF](https://huggingface.co/bartowski/Nanbeige_Nanbeige4.3-33B-GGUF) | yes | yes |
-| North-Mini-Code-1.0 | [unsloth/North-Mini-Code-1.0-GGUF](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | yes | yes |
-| NVIDIA-Nemotron-3.5-Transcribe-30B-A4B | [AtomicChat/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF](https://huggingface.co/AtomicChat/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF) | yes | yes |
-| NVIDIA-Nemotron-Labs-Dory1.0-4B | [nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-GGUF](https://huggingface.co/nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-GGUF) | yes | yes |
-| Orpheus-3b-German-FT-Q8_0 | [lex-au/Orpheus-3b-German-FT-Q8_0.gguf](https://huggingface.co/lex-au/Orpheus-3b-German-FT-Q8_0.gguf) |  | yes |
-| PaddleOCR-VL-1.6 | [PaddlePaddle/PaddleOCR-VL-1.6-GGUF](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF) |  |  |
-| Qwen2.5-Coder-7B-Instruct | [Qwen/Qwen2.5-Coder-7B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF) |  | yes |
-| Qwen3-8B | [unsloth/Qwen3-8B-GGUF](https://huggingface.co/unsloth/Qwen3-8B-GGUF) | yes | yes |
-| Qwen3-Coder-30B-A3B-Instruct | [unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF) |  | yes |
-| Qwen3.5-9B | [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | yes | yes |
-| Qwen3.6-27B | [unsloth/Qwen3.6-27B-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | yes | yes |
-| Qwen3.8-27B-OBLITERATED | [OBLITERATUS/Qwen3.8-27B-OBLITERATED](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED) | yes |  |
-| Qwopus3.8-27B-Coder-Flash-TQ | [YTan2000/Qwopus3.8-27B-Coder-Flash-TQ](https://huggingface.co/YTan2000/Qwopus3.8-27B-Coder-Flash-TQ) | yes | yes |
-| Sharp-Spark-X2.5-4B | [peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF](https://huggingface.co/peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF) | yes | yes |
-| Spark-X2.6-4B | [XHToken/Spark-X2.6-4B-GGUF](https://huggingface.co/XHToken/Spark-X2.6-4B-GGUF) | yes | yes |
-| tiny-aya-global | [CohereLabs/tiny-aya-global-GGUF](https://huggingface.co/CohereLabs/tiny-aya-global-GGUF) |  |  |
-| TwIL-8B | [webAI-Official/TwIL-8B](https://huggingface.co/webAI-Official/TwIL-8B) | yes | yes |
-| TwIL-LM3 | [webAI-Official/TwIL-LM3](https://huggingface.co/webAI-Official/TwIL-LM3) | yes |  |
+| Model | Template taken from | Reasoning | Tool calls | Run on a model file |
+|---|---|---|---|---|
+| DeepSeek-R1-0528-Qwen3-8B | [unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF](https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF) | yes | yes | 2026-11-20 |
+| DeepSeek-R1-Distill-Qwen-7B | [bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | yes |  |  |
+| DeepSeek-V4.1-Flash-1017 | [unsloth/DeepSeek-V4.1-Flash-1017-GGUF](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF) | yes | yes |  |
+| Devstral-Small-2-24B-Instruct-2512 | [unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF](https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF) |  | yes |  |
+| Dolphin3-Cyber-8B | [RavichandranJ/Dolphin3-Cyber-8B-GGUF](https://huggingface.co/RavichandranJ/Dolphin3-Cyber-8B-GGUF) |  |  | 2026-11-20 |
+| Flint-abliterated | [orcarouter/Flint-abliterated-GGUF](https://huggingface.co/orcarouter/Flint-abliterated-GGUF) | yes | yes |  |
+| gemma-3-1b-it | [ggml-org/gemma-3-1b-it-GGUF](https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF) |  |  | 2026-11-20 |
+| gemma-4-26B-A4B-it | [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | yes | yes | 2026-11-20 |
+| GLM-4.7-Flash | [unsloth/GLM-4.7-Flash-GGUF](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | yes | yes | 2026-11-20 |
+| GLM-5.3-Flash-Maya | [peasantsmith/GLM-5.3-Flash-Maya-GGUF](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF) | yes | yes |  |
+| gpt-oss-20b | [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) | yes | yes | 2026-11-20 |
+| granite-4.2-8b | [ibm-granite/granite-4.2-8b-GGUF](https://huggingface.co/ibm-granite/granite-4.2-8b-GGUF) | yes | yes |  |
+| Hermes-2-Pro-Llama-3-8B | [NousResearch/Hermes-2-Pro-Llama-3-8B](https://huggingface.co/NousResearch/Hermes-2-Pro-Llama-3-8B) |  | yes |  |
+| Hy-Memory-30B-A3B | [rapatsky/Hy-Memory-30B-A3B-GGUF](https://huggingface.co/rapatsky/Hy-Memory-30B-A3B-GGUF) | yes | yes | 2026-11-20 |
+| Hy-MT2-1.8B | [tencent/Hy-MT2-1.8B-GGUF](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) |  |  |  |
+| Hy3 | [AngelSlim/Hy3-GGUF](https://huggingface.co/AngelSlim/Hy3-GGUF) | yes | yes |  |
+| Hy4-preview | [AngelSlim/Hy4-preview-GGUF](https://huggingface.co/AngelSlim/Hy4-preview-GGUF) | yes | yes |  |
+| HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M | [rippertnt/HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M-GGUF](https://huggingface.co/rippertnt/HyperCLOVAX-SEED-Text-Instruct-1.5B-Q4_K_M-GGUF) |  |  |  |
+| Inkling-Small | [unsloth/Inkling-Small-GGUF](https://huggingface.co/unsloth/Inkling-Small-GGUF) | yes |  |  |
+| Kimi-K3 | [unsloth/Kimi-K3-GGUF](https://huggingface.co/unsloth/Kimi-K3-GGUF) | yes | yes |  |
+| Laguna-XS-2.1-APEX | [mudler/Laguna-XS-2.1-APEX-GGUF](https://huggingface.co/mudler/Laguna-XS-2.1-APEX-GGUF) | yes | yes |  |
+| LFM2.5-24B-A2B-Uncensored | [AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF](https://huggingface.co/AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF) | yes | yes | 2026-11-20 |
+| LFM3-Omni-2B | [LiquidAI/LFM3-Omni-2B-GGUF](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) | yes | yes | 2026-11-20 |
+| Ling-3.0-tiny | [bartowski/Ling-3.0-tiny-GGUF](https://huggingface.co/bartowski/Ling-3.0-tiny-GGUF) | yes | yes | 2026-11-20 |
+| Mage-VL-Cowork | [Hansda/Mage-VL-Cowork-GGUF](https://huggingface.co/Hansda/Mage-VL-Cowork-GGUF) | yes | yes |  |
+| microsoft_Phi-4-mini-instruct | [bartowski/microsoft_Phi-4-mini-instruct-GGUF](https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF) |  |  |  |
+| MiniCPM5-2B | [openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF) | yes | yes | 2026-11-20 |
+| MiniMax-M3.1-Flash-abliterated | [orcarouter/MiniMax-M3.1-Flash-abliterated-GGUF](https://huggingface.co/orcarouter/MiniMax-M3.1-Flash-abliterated-GGUF) | yes | yes |  |
+| Ministral-3-8B-Instruct-2512 | [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) |  | yes |  |
+| Ministral-3-8B-Instruct-2512 | [unsloth/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/unsloth/Ministral-3-8B-Instruct-2512-GGUF) |  | yes | 2026-11-20 |
+| Ministral-3-8B-Reasoning-2512 | [unsloth/Ministral-3-8B-Reasoning-2512-GGUF](https://huggingface.co/unsloth/Ministral-3-8B-Reasoning-2512-GGUF) | yes | yes | 2026-11-20 |
+| Ministral-8B-Instruct-2410 | [bartowski/Ministral-8B-Instruct-2410-GGUF](https://huggingface.co/bartowski/Ministral-8B-Instruct-2410-GGUF) |  | yes | 2026-11-20 |
+| Mistral-Large-4-1T-A52B | [unsloth/Mistral-Large-4-1T-A52B-GGUF](https://huggingface.co/unsloth/Mistral-Large-4-1T-A52B-GGUF) | yes | yes |  |
+| Mistral-Small-3.2-24B-Instruct-2506 | [unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF](https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF) |  | yes |  |
+| Muse-Glimmer-30B | [unsloth/Muse-Glimmer-30B-GGUF](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | yes | yes | 2026-11-20 |
+| Nanbeige_Nanbeige4.3-33B | [bartowski/Nanbeige_Nanbeige4.3-33B-GGUF](https://huggingface.co/bartowski/Nanbeige_Nanbeige4.3-33B-GGUF) | yes | yes |  |
+| North-Mini-Code-1.0 | [unsloth/North-Mini-Code-1.0-GGUF](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | yes | yes | 2026-11-20 |
+| NVIDIA-Nemotron-3.5-Transcribe-30B-A4B | [AtomicChat/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF](https://huggingface.co/AtomicChat/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF) | yes | yes | 2026-11-20 |
+| NVIDIA-Nemotron-Labs-Dory1.0-4B | [nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-GGUF](https://huggingface.co/nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-GGUF) | yes | yes |  |
+| Orpheus-3b-German-FT-Q8_0 | [lex-au/Orpheus-3b-German-FT-Q8_0.gguf](https://huggingface.co/lex-au/Orpheus-3b-German-FT-Q8_0.gguf) |  | yes | 2026-11-20 |
+| PaddleOCR-VL-1.6 | [PaddlePaddle/PaddleOCR-VL-1.6-GGUF](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF) |  |  |  |
+| Qwen2.5-Coder-7B-Instruct | [Qwen/Qwen2.5-Coder-7B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF) |  | yes | 2026-11-20 |
+| Qwen3-8B | [unsloth/Qwen3-8B-GGUF](https://huggingface.co/unsloth/Qwen3-8B-GGUF) | yes | yes | 2026-11-20 |
+| Qwen3-Coder-30B-A3B-Instruct | [unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF) |  | yes | 2026-11-20 |
+| Qwen3.5-9B | [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | yes | yes | 2026-11-20 |
+| Qwen3.6-27B | [unsloth/Qwen3.6-27B-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | yes | yes | 2026-11-20 |
+| Qwen3.8-27B-OBLITERATED | [OBLITERATUS/Qwen3.8-27B-OBLITERATED](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED) | yes |  | 2026-11-20 |
+| Qwopus3.8-27B-Coder-Flash-TQ | [YTan2000/Qwopus3.8-27B-Coder-Flash-TQ](https://huggingface.co/YTan2000/Qwopus3.8-27B-Coder-Flash-TQ) | yes | yes | 2026-11-20 |
+| Sharp-Spark-X2.5-4B | [peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF](https://huggingface.co/peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF) | yes | yes | 2026-11-20 |
+| Spark-X2.6-4B | [XHToken/Spark-X2.6-4B-GGUF](https://huggingface.co/XHToken/Spark-X2.6-4B-GGUF) | yes | yes | 2026-11-20 |
+| tiny-aya-global | [CohereLabs/tiny-aya-global-GGUF](https://huggingface.co/CohereLabs/tiny-aya-global-GGUF) |  |  | 2026-11-20 |
+| TwIL-8B | [webAI-Official/TwIL-8B](https://huggingface.co/webAI-Official/TwIL-8B) | yes | yes | 2026-11-20 |
+| TwIL-LM3 | [webAI-Official/TwIL-LM3](https://huggingface.co/webAI-Official/TwIL-LM3) | yes |  | 2026-11-20 |
 
 ## Documentation
 
@@ -186,4 +190,4 @@ the same way, and refused with its cause where it cannot be.
 - [Verify](https://flinlix.github.io/llama-cpp-conversation/guide/verify/)
 - [Compatibility](https://flinlix.github.io/llama-cpp-conversation/guide/compatibility/)
 - [API reference](https://flinlix.github.io/llama-cpp-conversation/reference/)
-- [Decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/)
+- [Decision records](https://flinlix.github.io/llama-cpp-conversation/decisions/README/)

@@ -17,11 +17,12 @@ to the code.
   escapes known for 3.1 (from the release notes, not checked again here), and
   the tests check the sandbox on the 3.1 line only.
 - The `test`, `dev` and `docs` extras are bounded below the next major
-  version of each tool, and `ruff` below its next minor version, which may add
-  rules to the selected sets.
-- `mkdocs` is named in the `docs` extra with its bound, since the theme warns
-  that its own support ends in May 2027; the site build is checked with
-  `mkdocs build --strict` before every push.
+  version of each tool, `ruff` below its next minor version, which may add
+  rules to the selected sets, and the site's theme, versioned by date, below
+  the next year. Each floor is one that installs on every Python version the
+  package supports (Sphinx 9.1 needs 3.12, so the floor is 9.0).
+- The site build is checked with every warning an error before every push
+  (0057).
 - A bound is raised in a commit of its own, after the suite passes on the new
   release.
 

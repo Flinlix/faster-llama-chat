@@ -341,7 +341,7 @@ def with_reasoning_on(render, reasoning_on: Mapping[str, object]):
 
 @dataclasses.dataclass(frozen=True)
 class Capabilities:
-    """What :meth:`~llama_cpp_conversation.wrapper.ChatWrapper.begin` accepts for one kind of conversation, settled when the model loads.
+    """What :meth:`~llama_cpp_conversation.ChatWrapper.begin` accepts for one kind of conversation, settled when the model loads.
 
     Attributes:
         can_call_tools: Tools can be used every step of the way: the template

@@ -20,8 +20,9 @@ Both drifted from the code and from each other.
   headings of a guide.
 - The API reference is built from the docstrings (`docs/reference.md`), and
   the guides, the reference and the records form one site, built with
-  `mkdocs build --strict`. The site's overview and install pages take their
-  text from the README's marked sections, so the two never differ.
+  Sphinx with every warning an error (0057). The site's overview and install
+  pages take their text from the README's marked sections, so the two never
+  differ.
 - The README's list of supported models is the table the test templates'
   files give, and a test keeps it equal to that table, row for row. It is the one place outside
   the install section where the README names models (rule 3).

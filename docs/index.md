@@ -1,10 +1,16 @@
 # llama-cpp-conversation
 
---8<-- "README.md:lead"
+```{include} ../README.md
+:start-after: <!-- start: lead -->
+:end-before: <!-- end: lead -->
+```
 
 ## Why
 
---8<-- "README.md:why"
+```{include} ../README.md
+:start-after: <!-- start: why -->
+:end-before: <!-- end: why -->
+```
 
 ## Compared with llama.cpp's context shift
 
@@ -20,7 +26,29 @@ Both use the same cache operations; the policy differs.
 
 ## Quick start
 
---8<-- "README.md:quick-start"
+```{include} ../README.md
+:start-after: <!-- start: quick-start -->
+:end-before: <!-- end: quick-start -->
+```
 
 How a reply streams, how to stop one, and how the wrapper behaves across
 threads: [Streams, cancelling and threads](guide/streams-and-threads.md).
+
+```{toctree}
+:hidden:
+
+install
+guide/actions
+guide/streams-and-threads
+guide/tool-calling
+guide/reasoning
+guide/keeping-a-conversation
+guide/configuration
+guide/add-on-files
+guide/without-a-template
+guide/cache-context
+guide/verify
+guide/compatibility
+reference
+decisions/README
+```

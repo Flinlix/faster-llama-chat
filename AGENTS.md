@@ -147,7 +147,7 @@ python -m pytest -q -n auto   # everything needing no model: rules, lint, types,
 python -m pytest -q -m slow   # many new random sequences of actions
 python -m pytest -q -m gpu    # real model files named in LLAMA_CPP_CONVERSATION_TEST_MODELS
 LLAMA_CPP_CONVERSATION_CHECK_EVERY_ACTION=1 python -m pytest -q -n auto   # every wrapper checked against a fresh begin
-mkdocs build --strict         # the documentation site
+python -m sphinx -W --keep-going -b dirhtml docs site   # the documentation site
 ```
 
 ## Decisions

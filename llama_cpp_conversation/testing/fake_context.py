@@ -163,7 +163,7 @@ class FakeContext:
     which is tokenized with parsing off, stays its characters and cannot
     become the model's own. The tags it lists are those the template spells
     or writes, and each closing tag among them without its slash. Where the fixture says
-    ``adds_bos``, :data:`BOS` comes first where the opener is asked for.
+    ``adds_bos``, ``BOS`` comes first where the opener is asked for.
 
     A generation is the library's own loop drawing, in this order: the next of
     ``call_script`` where a call's opening may be drawn, else the next of
