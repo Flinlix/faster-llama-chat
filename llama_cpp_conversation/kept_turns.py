@@ -135,7 +135,7 @@ class KeptTurns:
         # The text without the tags, as a reply's text drops one inside it, else as generated.
         pieces = [b"" if self._context.is_special(token) else piece
                   for token, piece in zip(turn.tokens, spelled)]
-        if not b"".join(pieces).endswith(said):
+        if not b"".join(pieces).endswith(said) or self._starts_in_a_thought(turn.tokens, pieces, len(said)):
             pieces = spelled
         whole = b"".join(pieces)
         if not whole.endswith(said):
@@ -150,6 +150,24 @@ class KeptTurns:
         rest = whole[at:end].decode()
         tokens = turn.tokens[:n] + tuple(self._rendering.tokenize([(rest, True)]) if rest else ())
         return GeneratedTurn(tokens, turn.span, turn.on_call)
+
+    def _starts_in_a_thought(self, tokens: tuple[int, ...], pieces: list[bytes], length: int) -> bool:
+        """Whether the last ``length`` bytes of the joined ``pieces``, one per token of ``tokens``, begin inside a thought, which the reply's text hides."""
+        marks = self._template().properties.reasoning
+        if marks is None:
+            return False
+        held, start = 0, len(pieces)
+        for index in reversed(range(len(pieces))):
+            if held >= length:
+                break
+            start, held = index, held + len(pieces[index])
+        for token in reversed(tokens[:start]):
+            spelled = self._context.token_bytes(token).decode(errors="replace")
+            if spelled == marks.thought_close:
+                return False
+            if spelled == marks.thought_open:
+                return True
+        return False
 
     def generated_to_its_call(self, turn: GeneratedTurn, text: str, span: int) -> GeneratedTurn | None:
         """``turn``, ending the newest message, a reply of ``text``, as the turn of its first ``span`` messages, ending on its newest call: its generated tokens up to that call's closing; ``None`` where they cannot be told.

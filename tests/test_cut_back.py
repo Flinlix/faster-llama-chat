@@ -474,6 +474,18 @@ def test_a_reply_with_a_tag_the_model_wrote_inside_its_text_is_cut_anywhere_in_t
     assert wrapper.reply("weiter").finish().text
 
 
+@pytest.mark.parametrize("answer, keep", [("Ja.<thought>Ja.</thought>", "Ja"), ("ha<thought>ha</thought>", "h"),
+                                          ("a<thought>a</thought>a", "a")])
+def test_a_cut_whose_text_would_begin_inside_a_thought_after_the_answer_is_refused(answer, keep):
+    """A thought after the answer that ends as the answer does is hidden text, which the cut may not take for the answer."""
+    wrapper, _shown = _answered_with_a_tag_inside(answer)
+    before = wrapper.conversation()
+    with pytest.raises(TemplateRefusedError) as refused:
+        wrapper.truncate_last_reply(keep)
+    assert refused.value.field == "keep_text"
+    assert wrapper.conversation() == before
+
+
 @pytest.mark.parametrize("merges", [False, True], ids=["one-per-character", "merging"])
 def test_a_reply_after_a_call_is_cut_to_nothing_where_one_token_holds_a_space_and_its_first_letter(merges):
     """On a merging tokenizer the token after the thought's closing holds the space before the answer and its first letter, which the shown text does not start with."""
