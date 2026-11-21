@@ -13,6 +13,22 @@ from .loop_variant import LoopVariant
 from .cache_targets import CacheTargets
 
 
+def _text_starts_at(pieces: list[bytes], tags: list[bool], said: bytes) -> int | None:
+    """Where in the joined ``pieces`` the text ``said`` begins that they end on, the pieces marked as ``tags`` counting as no text; ``None`` where they do not end on it.
+
+    The place may fall inside a piece, where one token holds the end of what
+    comes before the text and its first letters.
+    """
+    text, at = b"", sum(map(len, pieces))
+    for piece, tag in zip(reversed(pieces), reversed(tags)):
+        if len(text) >= len(said):
+            break
+        at -= len(piece)
+        if not tag:
+            text = piece + text
+    return at + len(text) - len(said) if text.endswith(said) else None
+
+
 def _decodes(data: bytes) -> bool:
     """Whether ``data`` is whole UTF-8 text."""
     try:
@@ -107,15 +123,27 @@ class KeptTurns:
         return bool(unplaced)
 
     def generated_up_to(self, turn: GeneratedTurn, text: str, keep_text: str) -> GeneratedTurn | None:
-        """``turn``, ending on a reply's ``text``, as its tokens hold the reply cut to ``keep_text``: its generated tokens up to the last whole one before the cut, the rest of ``keep_text`` tokenized; ``None`` where its tokens do not end on ``text``."""
-        pieces = [self._context.token_bytes(token) for token in turn.tokens]
-        whole, said = b"".join(pieces), text.encode()
+        """``turn``, ending on a reply's ``text``, as its tokens hold the reply cut to ``keep_text``: its generated tokens up to the last whole one before the cut, the rest of ``keep_text`` tokenized; ``None`` where its tokens do not end on ``text``.
+
+        A tag the model wrote inside the text is no text, as the reply's text
+        drops it: it is kept where it stands before the cut and goes with the
+        rest. Where the text spells a tag itself, the tokens are read as
+        generated.
+        """
+        spelled = [self._context.token_bytes(token) for token in turn.tokens]
+        said = text.encode()
+        # The text without the tags, as a reply's text drops one inside it, else as generated.
+        pieces = [b"" if self._context.is_special(token) else piece
+                  for token, piece in zip(turn.tokens, spelled)]
+        if not b"".join(pieces).endswith(said):
+            pieces = spelled
+        whole = b"".join(pieces)
         if not whole.endswith(said):
             return None
         end = len(whole) - len(said) + len(keep_text.encode())
         n, at = len(pieces), len(whole)
         backing_variant = LoopVariant("finding the last whole token")
-        while n and (at > end or not _decodes(whole[at:end])):
+        while n and (at > end or not _decodes(whole[at:end]) or (at == end and not pieces[n - 1])):
             backing_variant.passes(n)
             n -= 1
             at -= len(pieces[n])
@@ -139,11 +167,15 @@ class KeptTurns:
         if closed is None or result is None or result[1] < closed:
             return None
         pieces = [self._context.token_bytes(token) for token in turn.tokens]
-        whole, said = b"".join(pieces), text.encode()
+        whole = b"".join(pieces)
         closing = self._template().properties.call_close_text.encode()
-        if not whole.endswith(said):
+        said_at = _text_starts_at(pieces, [self._context.is_special(token) for token in turn.tokens],
+                                  text.encode())
+        if said_at is None and whole.endswith(text.encode()):
+            said_at = len(whole) - len(text.encode())       # a tag the text spells as written
+        if said_at is None:
             return None
-        end = whole.rfind(split.text[closed:result[1]].encode(), 0, len(whole) - len(said))
+        end = whole.rfind(split.text[closed:result[1]].encode(), 0, said_at)
         if end < 0 or not whole[:end].endswith(closing):
             return None
         at = 0

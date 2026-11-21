@@ -12,7 +12,7 @@ from llama_cpp_conversation.wrapper import ChatWrapper
 from tests.chat_templates import STEMS, expected, fixture, ANSWERS, QUESTIONS, WEATHER
 from llama_cpp_conversation.testing.fake_context import FakeContext, ScriptedCall
 from tests.internals import token_id_range
-from llama_cpp_conversation.testing.invented_templates import PLAIN, TOOLS
+from llama_cpp_conversation.testing.invented_templates import PLAIN, REASONING, TOOLS
 from tests.wrappers import (assert_consistent, begun_wrapper, held_text, newest_turn, tool_wrapper,
                             reasoning_wrapper, rendered_reply, rows, ask_through_a_tool_call)
 from llama_cpp_conversation import OutOfOrderError, ContextOverflowError, TemplateRefusedError
@@ -449,6 +449,38 @@ def test_a_reply_cut_in_its_answer_keeps_every_whole_generated_token_before_the_
         assert after[:kept] == before[:kept], keep_chars
         rest = target[len(_spelled(fake, before[:kept])):].decode()
         assert after[kept:] == fake.tokenize(rest, parse_special=False), keep_chars
+
+
+def _answered_with_a_tag_inside(answer: str, **fake_kw):
+    """A wrapper whose newest turn called a tool and then answered ``answer``, its tags generated as the model's own tags, and the text shown."""
+    registry = ToolRegistry()
+    registry.tool(lambda: "12:00", description="Die Zeit.", name="clock")
+    fake = FakeContext(REASONING, writes_tags=True, **fake_kw)
+    wrapper = ChatWrapper(Config(context_size=4096), context=fake)
+    wrapper.begin(opened("persona"), tools=registry.specs())
+    fake.call_script, fake.replies = ["fn:clock{}"], [answer]
+    shown = "".join(step for step in wrapper.reply("wie spät?", tool_call_policy=registry)
+                    if isinstance(step, str))
+    return wrapper, shown
+
+
+@pytest.mark.parametrize("keep_chars", range(0, len("Es istzwölf Uhr.")))
+def test_a_reply_with_a_tag_the_model_wrote_inside_its_text_is_cut_anywhere_in_that_text(keep_chars):
+    """A tag inside the answer is no text: the cut counts the text alone, and keeps the tag only where it stands before the cut."""
+    wrapper, shown = _answered_with_a_tag_inside("Es ist</thought>zwölf Uhr.")
+    assert shown == "Es istzwölf Uhr."
+    wrapper.truncate_last_reply(shown[:keep_chars])
+    assert wrapper.conversation()["messages"][-1]["content"] == shown[:keep_chars]
+    assert wrapper.reply("weiter").finish().text
+
+
+@pytest.mark.parametrize("merges", [False, True], ids=["one-per-character", "merging"])
+def test_a_reply_after_a_call_is_cut_to_nothing_where_one_token_holds_a_space_and_its_first_letter(merges):
+    """On a merging tokenizer the token after the thought's closing holds the space before the answer and its first letter, which the shown text does not start with."""
+    wrapper, shown = _answered_with_a_tag_inside("</thought> Es ist zwölf.", merges=merges)
+    wrapper.truncate_last_reply("")
+    assert wrapper.conversation()["messages"][-1]["content"] == ""
+    assert wrapper.reply("weiter").finish().text
 
 
 @pytest.mark.parametrize("calls", [1, 2])

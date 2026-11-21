@@ -30,7 +30,15 @@ conversation refusing every later question until the next `begin`.
 - `truncate_last_reply` is refused where the template writes the shortened
   conversation neither as it is nor with a question after it, naming that more
   text must be kept. The reply that ends a tool turn is cut at the last whole
-  token before the kept text's end, by the tokens' bytes.
+  token before the kept text's end, by the tokens' bytes. A tag the model
+  wrote inside its answer counts as no text there, as in the reply's text:
+  it stays where it stands before the cut and goes with the rest. Where the
+  reply's text spells a tag itself, as one that opens the answer, the tokens
+  are read as generated. The reply's text may begin inside a token, where one
+  token holds a space and the answer's first letter. Found on a
+  real model file on 2026-11-20, which wrote its thought's closing tag again
+  in the middle of an answer after a tool's result; the cut was refused
+  before.
 - Replies in a row whose calls could not be read are joined.
 
 ## Consequences
