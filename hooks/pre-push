@@ -10,19 +10,18 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 head="$(git rev-parse HEAD)"
-# Each line git gives: the local ref, its commit, the remote ref, the remote's commit.
+# Each line git gives: the local ref, its object, the remote ref, the remote's commit. Every
+# commit pushed, by branch, tag or hash, is the one checked out; a deletion pushes none.
 while read -r local_ref local_sha _remote_ref _remote_sha; do
-    case "$local_ref" in
-        refs/heads/*)
-            if [ "$local_sha" != "$head" ] && [ "$local_sha" != 0000000000000000000000000000000000000000 ]; then
-                echo "pre-push: $local_ref is not the commit checked out; check it out to push it." >&2
-                exit 1
-            fi ;;
-    esac
+    [ "$local_sha" = 0000000000000000000000000000000000000000 ] && continue
+    if [ "$(git rev-parse "$local_sha^{commit}")" != "$head" ]; then
+        echo "pre-push: $local_ref is not the commit checked out; check it out to push it." >&2
+        exit 1
+    fi
 done
 PYTHON="${PYTHON:-python}"
 "$PYTHON" -m pytest -q -p no:cacheprovider -n auto
 LLAMA_CPP_CONVERSATION_SLOW_EXAMPLES=200 "$PYTHON" -m pytest -q -p no:cacheprovider -m slow tests/test_sequences.py
 site="$(mktemp -d)"
 trap 'rm -rf "$site"' EXIT
-"$PYTHON" -m mkdocs build --strict --quiet --site-dir "$site"
+"$PYTHON" -m sphinx -W --keep-going -q -b dirhtml docs "$site"
