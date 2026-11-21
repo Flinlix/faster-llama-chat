@@ -62,11 +62,17 @@ names the tests that try to break it.
    the rest otherwise once the oldest exchange goes (as one that numbers its
    messages does), an eviction drops the conversation well below the
    threshold, so that it is decoded again only every few turns. A model that would need the whole conversation decoded
-   again each turn is refused.
+   again each turn is refused. With `compact_window_cache`, an action whose
+   render rewrites the conversation's end further back than the window layers
+   keep beyond their window, about one micro-batch, reads the conversation
+   again from the start, after the reply where the action allows it: the
+   setting trades this for its memory.
    Verified by:
    - `tests/test_conversations.py`: on every test template and every kind of
      cache, what each action decodes does not grow with the conversation, and
-     a cache that cannot shift is decoded again only every few turns.
+     a cache that cannot shift is decoded again only every few turns; on the
+     compact window cache with a margin of 256 tokens, on every template whose
+     tool turns rewrite no further back than that.
 5. **Only a template that needs something pays for it.** What only some
    templates need is read once at load, or stated in the add-on file, and no
    question, reply or token of another template pays for it.
