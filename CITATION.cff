@@ -6,6 +6,6 @@ authors:
   - family-names: Lindenmeier
     given-names: Felix
     affiliation: "Ludwig-Maximilians-Universität München (LMU Munich)"
-version: 3.0.0
+version: 3.1.0
 license: Apache-2.0
 repository-code: "https://github.com/Flinlix/llama-cpp-conversation"
