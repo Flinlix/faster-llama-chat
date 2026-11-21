@@ -71,7 +71,7 @@ value `Config` refuses.
 | `micro_batch_tokens` | `None` | most tokens the engine computes at once, at most `max_batch_tokens`; `None` leaves the engine's default. A larger one can read a long prefill faster and takes more memory on the device |
 | `flash_attention` | `None` | `True` or `False` forces flash attention on or off; `None` leaves it to llama.cpp, except under a quantized KV cache, which requires it and turns it on |
 | `kv_cache_type` | `"f16"` | `"f16"`, `"q8_0"`, `"q5_1"`, `"q5_0"`, `"q4_1"`, `"q4_0"`; a quantized type requires flash attention, so is refused with `flash_attention=False` |
-| `kept_conversation_bytes` | `0` | the most host RAM, in bytes, the caches of conversations a `begin` switched away from may take once kept, so that going back to one decodes only what changed since; the oldest goes first, and while one is saved it takes its own size beside them; only a cache that can shift or cut keeps any; `0` keeps none |
+| `kept_conversation_bytes` | `0` | the most host RAM, in bytes, the caches of conversations a `begin` switched away from may take once kept, each with every position it holds, so that going back to one decodes only what changed since; the oldest goes first, and while one is saved it takes its own size beside them; only a cache that can shift or cut keeps any; `0` keeps none |
 | `check_cache` | `False` | for finding faults: after the work after every reply and before every generation, compare the cache with a fresh begin of its conversation, and raise `InternalError` where they differ; each check renders and tokenizes the whole conversation |
 
 ## Memory or speed: the window cache
@@ -106,11 +106,16 @@ spoken, so the wait before the next first word does not change. These do:
   takes to read or speak turns the work after a reply into a pause the next
   question meets.
 
-The compact cache checks every cut and reads the conversation again where its
-window falls short. Where one action rewrites more than the compact cache
-keeps beyond its window, as where a long thought is removed from the reply
-before it, every such turn reads the conversation again, usually after the
-reply.
+On the full-size cache too, the engine reuses the cells its window layers no
+longer attend over when it needs room. After an eviction those layers may hold
+only a little more than their window, so a reply shortened further back than
+that leaves them a gap of usually a few dozen tokens. The library does not
+read the conversation again for it, since that would take far longer on a slow
+processor than the gap costs in the answer. The compact cache checks every cut
+and reads the conversation again where its window falls short. Where one
+action rewrites more than the compact cache keeps beyond its window, as where
+a long thought is removed from the reply before it, every such turn reads the
+conversation again, usually after the reply.
 
 Choose the compact cache where memory is short and the machine reads the kept
 history again in about a second, as a GPU does with a model that fits it; in a

@@ -66,3 +66,4 @@ it rejected. The dated log the records were written from is kept as
 | [0057](0057-the-site-is-built-with-sphinx.md) | The documentation site is built with Sphinx | Every warning an error; the README's sections included; the theme's support for the old tool ends in 2027. |
 | [0058](0058-the-public-signatures-are-typed.md) | The public signatures are typed | Typed messages and conversation; a strictly checked caller in the tests. |
 | [0059](0059-a-compact-cache-for-sliding-window-layers.md) | A compact cache for sliding-window layers, chosen by the caller | Much less memory; an eviction reads the kept history again after a reply; off by default. |
+| [0060](0060-the-full-size-cache-is-not-checked.md) | The full-size cache keeps the gap llama.cpp leaves in its window layers; a kept conversation keeps every position | Nothing is read again for the gap; a kept conversation takes about twice the RAM. |

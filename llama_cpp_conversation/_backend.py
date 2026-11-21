@@ -96,6 +96,8 @@ def _parameter_count(fn) -> int:
     return len(inspect.signature(fn).parameters)
 
 
+# The sequence id that names every sequence: the library decodes one only.
+_EVERY_SEQUENCE = -1
 
 def _required_symbol(*names: str):
     """Return the first of ``names`` this build defines.
@@ -460,14 +462,15 @@ class Backend:
         return buffer
 
     def save_whole_state(self, ctx, seq: int):
-        """All of ``seq``'s state, as a host buffer of its own.
+        """All of ``seq``'s state, as a host buffer of its own, with the positions its window layers no longer attend over.
 
         Raises:
             RuntimeError: If the build saves nothing.
         """
-        size = self._state_size(ctx, seq, 0)
+        # Saved for one sequence, the state leaves out those positions; a cut after the restore needs them.
+        size = self._state_size(ctx, _EVERY_SEQUENCE, 0)
         buffer = (ctypes.c_uint8 * size)()
-        if self._state_get(ctx, buffer, size, seq, 0) != size:
+        if self._state_get(ctx, buffer, size, _EVERY_SEQUENCE, 0) != size:
             raise EngineError("the engine did not save the cache's state")
         return buffer
 
@@ -477,7 +480,7 @@ class Backend:
         Raises:
             RuntimeError: If the cache refuses it.
         """
-        if self._state_set(ctx, buffer, len(buffer), seq, 0) == 0:
+        if self._state_set(ctx, buffer, len(buffer), _EVERY_SEQUENCE, 0) == 0:
             raise EngineError("the engine refused the cache's saved state")
 
     def restore_state(self, ctx, seq: int, buffer) -> None:

@@ -28,7 +28,8 @@ kept history again at an eviction instead.
   layers hold is later than the cut less the window, and says so: the cache
   context protocol's `remove_from` may return where the cache now ends, and the
   library reads the conversation again from there. A context that returns
-  nothing is cut as asked, as before.
+  nothing is cut as asked, as before. Record 0060 says why the full-size
+  cache is not checked.
 - The rule is one position stricter than the attention mask needs, since the
   next token at `pos` attends back to `pos - n_swa + 1`. llama.cpp's server
   reads again at `pos_min >= max(0, pos - n_swa)` in the source of binding

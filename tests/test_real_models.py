@@ -1,4 +1,4 @@
-"""Long conversations on real model files: the cache is checked against a fresh render after every action, a compact window cache holds what the next token attends over, and memory stops growing.
+"""Long conversations on real model files: the cache is checked against a fresh render after every action, a compact window cache holds what the next token attends over, and memory stops growing; a conversation switched away from comes back whole.
 
 The model files are named by the environment, never here:
 ``LLAMA_CPP_CONVERSATION_TEST_MODELS`` holds their paths, separated as the system separates
@@ -26,6 +26,8 @@ _TURNS, _WARM_UP_TURNS = 120, 30
 # reaching their bound; on the GPU, nothing.
 _MAX_RAM_GROWTH_MIB, _MAX_GPU_GROWTH_MIB = 64, 16
 _CONTEXT_TOKENS, _REPLY_TOKENS = 4096, 48
+# Room for the conversation switched away from, which the switch back takes out again.
+_KEPT_BYTES = 1 << 30
 _GPU_LAYERS = int(os.environ.get("LLAMA_CPP_CONVERSATION_TEST_GPU_LAYERS", "-1"))
 _COMPACT_WINDOW_CACHE = os.environ.get("LLAMA_CPP_CONVERSATION_TEST_COMPACT_WINDOW_CACHE") == "1"
 
@@ -59,6 +61,8 @@ def _clock_registry() -> ToolRegistry:
 
 
 def _assert_the_window_layers_hold_the_window(wrapper, turn) -> None:
+    # The full-size cache leaves a gap after an eviction; see
+    # docs/decisions/0060-the-full-size-cache-is-not-checked.md.
     reach = internals.window_layers_reach(wrapper) if _COMPACT_WINDOW_CACHE else None
     if reach is not None:
         window, oldest = reach
@@ -105,3 +109,29 @@ def test_a_long_conversation_keeps_the_cache_the_render_and_memory_bounded(model
     finally:
         wrapper.close()
 
+
+@pytest.mark.time_limit_s(1800)
+@pytest.mark.parametrize("model_path", _MODELS, ids=[os.path.basename(p) for p in _MODELS])
+def test_a_conversation_switched_away_from_and_back_to_comes_back_whole(model_path):
+    wrapper = ChatWrapper(Config(model_path=model_path, context_size=_CONTEXT_TOKENS, gpu_layers=_GPU_LAYERS,
+                                 max_reply_tokens=_REPLY_TOKENS, seed=7, check_cache=True,
+                                 compact_window_cache=_COMPACT_WINDOW_CACHE,
+                                 kept_conversation_bytes=_KEPT_BYTES))
+    try:
+        can = wrapper.capabilities(tools=False)
+        wrapper.begin([{"role": "system", "content": "Be brief."}] if can.can_take_system_prompt else [])
+        filler = " ".join(f"word{i}" for i in range(120))
+        for turn in range(24):
+            wrapper.reply(f"Answer in one word. {filler}").finish()
+            wrapper.wait_idle(timeout_s=30)
+            if turn % 6 == 5:
+                # Away and back, the newest exchange gone: the kept cache is restored and cut.
+                kept = wrapper.conversation()
+                wrapper.begin([{"role": "user", "content": "Hello."}, {"role": "assistant", "content": "Hi."}])
+                kept["messages"] = kept["messages"][:-2]
+                wrapper.begin(**kept)
+                wrapper.wait_idle(timeout_s=30)
+                _assert_the_window_layers_hold_the_window(wrapper, turn)
+        assert wrapper._conversation._found_fault is None, "check_cache found a fault"
+    finally:
+        wrapper.close()
