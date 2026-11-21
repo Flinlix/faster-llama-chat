@@ -244,12 +244,14 @@ def test_the_invented_templates_tags_are_no_real_templates():
 
 
 def _supported_row(stem: str) -> str:
-    """The README's row for a test template: the model its source names, the source, and whether it reasons and calls tools."""
+    """The README's row for a test template: the model its source names, the source, whether it reasons and calls tools, and the day a long conversation passed on a model file with it."""
     known = fixture(stem)
     source = known["source"]
     name = re.sub(r"(?i)[-_.]?gguf$", "", source.split("/", 1)[1])
     marks = ["yes" if known.get(key) else "" for key in ("can_reason", "calls_tools")]
-    return f"| {name} | [{source}](https://huggingface.co/{source}) | {marks[0]} | {marks[1]} |"
+    run = expected(known, "run_on_model_file")
+    return (f"| {name} | [{source}](https://huggingface.co/{source}) | {marks[0]} | {marks[1]} | "
+            f"{run['date'] if run else ''} |")
 
 
 def test_the_readmes_list_of_supported_models_is_the_table_the_test_templates_give():

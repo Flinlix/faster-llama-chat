@@ -52,6 +52,7 @@ _UNSTATED = {
     "content_rewrites": [],             # texts the template writes otherwise inside a message
     "writes_two_user_turns": True,      # two questions in a row are written
     "call_lead_in": "",                 # fixed text a model writes before a call's name
+    "run_on_model_file": None,          # the model file a long conversation passed on, and the day
 }
 
 
